@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: smeta-ai-backend
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smeta-ai-db
+          property: connectionString
+      - key: CLAUDE_API_KEY
+        sync: false
+      - key: USER_PASSWORD
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+
+databases:
+  - name: smeta-ai-db
+    databaseName: smeta_ai
+    user: smeta_ai_user
+    plan: free
