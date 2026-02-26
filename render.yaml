@@ -3,7 +3,7 @@ services:
     name: smeta-ai-backend
     env: python
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python init_pricelists.py; uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -17,6 +17,8 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      - key: CLAUDE_MODEL
+        value: claude-sonnet-4-20250514
 
 databases:
   - name: smeta-ai-db
