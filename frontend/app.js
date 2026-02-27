@@ -76,17 +76,43 @@ async function handleLogin(e) {
     errorDiv.style.display = 'none';
     
     try {
-        const response = await fetch(`${API_BASE}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password })
-        });
-        
-        if (!response.ok) {
-            const data = await response.json();
-            errorDiv.textContent = data.detail || 'Неверный пароль';
-            errorDiv.style.display = 'block';
-            return;
+        const data = await response.json();
+const requestId = data.request_id;
+
+// Поллинг статуса каждые 3 секунды
+let attempts = 0;
+const poll = setInterval(async () => {
+    attempts++;
+    if (attempts > 100) { // 5 минут максимум
+        clearInterval(poll);
+        document.getElementById('status-message').innerHTML = '<div class="error">Таймаут обработки</div>';
+        return;
+    }
+    
+    const statusRes = await fetch(`${API_BASE}/tasks/status/${requestId}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+    const statusData = await statusRes.json();
+    
+    // Обновляем прогресс бар
+    updateProgressBar(Math.min(attempts * 3, 90));
+    
+    if (statusData.status === 'success') {
+        clearInterval(poll);
+        updateProgressBar(100);
+        displayResults(statusData.output_files);
+        loadHistory();
+        uploadedFiles = [];
+        updateFileList();
+        document.getElementById('file-input').value = '';
+        document.getElementById('user-comment').value = '';
+        document.getElementById('process-btn').disabled = false;
+    } else if (statusData.status === 'error') {
+        clearInterval(poll);
+        document.getElementById('status-message').innerHTML = `<div class="error">Ошибка: ${statusData.error_message}</div>`;
+        document.getElementById('process-btn').disabled = false;
+    }
+}, 3000);
         }
         
         const data = await response.json();
