@@ -217,12 +217,26 @@ function removeFile(idx) {
 }
 
 // ==================== ОБРАБОТКА ====================
-async function handleProcess() {
-    // Проверяем наличие файлов
-    if (uploadedFiles.length === 0) {
-        alert('Пожалуйста, загрузите файлы');
-        return;
+async function downloadFile(fileName) {
+    // В реальной реализации нужно получить file_id из БД
+    // Это упрощенная версия
+    
+    const history = await getHistory();
+    if (history && history.length > 0) {
+        const latestRequest = history[0];
+        const files = latestRequest.output_files || {};
+        
+        for (const file of Object.values(files)) {
+            if (file.name === fileName) {
+                // Скачиваем файл
+                window.location.href = `${API_BASE}/tasks/download/${file.name}`;
+                return;
+            }
+        }
     }
+    
+    alert('Файл не найден');
+}
     
     // Проверяем выбор типа входных данных
     const inputType = document.querySelector('input[name="input_type"]:checked');
