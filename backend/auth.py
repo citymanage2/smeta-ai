@@ -4,7 +4,7 @@ from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthCredentials
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Константы
 SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
@@ -39,7 +39,7 @@ def verify_token(token: str):
         return None
 
 
-async def get_current_user(credentials: HTTPAuthCredentials = Depends(security)):
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     payload = verify_token(token)
     
