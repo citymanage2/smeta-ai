@@ -1,4 +1,3 @@
-cat > frontend/app.js << 'ENDOFFILE'
 let accessToken = null;
 let isAdmin = false;
 let uploadedFiles = [];
