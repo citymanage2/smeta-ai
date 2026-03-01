@@ -237,7 +237,19 @@ function displayResults(outputFiles) {
 }
 
 async function downloadFile(fileName) {
-    window.location.href = `${API_BASE}/tasks/download-by-name/${encodeURIComponent(fileName)}`;
+    try {
+        const response = await fetch(`${API_BASE}/tasks/download-by-name/${encodeURIComponent(fileName)}`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        if (!response.ok) { alert('Ошибка скачивания'); return; }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch(e) { alert('Ошибка: ' + e.message); }
 }
 
 // ==================== ИСТОРИЯ ====================
