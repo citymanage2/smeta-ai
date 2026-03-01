@@ -197,7 +197,6 @@ async def download_file(
 @router.get("/download-by-name/{file_name}")
 async def download_by_name(
     file_name: str,
-    current_user: dict = Depends(get_current_user),
 ):
     file_path = RESULTS_DIR / file_name
     if not file_path.exists():
