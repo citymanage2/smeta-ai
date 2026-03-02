@@ -18,7 +18,7 @@ from backend.services.pdf_builder import PDFBuilder
 
 router = APIRouter()
 
-RESULTS_DIR = Path("/tmp/smeta_ai_results")
+RESULTS_DIR = Path("/data/results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
 
