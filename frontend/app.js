@@ -31,12 +31,12 @@ function setupEventListeners() {
     fileUploadArea.addEventListener('click', () => document.getElementById('file-input').click());
     fileUploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
-        fileUploadArea.style.borderColor = '#1f4788';
-        fileUploadArea.style.backgroundColor = '#f0f4ff';
+        fileUploadArea.style.borderColor = '#1EAEDB';
+        fileUploadArea.style.backgroundColor = 'rgba(30,174,219,0.07)';
     });
     fileUploadArea.addEventListener('dragleave', () => {
-        fileUploadArea.style.borderColor = '#ddd';
-        fileUploadArea.style.backgroundColor = '#fafafa';
+        fileUploadArea.style.borderColor = '';
+        fileUploadArea.style.backgroundColor = '';
     });
     fileUploadArea.addEventListener('drop', handleFileDrop);
     document.getElementById('file-input').addEventListener('change', (e) => {
@@ -55,12 +55,12 @@ function setupEventListeners() {
     scanUploadArea.addEventListener('click', () => document.getElementById('scan-file-input').click());
     scanUploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
-        scanUploadArea.style.borderColor = '#1f4788';
-        scanUploadArea.style.backgroundColor = '#f0f4ff';
+        scanUploadArea.style.borderColor = '#1EAEDB';
+        scanUploadArea.style.backgroundColor = 'rgba(30,174,219,0.07)';
     });
     scanUploadArea.addEventListener('dragleave', () => {
-        scanUploadArea.style.borderColor = '#ddd';
-        scanUploadArea.style.backgroundColor = '#fafafa';
+        scanUploadArea.style.borderColor = '';
+        scanUploadArea.style.backgroundColor = '';
     });
     scanUploadArea.addEventListener('drop', handleScanDrop);
     document.getElementById('scan-file-input').addEventListener('change', (e) => {
@@ -144,8 +144,8 @@ function showAdminScreen(e) {
 function handleFileDrop(e) {
     e.preventDefault();
     const fileUploadArea = document.getElementById('file-upload-area');
-    fileUploadArea.style.borderColor = '#ddd';
-    fileUploadArea.style.backgroundColor = '#fafafa';
+    fileUploadArea.style.borderColor = '';
+    fileUploadArea.style.backgroundColor = '';
     uploadedFiles = Array.from(e.dataTransfer.files);
     updateFileList();
 }
@@ -386,8 +386,8 @@ document.addEventListener('click', (e) => {
 function handleScanDrop(e) {
     e.preventDefault();
     const scanUploadArea = document.getElementById('scan-upload-area');
-    scanUploadArea.style.borderColor = '#ddd';
-    scanUploadArea.style.backgroundColor = '#fafafa';
+    scanUploadArea.style.borderColor = '';
+    scanUploadArea.style.backgroundColor = '';
     const file = e.dataTransfer.files[0];
     if (file) setScanFile(file);
 }
