@@ -15,6 +15,7 @@ from backend.services.file_parser import FileParser
 from backend.services.claude_service import ClaudeService
 from backend.services.excel_builder import ExcelBuilder
 from backend.services.pdf_builder import PDFBuilder
+from backend.services.scan_recognition_service import ScanRecognitionService
 
 router = APIRouter()
 
@@ -221,6 +222,102 @@ async def get_history(
             "error_message": r.error_message
         } for r in requests
     ]}
+
+
+SCAN_ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png'}
+
+
+def scan_in_background(request_id: int, temp_file_path: str, original_name: str):
+    """Фоновая задача распознавания скана сметы"""
+    db = SessionLocal()
+    request_record = None
+    try:
+        request_record = db.query(Request).filter(Request.id == request_id).first()
+
+        scan_service = ScanRecognitionService()
+        scan_data = scan_service.recognize_scan(temp_file_path)
+
+        excel_builder = ExcelBuilder()
+        excel_bytes = excel_builder.create_scan_excel_workbook(scan_data)
+
+        stem = Path(original_name).stem
+        out_filename = f"Смета_скан_{stem}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+        out_path = RESULTS_DIR / out_filename
+        out_path.write_bytes(excel_bytes)
+
+        summary = scan_data.get("summary", {})
+        output_files = {
+            "scan_excel": {
+                "name": out_filename,
+                "path": str(out_path),
+                "type": "excel_scan",
+                "total_positions": summary.get("total_positions", 0),
+                "total_sections": summary.get("total_sections", 0),
+                "total_amount": summary.get("total_amount"),
+                "unreadable_positions": summary.get("unreadable_positions", []),
+            }
+        }
+
+        db.add(OutputFile(
+            request_id=request_id,
+            file_name=out_filename,
+            file_path=str(out_path),
+            file_type="excel_scan"
+        ))
+
+        request_record.status = "success"
+        request_record.output_files = output_files
+        request_record.claude_response = str(summary)[:5000]
+        db.commit()
+
+    except Exception as e:
+        if request_record:
+            request_record.status = "error"
+            request_record.error_message = str(e)
+            db.commit()
+    finally:
+        Path(temp_file_path).unlink(missing_ok=True)
+        db.close()
+
+
+@router.post("/scan-to-excel")
+async def scan_to_excel(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Распознать скан сметы (PDF/JPG/PNG) и конвертировать в Excel"""
+    ext = Path(file.filename).suffix.lower()
+    if ext not in SCAN_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Неподдерживаемый формат файла. Допустимые форматы: PDF, JPG, PNG"
+        )
+
+    content = await file.read()
+    temp_path = Path(tempfile.gettempdir()) / f"{datetime.now().timestamp()}_{file.filename}"
+    temp_path.write_bytes(content)
+
+    request_record = Request(
+        input_type="Скан сметы",
+        requested_outputs=["scan_excel"],
+        status="processing",
+        uploaded_files=[{"name": file.filename, "size": file.size, "format": file.content_type}],
+        user_comment=None
+    )
+    db.add(request_record)
+    db.commit()
+    db.refresh(request_record)
+
+    background_tasks.add_task(
+        scan_in_background,
+        request_record.id,
+        str(temp_path),
+        file.filename
+    )
+
+    return {"request_id": request_record.id, "status": "processing"}
 
 
 def _read_pricelist(file_path: str) -> str:

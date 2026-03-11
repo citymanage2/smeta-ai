@@ -47,147 +47,253 @@
             </nav>
 
             <div class="container main-content">
-                <div class="grid-2">
-                    <!-- Левая часть - форма -->
-                    <div>
-                        <div class="card">
-                            <h2>Загрузка документов</h2>
-                            
-                            <!-- Drag and drop файлов -->
-                            <div class="file-upload-area" id="file-upload-area">
-                                <div class="file-upload-content">
-                                    <div class="upload-icon">📁</div>
-                                    <p>Перетащите файлы сюда или нажмите для выбора</p>
-                                    <p class="text-small">PDF, Excel, XML, GSN</p>
+                <!-- Вкладки режимов -->
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="tab-standard">Формирование сметы</button>
+                    <button class="tab-btn" data-tab="tab-scan">Распознавание скана</button>
+                </div>
+
+                <!-- ═══════════════ ВКЛАДКА: ФОРМИРОВАНИЕ СМЕТЫ ═══════════════ -->
+                <div id="tab-standard" class="tab-content active">
+                    <div class="grid-2">
+                        <!-- Левая часть - форма -->
+                        <div>
+                            <div class="card">
+                                <h2>Загрузка документов</h2>
+
+                                <!-- Drag and drop файлов -->
+                                <div class="file-upload-area" id="file-upload-area">
+                                    <div class="file-upload-content">
+                                        <div class="upload-icon">📁</div>
+                                        <p>Перетащите файлы сюда или нажмите для выбора</p>
+                                        <p class="text-small">PDF, Excel, XML, GSN</p>
+                                    </div>
+                                    <input
+                                        type="file"
+                                        id="file-input"
+                                        multiple
+                                        accept=".pdf,.xlsx,.xls,.xml,.gsn"
+                                        style="display: none;"
+                                    >
                                 </div>
-                                <input 
-                                    type="file" 
-                                    id="file-input" 
-                                    multiple 
-                                    accept=".pdf,.xlsx,.xls,.xml,.gsn"
-                                    style="display: none;"
-                                >
+
+                                <!-- Список загруженных файлов -->
+                                <div id="file-list" class="file-list" style="display: none;">
+                                    <h4>Загруженные файлы:</h4>
+                                    <ul id="files-ul"></ul>
+                                    <button type="button" id="clear-files" class="btn btn-small btn-secondary">Очистить</button>
+                                </div>
                             </div>
 
-                            <!-- Список загруженных файлов -->
-                            <div id="file-list" class="file-list" style="display: none;">
-                                <h4>Загруженные файлы:</h4>
-                                <ul id="files-ul"></ul>
-                                <button type="button" id="clear-files" class="btn btn-small btn-secondary">Очистить</button>
+                            <div class="card">
+                                <h2>Тип входных данных</h2>
+
+                                <form id="input-type-form">
+                                    <div class="radio-group">
+                                        <label class="radio-label">
+                                            <input type="radio" name="input_type" value="ТЗ" required>
+                                            <span>ТЗ</span>
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="input_type" value="ТЗ + Проект">
+                                            <span>ТЗ + Проект</span>
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="input_type" value="Смета ГрандСмета + Проект">
+                                            <span>Смета ГрандСмета + Проект</span>
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="input_type" value="Проект со спецификацией">
+                                            <span>Проект со спецификацией</span>
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="input_type" value="Смета ЭДЦ + Проект">
+                                            <span>Смета ЭДЦ + Проект</span>
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="input_type" value="Готовый Перечень (XLSX)">
+                                            <span>Готовый Перечень (XLSX)</span>
+                                        </label>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div class="card">
+                                <h2>Выбор результата</h2>
+
+                                <form id="output-type-form">
+                                    <div class="checkbox-group">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="requested_outputs" value="list">
+                                            <span>Перечень работ и материалов</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="requested_outputs" value="estimate">
+                                            <span>Смета</span>
+                                        </label>
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" name="requested_outputs" value="comparison">
+                                            <span>Сравнительный анализ</span>
+                                        </label>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div class="card">
+                                <h2>Комментарий (необязательно)</h2>
+                                <textarea
+                                    id="user-comment"
+                                    class="form-input"
+                                    placeholder="Введите дополнительный комментарий"
+                                    rows="4"
+                                ></textarea>
+                            </div>
+
+                            <button id="process-btn" class="btn btn-primary btn-block btn-large">Сформировать</button>
+                        </div>
+
+                        <!-- Правая часть - результаты и история -->
+                        <div>
+                            <div class="card">
+                                <h2>Статус обработки</h2>
+                                <div id="progress-container" style="display: none;">
+                                    <div class="progress-bar">
+                                        <div id="progress-fill" class="progress-fill"></div>
+                                    </div>
+                                    <ul class="progress-steps">
+                                        <li class="step" id="step-1">
+                                            <span class="step-number">1</span>
+                                            <span class="step-text">Анализ документов</span>
+                                        </li>
+                                        <li class="step" id="step-2">
+                                            <span class="step-number">2</span>
+                                            <span class="step-text">Формирование перечня</span>
+                                        </li>
+                                        <li class="step" id="step-3">
+                                            <span class="step-number">3</span>
+                                            <span class="step-text">Расчет сметы</span>
+                                        </li>
+                                        <li class="step" id="step-4">
+                                            <span class="step-number">4</span>
+                                            <span class="step-text">Готово</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                                <div id="status-message" class="status-message"></div>
+                            </div>
+
+                            <div class="card">
+                                <h2>Результаты</h2>
+                                <div id="results-container" style="display: none;">
+                                    <ul id="results-list" class="results-list"></ul>
+                                </div>
+                                <div id="no-results" class="text-center text-gray">
+                                    Результаты отображаются здесь после обработки
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <h2>История запросов</h2>
+                                <div id="history-container">
+                                    <div class="loading">Загрузка истории...</div>
+                                </div>
                             </div>
                         </div>
-
-                        <div class="card">
-                            <h2>Тип входных данных</h2>
-                            
-                            <form id="input-type-form">
-                                <div class="radio-group">
-                                    <label class="radio-label">
-                                        <input type="radio" name="input_type" value="ТЗ" required>
-                                        <span>ТЗ</span>
-                                    </label>
-                                    <label class="radio-label">
-                                        <input type="radio" name="input_type" value="ТЗ + Проект">
-                                        <span>ТЗ + Проект</span>
-                                    </label>
-                                    <label class="radio-label">
-                                        <input type="radio" name="input_type" value="Смета ГрандСмета + Проект">
-                                        <span>Смета ГрандСмета + Проект</span>
-                                    </label>
-                                    <label class="radio-label">
-                                        <input type="radio" name="input_type" value="Проект со спецификацией">
-                                        <span>Проект со спецификацией</span>
-                                    </label>
-                                    <label class="radio-label">
-                                        <input type="radio" name="input_type" value="Смета ЭДЦ + Проект">
-                                        <span>Смета ЭДЦ + Проект</span>
-                                    </label>
-                                    <label class="radio-label">
-                                        <input type="radio" name="input_type" value="Готовый Перечень (XLSX)">
-                                        <span>Готовый Перечень (XLSX)</span>
-                                    </label>
-                                </div>
-                            </form>
-                        </div>
-
-                        <div class="card">
-                            <h2>Выбор результата</h2>
-                            
-                            <form id="output-type-form">
-                                <div class="checkbox-group">
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" name="requested_outputs" value="list">
-                                        <span>Перечень работ и материалов</span>
-                                    </label>
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" name="requested_outputs" value="estimate">
-                                        <span>Смета</span>
-                                    </label>
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" name="requested_outputs" value="comparison">
-                                        <span>Сравнительный анализ</span>
-                                    </label>
-                                </div>
-                            </form>
-                        </div>
-
-                        <div class="card">
-                            <h2>Комментарий (необязательно)</h2>
-                            <textarea 
-                                id="user-comment" 
-                                class="form-input" 
-                                placeholder="Введите дополнительный комментарий"
-                                rows="4"
-                            ></textarea>
-                        </div>
-
-                        <button id="process-btn" class="btn btn-primary btn-block btn-large">Сформировать</button>
                     </div>
+                </div>
 
-                    <!-- Правая часть - результаты и история -->
-                    <div>
-                        <div class="card">
-                            <h2>Статус обработки</h2>
-                            <div id="progress-container" style="display: none;">
-                                <div class="progress-bar">
-                                    <div id="progress-fill" class="progress-fill"></div>
+                <!-- ═══════════════ ВКЛАДКА: РАСПОЗНАВАНИЕ СКАНА ═══════════════ -->
+                <div id="tab-scan" class="tab-content">
+                    <div class="grid-2">
+                        <!-- Левая часть - форма загрузки скана -->
+                        <div>
+                            <div class="card">
+                                <h2>Загрузка скана сметы</h2>
+                                <p class="text-small text-gray" style="margin-bottom: 12px;">
+                                    Поддерживаемые форматы: PDF, JPG, PNG.<br>
+                                    Многостраничные PDF обрабатываются автоматически (до 10 страниц).
+                                </p>
+
+                                <div class="file-upload-area" id="scan-upload-area">
+                                    <div class="file-upload-content">
+                                        <div class="upload-icon">🔍</div>
+                                        <p>Перетащите скан сметы сюда или нажмите для выбора</p>
+                                        <p class="text-small">PDF, JPG, PNG</p>
+                                    </div>
+                                    <input
+                                        type="file"
+                                        id="scan-file-input"
+                                        accept=".pdf,.jpg,.jpeg,.png"
+                                        style="display: none;"
+                                    >
                                 </div>
-                                <ul class="progress-steps">
-                                    <li class="step" id="step-1">
-                                        <span class="step-number">1</span>
-                                        <span class="step-text">Анализ документов</span>
-                                    </li>
-                                    <li class="step" id="step-2">
-                                        <span class="step-number">2</span>
-                                        <span class="step-text">Формирование перечня</span>
-                                    </li>
-                                    <li class="step" id="step-3">
-                                        <span class="step-number">3</span>
-                                        <span class="step-text">Расчет сметы</span>
-                                    </li>
-                                    <li class="step" id="step-4">
-                                        <span class="step-number">4</span>
-                                        <span class="step-text">Готово</span>
-                                    </li>
+
+                                <div id="scan-file-info" style="display: none;" class="scan-file-info">
+                                    <span id="scan-file-name" class="scan-file-name"></span>
+                                    <button type="button" id="scan-clear-file" class="btn btn-small btn-secondary">✕ Убрать</button>
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <h2>Что делает этот инструмент</h2>
+                                <ul class="feature-list">
+                                    <li>Определяет тип и структуру сметы</li>
+                                    <li>Извлекает все позиции: шифр, наименование, ед. изм., объём, цену, сумму</li>
+                                    <li>Сохраняет разделы и подразделы</li>
+                                    <li>Фиксирует итоги: накладные расходы, прибыль, НДС</li>
+                                    <li>Создаёт Excel с форматированием и автосуммой</li>
+                                    <li>Отмечает нечитаемые позиции для ручной проверки</li>
                                 </ul>
                             </div>
-                            <div id="status-message" class="status-message"></div>
+
+                            <button id="scan-process-btn" class="btn btn-primary btn-block btn-large">
+                                Распознать скан и создать Excel
+                            </button>
                         </div>
 
-                        <div class="card">
-                            <h2>Результаты</h2>
-                            <div id="results-container" style="display: none;">
-                                <ul id="results-list" class="results-list"></ul>
+                        <!-- Правая часть - статус и результаты -->
+                        <div>
+                            <div class="card">
+                                <h2>Статус распознавания</h2>
+                                <div id="scan-progress-container" style="display: none;">
+                                    <div class="progress-bar">
+                                        <div id="scan-progress-fill" class="progress-fill"></div>
+                                    </div>
+                                    <ul class="progress-steps">
+                                        <li class="step" id="scan-step-1">
+                                            <span class="step-number">1</span>
+                                            <span class="step-text">Отправка файла</span>
+                                        </li>
+                                        <li class="step" id="scan-step-2">
+                                            <span class="step-number">2</span>
+                                            <span class="step-text">Визуальный анализ AI</span>
+                                        </li>
+                                        <li class="step" id="scan-step-3">
+                                            <span class="step-number">3</span>
+                                            <span class="step-text">Извлечение данных</span>
+                                        </li>
+                                        <li class="step" id="scan-step-4">
+                                            <span class="step-number">4</span>
+                                            <span class="step-text">Формирование Excel</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                                <div id="scan-status-message" class="status-message"></div>
                             </div>
-                            <div id="no-results" class="text-center text-gray">
-                                Результаты отображаются здесь после обработки
-                            </div>
-                        </div>
 
-                        <div class="card">
-                            <h2>История запросов</h2>
-                            <div id="history-container">
-                                <div class="loading">Загрузка истории...</div>
+                            <div class="card" id="scan-results-card" style="display: none;">
+                                <h2>Результат распознавания</h2>
+                                <div id="scan-summary" class="scan-summary"></div>
+                                <div id="scan-results-container">
+                                    <ul id="scan-results-list" class="results-list"></ul>
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <h2>История распознаваний</h2>
+                                <div id="scan-history-container">
+                                    <div class="loading">Загрузка истории...</div>
+                                </div>
                             </div>
                         </div>
                     </div>
