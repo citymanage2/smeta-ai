@@ -9,82 +9,124 @@
 <body>
 <div id="app">
 
-    <!-- ══════════════════════════════════════════════════
-         LOGIN SCREEN
-    ═══════════════════════════════════════════════════ -->
-    <div id="login-screen" class="screen active">
+<!-- ══════════════════════════════════════════════════════
+     LOGIN SCREEN — split layout
+═══════════════════════════════════════════════════════ -->
+<div id="login-screen" class="screen active">
+
+    <!-- Left brand panel -->
+    <div class="login-brand">
+        <div class="login-brand-inner">
+            <div class="login-brand-logo">Smeta AI</div>
+            <div class="login-brand-tagline">
+                Автоматизированное формирование смет и анализ проектов
+            </div>
+            <p class="login-brand-desc">
+                Веб-сервис для строительных компаний.<br>
+                Загружайте документы, получайте сметы за минуты.
+            </p>
+            <ul class="login-brand-features">
+                <li>Формирование перечня работ и материалов</li>
+                <li>Расчёт сметной стоимости</li>
+                <li>Распознавание сканов смет в Excel</li>
+                <li>Сравнительный анализ проекта и сметы</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Right form panel -->
+    <div class="login-form-side">
         <div class="login-box">
-            <div class="login-logo">Smeta<span>AI</span></div>
-            <p class="login-subtitle">Веб-сервис для формирования смет и анализа проектов</p>
+            <h1 class="login-box-title">Вход в систему</h1>
+            <p class="login-box-subtitle">Введите пароль для доступа к сервису</p>
 
             <form id="login-form" class="login-form">
                 <input
                     type="password"
                     id="password"
                     class="form-input"
-                    placeholder="Введите пароль"
+                    placeholder="Пароль"
                     required
                 >
-                <button type="submit" class="btn btn-primary btn-block btn-large">Войти</button>
+                <button type="submit" class="btn btn-primary btn-block btn-large">
+                    Войти
+                </button>
             </form>
 
             <div id="login-error" class="error-message" style="display:none;"></div>
         </div>
     </div>
 
-    <!-- ══════════════════════════════════════════════════
-         MAIN SCREEN
-    ═══════════════════════════════════════════════════ -->
-    <div id="main-screen" class="screen">
+</div>
 
-        <!-- Navbar -->
-        <nav class="navbar">
-            <div class="container">
-                <div class="logo-main">Smeta<span>AI</span></div>
-                <div class="nav-right">
-                    <span id="user-type" class="user-type"></span>
-                    <a href="#admin-panel" id="admin-link" style="display:none;" class="btn btn-warning btn-small">Админ-панель</a>
-                    <button id="logout-btn" class="btn btn-secondary btn-small">Выход</button>
-                </div>
-            </div>
-        </nav>
+<!-- ══════════════════════════════════════════════════════
+     MAIN SCREEN
+═══════════════════════════════════════════════════════ -->
+<div id="main-screen" class="screen">
 
-        <!-- Content -->
-        <div class="container main-content">
+    <!-- Navbar with embedded tabs -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="navbar-logo">Smeta<span>AI</span></div>
 
-            <!-- Tabs -->
-            <div class="tabs">
-                <button class="tab-btn active" data-tab="tab-standard">Формирование сметы</button>
-                <button class="tab-btn" data-tab="tab-scan">Распознавание скана</button>
+            <div class="navbar-tabs">
+                <button class="tab-btn active" data-tab="tab-standard">
+                    <span class="tab-icon">📋</span> Формирование сметы
+                </button>
+                <button class="tab-btn" data-tab="tab-scan">
+                    <span class="tab-icon">🔍</span> Распознавание скана
+                </button>
             </div>
 
-            <!-- ══ TAB: STANDARD ══════════════════════════════ -->
-            <div id="tab-standard" class="tab-content active">
-                <div class="grid-2">
+            <div class="navbar-right">
+                <span id="user-type" class="user-type"></span>
+                <a href="#admin-panel" id="admin-link" style="display:none;" class="btn btn-warning btn-small">Панель админа</a>
+                <button id="logout-btn" class="btn btn-secondary btn-small">Выход</button>
+            </div>
+        </div>
+    </nav>
 
-                    <!-- Left column -->
-                    <div>
-                        <!-- Upload -->
-                        <div class="card">
-                            <h2>Загрузка документов</h2>
+    <div class="container page-body">
+
+        <!-- ══ TAB: STANDARD ═════════════════════════════════ -->
+        <div id="tab-standard" class="tab-content active">
+            <div class="workflow-grid">
+
+                <!-- ── Left: Form steps ── -->
+                <div class="form-panel">
+
+                    <!-- Step 1: Upload -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-num">1</div>
+                            <span class="step-title">Загрузка документов</span>
+                        </div>
+                        <div class="step-body">
                             <div class="file-upload-area" id="file-upload-area">
                                 <div class="file-upload-content">
                                     <div class="upload-icon">📁</div>
-                                    <p>Перетащите файлы или нажмите для выбора</p>
-                                    <p class="text-small">PDF, Excel, XML, GSN</p>
+                                    <p>Перетащите файлы сюда или нажмите для выбора</p>
+                                    <p class="text-small">Поддерживаются: PDF, Excel (.xlsx/.xls), XML, GSN</p>
                                 </div>
                                 <input type="file" id="file-input" multiple accept=".pdf,.xlsx,.xls,.xml,.gsn" style="display:none;">
                             </div>
                             <div id="file-list" class="file-list" style="display:none;">
                                 <h4>Выбранные файлы</h4>
                                 <ul id="files-ul"></ul>
-                                <button type="button" id="clear-files" class="btn btn-secondary btn-small" style="margin-top:8px;">Очистить всё</button>
+                                <div class="file-list-footer">
+                                    <button type="button" id="clear-files" class="btn btn-secondary btn-small">Очистить всё</button>
+                                </div>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- Input type -->
-                        <div class="card">
-                            <h2>Тип входных данных</h2>
+                    <!-- Step 2: Input type -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-num">2</div>
+                            <span class="step-title">Тип входных данных</span>
+                        </div>
+                        <div class="step-body">
                             <form id="input-type-form">
                                 <div class="radio-group">
                                     <label class="radio-label">
@@ -114,10 +156,15 @@
                                 </div>
                             </form>
                         </div>
+                    </div>
 
-                        <!-- Output type -->
-                        <div class="card">
-                            <h2>Выходные документы</h2>
+                    <!-- Step 3: Outputs -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-num">3</div>
+                            <span class="step-title">Выходные документы</span>
+                        </div>
+                        <div class="step-body">
                             <form id="output-type-form">
                                 <div class="checkbox-group">
                                     <label class="checkbox-label">
@@ -135,21 +182,38 @@
                                 </div>
                             </form>
                         </div>
-
-                        <!-- Comment -->
-                        <div class="card">
-                            <h2>Комментарий <span class="text-muted" style="text-transform:none;letter-spacing:0;font-weight:400;">(необязательно)</span></h2>
-                            <textarea id="user-comment" class="form-input" placeholder="Дополнительные пожелания или уточнения..." rows="3"></textarea>
-                        </div>
-
-                        <button id="process-btn" class="btn btn-primary btn-block btn-large">Сформировать документы</button>
                     </div>
 
-                    <!-- Right column -->
-                    <div>
-                        <!-- Status -->
-                        <div class="card">
-                            <h2>Статус обработки</h2>
+                    <!-- Step 4: Comment -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-num">4</div>
+                            <span class="step-title">Комментарий <span class="step-optional">(необязательно)</span></span>
+                        </div>
+                        <div class="step-body">
+                            <textarea
+                                id="user-comment"
+                                class="form-input"
+                                placeholder="Дополнительные пожелания или уточнения к расчёту..."
+                                rows="3"
+                            ></textarea>
+                        </div>
+                    </div>
+
+                    <button id="process-btn" class="btn btn-primary btn-block btn-large">
+                        Сформировать документы →
+                    </button>
+                </div>
+
+                <!-- ── Right: Status + Results ── -->
+                <div class="results-panel">
+
+                    <!-- Status card -->
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <span class="panel-title">Статус обработки</span>
+                        </div>
+                        <div class="panel-body">
                             <div id="progress-container" style="display:none;">
                                 <div class="progress-bar">
                                     <div id="progress-fill" class="progress-fill"></div>
@@ -157,15 +221,15 @@
                                 <ul class="progress-steps">
                                     <li class="step" id="step-1">
                                         <span class="step-number">1</span>
-                                        <span class="step-text">Анализ документов</span>
+                                        <span class="step-text">Анализ</span>
                                     </li>
                                     <li class="step" id="step-2">
                                         <span class="step-number">2</span>
-                                        <span class="step-text">Формирование перечня</span>
+                                        <span class="step-text">Перечень</span>
                                     </li>
                                     <li class="step" id="step-3">
                                         <span class="step-number">3</span>
-                                        <span class="step-text">Расчёт сметы</span>
+                                        <span class="step-text">Смета</span>
                                     </li>
                                     <li class="step" id="step-4">
                                         <span class="step-number">4</span>
@@ -175,19 +239,30 @@
                             </div>
                             <div id="status-message" class="status-message"></div>
                         </div>
+                    </div>
 
-                        <!-- Results -->
-                        <div class="card">
-                            <h2>Результаты</h2>
+                    <!-- Results card -->
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <span class="panel-title">Результаты</span>
+                        </div>
+                        <div class="panel-body">
                             <div id="results-container" style="display:none;">
                                 <ul id="results-list" class="results-list"></ul>
                             </div>
-                            <div id="no-results">Результаты появятся здесь после обработки</div>
+                            <div id="no-results" class="empty-state">
+                                <div class="empty-icon">📄</div>
+                                <div class="empty-text">Результаты появятся здесь после обработки</div>
+                            </div>
                         </div>
+                    </div>
 
-                        <!-- History -->
-                        <div class="card">
-                            <h2>История запросов</h2>
+                    <!-- History card -->
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <span class="panel-title">История запросов</span>
+                        </div>
+                        <div class="panel-body">
                             <div id="history-container">
                                 <div class="loading">Загрузка</div>
                             </div>
@@ -195,20 +270,26 @@
                     </div>
 
                 </div>
-            </div><!-- /tab-standard -->
+            </div>
+        </div><!-- /tab-standard -->
 
-            <!-- ══ TAB: SCAN ═══════════════════════════════════ -->
-            <div id="tab-scan" class="tab-content">
-                <div class="grid-2">
+        <!-- ══ TAB: SCAN ═══════════════════════════════════════ -->
+        <div id="tab-scan" class="tab-content">
+            <div class="workflow-grid">
 
-                    <!-- Left column -->
-                    <div>
-                        <!-- Upload scan -->
-                        <div class="card">
-                            <h2>Загрузка скана сметы</h2>
+                <!-- ── Left: Scan form ── -->
+                <div class="form-panel">
+
+                    <!-- Step 1: Upload scan -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-num">1</div>
+                            <span class="step-title">Загрузка скана сметы</span>
+                        </div>
+                        <div class="step-body">
                             <p class="text-small text-gray" style="margin-bottom:14px;">
                                 Поддерживаемые форматы: PDF, JPG, PNG.<br>
-                                Многостраничные PDF обрабатываются автоматически (до 10 страниц).
+                                Многостраничные PDF — до 10 страниц.
                             </p>
                             <div class="file-upload-area" id="scan-upload-area">
                                 <div class="file-upload-content">
@@ -223,30 +304,40 @@
                                 <button type="button" id="scan-clear-file" class="btn btn-secondary btn-small">✕</button>
                             </div>
                         </div>
-
-                        <!-- Features -->
-                        <div class="card">
-                            <h2>Что умеет распознавание</h2>
-                            <ul class="feature-list">
-                                <li>Определяет тип и структуру сметы</li>
-                                <li>Извлекает шифр, наименование, ед. изм., объём, цену, сумму</li>
-                                <li>Сохраняет разделы и подразделы</li>
-                                <li>Фиксирует накладные расходы, прибыль, НДС</li>
-                                <li>Создаёт Excel с форматированием и автосуммой</li>
-                                <li>Отмечает нечитаемые позиции</li>
-                            </ul>
-                        </div>
-
-                        <button id="scan-process-btn" class="btn btn-primary btn-block btn-large">
-                            Распознать и создать Excel
-                        </button>
                     </div>
 
-                    <!-- Right column -->
-                    <div>
-                        <!-- Scan status -->
-                        <div class="card">
-                            <h2>Статус распознавания</h2>
+                    <!-- Features -->
+                    <div class="step-card">
+                        <div class="step-header">
+                            <div class="step-num" style="background:var(--fg-2);">?</div>
+                            <span class="step-title">Что умеет распознавание</span>
+                        </div>
+                        <div class="step-body">
+                            <ul class="feature-list">
+                                <li>Определяет тип и структуру сметы (ФЕР, ТЕР, ГЭСН)</li>
+                                <li>Извлекает шифр, наименование, ед. изм., объём, цену, сумму</li>
+                                <li>Сохраняет разделы, подразделы и иерархию</li>
+                                <li>Фиксирует накладные расходы, прибыль, НДС</li>
+                                <li>Создаёт Excel с форматированием и автосуммой</li>
+                                <li>Отмечает нечитаемые позиции для ручной проверки</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <button id="scan-process-btn" class="btn btn-primary btn-block btn-large">
+                        Распознать скан и создать Excel →
+                    </button>
+                </div>
+
+                <!-- ── Right: Status + Results ── -->
+                <div class="results-panel">
+
+                    <!-- Scan status card -->
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <span class="panel-title">Статус распознавания</span>
+                        </div>
+                        <div class="panel-body">
                             <div id="scan-progress-container" style="display:none;">
                                 <div class="progress-bar">
                                     <div id="scan-progress-fill" class="progress-fill"></div>
@@ -254,37 +345,45 @@
                                 <ul class="progress-steps">
                                     <li class="step" id="scan-step-1">
                                         <span class="step-number">1</span>
-                                        <span class="step-text">Отправка файла</span>
+                                        <span class="step-text">Отправка</span>
                                     </li>
                                     <li class="step" id="scan-step-2">
                                         <span class="step-number">2</span>
-                                        <span class="step-text">Визуальный анализ AI</span>
+                                        <span class="step-text">Анализ AI</span>
                                     </li>
                                     <li class="step" id="scan-step-3">
                                         <span class="step-number">3</span>
-                                        <span class="step-text">Извлечение данных</span>
+                                        <span class="step-text">Данные</span>
                                     </li>
                                     <li class="step" id="scan-step-4">
                                         <span class="step-number">4</span>
-                                        <span class="step-text">Формирование Excel</span>
+                                        <span class="step-text">Excel</span>
                                     </li>
                                 </ul>
                             </div>
                             <div id="scan-status-message" class="status-message"></div>
                         </div>
+                    </div>
 
-                        <!-- Scan results -->
-                        <div class="card" id="scan-results-card" style="display:none;">
-                            <h2>Результат распознавания</h2>
+                    <!-- Scan results card -->
+                    <div class="panel-card" id="scan-results-card" style="display:none;">
+                        <div class="panel-header">
+                            <span class="panel-title">Результат распознавания</span>
+                        </div>
+                        <div class="panel-body">
                             <div id="scan-summary" class="scan-summary"></div>
                             <div id="scan-results-container">
                                 <ul id="scan-results-list" class="results-list"></ul>
                             </div>
                         </div>
+                    </div>
 
-                        <!-- Scan history -->
-                        <div class="card">
-                            <h2>История распознаваний</h2>
+                    <!-- Scan history card -->
+                    <div class="panel-card">
+                        <div class="panel-header">
+                            <span class="panel-title">История распознаваний</span>
+                        </div>
+                        <div class="panel-body">
                             <div id="scan-history-container">
                                 <div class="loading">Загрузка</div>
                             </div>
@@ -292,85 +391,89 @@
                     </div>
 
                 </div>
-            </div><!-- /tab-scan -->
-
-        </div><!-- /container -->
-    </div><!-- /main-screen -->
-
-    <!-- ══════════════════════════════════════════════════
-         ADMIN SCREEN
-    ═══════════════════════════════════════════════════ -->
-    <div id="admin-screen" class="screen">
-
-        <nav class="navbar">
-            <div class="container">
-                <div class="logo-main">Smeta<span>AI</span> <span style="color:var(--text-3);font-weight:400;font-size:13px;">/ Панель администратора</span></div>
-                <div class="nav-right">
-                    <a href="#main" id="back-to-main" class="btn btn-secondary btn-small">← Назад</a>
-                    <button id="admin-logout-btn" class="btn btn-secondary btn-small">Выход</button>
-                </div>
             </div>
-        </nav>
+        </div><!-- /tab-scan -->
 
-        <div class="container main-content">
+    </div><!-- /container -->
+</div><!-- /main-screen -->
 
-            <!-- Stats -->
-            <div class="card">
-                <h2>Статистика</h2>
-                <div class="stats-grid">
-                    <div class="stat-box">
-                        <div class="stat-value" id="total-requests">—</div>
-                        <div class="stat-label">Всего запросов</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="successful-requests">—</div>
-                        <div class="stat-label">Успешно</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="failed-requests">—</div>
-                        <div class="stat-label">Ошибок</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="success-rate">—</div>
-                        <div class="stat-label">% успеха</div>
-                    </div>
-                </div>
+<!-- ══════════════════════════════════════════════════════
+     ADMIN SCREEN
+═══════════════════════════════════════════════════════ -->
+<div id="admin-screen" class="screen">
+
+    <nav class="navbar">
+        <div class="container">
+            <div class="navbar-logo">Smeta<span>AI</span></div>
+            <span style="font-size:13px;color:var(--fg-muted);margin-left:4px;margin-right:auto;">/ Администратор</span>
+            <div class="navbar-right">
+                <a href="#main" id="back-to-main" class="btn btn-secondary btn-small">← К задачам</a>
+                <button id="admin-logout-btn" class="btn btn-secondary btn-small">Выход</button>
             </div>
+        </div>
+    </nav>
 
-            <!-- Requests table -->
-            <div class="card">
-                <h2>История всех запросов</h2>
+    <div class="container page-body">
+
+        <!-- Stats row -->
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-value" id="total-requests">—</div>
+                <div class="stat-label">Всего запросов</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="successful-requests">—</div>
+                <div class="stat-label">Успешно</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="failed-requests">—</div>
+                <div class="stat-label">Ошибок</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="success-rate">—</div>
+                <div class="stat-label">% успеха</div>
+            </div>
+        </div>
+
+        <!-- Requests table -->
+        <div class="admin-table-card">
+            <div class="admin-table-header">
+                <span class="admin-table-title">История всех запросов</span>
                 <div class="admin-controls">
                     <input type="date" id="filter-date-from" class="form-input" placeholder="От">
                     <input type="date" id="filter-date-to" class="form-input" placeholder="До">
-                    <button id="filter-btn" class="btn btn-secondary">Применить</button>
-                    <button id="export-csv-btn" class="btn btn-success">Экспорт CSV</button>
-                </div>
-                <div id="admin-requests-table" class="table-container">
-                    <table class="admin-table">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Дата</th>
-                                <th>Тип</th>
-                                <th>Файлы</th>
-                                <th>Результаты</th>
-                                <th>Статус</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="admin-table-body">
-                            <tr><td colspan="7" class="text-center" style="color:var(--text-3);padding:20px;">Загрузка...</td></tr>
-                        </tbody>
-                    </table>
+                    <button id="filter-btn" class="btn btn-secondary btn-small">Применить</button>
+                    <button id="export-csv-btn" class="btn btn-success btn-small">Экспорт CSV</button>
                 </div>
             </div>
-
+            <div id="admin-requests-table" class="table-container">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Дата</th>
+                            <th>Тип</th>
+                            <th>Файлы</th>
+                            <th>Результаты</th>
+                            <th>Статус</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="admin-table-body">
+                        <tr>
+                            <td colspan="7" class="text-center" style="color:var(--fg-subtle);padding:24px;">
+                                Загрузка данных...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
-    </div><!-- /admin-screen -->
+
+    </div>
+</div><!-- /admin-screen -->
 
 </div><!-- /app -->
-
 <script src="app.js"></script>
 </body>
 </html>

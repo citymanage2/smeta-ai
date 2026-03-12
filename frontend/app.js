@@ -31,8 +31,8 @@ function setupEventListeners() {
     fileUploadArea.addEventListener('click', () => document.getElementById('file-input').click());
     fileUploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
-        fileUploadArea.style.borderColor = '#1EAEDB';
-        fileUploadArea.style.backgroundColor = 'rgba(30,174,219,0.07)';
+        fileUploadArea.style.borderColor = '#c96442';
+        fileUploadArea.style.backgroundColor = '#fdf0ec';
     });
     fileUploadArea.addEventListener('dragleave', () => {
         fileUploadArea.style.borderColor = '';
@@ -55,8 +55,8 @@ function setupEventListeners() {
     scanUploadArea.addEventListener('click', () => document.getElementById('scan-file-input').click());
     scanUploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
-        scanUploadArea.style.borderColor = '#1EAEDB';
-        scanUploadArea.style.backgroundColor = 'rgba(30,174,219,0.07)';
+        scanUploadArea.style.borderColor = '#c96442';
+        scanUploadArea.style.backgroundColor = '#fdf0ec';
     });
     scanUploadArea.addEventListener('dragleave', () => {
         scanUploadArea.style.borderColor = '';
