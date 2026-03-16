@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 1 of 3 (Bug Fixes)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-03-17 — Roadmap created
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-03-17 — Completed plan 01-01 (BUG-01 + BUG-02 fixes)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [█░░░░░░░░░] 10%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: 6 min
+- Total execution time: 0.1 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 01-bug-fixes | 1 | 6 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 01-01 (6 min)
+- Trend: establishing baseline
 
 *Updated after each plan completion*
 
@@ -46,6 +46,9 @@ Recent decisions affecting current work:
 - Paginated table chosen for admin history (simpler, scales better than cards)
 - pytest chosen for backend tests (FastAPI standard)
 - Manual checklist alongside automated tests for post-deployment verification
+- VITE_API_BASE_URL pattern chosen over Render proxy — simpler, explicit, no hidden indirection (plan 01-01)
+- Guard task_id in TaskCreate.tsx before navigate() to fail fast with visible error (plan 01-01)
+- BUG-02 is deployment-gated: code is correct, Render rebuild needed after push (plan 01-01)
 
 ### Pending Todos
 
@@ -53,12 +56,12 @@ None yet.
 
 ### Blockers/Concerns
 
-- BUG-02 (_redirects fix): Previous commit may have placed the file in the wrong directory or it's not included in the Vite build output — needs investigation before fix
-- BUG-01 (polling 404): Root cause is one of three candidates — task_id not passed correctly, auth token missing on poll request, or route definition mismatch — needs diagnosis
-- BUG-03 (admin role): Likely in JWT creation (`role` field not set to "admin") or frontend auth store not reading the role field correctly — needs tracing
+- BUG-01 RESOLVED (plan 01-01): client.ts now uses VITE_API_BASE_URL — requires setting env var in Render dashboard to activate in production
+- BUG-02 RESOLVED (plan 01-01): _redirects and render.yaml are correct — requires fresh Render deploy after push
+- BUG-03 (admin role): Likely in JWT creation (`role` field not set to "admin") or frontend auth store not reading the role field correctly — needs tracing (plan 01-02)
 
 ## Session Continuity
 
 Last session: 2026-03-17
-Stopped at: Roadmap created, ready to plan Phase 1
+Stopped at: Completed 01-01-PLAN.md (BUG-01 API URL fix + BUG-02 SPA routing verification)
 Resume file: None

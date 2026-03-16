@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Fix API base URL for production, task_id guard, verify SPA routing (BUG-01, BUG-02)
+- [x] 01-01-PLAN.md — Fix API base URL for production, task_id guard, verify SPA routing (BUG-01, BUG-02)
 - [ ] 01-02-PLAN.md — Fix admin password hash sync on startup (BUG-03)
 
 ### Phase 2: Admin Panel
@@ -60,6 +60,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Bug Fixes | 0/2 | Planning complete | - |
+| 1. Bug Fixes | 1/2 | In progress | - |
 | 2. Admin Panel | 0/? | Not started | - |
 | 3. Test Coverage | 0/? | Not started | - |

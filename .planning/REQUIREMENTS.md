@@ -7,8 +7,8 @@
 
 ### Bug Fixes
 
-- [ ] **BUG-01**: Polling endpoint 404 no longer causes the task creation form to reset to empty state
-- [ ] **BUG-02**: Page refresh and direct URL navigation works correctly on all routes in Render static site deployment
+- [x] **BUG-01**: Polling endpoint 404 no longer causes the task creation form to reset to empty state
+- [x] **BUG-02**: Page refresh and direct URL navigation works correctly on all routes in Render static site deployment
 - [ ] **BUG-03**: Admin login displays "Администратор" in the UI (not "Пользователь")
 
 ### Admin Panel
@@ -57,8 +57,8 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BUG-01 | Phase 1 | Pending |
-| BUG-02 | Phase 1 | Pending |
+| BUG-01 | Phase 1 | Complete (plan 01-01) |
+| BUG-02 | Phase 1 | Complete (plan 01-01) |
 | BUG-03 | Phase 1 | Pending |
 | ADMIN-01 | Phase 2 | Pending |
 | ADMIN-02 | Phase 2 | Pending |
@@ -75,4 +75,4 @@
 
 ---
 *Requirements defined: 2026-03-17*
-*Last updated: 2026-03-17 after roadmap creation*
+*Last updated: 2026-03-17 after plan 01-01 completion*
