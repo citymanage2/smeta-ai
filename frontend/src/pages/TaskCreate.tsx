@@ -35,7 +35,7 @@ const TaskCreate: React.FC = () => {
       });
 
       const task = await createTask(formData);
-      navigate(`/task/${task.id}/status`);
+      navigate(`/task/${task.task_id}/status`);
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string } } };
       setError(axiosError.response?.data?.detail ?? 'Ошибка при создании задачи. Попробуйте ещё раз.');

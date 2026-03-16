@@ -21,8 +21,13 @@ export interface TaskChatResponse {
   chat_history: ChatMessage[];
 }
 
-export async function createTask(formData: FormData): Promise<Task> {
-  const response = await apiClient.post<Task>('/tasks', formData, {
+export interface TaskCreateResponse {
+  task_id: string;
+  status: string;
+}
+
+export async function createTask(formData: FormData): Promise<TaskCreateResponse> {
+  const response = await apiClient.post<TaskCreateResponse>('/tasks', formData, {
     headers: {
       'Content-Type': 'multipart/form-data',
     },
