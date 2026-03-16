@@ -1,0 +1,61 @@
+import apiClient from './client';
+import { Task, TaskResult } from '../types';
+
+export interface TaskStatusResponse {
+  id: string;
+  status: Task['status'];
+  task_type: Task['task_type'];
+  progress_message?: string;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  role: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface TaskChatResponse {
+  chat_history: ChatMessage[];
+}
+
+export async function createTask(formData: FormData): Promise<Task> {
+  const response = await apiClient.post<Task>('/tasks', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+}
+
+export async function getTaskStatus(taskId: string): Promise<TaskStatusResponse> {
+  const response = await apiClient.get<TaskStatusResponse>(`/tasks/${taskId}/status`);
+  return response.data;
+}
+
+export async function getTaskResults(taskId: string): Promise<TaskResult[]> {
+  const response = await apiClient.get<TaskResult[]>(`/tasks/${taskId}/results`);
+  return response.data;
+}
+
+export async function sendMessage(taskId: string, message: string): Promise<TaskChatResponse> {
+  const response = await apiClient.post<TaskChatResponse>(`/tasks/${taskId}/message`, { message });
+  return response.data;
+}
+
+export async function downloadResult(fileId: number, fileName: string): Promise<void> {
+  const response = await apiClient.get(`/results/${fileId}/download`, {
+    responseType: 'blob',
+  });
+
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}

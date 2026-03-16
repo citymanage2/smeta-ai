@@ -1,0 +1,401 @@
+import io
+from typing import Any
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+import structlog
+
+logger = structlog.get_logger()
+
+HEADER_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
+BOLD_FONT = Font(bold=True, size=11)
+NORMAL_FONT = Font(size=11)
+TOTAL_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+THIN_BORDER = Border(
+    left=Side(style="thin"),
+    right=Side(style="thin"),
+    top=Side(style="thin"),
+    bottom=Side(style="thin"),
+)
+
+
+def _style_header_row(ws, row: int, col_count: int) -> None:
+    for col in range(1, col_count + 1):
+        cell = ws.cell(row=row, column=col)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = THIN_BORDER
+
+
+def _style_data_row(ws, row: int, col_count: int, bold: bool = False) -> None:
+    for col in range(1, col_count + 1):
+        cell = ws.cell(row=row, column=col)
+        cell.font = BOLD_FONT if bold else NORMAL_FONT
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        cell.border = THIN_BORDER
+
+
+def _auto_fit_columns(ws, min_width: int = 10, max_width: int = 60) -> None:
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        adjusted = min(max(max_len + 2, min_width), max_width)
+        ws.column_dimensions[col_letter].width = adjusted
+
+
+def generate_list(items: list) -> bytes:
+    """
+    Generate Excel file with list of works/materials.
+    items: list of dicts with keys: type, name, unit, quantity
+    """
+    wb = openpyxl.Workbook()
+
+    # Sheet 1: Перечень (All items)
+    ws_all = wb.active
+    ws_all.title = "Перечень"
+
+    headers_all = ["№", "Тип", "Наименование", "Ед. изм.", "Кол-во"]
+    for col, h in enumerate(headers_all, start=1):
+        ws_all.cell(row=1, column=col, value=h)
+    _style_header_row(ws_all, 1, len(headers_all))
+
+    ws_all.row_dimensions[1].height = 30
+
+    for i, item in enumerate(items, start=1):
+        row = i + 1
+        ws_all.cell(row=row, column=1, value=i)
+        ws_all.cell(row=row, column=2, value=item.get("type", ""))
+        ws_all.cell(row=row, column=3, value=item.get("name", ""))
+        ws_all.cell(row=row, column=4, value=item.get("unit", ""))
+        qty = item.get("quantity")
+        ws_all.cell(row=row, column=5, value=qty)
+        _style_data_row(ws_all, row, len(headers_all))
+
+    _auto_fit_columns(ws_all)
+    ws_all.freeze_panes = "A2"
+
+    # Sheet 2: Работы
+    works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
+    ws_works = wb.create_sheet("Работы")
+    headers_works = ["№", "Наименование", "Ед. изм.", "Кол-во"]
+    for col, h in enumerate(headers_works, start=1):
+        ws_works.cell(row=1, column=col, value=h)
+    _style_header_row(ws_works, 1, len(headers_works))
+    ws_works.row_dimensions[1].height = 30
+
+    for i, item in enumerate(works, start=1):
+        row = i + 1
+        ws_works.cell(row=row, column=1, value=i)
+        ws_works.cell(row=row, column=2, value=item.get("name", ""))
+        ws_works.cell(row=row, column=3, value=item.get("unit", ""))
+        ws_works.cell(row=row, column=4, value=item.get("quantity"))
+        _style_data_row(ws_works, row, len(headers_works))
+
+    _auto_fit_columns(ws_works)
+    ws_works.freeze_panes = "A2"
+
+    # Sheet 3: Материалы
+    materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
+    ws_mats = wb.create_sheet("Материалы")
+    headers_mats = ["№", "Наименование", "Ед. изм.", "Кол-во"]
+    for col, h in enumerate(headers_mats, start=1):
+        ws_mats.cell(row=1, column=col, value=h)
+    _style_header_row(ws_mats, 1, len(headers_mats))
+    ws_mats.row_dimensions[1].height = 30
+
+    for i, item in enumerate(materials, start=1):
+        row = i + 1
+        ws_mats.cell(row=row, column=1, value=i)
+        ws_mats.cell(row=row, column=2, value=item.get("name", ""))
+        ws_mats.cell(row=row, column=3, value=item.get("unit", ""))
+        ws_mats.cell(row=row, column=4, value=item.get("quantity"))
+        _style_data_row(ws_mats, row, len(headers_mats))
+
+    _auto_fit_columns(ws_mats)
+    ws_mats.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def generate_smeta(items: list) -> bytes:
+    """
+    Generate full smeta Excel.
+    items: list of dicts with: type, name, unit, quantity,
+           work_price (per unit), material_price (per unit), notes
+    """
+    wb = openpyxl.Workbook()
+    VAT_RATE = 0.20
+
+    # Sheet 1: Смета
+    ws = wb.active
+    ws.title = "Смета"
+
+    headers = [
+        "№",
+        "Тип",
+        "Наименование",
+        "Ед. изм.",
+        "Кол-во",
+        "Цена работы (за ед.)",
+        "Цена материала (за ед.)",
+        "Стоимость работ",
+        "Стоимость материалов",
+        "Итого без НДС",
+        "НДС (20%)",
+        "Итого с НДС",
+        "Примечание",
+    ]
+    for col, h in enumerate(headers, start=1):
+        ws.cell(row=1, column=col, value=h)
+    _style_header_row(ws, 1, len(headers))
+    ws.row_dimensions[1].height = 40
+
+    for i, item in enumerate(items, start=1):
+        row = i + 1
+        qty = item.get("quantity") or 0
+        wp = item.get("work_price") or 0
+        mp = item.get("material_price") or 0
+
+        ws.cell(row=row, column=1, value=i)
+        ws.cell(row=row, column=2, value=item.get("type", ""))
+        ws.cell(row=row, column=3, value=item.get("name", ""))
+        ws.cell(row=row, column=4, value=item.get("unit", ""))
+        ws.cell(row=row, column=5, value=qty)
+        ws.cell(row=row, column=6, value=wp if wp else None)
+        ws.cell(row=row, column=7, value=mp if mp else None)
+
+        work_total = qty * wp
+        mat_total = qty * mp
+        subtotal = work_total + mat_total
+        vat = subtotal * VAT_RATE
+        total = subtotal + vat
+
+        ws.cell(row=row, column=8, value=work_total if work_total else None)
+        ws.cell(row=row, column=9, value=mat_total if mat_total else None)
+        ws.cell(row=row, column=10, value=subtotal if subtotal else None)
+        ws.cell(row=row, column=11, value=vat if vat else None)
+        ws.cell(row=row, column=12, value=total if total else None)
+        ws.cell(row=row, column=13, value=item.get("notes", ""))
+        _style_data_row(ws, row, len(headers))
+
+    # Totals row
+    total_row = len(items) + 2
+    ws.cell(row=total_row, column=1, value="ИТОГО")
+    ws.merge_cells(
+        start_row=total_row, start_column=1, end_row=total_row, end_column=7
+    )
+    data_start = 2
+    data_end = len(items) + 1
+
+    for col in [8, 9, 10, 11, 12]:
+        col_letter = get_column_letter(col)
+        ws.cell(
+            row=total_row,
+            column=col,
+            value=f"=SUM({col_letter}{data_start}:{col_letter}{data_end})",
+        )
+        ws.cell(row=total_row, column=col).number_format = '#,##0.00'
+
+    for col in range(1, len(headers) + 1):
+        cell = ws.cell(row=total_row, column=col)
+        cell.fill = TOTAL_FILL
+        cell.font = BOLD_FONT
+        cell.border = THIN_BORDER
+
+    # Number formats for currency columns
+    for col in [6, 7, 8, 9, 10, 11, 12]:
+        for row in range(2, len(items) + 2):
+            ws.cell(row=row, column=col).number_format = '#,##0.00'
+
+    _auto_fit_columns(ws)
+    ws.freeze_panes = "A2"
+
+    # Sheet 2: Работы
+    works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
+    ws_w = wb.create_sheet("Работы")
+    w_headers = ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена за ед.", "Стоимость"]
+    for col, h in enumerate(w_headers, start=1):
+        ws_w.cell(row=1, column=col, value=h)
+    _style_header_row(ws_w, 1, len(w_headers))
+    ws_w.row_dimensions[1].height = 30
+
+    for i, item in enumerate(works, start=1):
+        row = i + 1
+        qty = item.get("quantity") or 0
+        price = item.get("work_price") or 0
+        ws_w.cell(row=row, column=1, value=i)
+        ws_w.cell(row=row, column=2, value=item.get("name", ""))
+        ws_w.cell(row=row, column=3, value=item.get("unit", ""))
+        ws_w.cell(row=row, column=4, value=qty)
+        ws_w.cell(row=row, column=5, value=price if price else None)
+        ws_w.cell(row=row, column=6, value=qty * price if price else None)
+        _style_data_row(ws_w, row, len(w_headers))
+
+    if works:
+        sum_row = len(works) + 2
+        ws_w.cell(row=sum_row, column=1, value="ИТОГО")
+        ws_w.merge_cells(start_row=sum_row, start_column=1, end_row=sum_row, end_column=5)
+        ws_w.cell(
+            row=sum_row,
+            column=6,
+            value=f"=SUM(F2:F{len(works)+1})",
+        )
+        for col in range(1, len(w_headers) + 1):
+            cell = ws_w.cell(row=sum_row, column=col)
+            cell.fill = TOTAL_FILL
+            cell.font = BOLD_FONT
+            cell.border = THIN_BORDER
+
+    _auto_fit_columns(ws_w)
+    ws_w.freeze_panes = "A2"
+
+    # Sheet 3: Материалы
+    materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
+    ws_m = wb.create_sheet("Материалы")
+    m_headers = ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена за ед.", "Стоимость"]
+    for col, h in enumerate(m_headers, start=1):
+        ws_m.cell(row=1, column=col, value=h)
+    _style_header_row(ws_m, 1, len(m_headers))
+    ws_m.row_dimensions[1].height = 30
+
+    for i, item in enumerate(materials, start=1):
+        row = i + 1
+        qty = item.get("quantity") or 0
+        price = item.get("material_price") or 0
+        ws_m.cell(row=row, column=1, value=i)
+        ws_m.cell(row=row, column=2, value=item.get("name", ""))
+        ws_m.cell(row=row, column=3, value=item.get("unit", ""))
+        ws_m.cell(row=row, column=4, value=qty)
+        ws_m.cell(row=row, column=5, value=price if price else None)
+        ws_m.cell(row=row, column=6, value=qty * price if price else None)
+        _style_data_row(ws_m, row, len(m_headers))
+
+    if materials:
+        sum_row = len(materials) + 2
+        ws_m.cell(row=sum_row, column=1, value="ИТОГО")
+        ws_m.merge_cells(start_row=sum_row, start_column=1, end_row=sum_row, end_column=5)
+        ws_m.cell(
+            row=sum_row,
+            column=6,
+            value=f"=SUM(F2:F{len(materials)+1})",
+        )
+        for col in range(1, len(m_headers) + 1):
+            cell = ws_m.cell(row=sum_row, column=col)
+            cell.fill = TOTAL_FILL
+            cell.font = BOLD_FONT
+            cell.border = THIN_BORDER
+
+    _auto_fit_columns(ws_m)
+    ws_m.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def generate_scan_result(data: dict) -> bytes:
+    """
+    Generate Excel from scan/OCR result.
+    data: {
+      header: {title, date, contractor, object},
+      sections: [{title, items: [{name, unit, qty, price, total, notes}]}],
+      summary: {total_works, total_materials, total_vat, grand_total}
+    }
+    """
+    wb = openpyxl.Workbook()
+
+    # Sheet 1: Информация
+    ws_info = wb.active
+    ws_info.title = "Информация"
+
+    header = data.get("header", {})
+    info_rows = [
+        ("Документ", header.get("title", "")),
+        ("Дата", header.get("date", "")),
+        ("Подрядчик", header.get("contractor", "")),
+        ("Объект", header.get("object", "")),
+    ]
+
+    for row_idx, (key, val) in enumerate(info_rows, start=1):
+        ws_info.cell(row=row_idx, column=1, value=key).font = BOLD_FONT
+        ws_info.cell(row=row_idx, column=2, value=val)
+
+    _auto_fit_columns(ws_info)
+
+    # Sheet 2: Данные
+    ws_data = wb.create_sheet("Данные")
+    headers = ["№", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Цена", "Сумма", "Примечание"]
+    for col, h in enumerate(headers, start=1):
+        ws_data.cell(row=1, column=col, value=h)
+    _style_header_row(ws_data, 1, len(headers))
+    ws_data.row_dimensions[1].height = 30
+
+    row_idx = 2
+    item_num = 0
+    sections = data.get("sections", [])
+
+    for section in sections:
+        section_title = section.get("title", "")
+        # Section header row
+        ws_data.cell(row=row_idx, column=1, value="")
+        ws_data.cell(row=row_idx, column=2, value=section_title)
+        ws_data.merge_cells(
+            start_row=row_idx, start_column=2, end_row=row_idx, end_column=len(headers)
+        )
+        for col in range(1, len(headers) + 1):
+            cell = ws_data.cell(row=row_idx, column=col)
+            cell.fill = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+            cell.font = BOLD_FONT
+            cell.border = THIN_BORDER
+        row_idx += 1
+
+        for item in section.get("items", []):
+            item_num += 1
+            ws_data.cell(row=row_idx, column=1, value=item_num)
+            ws_data.cell(row=row_idx, column=2, value=section_title)
+            ws_data.cell(row=row_idx, column=3, value=item.get("name", ""))
+            ws_data.cell(row=row_idx, column=4, value=item.get("unit", ""))
+            ws_data.cell(row=row_idx, column=5, value=item.get("qty"))
+            ws_data.cell(row=row_idx, column=6, value=item.get("price"))
+            ws_data.cell(row=row_idx, column=7, value=item.get("total"))
+            ws_data.cell(row=row_idx, column=8, value=item.get("notes", ""))
+            _style_data_row(ws_data, row_idx, len(headers))
+            row_idx += 1
+
+    _auto_fit_columns(ws_data)
+    ws_data.freeze_panes = "A2"
+
+    # Sheet 3: Итоги
+    ws_summary = wb.create_sheet("Итоги")
+    summary = data.get("summary", {})
+    summary_rows = [
+        ("Итого работ", summary.get("total_works", "")),
+        ("Итого материалов", summary.get("total_materials", "")),
+        ("НДС (20%)", summary.get("total_vat", "")),
+        ("Итого с НДС", summary.get("grand_total", "")),
+    ]
+
+    ws_summary.cell(row=1, column=1, value="Показатель").font = HEADER_FONT
+    ws_summary.cell(row=1, column=1).fill = HEADER_FILL
+    ws_summary.cell(row=1, column=2, value="Значение").font = HEADER_FONT
+    ws_summary.cell(row=1, column=2).fill = HEADER_FILL
+
+    for row_idx, (key, val) in enumerate(summary_rows, start=2):
+        ws_summary.cell(row=row_idx, column=1, value=key).font = BOLD_FONT
+        cell_val = ws_summary.cell(row=row_idx, column=2, value=val)
+        if isinstance(val, (int, float)):
+            cell_val.number_format = '#,##0.00'
+
+    _auto_fit_columns(ws_summary)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

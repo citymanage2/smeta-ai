@@ -1,0 +1,445 @@
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import Layout from '../components/Layout';
+import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
+import {
+  getTaskStatus,
+  getTaskResults,
+  sendMessage,
+  downloadResult,
+  TaskStatusResponse,
+  ChatMessage,
+} from '../api/tasks';
+
+const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string }> = {
+  pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
+  processing: { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' },
+  completed: { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },
+  failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
+};
+
+function Spinner() {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '16px',
+        height: '16px',
+        border: '2px solid #93c5fd',
+        borderTopColor: '#2563eb',
+        borderRadius: '50%',
+        animation: 'spin 0.7s linear infinite',
+        verticalAlign: 'middle',
+        marginRight: '8px',
+      }}
+    />
+  );
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
+const TaskStatusPage: React.FC = () => {
+  const { taskId } = useParams<{ taskId: string }>();
+  const navigate = useNavigate();
+
+  const [task, setTask] = useState<TaskStatusResponse | null>(null);
+  const [results, setResults] = useState<TaskResult[]>([]);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const [downloading, setDownloading] = useState<number | null>(null);
+  const [error, setError] = useState('');
+
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchStatus = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const data = await getTaskStatus(taskId);
+      setTask(data);
+
+      if (data.status === 'completed') {
+        const res = await getTaskResults(taskId);
+        setResults(res);
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } else if (data.status === 'failed') {
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      }
+    } catch {
+      setError('Не удалось получить статус задачи.');
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    fetchStatus();
+
+    // Add CSS for spinner animation
+    const style = document.createElement('style');
+    style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+    document.head.appendChild(style);
+
+    pollingRef.current = setInterval(fetchStatus, 3000);
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      document.head.removeChild(style);
+    };
+  }, [fetchStatus]);
+
+  const handleSendMessage = async () => {
+    if (!taskId || !message.trim()) return;
+    setSending(true);
+    try {
+      const response = await sendMessage(taskId, message.trim());
+      setChatHistory(response.chat_history);
+      setMessage('');
+    } catch {
+      setError('Не удалось отправить сообщение.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleDownload = async (fileId: number, fileName: string) => {
+    setDownloading(fileId);
+    try {
+      await downloadResult(fileId, fileName);
+    } catch {
+      setError('Ошибка при скачивании файла.');
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  const statusStyle = task ? STATUS_COLORS[task.status] : STATUS_COLORS.pending;
+
+  return (
+    <Layout>
+      <div style={{ maxWidth: '760px', margin: '0 auto' }}>
+        {/* Page title */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+          <h2 style={{ margin: 0, fontSize: '26px', fontWeight: 700, color: '#0f172a' }}>
+            Статус задачи
+          </h2>
+          <button
+            onClick={() => navigate('/task/create')}
+            style={{
+              padding: '9px 18px',
+              backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 600,
+            }}
+          >
+            + Новая задача
+          </button>
+        </div>
+
+        {error && (
+          <div
+            style={{
+              padding: '12px 16px',
+              backgroundColor: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '8px',
+              marginBottom: '16px',
+              fontSize: '14px',
+              color: '#dc2626',
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Task info card */}
+        <div
+          style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '12px',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+            padding: '28px',
+            border: '1px solid #e2e8f0',
+            marginBottom: '20px',
+          }}
+        >
+          {task ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    ID задачи
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#1e293b', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                    {task.id}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Тип задачи
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#1e293b' }}>
+                    {TASK_TYPE_LABELS[task.task_type]}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Создана
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#1e293b' }}>
+                    {formatDate(task.created_at)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Обновлена
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#1e293b' }}>
+                    {formatDate(task.updated_at)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Status badge */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '6px 14px',
+                    backgroundColor: statusStyle.bg,
+                    color: statusStyle.text,
+                    border: `1.5px solid ${statusStyle.border}`,
+                    borderRadius: '20px',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                  }}
+                >
+                  {(task.status === 'pending' || task.status === 'processing') && <Spinner />}
+                  {STATUS_LABELS[task.status]}
+                </span>
+
+                {task.progress_message && (
+                  <span style={{ fontSize: '14px', color: '#64748b' }}>
+                    {task.progress_message}
+                  </span>
+                )}
+              </div>
+
+              {/* Error message */}
+              {task.status === 'failed' && task.error_message && (
+                <div
+                  style={{
+                    marginTop: '16px',
+                    padding: '12px 16px',
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    color: '#dc2626',
+                  }}
+                >
+                  <strong>Ошибка:</strong> {task.error_message}
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
+              <Spinner />
+              Загрузка информации о задаче...
+            </div>
+          )}
+        </div>
+
+        {/* Results */}
+        {results.length > 0 && (
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+              padding: '24px 28px',
+              border: '1px solid #e2e8f0',
+              marginBottom: '20px',
+            }}
+          >
+            <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+              Результаты
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {results.map((result) => (
+                <div
+                  key={result.file_id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '10px 14px',
+                    backgroundColor: '#f0fdf4',
+                    border: '1px solid #86efac',
+                    borderRadius: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '18px' }}>📊</span>
+                    <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
+                      {result.file_name}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleDownload(result.file_id, result.file_name)}
+                    disabled={downloading === result.file_id}
+                    style={{
+                      padding: '7px 16px',
+                      backgroundColor: downloading === result.file_id ? '#86efac' : '#16a34a',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: downloading === result.file_id ? 'not-allowed' : 'pointer',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {downloading === result.file_id ? 'Скачивание...' : 'Скачать'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Chat section */}
+        <div
+          style={{
+            backgroundColor: '#ffffff',
+            borderRadius: '12px',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+            padding: '24px 28px',
+            border: '1px solid #e2e8f0',
+          }}
+        >
+          <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+            Уточнить задачу
+          </h3>
+
+          {/* Chat history */}
+          {chatHistory.length > 0 && (
+            <div
+              style={{
+                maxHeight: '320px',
+                overflowY: 'auto',
+                marginBottom: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                padding: '4px 0',
+              }}
+            >
+              {chatHistory.map((msg, index) => (
+                <div
+                  key={index}
+                  style={{
+                    display: 'flex',
+                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: '80%',
+                      padding: '10px 14px',
+                      backgroundColor: msg.role === 'user' ? '#2563eb' : '#f1f5f9',
+                      color: msg.role === 'user' ? '#ffffff' : '#1e293b',
+                      borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
+                      fontSize: '14px',
+                      lineHeight: '1.5',
+                    }}
+                  >
+                    <p style={{ margin: 0 }}>{msg.content}</p>
+                    <p
+                      style={{
+                        margin: '6px 0 0',
+                        fontSize: '11px',
+                        opacity: 0.6,
+                        textAlign: 'right',
+                      }}
+                    >
+                      {formatDate(msg.timestamp)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Message input */}
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Введите уточнение или дополнительный вопрос..."
+              rows={3}
+              disabled={sending}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              style={{
+                flex: 1,
+                padding: '10px 14px',
+                fontSize: '14px',
+                color: '#1e293b',
+                border: '1.5px solid #e2e8f0',
+                borderRadius: '8px',
+                resize: 'vertical',
+                outline: 'none',
+                fontFamily: 'inherit',
+                backgroundColor: sending ? '#f1f5f9' : '#ffffff',
+                transition: 'border-color 0.15s',
+              }}
+              onFocus={(e) => { e.target.style.borderColor = '#2563eb'; }}
+              onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }}
+            />
+            <button
+              onClick={handleSendMessage}
+              disabled={sending || !message.trim()}
+              style={{
+                padding: '10px 20px',
+                backgroundColor: sending || !message.trim() ? '#93c5fd' : '#2563eb',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: sending || !message.trim() ? 'not-allowed' : 'pointer',
+                fontSize: '14px',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              {sending ? 'Отправка...' : 'Уточнить'}
+            </button>
+          </div>
+          <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+            Ctrl+Enter для отправки
+          </p>
+        </div>
+      </div>
+    </Layout>
+  );
+};
+
+export default TaskStatusPage;
