@@ -26,7 +26,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. After submitting a task, the user sees polling progress — the form does not reset to empty state and no 404 appears in the network log
   2. Refreshing the page or navigating directly to any route (e.g., `/admin`) loads the correct page instead of returning "Not Found"
   3. After logging in as admin, the UI displays "Администратор" in the role indicator, not "Пользователь"
-**Plans**: TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Fix API base URL for production, task_id guard, verify SPA routing (BUG-01, BUG-02)
+- [ ] 01-02-PLAN.md — Fix admin password hash sync on startup (BUG-03)
 
 ### Phase 2: Admin Panel
 **Goal**: Admin can inspect the full history of all requests with access to every associated file and conversation
@@ -56,6 +60,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Bug Fixes | 0/? | Not started | - |
+| 1. Bug Fixes | 0/2 | Planning complete | - |
 | 2. Admin Panel | 0/? | Not started | - |
 | 3. Test Coverage | 0/? | Not started | - |
