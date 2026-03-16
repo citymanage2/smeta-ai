@@ -76,6 +76,7 @@ const TaskStatusPage: React.FC = () => {
     if (!taskId || taskId === 'undefined') return;
     try {
       const data = await getTaskStatus(taskId);
+      setError('');
       setTask(data);
 
       if (data.progress_message) {
@@ -104,8 +105,18 @@ const TaskStatusPage: React.FC = () => {
       } else if (data.status === 'failed') {
         stopTimers();
       }
-    } catch {
-      setError('Не удалось получить статус задачи.');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { status?: number; data?: { detail?: string } } };
+      const status = axiosErr.response?.status;
+      const detail = axiosErr.response?.data?.detail;
+      if (status === 404) {
+        setError(`Задача не найдена (ID: ${taskId}). Возможно, она была удалена.`);
+        stopTimers();
+      } else if (detail) {
+        setError(`Ошибка: ${detail}`);
+      } else {
+        setError('Не удалось получить статус задачи. Проверьте подключение к серверу.');
+      }
     }
   }, [taskId, stopTimers]);
 
