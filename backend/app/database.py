@@ -5,8 +5,17 @@ import structlog
 
 logger = structlog.get_logger()
 
+def _make_async_url(url: str) -> str:
+    """Ensure the database URL uses the asyncpg driver."""
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
+
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _make_async_url(settings.DATABASE_URL),
     echo=False,
     pool_pre_ping=True,
     pool_size=10,
