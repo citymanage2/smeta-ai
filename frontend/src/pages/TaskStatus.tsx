@@ -57,8 +57,14 @@ const TaskStatusPage: React.FC = () => {
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  useEffect(() => {
+    if (!taskId || taskId === 'undefined') {
+      navigate('/task/create');
+    }
+  }, [taskId, navigate]);
+
   const fetchStatus = useCallback(async () => {
-    if (!taskId) return;
+    if (!taskId || taskId === 'undefined') return;
     try {
       const data = await getTaskStatus(taskId);
       setTask(data);
