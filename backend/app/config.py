@@ -1,7 +1,6 @@
 import json
 from pydantic_settings import BaseSettings
-from pydantic import model_validator
-from typing import List, Any
+from typing import List
 
 
 class Settings(BaseSettings):
@@ -15,20 +14,13 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 20
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
 
-    @model_validator(mode="before")
-    @classmethod
-    def parse_list_fields(cls, values: Any) -> Any:
-        if isinstance(values, dict) and "CORS_ORIGINS" in values:
-            v = values["CORS_ORIGINS"]
-            if isinstance(v, str):
-                try:
-                    parsed = json.loads(v)
-                    values["CORS_ORIGINS"] = parsed
-                except Exception:
-                    values["CORS_ORIGINS"] = [o.strip() for o in v.split(",") if o.strip()]
-        return values
+    def get_cors_origins(self) -> List[str]:
+        try:
+            return json.loads(self.CORS_ORIGINS)
+        except Exception:
+            return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
     class Config:
         env_file = ".env"
