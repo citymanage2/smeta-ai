@@ -18,3 +18,14 @@ services:
         sync: false
       - key: CORS_ORIGINS
         value: '["*"]'
+
+  - type: web
+    name: smeta-ai-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
