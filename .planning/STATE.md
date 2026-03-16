@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: executing
+stopped_at: Completed 01-02-PLAN.md (BUG-03 admin password hash sync fix)
+last_updated: "2026-03-16T23:59:44.006Z"
+last_activity: 2026-03-17 — Completed plan 01-01 (BUG-01 + BUG-02 fixes)
+progress:
+  total_phases: 3
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
+  percent: 100
+---
+
 # Project State
 
 ## Project Reference
@@ -14,7 +30,7 @@ Plan: 1 of 3 in current phase
 Status: In progress
 Last activity: 2026-03-17 — Completed plan 01-01 (BUG-01 + BUG-02 fixes)
 
-Progress: [█░░░░░░░░░] 10%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -34,6 +50,7 @@ Progress: [█░░░░░░░░░] 10%
 - Trend: establishing baseline
 
 *Updated after each plan completion*
+| Phase 01-bug-fixes P02 | 8 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -49,6 +66,8 @@ Recent decisions affecting current work:
 - VITE_API_BASE_URL pattern chosen over Render proxy — simpler, explicit, no hidden indirection (plan 01-01)
 - Guard task_id in TaskCreate.tsx before navigate() to fail fast with visible error (plan 01-01)
 - BUG-02 is deployment-gated: code is correct, Render rebuild needed after push (plan 01-01)
+- [Phase 01-bug-fixes]: Password sync on startup: verify existing hash against env var, re-hash on mismatch in _initialize_users (plan 01-02)
+- [Phase 01-bug-fixes]: Avoid unnecessary bcrypt rounds: use verify_password check before re-hashing (plan 01-02)
 
 ### Pending Todos
 
@@ -62,6 +81,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17
-Stopped at: Completed 01-01-PLAN.md (BUG-01 API URL fix + BUG-02 SPA routing verification)
+Last session: 2026-03-16T23:59:44.003Z
+Stopped at: Completed 01-02-PLAN.md (BUG-03 admin password hash sync fix)
 Resume file: None

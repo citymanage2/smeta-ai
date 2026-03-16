@@ -12,7 +12,7 @@ The service is deployed and the core AI pipeline works, but three production bug
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Bug Fixes** - Restore correct behavior for task polling, SPA routing, and admin role display
+- [x] **Phase 1: Bug Fixes** - Restore correct behavior for task polling, SPA routing, and admin role display (completed 2026-03-16)
 - [ ] **Phase 2: Admin Panel** - Deliver complete admin request history with file re-download and conversation transcripts
 - [ ] **Phase 3: Test Coverage** - Automated pytest suite and manual E2E checklist covering all critical flows
 
@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. After submitting a task, the user sees polling progress — the form does not reset to empty state and no 404 appears in the network log
   2. Refreshing the page or navigating directly to any route (e.g., `/admin`) loads the correct page instead of returning "Not Found"
   3. After logging in as admin, the UI displays "Администратор" in the role indicator, not "Пользователь"
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 01-01-PLAN.md — Fix API base URL for production, task_id guard, verify SPA routing (BUG-01, BUG-02)
@@ -60,6 +60,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Bug Fixes | 1/2 | In progress | - |
+| 1. Bug Fixes | 2/2 | Complete   | 2026-03-16 |
 | 2. Admin Panel | 0/? | Not started | - |
 | 3. Test Coverage | 0/? | Not started | - |
