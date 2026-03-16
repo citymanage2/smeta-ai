@@ -54,8 +54,12 @@ const TaskStatusPage: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [downloading, setDownloading] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [progressLog, setProgressLog] = useState<string[]>([]);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!taskId || taskId === 'undefined') {
@@ -63,45 +67,70 @@ const TaskStatusPage: React.FC = () => {
     }
   }, [taskId, navigate]);
 
+  const stopTimers = useCallback(() => {
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+  }, []);
+
   const fetchStatus = useCallback(async () => {
     if (!taskId || taskId === 'undefined') return;
     try {
       const data = await getTaskStatus(taskId);
       setTask(data);
 
+      if (data.progress_message) {
+        setProgressLog((prev) => {
+          const last = prev[prev.length - 1];
+          if (last === data.progress_message) return prev;
+          return [...prev, data.progress_message!];
+        });
+      }
+
+      if (data.status === 'processing' || data.status === 'pending') {
+        if (!startTimeRef.current) {
+          startTimeRef.current = Date.now();
+        }
+        if (!timerRef.current) {
+          timerRef.current = setInterval(() => {
+            setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current!) / 1000));
+          }, 1000);
+        }
+      }
+
       if (data.status === 'completed') {
         const res = await getTaskResults(taskId);
         setResults(res);
-        if (pollingRef.current) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-        }
+        stopTimers();
       } else if (data.status === 'failed') {
-        if (pollingRef.current) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-        }
+        stopTimers();
       }
     } catch {
       setError('Не удалось получить статус задачи.');
     }
-  }, [taskId]);
+  }, [taskId, stopTimers]);
 
   useEffect(() => {
+    if (!taskId || taskId === 'undefined') {
+      navigate('/task/create');
+      return;
+    }
+
     fetchStatus();
 
-    // Add CSS for spinner animation
     const style = document.createElement('style');
-    style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+    style.textContent = `
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+    `;
     document.head.appendChild(style);
 
     pollingRef.current = setInterval(fetchStatus, 3000);
 
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      stopTimers();
       document.head.removeChild(style);
     };
-  }, [fetchStatus]);
+  }, [fetchStatus, taskId, navigate, stopTimers]);
 
   const handleSendMessage = async () => {
     if (!taskId || !message.trim()) return;
@@ -219,8 +248,8 @@ const TaskStatusPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Status badge */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {/* Status badge + elapsed */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <span
                   style={{
                     display: 'inline-flex',
@@ -237,28 +266,102 @@ const TaskStatusPage: React.FC = () => {
                   {(task.status === 'pending' || task.status === 'processing') && <Spinner />}
                   {STATUS_LABELS[task.status]}
                 </span>
-
-                {task.progress_message && (
-                  <span style={{ fontSize: '14px', color: '#64748b' }}>
-                    {task.progress_message}
+                {(task.status === 'pending' || task.status === 'processing') && elapsedSeconds > 0 && (
+                  <span style={{ fontSize: '13px', color: '#94a3b8' }}>
+                    {elapsedSeconds < 60
+                      ? `${elapsedSeconds} сек.`
+                      : `${Math.floor(elapsedSeconds / 60)} мин. ${elapsedSeconds % 60} сек.`}
                   </span>
                 )}
               </div>
 
-              {/* Error message */}
-              {task.status === 'failed' && task.error_message && (
+              {/* Progress log */}
+              {(task.status === 'pending' || task.status === 'processing') && progressLog.length > 0 && (
                 <div
                   style={{
                     marginTop: '16px',
-                    padding: '12px 16px',
+                    padding: '14px 16px',
+                    backgroundColor: '#f0f9ff',
+                    border: '1px solid #bae6fd',
+                    borderRadius: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#0369a1', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Ход выполнения
+                  </div>
+                  {progressLog.map((msg, i) => {
+                    const isLast = i === progressLog.length - 1;
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '8px',
+                          marginBottom: i < progressLog.length - 1 ? '6px' : 0,
+                          opacity: isLast ? 1 : 0.5,
+                        }}
+                      >
+                        <span style={{ fontSize: '14px', marginTop: '1px', flexShrink: 0 }}>
+                          {isLast ? '⏳' : '✓'}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: '14px',
+                            color: isLast ? '#0c4a6e' : '#64748b',
+                            fontWeight: isLast ? 500 : 400,
+                            animation: isLast ? 'pulse 1.8s ease-in-out infinite' : 'none',
+                          }}
+                        >
+                          {msg}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Error message */}
+              {task.status === 'failed' && (
+                <div
+                  style={{
+                    marginTop: '16px',
+                    padding: '16px',
                     backgroundColor: '#fef2f2',
                     border: '1px solid #fecaca',
                     borderRadius: '8px',
-                    fontSize: '14px',
-                    color: '#dc2626',
                   }}
                 >
-                  <strong>Ошибка:</strong> {task.error_message}
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#dc2626', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Ошибка выполнения
+                  </div>
+                  {task.error_message && (
+                    <pre
+                      style={{
+                        margin: 0,
+                        fontSize: '13px',
+                        color: '#7f1d1d',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        fontFamily: 'monospace',
+                        lineHeight: 1.6,
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                      }}
+                    >
+                      {task.error_message}
+                    </pre>
+                  )}
+                  {progressLog.length > 0 && (
+                    <div style={{ marginTop: '12px', borderTop: '1px solid #fecaca', paddingTop: '10px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#991b1b', marginBottom: '6px' }}>
+                        Последний шаг:
+                      </div>
+                      <span style={{ fontSize: '13px', color: '#7f1d1d' }}>
+                        {progressLog[progressLog.length - 1]}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </>
