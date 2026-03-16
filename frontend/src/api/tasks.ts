@@ -26,10 +26,16 @@ export interface TaskCreateResponse {
   status: string;
 }
 
-export async function createTask(formData: FormData): Promise<TaskCreateResponse> {
+export async function createTask(
+  formData: FormData,
+  onUploadProgress?: (percent: number) => void,
+): Promise<TaskCreateResponse> {
   const response = await apiClient.post<TaskCreateResponse>('/tasks', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (event) => {
+      if (onUploadProgress && event.total) {
+        onUploadProgress(Math.round((event.loaded * 100) / event.total));
+      }
     },
   });
   return response.data;

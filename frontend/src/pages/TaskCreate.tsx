@@ -12,6 +12,8 @@ const TaskCreate: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [submitStep, setSubmitStep] = useState<'upload' | 'create' | null>(null);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -24,6 +26,9 @@ const TaskCreate: React.FC = () => {
     }
 
     setSubmitting(true);
+    setUploadPercent(0);
+    setSubmitStep('upload');
+
     try {
       const formData = new FormData();
       formData.append('task_type', taskType);
@@ -34,13 +39,18 @@ const TaskCreate: React.FC = () => {
         formData.append('files', file);
       });
 
-      const task = await createTask(formData);
+      const task = await createTask(formData, (pct) => {
+        setUploadPercent(pct);
+        if (pct >= 100) setSubmitStep('create');
+      });
       navigate(`/task/${task.task_id}/status`);
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string } } };
       setError(axiosError.response?.data?.detail ?? 'Ошибка при создании задачи. Попробуйте ещё раз.');
     } finally {
       setSubmitting(false);
+      setSubmitStep(null);
+      setUploadPercent(0);
     }
   };
 
@@ -145,16 +155,68 @@ const TaskCreate: React.FC = () => {
                 padding: '13px',
                 fontSize: '16px',
                 fontWeight: 600,
-                backgroundColor: submitting ? '#93c5fd' : '#2563eb',
+                backgroundColor: submitting ? '#3b82f6' : '#2563eb',
                 color: '#ffffff',
                 border: 'none',
                 borderRadius: '8px',
                 cursor: submitting ? 'not-allowed' : 'pointer',
-                transition: 'background-color 0.15s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
               }}
             >
-              {submitting ? 'Создание задачи...' : 'Создать задачу'}
+              {submitting && (
+                <span
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    border: '2.5px solid rgba(255,255,255,0.4)',
+                    borderTopColor: '#ffffff',
+                    borderRadius: '50%',
+                    display: 'inline-block',
+                    animation: 'spin 0.8s linear infinite',
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+              {submitting
+                ? submitStep === 'upload'
+                  ? `Загрузка файлов... ${uploadPercent}%`
+                  : 'Создание задачи...'
+                : 'Создать задачу'}
             </button>
+
+            {/* Upload progress bar */}
+            {submitting && (
+              <div style={{ marginTop: '12px' }}>
+                <div
+                  style={{
+                    height: '6px',
+                    backgroundColor: '#e2e8f0',
+                    borderRadius: '4px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: submitStep === 'create' ? '100%' : `${uploadPercent}%`,
+                      backgroundColor: submitStep === 'create' ? '#22c55e' : '#3b82f6',
+                      borderRadius: '4px',
+                      transition: 'width 0.2s ease, background-color 0.3s',
+                    }}
+                  />
+                </div>
+                <div style={{ marginTop: '6px', fontSize: '12px', color: '#64748b', textAlign: 'center' }}>
+                  {submitStep === 'upload'
+                    ? `Загрузка ${files.length > 1 ? `${files.length} файлов` : 'файла'}...`
+                    : '✓ Файлы загружены — создаём задачу...'}
+                </div>
+              </div>
+            )}
+
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </form>
         </div>
       </div>
