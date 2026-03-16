@@ -28,7 +28,7 @@ const TaskCreate: React.FC = () => {
       const formData = new FormData();
       formData.append('task_type', taskType);
       if (prompt.trim()) {
-        formData.append('user_prompt', prompt.trim());
+        formData.append('prompt', prompt.trim());
       }
       files.forEach((file) => {
         formData.append('files', file);
@@ -68,6 +68,23 @@ const TaskCreate: React.FC = () => {
           }}
         >
           <form onSubmit={handleSubmit} noValidate>
+            {/* Error */}
+            {error && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  backgroundColor: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: '8px',
+                  marginBottom: '20px',
+                  fontSize: '14px',
+                  color: '#dc2626',
+                }}
+              >
+                {error}
+              </div>
+            )}
+
             {/* Task type */}
             <div style={{ marginBottom: '24px' }}>
               <TaskTypeSelector value={taskType} onChange={setTaskType} disabled={submitting} />
@@ -118,23 +135,6 @@ const TaskCreate: React.FC = () => {
                 onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }}
               />
             </div>
-
-            {/* Error */}
-            {error && (
-              <div
-                style={{
-                  padding: '10px 14px',
-                  backgroundColor: '#fef2f2',
-                  border: '1px solid #fecaca',
-                  borderRadius: '8px',
-                  marginBottom: '20px',
-                  fontSize: '14px',
-                  color: '#dc2626',
-                }}
-              >
-                {error}
-              </div>
-            )}
 
             {/* Submit */}
             <button

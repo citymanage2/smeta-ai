@@ -65,9 +65,13 @@ def _get_mime_type(file: UploadFile) -> str:
 
 
 class TaskStatusResponse(BaseModel):
+    id: str
+    task_type: str
     status: str
     progress_message: Optional[str]
-    error: Optional[str]
+    error_message: Optional[str]
+    created_at: str
+    updated_at: str
 
 
 class TaskCreateResponse(BaseModel):
@@ -196,9 +200,13 @@ async def get_task_status(
         )
 
     return TaskStatusResponse(
+        id=str(task.id),
+        task_type=task.task_type,
         status=task.status,
         progress_message=task.progress_message,
-        error=task.error_message,
+        error_message=task.error_message,
+        created_at=task.created_at.isoformat(),
+        updated_at=task.updated_at.isoformat(),
     )
 
 
