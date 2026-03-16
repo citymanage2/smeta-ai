@@ -43,6 +43,10 @@ const TaskCreate: React.FC = () => {
         setUploadPercent(pct);
         if (pct >= 100) setSubmitStep('create');
       });
+      if (!task.task_id) {
+        setError('Задача создана, но ID не получен. Попробуйте обновить страницу.');
+        return;
+      }
       navigate(`/task/${task.task_id}/status`);
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string } } };
