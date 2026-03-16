@@ -1,6 +1,7 @@
+import json
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
-from typing import List
+from pydantic import model_validator
+from typing import List, Any
 
 
 class Settings(BaseSettings):
@@ -16,16 +17,18 @@ class Settings(BaseSettings):
     TASK_TIMEOUT_SECONDS: int = 600
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
 
-    @field_validator("CORS_ORIGINS", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            import json
-            try:
-                return json.loads(v)
-            except Exception:
-                return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+    def parse_list_fields(cls, values: Any) -> Any:
+        if isinstance(values, dict) and "CORS_ORIGINS" in values:
+            v = values["CORS_ORIGINS"]
+            if isinstance(v, str):
+                try:
+                    parsed = json.loads(v)
+                    values["CORS_ORIGINS"] = parsed
+                except Exception:
+                    values["CORS_ORIGINS"] = [o.strip() for o in v.split(",") if o.strip()]
+        return values
 
     class Config:
         env_file = ".env"
