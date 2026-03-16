@@ -11,7 +11,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.config import settings
 from app.database import init_db, AsyncSessionLocal
 from app.models.user import User
-from app.utils.auth import hash_password
+from app.utils.auth import hash_password, verify_password
 from sqlalchemy import select
 
 # Configure structlog
@@ -31,7 +31,12 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 async def _initialize_users() -> None:
-    """Create default user and admin accounts if they don't exist."""
+    """Create or update default user and admin accounts.
+
+    If a user for a role already exists but the password hash doesn't match
+    the current environment variable, update the hash. This ensures password
+    changes via env vars take effect after redeployment.
+    """
     async with AsyncSessionLocal() as db:
         for role, password in [("user", settings.USER_PASSWORD), ("admin", settings.ADMIN_PASSWORD)]:
             result = await db.execute(select(User).where(User.role == role))
@@ -43,6 +48,11 @@ async def _initialize_users() -> None:
                 )
                 db.add(user)
                 logger.info("Created default user", role=role)
+            else:
+                # Update password hash if env var changed since last deploy
+                if not verify_password(password, existing.password_hash):
+                    existing.password_hash = hash_password(password)
+                    logger.info("Updated password hash for user", role=role)
 
         await db.commit()
 
