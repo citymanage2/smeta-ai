@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-01-PLAN.md (backend test suite)
-last_updated: "2026-03-17T23:06:40.377Z"
+stopped_at: Completed 03-02-PLAN.md (manual E2E checklist)
+last_updated: "2026-03-17T23:10:12.673Z"
 last_activity: 2026-03-17 — Completed plan 01-01 (BUG-01 + BUG-02 fixes)
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
   percent: 100
 ---
 
@@ -52,6 +52,7 @@ Progress: [██████████] 100%
 *Updated after each plan completion*
 | Phase 01-bug-fixes P02 | 8 | 2 tasks | 1 files |
 | Phase 03-test-coverage P01 | 8 | 2 tasks | 12 files |
+| Phase 03-test-coverage P02 | 2 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,8 @@ Recent decisions affecting current work:
 - [Phase 01-bug-fixes]: Avoid unnecessary bcrypt rounds: use verify_password check before re-hashing (plan 01-02)
 - [Phase 03-test-coverage]: Use String(36) instead of postgresql.UUID(as_uuid=False) in models for SQLite test compatibility
 - [Phase 03-test-coverage]: Fix Mapped[X | None] to Mapped[Optional[X]] across models/services for Python 3.9 compatibility
+- [Phase 03-test-coverage]: 10-section E2E checklist mirrors backend router organization for traceability — auth, tasks, results, admin
+- [Phase 03-test-coverage]: Include exact error message strings in E2E checklist so testers can confirm error handling without ambiguity
 
 ### Pending Todos
 
@@ -84,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T23:06:40.374Z
-Stopped at: Completed 03-01-PLAN.md (backend test suite)
+Last session: 2026-03-17T23:10:08.850Z
+Stopped at: Completed 03-02-PLAN.md (manual E2E checklist)
 Resume file: None
