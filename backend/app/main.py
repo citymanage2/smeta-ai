@@ -82,7 +82,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS
+    # Rate limiting middleware
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
+    # CORS — must be added last so it runs first (outermost), handling
+    # OPTIONS preflights before any other middleware touches the request.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.get_cors_origins(),
@@ -90,11 +96,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Rate limiting middleware
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_middleware(SlowAPIMiddleware)
 
     # Include routers
     from app.routers import auth, tasks, results, admin

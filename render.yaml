@@ -17,7 +17,7 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: CORS_ORIGINS
-        value: '["*"]'
+        value: 'https://smeta-ai.onrender.com'
 
   - type: web
     name: smeta-ai-frontend
