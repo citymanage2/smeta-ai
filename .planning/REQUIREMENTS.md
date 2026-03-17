@@ -20,9 +20,9 @@
 
 ### Testing
 
-- [ ] **TEST-01**: pytest suite covers: authentication (valid/invalid login, role verification), task creation, task status polling, result download, and admin panel endpoints
+- [x] **TEST-01**: pytest suite covers: authentication (valid/invalid login, role verification), task creation, task status polling, result download, and admin panel endpoints
 - [ ] **TEST-02**: Manual E2E test checklist documents step-by-step verification of all critical flows for post-deployment use
-- [ ] **TEST-03**: Additional bugs discovered during testing are identified and fixed
+- [x] **TEST-03**: Additional bugs discovered during testing are identified and fixed
 
 ## v2 Requirements
 
@@ -64,9 +64,9 @@
 | ADMIN-02 | Phase 2 | Pending |
 | ADMIN-03 | Phase 2 | Pending |
 | ADMIN-04 | Phase 2 | Pending |
-| TEST-01 | Phase 3 | Pending |
+| TEST-01 | Phase 3 | Complete |
 | TEST-02 | Phase 3 | Pending |
-| TEST-03 | Phase 3 | Pending |
+| TEST-03 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 10 total

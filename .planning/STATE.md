@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-02-PLAN.md (BUG-03 admin password hash sync fix)
-last_updated: "2026-03-16T23:59:44.006Z"
+stopped_at: Completed 03-01-PLAN.md (backend test suite)
+last_updated: "2026-03-17T23:06:40.377Z"
 last_activity: 2026-03-17 — Completed plan 01-01 (BUG-01 + BUG-02 fixes)
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
   percent: 100
 ---
 
@@ -51,6 +51,7 @@ Progress: [██████████] 100%
 
 *Updated after each plan completion*
 | Phase 01-bug-fixes P02 | 8 | 2 tasks | 1 files |
+| Phase 03-test-coverage P01 | 8 | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,8 @@ Recent decisions affecting current work:
 - BUG-02 is deployment-gated: code is correct, Render rebuild needed after push (plan 01-01)
 - [Phase 01-bug-fixes]: Password sync on startup: verify existing hash against env var, re-hash on mismatch in _initialize_users (plan 01-02)
 - [Phase 01-bug-fixes]: Avoid unnecessary bcrypt rounds: use verify_password check before re-hashing (plan 01-02)
+- [Phase 03-test-coverage]: Use String(36) instead of postgresql.UUID(as_uuid=False) in models for SQLite test compatibility
+- [Phase 03-test-coverage]: Fix Mapped[X | None] to Mapped[Optional[X]] across models/services for Python 3.9 compatibility
 
 ### Pending Todos
 
@@ -81,6 +84,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-16T23:59:44.003Z
-Stopped at: Completed 01-02-PLAN.md (BUG-03 admin password hash sync fix)
+Last session: 2026-03-17T23:06:40.374Z
+Stopped at: Completed 03-01-PLAN.md (backend test suite)
 Resume file: None
