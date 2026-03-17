@@ -87,11 +87,12 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
 
-    # CORS — must be added last so it runs first (outermost), handling
-    # OPTIONS preflights before any other middleware touches the request.
+    # CORS — hardcoded to ["*"] so no env var can silently break preflights.
+    # Safe because allow_credentials=False (Bearer tokens, no cookies).
+    # Must be added last so Starlette places it outermost (first to run).
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.get_cors_origins(),
+        allow_origins=["*"],
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
