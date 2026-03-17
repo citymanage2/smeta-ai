@@ -19,9 +19,8 @@ services:
       - key: CORS_ORIGINS
         value: 'https://smeta-ai.onrender.com'
 
-  - type: web
+  - type: static
     name: smeta-ai-frontend
-    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist

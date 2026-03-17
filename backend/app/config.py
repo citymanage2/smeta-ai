@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_MB: int = 20
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    CORS_ORIGINS: str = "*"
 
     def get_cors_origins(self) -> List[str]:
         try:
