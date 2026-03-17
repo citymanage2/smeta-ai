@@ -151,6 +151,8 @@ def generate_smeta(items: list) -> bytes:
         "Итого без НДС",
         "НДС (20%)",
         "Итого с НДС",
+        "Наименование в прайсе",
+        "Источники",
         "Примечание",
     ]
     for col, h in enumerate(headers, start=1):
@@ -183,7 +185,9 @@ def generate_smeta(items: list) -> bytes:
         ws.cell(row=row, column=10, value=subtotal if subtotal else None)
         ws.cell(row=row, column=11, value=vat if vat else None)
         ws.cell(row=row, column=12, value=total if total else None)
-        ws.cell(row=row, column=13, value=item.get("notes", ""))
+        ws.cell(row=row, column=13, value=item.get("price_list_name", "") or "")
+        ws.cell(row=row, column=14, value=item.get("sources", "") or "")
+        ws.cell(row=row, column=15, value=item.get("notes", ""))
         _style_data_row(ws, row, len(headers))
 
     # Totals row
@@ -221,7 +225,7 @@ def generate_smeta(items: list) -> bytes:
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
     ws_w = wb.create_sheet("Работы")
-    w_headers = ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена за ед.", "Стоимость"]
+    w_headers = ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена за ед.", "Стоимость", "Наименование в прайсе", "Источники"]
     for col, h in enumerate(w_headers, start=1):
         ws_w.cell(row=1, column=col, value=h)
     _style_header_row(ws_w, 1, len(w_headers))
@@ -237,6 +241,8 @@ def generate_smeta(items: list) -> bytes:
         ws_w.cell(row=row, column=4, value=qty)
         ws_w.cell(row=row, column=5, value=price if price else None)
         ws_w.cell(row=row, column=6, value=qty * price if price else None)
+        ws_w.cell(row=row, column=7, value=item.get("price_list_name", "") or "")
+        ws_w.cell(row=row, column=8, value=item.get("sources", "") or "")
         _style_data_row(ws_w, row, len(w_headers))
 
     if works:
@@ -260,7 +266,7 @@ def generate_smeta(items: list) -> bytes:
     # Sheet 3: Материалы
     materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
     ws_m = wb.create_sheet("Материалы")
-    m_headers = ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена за ед.", "Стоимость"]
+    m_headers = ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена за ед.", "Стоимость", "Наименование в прайсе", "Источники"]
     for col, h in enumerate(m_headers, start=1):
         ws_m.cell(row=1, column=col, value=h)
     _style_header_row(ws_m, 1, len(m_headers))
@@ -276,6 +282,8 @@ def generate_smeta(items: list) -> bytes:
         ws_m.cell(row=row, column=4, value=qty)
         ws_m.cell(row=row, column=5, value=price if price else None)
         ws_m.cell(row=row, column=6, value=qty * price if price else None)
+        ws_m.cell(row=row, column=7, value=item.get("price_list_name", "") or "")
+        ws_m.cell(row=row, column=8, value=item.get("sources", "") or "")
         _style_data_row(ws_m, row, len(m_headers))
 
     if materials:
