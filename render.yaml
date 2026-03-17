@@ -20,10 +20,9 @@ services:
         value: 'https://smeta-ai.onrender.com'
 
   - type: static
-    name: smeta-ai-frontend
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
+    name: smeta-ai
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
     routes:
       - type: rewrite
         source: /*
