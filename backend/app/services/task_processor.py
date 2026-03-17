@@ -11,7 +11,7 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.services.claude_service import call_claude
 from app.services import price_service
-from app.services.excel_service import generate_list, generate_smeta, generate_scan_result
+from app.services.excel_service import generate_list, generate_smeta, generate_smeta_detailed, generate_scan_result
 from app.services.pdf_service import generate_comparison_report
 from app.utils.file_parser import parse_file
 
@@ -211,6 +211,134 @@ PROMPT_COMPARE = """Сравни проектную документацию (п
 }"""
 
 
+PROMPT_STAGE1_FROM_PROJECT = """Ты — опытный инженер-сметчик. Тебе предоставлена проектная документация.
+
+Задача: составить подробный перечень всех работ и материалов, необходимых для реализации проекта.
+
+Требования:
+- Извлеки ВСЕ виды работ и материалов из документации
+- Для каждой позиции определи единицу измерения и количество
+- Разбей на категории: отдельно работы, отдельно материалы
+- Если количество не определяется однозначно — укажи "?" и поясни в примечании
+- Выводи строго в виде структурированного списка
+- Язык вывода: русский
+
+Формат каждой позиции:
+[Тип: Работа/Материал] | [Наименование] | [Ед.изм.] | [Кол-во] | [Примечание]"""
+
+PROMPT_STAGE1_FROM_EDC = """Ты — опытный инженер-сметчик. Тебе предоставлены два документа: проектная документация и ЭДЦ (элементные дефектные ведомости/ценники).
+
+Задача: составить подробный перечень всех работ и материалов на основе ОБОИХ документов.
+
+Требования:
+- Сопоставь данные проекта и ЭДЦ
+- Если позиция есть в обоих — объедини, укажи расхождение в примечании
+- Если позиция только в проекте — пометь "только проект"
+- Если позиция только в ЭДЦ — пометь "только ЭДЦ"
+- Для каждой позиции определи единицу измерения и количество
+- Если количество не определяется — укажи "?" и поясни
+- Язык вывода: русский
+
+Формат каждой позиции:
+[Тип: Работа/Материал] | [Наименование] | [Ед.изм.] | [Кол-во] | [Источник: проект/ЭДЦ/оба] | [Примечание]"""
+
+PROMPT_STAGE1_FROM_GRAND = """Ты — опытный инженер-сметчик. Тебе предоставлена смета в формате Гранд-Смета.
+
+Задача: извлечь полный структурированный перечень всех работ и материалов из сметы Гранд.
+
+Требования:
+- Разбери структуру сметы Гранд: разделы, подразделы, позиции
+- Для каждой позиции извлеки: наименование, единицу измерения, количество, расценку ГЭСН/ТЕР если указана
+- Разбей на категории: работы и материалы
+- Сохрани иерархию разделов сметы
+- Язык вывода: русский
+
+Формат каждой позиции:
+[Раздел] | [Тип: Работа/Материал] | [Наименование] | [Код ГЭСН/ТЕР] | [Ед.изм.] | [Кол-во] | [Цена Гранд] | [Примечание]"""
+
+PROMPT_STAGE2_SMETA = """Ты — снабженец/сметчик с опытом в строительстве.
+
+На основании полученного перечня работ и материалов подготовь полную смету для закупки/бюджетирования.
+
+Прайс на работы:
+{price_list_works}
+
+Прайс на материалы:
+{price_list_materials}
+
+Инструкции по ценообразованию:
+1. Найди каждую позицию в соответствующем прайсе (нечёткий поиск — ищи по смыслу, не только по точному совпадению)
+2. Если позиция найдена в прайсе — используй цену из прайса, в поле "price_list_name" запиши точное название из прайса
+3. Если позиции нет в прайсе — найди актуальную цену в интернете:
+   Регион: Россия, г. Екатеринбург, Свердловская область
+   Период: актуальный на сегодня ({current_date})
+   Класс: нормальные бренды, квалифицированные подрядчики с лицензиями/допусками СРО
+   В поле "notes" укажи источник цены
+4. Все цены указывай БЕЗ НДС (НДС будет рассчитан автоматически по ставке 22%)
+5. Для работ подрядчика на УСН (если очевидно): usn=true, тогда НДС=0
+6. Если количество не определено ("?") — оставь quantity=null, в notes поясни
+
+Верни результат СТРОГО в формате JSON (без markdown блоков):
+{{
+  "items": [
+    {{
+      "type": "Работа" или "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "work_price": число или null,
+      "mat_price": число или null,
+      "usn": false,
+      "price_list_name": "Точное название из прайса или источника" или null,
+      "notes": "Примечание / источник цены"
+    }}
+  ]
+}}
+
+Язык: русский."""
+
+PROMPT_STAGE2_GRAND = """Ты — снабженец/сметчик с опытом в строительстве.
+
+На основании перечня из сметы Гранд подготовь рыночную смету для закупки/бюджетирования.
+
+Прайс на работы:
+{price_list_works}
+
+Прайс на материалы:
+{price_list_materials}
+
+Инструкции по ценообразованию:
+1. Для каждой позиции найди рыночную цену (не нормативную цену Гранд)
+2. Сначала ищи в прайсах (нечёткий поиск по смыслу)
+3. Если не найдено — ищи актуальную рыночную цену в интернете:
+   Регион: Россия, г. Екатеринбург, Свердловская область
+   Период: актуальный на сегодня ({current_date})
+   Класс: нормальные бренды, квалифицированные подрядчики с лицензиями/допусками СРО
+4. В поле "price_list_name" — точное название из прайса или источника
+5. В поле "notes" — для позиций из Гранд укажи исходную цену Гранд для сравнения
+6. Все цены указывай БЕЗ НДС (НДС будет рассчитан автоматически по ставке 22%)
+7. Для работ подрядчика на УСН: usn=true
+
+Верни результат СТРОГО в формате JSON (без markdown блоков):
+{{
+  "items": [
+    {{
+      "type": "Работа" или "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "work_price": число или null,
+      "mat_price": число или null,
+      "usn": false,
+      "price_list_name": "Точное название из прайса или источника" или null,
+      "notes": "Примечание / источник цены / цена Гранд"
+    }}
+  ]
+}}
+
+Язык: русский."""
+
+
 class TaskProcessor:
     def __init__(self, task_id: str, db: AsyncSession):
         self.task_id = task_id
@@ -354,6 +482,12 @@ class TaskProcessor:
                 await self._handle_scan_to_excel(task)
             elif task_type == "COMPARE_PROJECT_SMETA":
                 await self._handle_compare(task)
+            elif task_type == "SMETA_FROM_PROJECT":
+                await self._handle_smeta_from_project(task)
+            elif task_type == "SMETA_FROM_EDC_PROJECT":
+                await self._handle_smeta_from_edc(task)
+            elif task_type == "SMETA_FROM_GRAND_PROJECT":
+                await self._handle_smeta_from_grand(task)
             else:
                 raise ValueError(f"Неизвестный тип задачи: {task.task_type}")
 
@@ -498,6 +632,111 @@ class TaskProcessor:
 
         discrepancies_count = len(data.get("discrepancies", []))
         logger.info("Compare task completed", discrepancies=discrepancies_count)
+
+
+    def _format_price_list_text(self) -> tuple[str, str]:
+        """Format DB price caches as text for use in Stage 2 prompt."""
+        works_lines = []
+        for w in price_service._works_cache[:300]:
+            price = w.get("min_price") or ""
+            unit = w.get("unit") or ""
+            works_lines.append(f"- {w['name']} | {unit} | {price} руб.")
+        works_text = "\n".join(works_lines) if works_lines else "(прайс пуст)"
+
+        mats_lines = []
+        for m in price_service._materials_cache[:300]:
+            price = m.get("price") or ""
+            unit = m.get("unit") or ""
+            mats_lines.append(f"- {m['name']} | {unit} | {price} руб.")
+        mats_text = "\n".join(mats_lines) if mats_lines else "(прайс пуст)"
+
+        return works_text, mats_text
+
+    async def _handle_two_stage_smeta(
+        self,
+        task: Task,
+        stage1_prompt: str,
+        stage2_prompt_template: str,
+        file_suffix: str,
+    ) -> None:
+        """Common two-stage handler: extract list → build priced estimate."""
+        from datetime import date
+
+        # Stage 1: extract list
+        await self.update_progress("Этап 1: извлечение перечня работ и материалов...")
+        messages, image_blocks = self._build_messages_with_files(task, stage1_prompt)
+        stage1_response = await call_claude(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks if image_blocks else None,
+        )
+        logger.info("Stage 1 complete", task_id=self.task_id, length=len(stage1_response))
+
+        # Load price cache
+        await self.update_progress("Загрузка базы расценок...")
+        await price_service.load_cache(self.db)
+        works_text, mats_text = self._format_price_list_text()
+
+        # Stage 2: build priced estimate
+        await self.update_progress("Этап 2: составление сметы с ценами (поиск по прайсу и интернету)...")
+        current_date = date.today().strftime("%d.%m.%Y")
+        stage2_prompt = stage2_prompt_template.format(
+            price_list_works=works_text,
+            price_list_materials=mats_text,
+            current_date=current_date,
+        )
+        stage2_messages = [
+            {"role": "user", "content": f"Перечень работ и материалов:\n\n{stage1_response}\n\n{stage2_prompt}"}
+        ]
+        if task.user_prompt:
+            stage2_messages[0]["content"] += f"\n\nДополнительные требования: {task.user_prompt}"
+
+        stage2_response = await call_claude(
+            stage2_messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=True,
+        )
+
+        await self.update_progress("Обработка результатов сметы...")
+        data = self._parse_json_response(stage2_response)
+        items = data.get("items", [])
+        if not items:
+            raise ValueError("Claude не вернул позиции сметы. Проверьте содержимое документов.")
+
+        await self.update_progress(f"Формирование Excel ({len(items)} позиций)...")
+        excel_data = generate_smeta_detailed(items)
+        file_name = f"{file_suffix}_{date.today().strftime('%Y-%m-%d')}.xlsx"
+        await self.save_result(
+            file_name,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            excel_data,
+        )
+        logger.info("Two-stage smeta completed", task_id=self.task_id, items=len(items))
+
+    async def _handle_smeta_from_project(self, task: Task) -> None:
+        await self._handle_two_stage_smeta(
+            task,
+            stage1_prompt=PROMPT_STAGE1_FROM_PROJECT,
+            stage2_prompt_template=PROMPT_STAGE2_SMETA,
+            file_suffix="SMETA_FROM_PROJECT",
+        )
+
+    async def _handle_smeta_from_edc(self, task: Task) -> None:
+        await self._handle_two_stage_smeta(
+            task,
+            stage1_prompt=PROMPT_STAGE1_FROM_EDC,
+            stage2_prompt_template=PROMPT_STAGE2_SMETA,
+            file_suffix="SMETA_FROM_EDC_PROJECT",
+        )
+
+    async def _handle_smeta_from_grand(self, task: Task) -> None:
+        await self._handle_two_stage_smeta(
+            task,
+            stage1_prompt=PROMPT_STAGE1_FROM_GRAND,
+            stage2_prompt_template=PROMPT_STAGE2_GRAND,
+            file_suffix="SMETA_FROM_GRAND_PROJECT",
+        )
 
 
 async def process_task(task_id: str, db: AsyncSession) -> None:

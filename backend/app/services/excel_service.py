@@ -301,6 +301,270 @@ def generate_smeta(items: list) -> bytes:
     return buf.getvalue()
 
 
+def generate_smeta_detailed(items: list) -> bytes:
+    """
+    Generate detailed smeta Excel with 3 sheets and VAT sub-columns.
+    items: list of dicts with:
+        type, name, unit, quantity,
+        work_price (ex. VAT), mat_price (ex. VAT),
+        usn (bool: if True, VAT=0), price_list_name, notes
+    """
+    VAT_RATE = 0.22
+    wb = openpyxl.Workbook()
+
+    def _vat_triple(price, usn: bool):
+        """Return (ex_vat, vat, inc_vat) for a given price."""
+        if not price:
+            return None, None, None
+        vat = 0.0 if usn else price * VAT_RATE
+        return price, vat, price + vat
+
+    def _write_sheet1(ws, rows):
+        """Sheet 1: Перечень работ и материалов (all items)."""
+        # Row 1: group headers with merges
+        groups = [
+            (1, 1, "№ п/п"),
+            (2, 2, "Работа/\nМатериал"),
+            (3, 3, "Наименование"),
+            (4, 4, "Ед. изм."),
+            (5, 5, "Кол-во"),
+            (6, 8, "Цена за ед. изм.\nРаботы"),
+            (9, 11, "Стоимость работ\nруб."),
+            (12, 14, "Цена за ед. изм.\nМатериала"),
+            (15, 17, "Стоимость\nМатериала руб."),
+            (18, 18, "Наименование\nв прайсе"),
+            (19, 19, "Примечание"),
+        ]
+        for c_start, c_end, title in groups:
+            ws.cell(row=1, column=c_start, value=title)
+            if c_start == c_end:
+                ws.merge_cells(start_row=1, start_column=c_start, end_row=2, end_column=c_start)
+            else:
+                ws.merge_cells(start_row=1, start_column=c_start, end_row=1, end_column=c_end)
+        # Row 2: sub-headers for VAT columns
+        for col, label in [
+            (6, "без НДС"), (7, "НДС"), (8, "с НДС"),
+            (9, "без НДС"), (10, "НДС"), (11, "с НДС"),
+            (12, "без НДС"), (13, "НДС"), (14, "с НДС"),
+            (15, "без НДС"), (16, "НДС"), (17, "с НДС"),
+        ]:
+            ws.cell(row=2, column=col, value=label)
+        total_cols = 19
+        _style_header_row(ws, 1, total_cols)
+        _style_header_row(ws, 2, total_cols)
+        ws.row_dimensions[1].height = 40
+        ws.row_dimensions[2].height = 30
+
+        for i, item in enumerate(rows, start=1):
+            r = i + 2
+            qty = item.get("quantity") or 0
+            wp = item.get("work_price") or 0
+            mp = item.get("mat_price") or 0
+            usn = item.get("usn", False)
+
+            wp_ex, wp_vat, wp_inc = _vat_triple(wp, usn)
+            mp_ex, mp_vat, mp_inc = _vat_triple(mp, usn)
+            wt_ex = (wp_ex or 0) * qty or None
+            wt_vat = (wp_vat or 0) * qty or None
+            wt_inc = (wp_inc or 0) * qty or None
+            mt_ex = (mp_ex or 0) * qty or None
+            mt_vat = (mp_vat or 0) * qty or None
+            mt_inc = (mp_inc or 0) * qty or None
+
+            vals = [
+                i, item.get("type", ""), item.get("name", ""),
+                item.get("unit", ""), qty if qty else None,
+                wp_ex, wp_vat, wp_inc,
+                wt_ex, wt_vat, wt_inc,
+                mp_ex, mp_vat, mp_inc,
+                mt_ex, mt_vat, mt_inc,
+                item.get("price_list_name", ""),
+                item.get("notes", ""),
+            ]
+            for col, val in enumerate(vals, start=1):
+                ws.cell(row=r, column=col, value=val)
+            _style_data_row(ws, r, total_cols)
+
+        # Currency format
+        for col in range(6, 18):
+            for r in range(3, len(rows) + 3):
+                ws.cell(row=r, column=col).number_format = '#,##0.00'
+
+        # Totals row
+        if rows:
+            tr = len(rows) + 3
+            ws.cell(row=tr, column=1, value="ИТОГО")
+            ws.merge_cells(start_row=tr, start_column=1, end_row=tr, end_column=5)
+            data_start, data_end = 3, len(rows) + 2
+            for col in range(9, 18):
+                cl = get_column_letter(col)
+                ws.cell(row=tr, column=col,
+                        value=f"=SUM({cl}{data_start}:{cl}{data_end})")
+                ws.cell(row=tr, column=col).number_format = '#,##0.00'
+            for col in range(1, total_cols + 1):
+                c = ws.cell(row=tr, column=col)
+                c.fill = TOTAL_FILL
+                c.font = BOLD_FONT
+                c.border = THIN_BORDER
+
+        _auto_fit_columns(ws)
+        ws.freeze_panes = "A3"
+
+    def _write_sheet_works(ws, works):
+        """Sheet 2: Перечень работ."""
+        total_cols = 12
+        groups = [
+            (1, 1, "№ п/п"),
+            (2, 2, "Наименование"),
+            (3, 3, "Ед. изм."),
+            (4, 4, "Кол-во"),
+            (5, 7, "Цена за ед. изм.\nРаботы"),
+            (8, 10, "Стоимость работ\nруб."),
+            (11, 11, "Наименование\nв прайсе"),
+            (12, 12, "Примечание"),
+        ]
+        for c_start, c_end, title in groups:
+            ws.cell(row=1, column=c_start, value=title)
+            if c_start == c_end:
+                ws.merge_cells(start_row=1, start_column=c_start, end_row=2, end_column=c_start)
+            else:
+                ws.merge_cells(start_row=1, start_column=c_start, end_row=1, end_column=c_end)
+        for col, label in [(5, "без НДС"), (6, "НДС"), (7, "с НДС"),
+                           (8, "без НДС"), (9, "НДС"), (10, "с НДС")]:
+            ws.cell(row=2, column=col, value=label)
+        _style_header_row(ws, 1, total_cols)
+        _style_header_row(ws, 2, total_cols)
+        ws.row_dimensions[1].height = 40
+        ws.row_dimensions[2].height = 30
+
+        for i, item in enumerate(works, start=1):
+            r = i + 2
+            qty = item.get("quantity") or 0
+            wp = item.get("work_price") or 0
+            usn = item.get("usn", False)
+            wp_ex, wp_vat, wp_inc = _vat_triple(wp, usn)
+            wt_ex = (wp_ex or 0) * qty or None
+            wt_vat = (wp_vat or 0) * qty or None
+            wt_inc = (wp_inc or 0) * qty or None
+            vals = [
+                i, item.get("name", ""), item.get("unit", ""),
+                qty if qty else None,
+                wp_ex, wp_vat, wp_inc,
+                wt_ex, wt_vat, wt_inc,
+                item.get("price_list_name", ""), item.get("notes", ""),
+            ]
+            for col, val in enumerate(vals, start=1):
+                ws.cell(row=r, column=col, value=val)
+            _style_data_row(ws, r, total_cols)
+
+        for col in range(5, 11):
+            for r in range(3, len(works) + 3):
+                ws.cell(row=r, column=col).number_format = '#,##0.00'
+
+        if works:
+            tr = len(works) + 3
+            ws.cell(row=tr, column=1, value="ИТОГО")
+            ws.merge_cells(start_row=tr, start_column=1, end_row=tr, end_column=4)
+            for col in range(8, 11):
+                cl = get_column_letter(col)
+                ws.cell(row=tr, column=col,
+                        value=f"=SUM({cl}3:{cl}{len(works)+2})")
+                ws.cell(row=tr, column=col).number_format = '#,##0.00'
+            for col in range(1, total_cols + 1):
+                c = ws.cell(row=tr, column=col)
+                c.fill = TOTAL_FILL
+                c.font = BOLD_FONT
+                c.border = THIN_BORDER
+
+        _auto_fit_columns(ws)
+        ws.freeze_panes = "A3"
+
+    def _write_sheet_materials(ws, materials):
+        """Sheet 3: Перечень материалов."""
+        total_cols = 12
+        groups = [
+            (1, 1, "№ п/п"),
+            (2, 2, "Наименование"),
+            (3, 3, "Ед. изм."),
+            (4, 4, "Кол-во"),
+            (5, 7, "Цена за ед. изм.\nМатериала"),
+            (8, 10, "Стоимость\nМатериала руб."),
+            (11, 11, "Наименование\nв прайсе"),
+            (12, 12, "Примечание"),
+        ]
+        for c_start, c_end, title in groups:
+            ws.cell(row=1, column=c_start, value=title)
+            if c_start == c_end:
+                ws.merge_cells(start_row=1, start_column=c_start, end_row=2, end_column=c_start)
+            else:
+                ws.merge_cells(start_row=1, start_column=c_start, end_row=1, end_column=c_end)
+        for col, label in [(5, "без НДС"), (6, "НДС"), (7, "с НДС"),
+                           (8, "без НДС"), (9, "НДС"), (10, "с НДС")]:
+            ws.cell(row=2, column=col, value=label)
+        _style_header_row(ws, 1, total_cols)
+        _style_header_row(ws, 2, total_cols)
+        ws.row_dimensions[1].height = 40
+        ws.row_dimensions[2].height = 30
+
+        for i, item in enumerate(materials, start=1):
+            r = i + 2
+            qty = item.get("quantity") or 0
+            mp = item.get("mat_price") or 0
+            usn = item.get("usn", False)
+            mp_ex, mp_vat, mp_inc = _vat_triple(mp, usn)
+            mt_ex = (mp_ex or 0) * qty or None
+            mt_vat = (mp_vat or 0) * qty or None
+            mt_inc = (mp_inc or 0) * qty or None
+            vals = [
+                i, item.get("name", ""), item.get("unit", ""),
+                qty if qty else None,
+                mp_ex, mp_vat, mp_inc,
+                mt_ex, mt_vat, mt_inc,
+                item.get("price_list_name", ""), item.get("notes", ""),
+            ]
+            for col, val in enumerate(vals, start=1):
+                ws.cell(row=r, column=col, value=val)
+            _style_data_row(ws, r, total_cols)
+
+        for col in range(5, 11):
+            for r in range(3, len(materials) + 3):
+                ws.cell(row=r, column=col).number_format = '#,##0.00'
+
+        if materials:
+            tr = len(materials) + 3
+            ws.cell(row=tr, column=1, value="ИТОГО")
+            ws.merge_cells(start_row=tr, start_column=1, end_row=tr, end_column=4)
+            for col in range(8, 11):
+                cl = get_column_letter(col)
+                ws.cell(row=tr, column=col,
+                        value=f"=SUM({cl}3:{cl}{len(materials)+2})")
+                ws.cell(row=tr, column=col).number_format = '#,##0.00'
+            for col in range(1, total_cols + 1):
+                c = ws.cell(row=tr, column=col)
+                c.fill = TOTAL_FILL
+                c.font = BOLD_FONT
+                c.border = THIN_BORDER
+
+        _auto_fit_columns(ws)
+        ws.freeze_panes = "A3"
+
+    ws1 = wb.active
+    ws1.title = "Перечень работ и материалов"
+    _write_sheet1(ws1, items)
+
+    works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
+    ws2 = wb.create_sheet("Перечень работ")
+    _write_sheet_works(ws2, works)
+
+    materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
+    ws3 = wb.create_sheet("Перечень материалов")
+    _write_sheet_materials(ws3, materials)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def generate_scan_result(data: dict) -> bytes:
     """
     Generate Excel from scan/OCR result.
