@@ -146,10 +146,30 @@ const TaskStatusPage: React.FC = () => {
   const handleSendMessage = async () => {
     if (!taskId || !message.trim()) return;
     setSending(true);
+    const trimmed = message.trim();
     try {
-      const response = await sendMessage(taskId, message.trim());
-      setChatHistory(response.chat_history);
+      await sendMessage(taskId, trimmed);
+
+      // Append message locally — backend response does not include chat_history
+      const newMsg: ChatMessage = { role: 'user', content: trimmed, timestamp: new Date().toISOString() };
+      setChatHistory((prev) => [...prev, newMsg]);
       setMessage('');
+
+      // Reset state for re-processing
+      setResults([]);
+      setProgressLog(['Обработка уточнения...']);
+      setElapsedSeconds(0);
+      startTimeRef.current = null;
+
+      // Optimistically flip status so spinner shows immediately
+      setTask((prev) => prev ? { ...prev, status: 'processing', progress_message: 'Обработка уточнения...' } : prev);
+
+      // Restart polling (was stopped on completion)
+      if (!pollingRef.current) {
+        pollingRef.current = setInterval(fetchStatus, 3000);
+      }
+      // Fetch immediately so UI reflects new backend state without waiting 3 s
+      fetchStatus();
     } catch {
       setError('Не удалось отправить сообщение.');
     } finally {
