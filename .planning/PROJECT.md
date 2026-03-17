@@ -4,6 +4,8 @@
 
 smeta-ai is a deployed AI-powered construction cost estimation service. Users upload construction documents (TZ, plans, existing estimates) and the service uses the Claude API to generate cost estimates, work item lists, Excel/PDF reports, and document comparisons. The service runs on Render with a FastAPI backend, React/TypeScript frontend, and PostgreSQL database.
 
+v1.0 shipped with all three critical production bugs fixed, a complete admin panel for request history inspection, and a 28-test automated suite plus a 42-step manual E2E checklist.
+
 ## Core Value
 
 A construction professional uploads documents and receives a ready-to-use cost estimate — the entire AI processing pipeline must work reliably end-to-end.
@@ -19,54 +21,66 @@ A construction professional uploads documents and receives a ready-to-use cost e
 - ✓ Four task types: LIST_FROM_TZ, SMETA_FROM_LIST, SCAN_TO_EXCEL, COMPARE_PROJECT_SMETA — existing
 - ✓ Result file generation (Excel/PDF output) — existing
 - ✓ Result file download — existing
-- ✓ Role-based routing (user vs admin) — existing (partial)
+- ✓ Role-based routing (user vs admin) — existing
+- ✓ BUG-01: Task creation no longer resets form on polling 404 — v1.0
+- ✓ BUG-02: SPA routing works on Render static site (page refresh + direct URL) — v1.0
+- ✓ BUG-03: Admin login shows "Администратор" (password hash sync on startup) — v1.0
+- ✓ ADMIN-01: Admin paginated table of all requests with date/time, task type, status — v1.0 (pre-GSD)
+- ✓ ADMIN-02: Admin can re-download original files from request history — v1.0 (pre-GSD)
+- ✓ ADMIN-03: Admin can download result files from request history — v1.0 (pre-GSD)
+- ✓ ADMIN-04: Admin can view full Claude conversation transcript inline — v1.0 (pre-GSD)
+- ✓ TEST-01: pytest suite covering auth, tasks, results, admin endpoints — v1.0
+- ✓ TEST-02: Manual E2E checklist for post-deployment verification — v1.0
+- ✓ TEST-03: Additional bugs discovered during testing fixed — v1.0
 
 ### Active
 
-- [ ] **BUG-01**: Task creation resets to empty state after submission — polling endpoint returns 404, frontend treats it as failure and resets the form
-- [ ] **BUG-02**: Page refresh / direct URL returns "Not Found" — SPA routing broken on Render static site deployment (_redirects fix committed but not working)
-- [ ] **BUG-03**: Admin login displays "Пользователь" instead of "Администратор" — admin role not correctly identified or passed to frontend
-- [ ] **FEAT-01**: Admin panel — paginated table of all requests with: date/time, uploaded filenames (re-downloadable), task type, result file (downloadable), full Claude conversation transcript
-- [ ] **TEST-01**: Automated test suite (pytest) covering: auth, task creation, polling, result download, admin endpoints
-- [ ] **TEST-02**: Manual E2E test checklist for post-deployment verification of all critical flows
+(None — next milestone requirements to be defined via `/gsd:new-milestone`)
 
 ### Out of Scope
 
-- Multi-user accounts (username/email fields) — single user per role by design for now
-- Task cancellation — not requested
-- Result expiry / cleanup jobs — not requested
-- Mobile app — web-first
-- Real-time WebSocket updates — polling is sufficient
+| Feature | Reason |
+|---------|--------|
+| Multi-user accounts (username/email) | Single user per role by design for v1 |
+| Real-time WebSocket updates | Polling is sufficient |
+| Mobile app | Web-first |
+| Task cancellation | Not requested for v1 |
+| OAuth / social login | Not needed |
+| Offline mode | Real-time pipeline is core value |
 
 ## Context
 
-**Current deployment:** Render (static site for frontend, web service for backend). Frontend build output served from `frontend/dist/`. Backend runs as uvicorn on Render's web service.
+**Shipped v1.0** on 2026-03-18. ~16 files modified across 4 plans.
 
-**SPA routing issue:** The `_redirects` file needs to exist in the correct location for Render's static site to serve `index.html` for all routes. Previous fix commit may have placed it in the wrong directory or the file may not be included in the build output.
+**Tech stack:** FastAPI + SQLAlchemy async (PostgreSQL in prod, SQLite in tests), React 18 + TypeScript + Vite, Render deployment, Claude API (anthropic SDK), pytest + httpx + aiosqlite for testing.
 
-**Admin role bug:** Authentication uses role+password only (no username). The JWT token has a `role` field. Likely either the token creation doesn't set role to "admin", or the frontend auth store isn't reading the role field correctly.
+**Deployment:** Render static site (frontend) + web service (backend). `VITE_API_BASE_URL` must be set in Render dashboard for production API routing to work.
 
-**Polling bug:** Frontend polls `GET /tasks/{taskId}/status`. A 404 on this endpoint likely means either: (a) the task_id is not being passed correctly, (b) the route requires authentication but the token isn't being sent, or (c) a route definition mismatch.
-
-**Admin panel data:** All necessary data is already stored in the database — `Task` model has `input_files` (JSON with filenames + base64 data), `task_type`, `chat_history` (JSON), `created_at`. `TaskResult` has the output file binary. The admin router (`backend/app/routers/admin.py`) already exists.
-
-**Tech stack:** FastAPI + asyncpg/SQLAlchemy async, React 18 + TypeScript + Vite, PostgreSQL, Render deployment, Claude API (anthropic SDK).
+**Known tech debt from v1.0:**
+- `client.ts` fallback URL is hardcoded `'https://smeta-ai-backend.onrender.com'` — docs said `/api` but code differs. Local dev without `VITE_API_BASE_URL` hits production backend.
+- BUG-03 stale-hash repair branch in `_initialize_users()` has no automated regression test.
+- `_get_user_token()` helper in `test_admin.py` bypasses fixture graph — fragile if `create_access_token` interface changes.
+- Nyquist VALIDATION.md files incomplete/missing for Phases 1 and 3.
 
 ## Constraints
 
 - **Deployment**: Render static site + web service — must keep build and routing compatible
 - **Database**: PostgreSQL on Render — no schema breaking changes without migration
 - **Auth**: Keep existing JWT + role-based system — no overhaul of auth model
-- **No downtime**: Fixes must be deployable without data loss or service interruption
+- **No downtime**: Changes must be deployable without data loss or service interruption
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
-|----------|-----------|----------|
-| Admin panel as new route `/admin` | Route already exists in App.tsx, admin router in backend | — Pending |
-| Paginated table for admin history | Simpler than cards, scales to many records | — Pending |
-| pytest for backend tests | Already the standard for FastAPI | — Pending |
-| Manual checklist alongside automated tests | Deployment verification requires human eyes | — Pending |
+|----------|-----------|---------|
+| VITE_API_BASE_URL env var for API routing | Simpler than Render proxy; explicit, no hidden indirection | ✓ Good — works in prod |
+| task_id guard in TaskCreate.tsx before navigate() | Fail fast with visible error rather than silent redirect loop | ✓ Good |
+| Password hash sync on startup (lifespan) | Self-healing on each deploy; simpler than migration script | ✓ Good |
+| String(36) instead of postgresql.UUID in models | SQLite test compatibility; identical storage semantics in PostgreSQL | ✓ Good |
+| Optional[X] instead of X\|None annotations | Python 3.9 system compat; SQLAlchemy eval() rejects PEP 604 syntax | ✓ Good — backward compatible |
+| Session-scoped table creation + function-scoped seed data | Balance of speed and isolation without per-test schema recreation | ✓ Good |
+| 10-section E2E checklist mirroring backend router organization | Traceability — each checklist item maps to a router | ✓ Good |
+| Admin panel built outside GSD pipeline | Pre-existing or built alongside Phase 1 outside GSD | ⚠️ Revisit — no formal verification artifacts |
 
 ---
-*Last updated: 2026-03-17 after initialization*
+*Last updated: 2026-03-18 after v1.0 milestone*

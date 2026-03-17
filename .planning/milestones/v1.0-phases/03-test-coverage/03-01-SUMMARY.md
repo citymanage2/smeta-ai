@@ -150,3 +150,9 @@ None - no external service configuration required.
 ---
 *Phase: 03-test-coverage*
 *Completed: 2026-03-18*
+
+## Self-Check: PASSED
+
+- All 7 key files found on disk
+- Task commits 0f9314e and f8672d1 verified in git log
+- All 28 tests pass: `python3 -m pytest tests/ -v` — 28 passed, 1 warning (Pydantic deprecation), 0 failures
