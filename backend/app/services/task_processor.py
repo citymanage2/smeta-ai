@@ -456,7 +456,7 @@ class TaskProcessor:
         messages: list[dict],
         system_prompt: str,
         use_web_search: bool = False,
-        image_data: list | None = None,
+        image_data: Optional[list] = None,
     ) -> dict:
         """Call Claude and parse the JSON response, retrying once if parsing fails."""
         response = await call_claude(

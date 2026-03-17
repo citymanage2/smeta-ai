@@ -70,7 +70,7 @@ async def call_claude(
         kwargs["tools"] = tools
 
     delays = [1, 4, 16]
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
 
     for attempt, delay in enumerate(delays, start=1):
         try:
