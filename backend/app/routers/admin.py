@@ -1,3 +1,4 @@
+import csv
 import io
 from datetime import datetime, timezone
 from typing import Optional
@@ -11,6 +12,7 @@ import structlog
 from app.database import get_db
 from app.models.task import Task
 from app.models.price import PriceWork, PriceMaterial
+from app.models.price_list import PriceList
 from app.utils.auth import get_admin_user
 from app.services import price_service
 
@@ -18,6 +20,13 @@ logger = structlog.get_logger()
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+PRICE_LIST_ALLOWED_EXTS = {".xlsx", ".xls", ".csv", ".txt", ".pdf", ".docx"}
+MAX_PRICE_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 
 class TaskListItem(BaseModel):
     id: str
@@ -55,6 +64,182 @@ class PriceUploadResponse(BaseModel):
     materials_loaded: int
 
 
+class PriceListInfo(BaseModel):
+    type: str
+    filename: Optional[str]
+    updated_at: Optional[str]
+
+
+class PriceListsInfoResponse(BaseModel):
+    works: PriceListInfo
+    materials: PriceListInfo
+
+
+class SinglePriceUploadResponse(BaseModel):
+    loaded: int
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# Parsing helpers
+# ---------------------------------------------------------------------------
+
+def _parse_price_rows(rows: list, is_works: bool) -> list[dict]:
+    """
+    Parse price data from a list of rows (list of cell values).
+    Auto-detects header row by looking for 'Наименование' or falling back to row 0.
+    """
+    if not rows:
+        return []
+
+    # Find header row
+    header_row_idx = 0
+    headers: list[str] = []
+    for i, row in enumerate(rows):
+        for cell in row:
+            if cell and isinstance(cell, str) and "наименование" in cell.lower():
+                header_row_idx = i
+                headers = [str(h).strip() if h is not None else "" for h in row]
+                break
+        if headers:
+            break
+
+    if not headers:
+        headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+        header_row_idx = 0
+
+    # Map column indices
+    name_col: Optional[int] = None
+    unit_col: Optional[int] = None
+    price_col: Optional[int] = None
+    contractor_cols: list[tuple[int, str]] = []
+
+    for i, h in enumerate(headers):
+        lower = h.lower()
+        if "наименование" in lower or "название" in lower or "name" in lower:
+            name_col = i
+        elif ("ед" in lower and ("изм" in lower or "." in lower)) or lower in ("ед", "unit"):
+            unit_col = i
+        elif "цена" in lower or "стоимость" in lower or "price" in lower:
+            price_col = i
+
+    if name_col is None:
+        return []
+
+    # For works: all non-name/unit columns with headers are contractor price cols
+    if is_works:
+        for i, h in enumerate(headers):
+            if i != name_col and i != unit_col and h:
+                contractor_cols.append((i, h))
+
+    result = []
+    for row in rows[header_row_idx + 1:]:
+        if not row or all(cell is None or str(cell).strip() == "" for cell in row):
+            continue
+
+        name = row[name_col] if name_col < len(row) else None
+        if not name:
+            continue
+        name = str(name).strip()
+        if not name or name.lower() in ("итого", "всего", "total"):
+            continue
+
+        unit = ""
+        if unit_col is not None and unit_col < len(row) and row[unit_col] is not None:
+            unit = str(row[unit_col]).strip()
+
+        if is_works:
+            prices: dict[str, float] = {}
+            for col_idx, contractor_name in contractor_cols:
+                if col_idx < len(row) and row[col_idx] is not None:
+                    try:
+                        prices[contractor_name] = float(row[col_idx])
+                    except (ValueError, TypeError):
+                        pass
+            min_price = min(prices.values()) if prices else None
+            result.append({"name": name, "unit": unit, "prices": prices, "min_price": min_price})
+        else:
+            price: Optional[float] = None
+            col = price_col if price_col is not None else (
+                # Fall back to last non-name/unit numeric column
+                next(
+                    (i for i in range(len(row) - 1, -1, -1)
+                     if i != name_col and i != unit_col and row[i] is not None),
+                    None,
+                )
+            )
+            if col is not None and col < len(row) and row[col] is not None:
+                try:
+                    price = float(row[col])
+                except (ValueError, TypeError):
+                    pass
+            result.append({"name": name, "unit": unit, "price": price})
+
+    return result
+
+
+def _parse_xlsx_single(data: bytes, is_works: bool) -> list[dict]:
+    """Parse a single-type xlsx/xls file (all sheets tried)."""
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    for sheet_name in wb.sheetnames:
+        rows = list(wb[sheet_name].iter_rows(values_only=True))
+        items = _parse_price_rows(rows, is_works)
+        if items:
+            return items
+    return []
+
+
+def _parse_xlsx_combined(data: bytes) -> tuple[list[dict], list[dict]]:
+    """
+    Parse combined xlsx with 'Работы' and 'Материалы' sheets.
+    Used by the legacy /prices/upload endpoint.
+    """
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    works: list[dict] = []
+    materials: list[dict] = []
+    for name in wb.sheetnames:
+        lower = name.lower()
+        rows = list(wb[name].iter_rows(values_only=True))
+        if "работ" in lower or "work" in lower:
+            works = _parse_price_rows(rows, is_works=True)
+        elif "материал" in lower or "material" in lower:
+            materials = _parse_price_rows(rows, is_works=False)
+    return works, materials
+
+
+def _parse_csv_single(data: bytes, is_works: bool) -> list[dict]:
+    """Parse a CSV or TXT price list file."""
+    text = data.decode("utf-8-sig", errors="replace")
+    # Detect delimiter
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
+        delimiter = dialect.delimiter
+    except csv.Error:
+        delimiter = ","
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    rows = [list(row) for row in reader]
+    return _parse_price_rows(rows, is_works)
+
+
+def _parse_file_for_type(data: bytes, filename: str, mime_type: str, is_works: bool) -> list[dict]:
+    """Route file to the correct parser based on extension."""
+    lower = filename.lower()
+    if lower.endswith(".xlsx") or lower.endswith(".xls"):
+        return _parse_xlsx_single(data, is_works)
+    if lower.endswith(".csv") or lower.endswith(".txt"):
+        return _parse_csv_single(data, is_works)
+    # PDF / DOCX — cannot parse automatically
+    return []
+
+
+def _ext_from_filename(filename: str) -> str:
+    return "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+
+# ---------------------------------------------------------------------------
+# Task endpoints
+# ---------------------------------------------------------------------------
+
 @router.get("/tasks", response_model=TaskListResponse)
 async def list_tasks(
     page: int = Query(1, ge=1),
@@ -78,12 +263,10 @@ async def list_tasks(
     if task_type:
         query = query.where(Task.task_type == task_type)
 
-    # Count total
     count_query = select(func.count()).select_from(query.subquery())
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    # Paginate
     query = query.order_by(Task.created_at.desc())
     query = query.offset((page - 1) * limit).limit(limit)
 
@@ -104,7 +287,6 @@ async def list_tasks(
         )
         for t in tasks
     ]
-
     return TaskListResponse(items=items, total=total)
 
 
@@ -114,16 +296,10 @@ async def get_task(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_admin_user),
 ):
-    """Get full task details including chat history."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
-
     if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Задача не найдена",
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     return TaskDetail(
         id=str(task.id),
         user_role=task.user_role,
@@ -145,151 +321,153 @@ async def delete_task(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_admin_user),
 ):
-    """Delete a task and all its results (cascade)."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
-
     if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Задача не найдена",
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     await db.delete(task)
     await db.commit()
     logger.info("Task deleted by admin", task_id=task_id)
 
 
-def _parse_price_xlsx(data: bytes) -> tuple[list[dict], list[dict]]:
-    """
-    Parse price list Excel file.
-    Expected sheets: 'Работы' and 'Материалы' (or similar names).
-    Returns (works, materials) as lists of dicts.
-    """
-    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+# ---------------------------------------------------------------------------
+# Price list info endpoint
+# ---------------------------------------------------------------------------
 
-    works = []
-    materials = []
+@router.get("/price-lists/info", response_model=PriceListsInfoResponse)
+async def get_price_lists_info(
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return metadata for currently stored works and materials price lists."""
+    async def _get_info(pl_type: str) -> PriceListInfo:
+        res = await db.execute(
+            select(PriceList)
+            .where(PriceList.type == pl_type)
+            .order_by(PriceList.updated_at.desc())
+            .limit(1)
+        )
+        row = res.scalar_one_or_none()
+        if row:
+            return PriceListInfo(
+                type=pl_type,
+                filename=row.filename,
+                updated_at=row.updated_at.isoformat(),
+            )
+        return PriceListInfo(type=pl_type, filename=None, updated_at=None)
 
-    # Find works sheet
-    works_sheet = None
-    materials_sheet = None
-
-    for name in wb.sheetnames:
-        lower = name.lower()
-        if "работ" in lower or "work" in lower:
-            works_sheet = wb[name]
-        elif "материал" in lower or "material" in lower:
-            materials_sheet = wb[name]
-
-    # Parse works sheet
-    if works_sheet:
-        works = _parse_price_sheet(works_sheet, is_works=True)
-
-    # Parse materials sheet
-    if materials_sheet:
-        materials = _parse_price_sheet(materials_sheet, is_works=False)
-
-    return works, materials
+    return PriceListsInfoResponse(
+        works=await _get_info("works"),
+        materials=await _get_info("materials"),
+    )
 
 
-def _parse_price_sheet(ws, is_works: bool) -> list[dict]:
-    """
-    Parse a price sheet.
-    Expected columns: Наименование, Ед. изм., then contractor columns (for works)
-    or: Наименование, Ед. изм., Цена (for materials)
-    """
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        return []
+# ---------------------------------------------------------------------------
+# Separate upload endpoints
+# ---------------------------------------------------------------------------
 
-    # Find header row - look for "Наименование"
-    header_row_idx = 0
-    headers = []
-    for i, row in enumerate(rows):
-        for cell in row:
-            if cell and isinstance(cell, str) and "наименование" in cell.lower():
-                header_row_idx = i
-                headers = [str(h).strip() if h else "" for h in row]
-                break
-        if headers:
-            break
+async def _handle_price_upload(
+    file: UploadFile,
+    pl_type: str,
+    is_works: bool,
+    db: AsyncSession,
+) -> SinglePriceUploadResponse:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Файл не выбран")
 
-    if not headers:
-        # Use first row as headers
-        headers = [str(h).strip() if h else "" for h in rows[0]]
-        header_row_idx = 0
+    ext = _ext_from_filename(file.filename)
+    if ext not in PRICE_LIST_ALLOWED_EXTS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Недопустимый формат. Разрешены: {', '.join(PRICE_LIST_ALLOWED_EXTS)}",
+        )
 
-    # Find column indices
-    name_col = None
-    unit_col = None
-    price_col = None
-    contractor_cols = []
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Файл пустой")
+    if len(data) > MAX_PRICE_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Файл превышает 20 МБ")
 
-    for i, h in enumerate(headers):
-        lower = h.lower()
-        if "наименование" in lower or "название" in lower:
-            name_col = i
-        elif "ед" in lower and ("изм" in lower or "." in lower):
-            unit_col = i
-        elif "цена" in lower or "стоимость" in lower:
-            price_col = i
+    mime_type = file.content_type or "application/octet-stream"
+    now = datetime.now(timezone.utc)
 
-    if name_col is None:
-        return []
+    # Try to parse data into price rows
+    try:
+        items = _parse_file_for_type(data, file.filename, mime_type, is_works)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Ошибка разбора файла: {e}")
 
-    # For works, all numeric columns after unit are contractor prices
-    if is_works:
-        for i, h in enumerate(headers):
-            if i != name_col and i != unit_col and h:
-                contractor_cols.append((i, h))
+    # Persist raw file (upsert: delete old, insert new)
+    await db.execute(delete(PriceList).where(PriceList.type == pl_type))
+    db.add(PriceList(
+        type=pl_type,
+        filename=file.filename,
+        mime_type=mime_type,
+        content=data,
+        updated_at=now,
+    ))
 
-    result = []
-    for row in rows[header_row_idx + 1:]:
-        if not row or all(cell is None for cell in row):
-            continue
-
-        name = row[name_col] if name_col is not None and name_col < len(row) else None
-        if not name:
-            continue
-        name = str(name).strip()
-        if not name or name.lower() in ("итого", "всего"):
-            continue
-
-        unit = ""
-        if unit_col is not None and unit_col < len(row) and row[unit_col]:
-            unit = str(row[unit_col]).strip()
-
+    # Update price tables if we got rows
+    if items:
         if is_works:
-            prices = {}
-            for col_idx, contractor_name in contractor_cols:
-                if col_idx < len(row) and row[col_idx] is not None:
-                    try:
-                        prices[contractor_name] = float(row[col_idx])
-                    except (ValueError, TypeError):
-                        pass
-            min_price = min(prices.values()) if prices else None
-            result.append({
-                "name": name,
-                "unit": unit,
-                "prices": prices,
-                "min_price": min_price,
-            })
+            await db.execute(delete(PriceWork))
+            for item in items:
+                db.add(PriceWork(
+                    name=item["name"],
+                    unit=item.get("unit", ""),
+                    prices=item.get("prices", {}),
+                    min_price=item.get("min_price"),
+                    updated_at=now,
+                ))
         else:
-            price = None
-            if price_col is not None and price_col < len(row) and row[price_col] is not None:
-                try:
-                    price = float(row[price_col])
-                except (ValueError, TypeError):
-                    pass
-            result.append({
-                "name": name,
-                "unit": unit,
-                "price": price,
-            })
+            await db.execute(delete(PriceMaterial))
+            for item in items:
+                db.add(PriceMaterial(
+                    name=item["name"],
+                    unit=item.get("unit", ""),
+                    price=item.get("price"),
+                    updated_at=now,
+                ))
 
-    return result
+    await db.commit()
+    await price_service.load_cache(db)
 
+    loaded = len(items)
+    if loaded == 0 and ext in (".pdf", ".docx"):
+        msg = "Файл сохранён. Автоматический разбор PDF/DOCX не поддерживается — данные в базе не обновлены."
+    elif loaded == 0:
+        msg = "Файл сохранён, но позиции не найдены. Проверьте структуру файла (нужны колонки Наименование, Цена)."
+    else:
+        kind = "работ" if is_works else "материалов"
+        msg = f"Прайс {kind} успешно загружен: {loaded} позиций."
+
+    logger.info("Price list uploaded", type=pl_type, filename=file.filename, loaded=loaded)
+    return SinglePriceUploadResponse(loaded=loaded, message=msg)
+
+
+@router.post("/price-lists/works", response_model=SinglePriceUploadResponse)
+async def upload_works_price_list(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Upload price list for works. Replaces existing works prices."""
+    return await _handle_price_upload(file, "works", is_works=True, db=db)
+
+
+@router.post("/price-lists/materials", response_model=SinglePriceUploadResponse)
+async def upload_materials_price_list(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Upload price list for materials. Replaces existing materials prices."""
+    return await _handle_price_upload(file, "materials", is_works=False, db=db)
+
+
+# ---------------------------------------------------------------------------
+# Legacy combined upload (kept for backward compatibility)
+# ---------------------------------------------------------------------------
 
 @router.post("/prices/upload", response_model=PriceUploadResponse)
 async def upload_prices(
@@ -298,80 +476,42 @@ async def upload_prices(
     admin: dict = Depends(get_admin_user),
 ):
     """
-    Upload price list Excel file.
-    Parses works and materials sheets, replaces existing prices.
+    Upload combined price list Excel file with 'Работы' and 'Материалы' sheets.
     """
     if not file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Файл не выбран",
-        )
+        raise HTTPException(status_code=400, detail="Файл не выбран")
 
-    allowed_types = {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.ms-excel",
-    }
-    if file.content_type not in allowed_types and not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Принимаются только файлы Excel (.xlsx, .xls)",
-        )
+    allowed_exts = {".xlsx", ".xls"}
+    if _ext_from_filename(file.filename) not in allowed_exts:
+        raise HTTPException(status_code=415, detail="Принимаются только файлы Excel (.xlsx, .xls)")
 
     data = await file.read()
     if not data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Файл пустой",
-        )
+        raise HTTPException(status_code=400, detail="Файл пустой")
 
     try:
-        works_data, materials_data = _parse_price_xlsx(data)
+        works_data, materials_data = _parse_xlsx_combined(data)
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Ошибка разбора файла: {e}",
-        )
+        raise HTTPException(status_code=422, detail=f"Ошибка разбора файла: {e}")
 
     now = datetime.now(timezone.utc)
-
-    # Clear existing prices
     await db.execute(delete(PriceWork))
     await db.execute(delete(PriceMaterial))
     await db.commit()
 
-    # Insert new works
     for item in works_data:
-        work = PriceWork(
-            name=item["name"],
-            unit=item.get("unit", ""),
-            prices=item.get("prices", {}),
-            min_price=item.get("min_price"),
-            updated_at=now,
-        )
-        db.add(work)
-
-    # Insert new materials
+        db.add(PriceWork(
+            name=item["name"], unit=item.get("unit", ""),
+            prices=item.get("prices", {}), min_price=item.get("min_price"), updated_at=now,
+        ))
     for item in materials_data:
-        material = PriceMaterial(
-            name=item["name"],
-            unit=item.get("unit", ""),
-            price=item.get("price"),
-            updated_at=now,
-        )
-        db.add(material)
+        db.add(PriceMaterial(
+            name=item["name"], unit=item.get("unit", ""),
+            price=item.get("price"), updated_at=now,
+        ))
 
     await db.commit()
-
-    # Reload cache
     await price_service.load_cache(db)
 
-    logger.info(
-        "Prices uploaded",
-        works=len(works_data),
-        materials=len(materials_data),
-    )
-
-    return PriceUploadResponse(
-        works_loaded=len(works_data),
-        materials_loaded=len(materials_data),
-    )
+    logger.info("Combined prices uploaded", works=len(works_data), materials=len(materials_data))
+    return PriceUploadResponse(works_loaded=len(works_data), materials_loaded=len(materials_data))

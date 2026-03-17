@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
-import { getAdminTasks, deleteTask, uploadPrices } from '../api/admin';
+import {
+  getAdminTasks, deleteTask,
+  getPriceListsInfo, uploadWorksPrice, uploadMaterialsPrice,
+  PriceListInfo,
+} from '../api/admin';
 import { downloadResult } from '../api/tasks';
 
 const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
@@ -34,6 +38,132 @@ function formatSize(bytes: number): string {
 
 const PAGE_SIZE = 20;
 
+interface PriceUploadCardProps {
+  title: string;
+  info: PriceListInfo | null;
+  selectedFile: File | null;
+  uploading: boolean;
+  message: { type: 'success' | 'error'; text: string } | null;
+  onPickFile: () => void;
+  onUpload: () => void;
+}
+
+const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
+  title, info, selectedFile, uploading, message, onPickFile, onUpload,
+}) => {
+  const hasFile = !!info?.filename;
+
+  return (
+    <div
+      style={{
+        flex: '1 1 360px',
+        minWidth: '320px',
+        backgroundColor: '#ffffff',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+        padding: '28px',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+      }}
+    >
+      <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+        {title}
+      </h3>
+
+      {/* Current status */}
+      <div
+        style={{
+          padding: '12px 14px',
+          backgroundColor: hasFile ? '#f0fdf4' : '#f8fafc',
+          border: `1px solid ${hasFile ? '#86efac' : '#e2e8f0'}`,
+          borderRadius: '8px',
+          marginBottom: '20px',
+        }}
+      >
+        {hasFile ? (
+          <>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: '#15803d', marginBottom: '2px' }}>
+              {info!.filename}
+            </div>
+            <div style={{ fontSize: '12px', color: '#64748b' }}>
+              Обновлён: {new Date(info!.updated_at!).toLocaleString('ru-RU', {
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit',
+              })}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: '13px', color: '#94a3b8' }}>Не загружен</div>
+        )}
+      </div>
+
+      {/* File picker button */}
+      <button
+        onClick={onPickFile}
+        style={{
+          width: '100%',
+          padding: '10px',
+          fontSize: '14px',
+          fontWeight: 500,
+          backgroundColor: '#f1f5f9',
+          color: '#374151',
+          border: '1.5px dashed #cbd5e1',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          marginBottom: '10px',
+          textAlign: 'left',
+        }}
+      >
+        {selectedFile ? (
+          <span>
+            <span style={{ fontWeight: 600, color: '#1e293b' }}>{selectedFile.name}</span>
+            <span style={{ color: '#94a3b8', fontSize: '12px' }}> — нажмите для замены</span>
+          </span>
+        ) : (
+          <span style={{ color: '#64748b' }}>Нажмите для выбора файла (.xlsx, .csv, .txt…)</span>
+        )}
+      </button>
+
+      {/* Message */}
+      {message && (
+        <div
+          style={{
+            padding: '9px 12px',
+            backgroundColor: message.type === 'success' ? '#f0fdf4' : '#fef2f2',
+            border: `1px solid ${message.type === 'success' ? '#86efac' : '#fca5a5'}`,
+            borderRadius: '7px',
+            marginBottom: '10px',
+            fontSize: '13px',
+            color: message.type === 'success' ? '#15803d' : '#dc2626',
+          }}
+        >
+          {message.text}
+        </div>
+      )}
+
+      {/* Upload button */}
+      <button
+        onClick={onUpload}
+        disabled={!selectedFile || uploading}
+        style={{
+          width: '100%',
+          padding: '11px',
+          fontSize: '14px',
+          fontWeight: 600,
+          backgroundColor: !selectedFile || uploading ? '#93c5fd' : '#2563eb',
+          color: '#ffffff',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: !selectedFile || uploading ? 'not-allowed' : 'pointer',
+          transition: 'background-color 0.15s',
+        }}
+      >
+        {uploading ? 'Загрузка...' : `Загрузить ${title.toLowerCase()}`}
+      </button>
+    </div>
+  );
+};
+
+
 const AdminPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'tasks' | 'prices'>('tasks');
 
@@ -54,11 +184,16 @@ const AdminPage: React.FC = () => {
   const [filterDateTo, setFilterDateTo] = useState('');
 
   // Prices state
-  const priceInputRef = useRef<HTMLInputElement>(null);
-  const [priceFile, setPriceFile] = useState<File | null>(null);
-  const [priceUploading, setPriceUploading] = useState(false);
-  const [priceMessage, setPriceMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [priceDragging, setPriceDragging] = useState(false);
+  const worksInputRef = useRef<HTMLInputElement>(null);
+  const matsInputRef = useRef<HTMLInputElement>(null);
+  const [priceListsInfo, setPriceListsInfo] = useState<{ works: PriceListInfo; materials: PriceListInfo } | null>(null);
+  const [priceInfoLoading, setPriceInfoLoading] = useState(false);
+  const [worksFile, setWorksFile] = useState<File | null>(null);
+  const [matsFile, setMatsFile] = useState<File | null>(null);
+  const [worksUploading, setWorksUploading] = useState(false);
+  const [matsUploading, setMatsUploading] = useState(false);
+  const [worksMsg, setWorksMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [matsMsg, setMatsMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [downloadingFile, setDownloadingFile] = useState<number | null>(null);
 
@@ -85,9 +220,22 @@ const AdminPage: React.FC = () => {
     }
   }, [page, filterStatus, filterType, filterDateFrom, filterDateTo]);
 
+  const fetchPriceListsInfo = useCallback(async () => {
+    setPriceInfoLoading(true);
+    try {
+      const info = await getPriceListsInfo();
+      setPriceListsInfo(info);
+    } catch {
+      // non-critical — leave null
+    } finally {
+      setPriceInfoLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'tasks') fetchTasks();
-  }, [activeTab, fetchTasks]);
+    if (activeTab === 'prices') fetchPriceListsInfo();
+  }, [activeTab, fetchTasks, fetchPriceListsInfo]);
 
   const handleDeleteTask = async (taskId: string) => {
     setDeleteLoading(true);
@@ -102,28 +250,39 @@ const AdminPage: React.FC = () => {
     }
   };
 
-  const handlePriceUpload = async () => {
-    if (!priceFile) return;
-    setPriceUploading(true);
-    setPriceMessage(null);
+  const PRICE_ACCEPT = '.xlsx,.xls,.csv,.txt,.pdf,.docx';
+
+  const handleWorksUpload = async () => {
+    if (!worksFile) return;
+    setWorksUploading(true);
+    setWorksMsg(null);
     try {
-      const result = await uploadPrices(priceFile);
-      setPriceMessage({ type: 'success', text: result.message || 'Прайс-лист успешно загружен.' });
-      setPriceFile(null);
+      const result = await uploadWorksPrice(worksFile);
+      setWorksMsg({ type: 'success', text: result.message });
+      setWorksFile(null);
+      fetchPriceListsInfo();
     } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { detail?: string } } };
-      setPriceMessage({ type: 'error', text: axiosError.response?.data?.detail ?? 'Ошибка при загрузке прайс-листа.' });
+      const e = err as { response?: { data?: { detail?: string } } };
+      setWorksMsg({ type: 'error', text: e.response?.data?.detail ?? 'Ошибка загрузки.' });
     } finally {
-      setPriceUploading(false);
+      setWorksUploading(false);
     }
   };
 
-  const handlePriceDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setPriceDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
-      setPriceFile(file);
+  const handleMatsUpload = async () => {
+    if (!matsFile) return;
+    setMatsUploading(true);
+    setMatsMsg(null);
+    try {
+      const result = await uploadMaterialsPrice(matsFile);
+      setMatsMsg({ type: 'success', text: result.message });
+      setMatsFile(null);
+      fetchPriceListsInfo();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      setMatsMsg({ type: 'error', text: e.response?.data?.detail ?? 'Ошибка загрузки.' });
+    } finally {
+      setMatsUploading(false);
     }
   };
 
@@ -508,109 +667,48 @@ const AdminPage: React.FC = () => {
 
         {/* ---- PRICES TAB ---- */}
         {activeTab === 'prices' && (
-          <div style={{ maxWidth: '560px' }}>
-            <div
-              style={{
-                backgroundColor: '#ffffff',
-                border: '1px solid #e2e8f0',
-                borderRadius: '12px',
-                padding: '32px',
-                boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
-              }}
-            >
-              <h3 style={{ margin: '0 0 8px', fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
-                Загрузка прайс-листа
-              </h3>
-              <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#64748b' }}>
-                Загрузите файл Excel (.xlsx) с актуальными ценами
-              </p>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', maxWidth: '900px' }}>
+            {priceInfoLoading && (
+              <p style={{ fontSize: '14px', color: '#94a3b8' }}>Загрузка информации о прайс-листах...</p>
+            )}
 
-              {/* Drop zone */}
-              <div
-                onDrop={handlePriceDrop}
-                onDragOver={(e) => { e.preventDefault(); setPriceDragging(true); }}
-                onDragLeave={() => setPriceDragging(false)}
-                onClick={() => priceInputRef.current?.click()}
-                style={{
-                  border: `2px dashed ${priceDragging ? '#2563eb' : '#cbd5e1'}`,
-                  borderRadius: '10px',
-                  padding: '32px',
-                  textAlign: 'center',
-                  cursor: 'pointer',
-                  backgroundColor: priceDragging ? '#eff6ff' : '#f8fafc',
-                  marginBottom: '16px',
-                  transition: 'all 0.15s',
-                }}
-              >
-                <input
-                  ref={priceInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) setPriceFile(f);
-                    e.target.value = '';
-                  }}
-                />
-                <div style={{ fontSize: '32px', marginBottom: '8px' }}>📋</div>
-                {priceFile ? (
-                  <div>
-                    <p style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#334155' }}>
-                      {priceFile.name}
-                    </p>
-                    <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#94a3b8' }}>
-                      Нажмите для замены файла
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <p style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#334155' }}>
-                      Перетащите файл или нажмите для выбора
-                    </p>
-                    <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#94a3b8' }}>
-                      Поддерживаемые форматы: .xlsx, .xls
-                    </p>
-                  </div>
-                )}
-              </div>
+            {/* Hidden file inputs */}
+            <input
+              ref={worksInputRef}
+              type="file"
+              accept={PRICE_ACCEPT}
+              style={{ display: 'none' }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setWorksFile(f); e.target.value = ''; }}
+            />
+            <input
+              ref={matsInputRef}
+              type="file"
+              accept={PRICE_ACCEPT}
+              style={{ display: 'none' }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) setMatsFile(f); e.target.value = ''; }}
+            />
 
-              {/* Status messages */}
-              {priceMessage && (
-                <div
-                  style={{
-                    padding: '10px 14px',
-                    backgroundColor: priceMessage.type === 'success' ? '#f0fdf4' : '#fef2f2',
-                    border: `1px solid ${priceMessage.type === 'success' ? '#86efac' : '#fca5a5'}`,
-                    borderRadius: '8px',
-                    marginBottom: '16px',
-                    fontSize: '14px',
-                    color: priceMessage.type === 'success' ? '#15803d' : '#dc2626',
-                  }}
-                >
-                  {priceMessage.text}
-                </div>
-              )}
+            {/* Works card */}
+            <PriceUploadCard
+              title="Прайс работ"
+              info={priceListsInfo?.works ?? null}
+              selectedFile={worksFile}
+              uploading={worksUploading}
+              message={worksMsg}
+              onPickFile={() => worksInputRef.current?.click()}
+              onUpload={handleWorksUpload}
+            />
 
-              <button
-                onClick={handlePriceUpload}
-                disabled={!priceFile || priceUploading}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  fontSize: '15px',
-                  fontWeight: 600,
-                  backgroundColor: !priceFile || priceUploading ? '#93c5fd' : '#2563eb',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: !priceFile || priceUploading ? 'not-allowed' : 'pointer',
-                  transition: 'background-color 0.15s',
-                }}
-              >
-                {priceUploading ? 'Загрузка...' : 'Загрузить прайс-лист'}
-              </button>
-            </div>
+            {/* Materials card */}
+            <PriceUploadCard
+              title="Прайс материалов"
+              info={priceListsInfo?.materials ?? null}
+              selectedFile={matsFile}
+              uploading={matsUploading}
+              message={matsMsg}
+              onPickFile={() => matsInputRef.current?.click()}
+              onUpload={handleMatsUpload}
+            />
           </div>
         )}
       </div>
