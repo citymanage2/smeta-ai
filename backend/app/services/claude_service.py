@@ -89,10 +89,9 @@ async def call_claude(
                 final_msg = await stream.get_final_message()
 
             # Extract text from response
+            # block.text can be None for web-search tool_use/result blocks
             for block in final_msg.content:
-                if hasattr(block, "text"):
-                    text_parts.append(block.text)
-                elif hasattr(block, "type") and block.type == "text":
+                if hasattr(block, "text") and isinstance(block.text, str):
                     text_parts.append(block.text)
 
             result = "".join(text_parts)

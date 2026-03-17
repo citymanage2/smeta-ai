@@ -681,10 +681,15 @@ class TaskProcessor:
         # Stage 2: build priced estimate
         await self.update_progress("Этап 2: составление сметы с ценами (поиск по прайсу и интернету)...")
         current_date = date.today().strftime("%d.%m.%Y")
-        stage2_prompt = stage2_prompt_template.format(
-            price_list_works=works_text,
-            price_list_materials=mats_text,
-            current_date=current_date,
+        # Use chained replace() instead of .format() to avoid KeyError when
+        # price list entries contain literal { } characters.
+        stage2_prompt = (
+            stage2_prompt_template
+            .replace("{price_list_works}", works_text)
+            .replace("{price_list_materials}", mats_text)
+            .replace("{current_date}", current_date)
+            .replace("{{", "{")
+            .replace("}}", "}")
         )
         stage2_messages = [
             {"role": "user", "content": f"Перечень работ и материалов:\n\n{stage1_response}\n\n{stage2_prompt}"}
