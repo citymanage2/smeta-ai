@@ -25,6 +25,9 @@ services:
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://smeta-ai-backend.onrender.com
     routes:
       - type: rewrite
         source: /*
