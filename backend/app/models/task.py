@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy import Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,10 +21,10 @@ class Task(Base):
     input_files: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     # Each entry: {name, mime_type, size_bytes, content_b64}
     input_file_data: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    user_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     chat_history: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
-    progress_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
