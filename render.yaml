@@ -21,7 +21,7 @@ services:
 
   - type: static
     name: smeta-ai
-    buildCommand: cd frontend && npm install && npm run build
+    buildCommand: cd frontend && npm install && npm run build && cp dist/index.html dist/404.html
     staticPublishPath: ./frontend/dist
     routes:
       - type: rewrite
