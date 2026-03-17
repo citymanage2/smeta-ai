@@ -426,24 +426,59 @@ class TaskProcessor:
         return messages, image_blocks
 
     def _parse_json_response(self, response: str) -> dict:
-        """Extract and parse JSON from Claude response."""
+        """Extract and parse JSON from Claude response, stripping preamble and fences."""
         import re
-        # Try direct parse
+
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        stripped = re.sub(r'```(?:json)?\s*', '', response).strip()
+
+        # Try direct parse after stripping fences
         try:
-            return json.loads(response)
+            return json.loads(stripped)
         except json.JSONDecodeError:
             pass
 
-        # Try to extract JSON block
-        json_match = re.search(r'\{[\s\S]*\}', response)
-        if json_match:
+        # Find the outermost JSON object (skip any text preamble)
+        start = stripped.find('{')
+        end = stripped.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            candidate = stripped[start:end + 1]
             try:
-                return json.loads(json_match.group())
+                return json.loads(candidate)
             except json.JSONDecodeError:
                 pass
 
         logger.error("Failed to parse JSON response", response=response[:500])
         raise ValueError("Не удалось распознать ответ Claude как JSON")
+
+    async def _call_claude_json(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+        use_web_search: bool = False,
+        image_data: list | None = None,
+    ) -> dict:
+        """Call Claude and parse the JSON response, retrying once if parsing fails."""
+        response = await call_claude(
+            messages,
+            system_prompt=system_prompt,
+            use_web_search=use_web_search,
+            image_data=image_data,
+        )
+        try:
+            return self._parse_json_response(response)
+        except ValueError:
+            logger.warning("JSON parse failed on first attempt, retrying with explicit instruction", task_id=self.task_id)
+            retry_messages = list(messages) + [
+                {"role": "assistant", "content": response},
+                {"role": "user", "content": "Ответь ТОЛЬКО валидным JSON, без преамбулы, без markdown, начиная с { и заканчивая }."},
+            ]
+            retry_response = await call_claude(
+                retry_messages,
+                system_prompt=system_prompt,
+                use_web_search=False,
+            )
+            return self._parse_json_response(retry_response)
 
     async def process(self) -> None:
         """Main processing method."""
@@ -505,7 +540,7 @@ class TaskProcessor:
         messages, image_blocks = self._build_messages_with_files(task, prompt)
 
         await self.update_progress("Формирование перечня с помощью ИИ...")
-        response = await call_claude(
+        data = await self._call_claude_json(
             messages,
             system_prompt=SYSTEM_BASE,
             use_web_search=False,
@@ -513,7 +548,6 @@ class TaskProcessor:
         )
 
         await self.update_progress("Обработка результатов...")
-        data = self._parse_json_response(response)
         items = data.get("items", [])
 
         if not items:
@@ -532,7 +566,7 @@ class TaskProcessor:
         messages, image_blocks = self._build_messages_with_files(task, prompt)
 
         await self.update_progress("Составление сметы с помощью ИИ (поиск цен)...")
-        response = await call_claude(
+        data = await self._call_claude_json(
             messages,
             system_prompt=SYSTEM_BASE,
             use_web_search=True,
@@ -540,7 +574,6 @@ class TaskProcessor:
         )
 
         await self.update_progress("Обработка результатов сметы...")
-        data = self._parse_json_response(response)
         items = data.get("items", [])
 
         if not items:
@@ -582,7 +615,7 @@ class TaskProcessor:
         messages, image_blocks = self._build_messages_with_files(task, PROMPT_SCAN_TO_EXCEL)
 
         await self.update_progress("Обработка изображения/документа с помощью ИИ...")
-        response = await call_claude(
+        data = await self._call_claude_json(
             messages,
             system_prompt=SYSTEM_BASE,
             use_web_search=False,
@@ -590,7 +623,6 @@ class TaskProcessor:
         )
 
         await self.update_progress("Формирование Excel из распознанных данных...")
-        data = self._parse_json_response(response)
 
         excel_data = generate_scan_result(data)
         await self.save_result(
@@ -609,7 +641,7 @@ class TaskProcessor:
         messages, image_blocks = self._build_messages_with_files(task, PROMPT_COMPARE)
 
         await self.update_progress("Сравнительный анализ с помощью ИИ...")
-        response = await call_claude(
+        data = await self._call_claude_json(
             messages,
             system_prompt=SYSTEM_BASE,
             use_web_search=False,
@@ -617,7 +649,6 @@ class TaskProcessor:
         )
 
         await self.update_progress("Генерация отчёта о расхождениях...")
-        data = self._parse_json_response(response)
 
         # Set date if not provided
         if not data.get("date"):
@@ -697,14 +728,13 @@ class TaskProcessor:
         if task.user_prompt:
             stage2_messages[0]["content"] += f"\n\nДополнительные требования: {task.user_prompt}"
 
-        stage2_response = await call_claude(
+        data = await self._call_claude_json(
             stage2_messages,
             system_prompt=SYSTEM_BASE,
             use_web_search=True,
         )
 
         await self.update_progress("Обработка результатов сметы...")
-        data = self._parse_json_response(stage2_response)
         items = data.get("items", [])
         if not items:
             raise ValueError("Claude не вернул позиции сметы. Проверьте содержимое документов.")

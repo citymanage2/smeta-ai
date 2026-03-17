@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import init_db, AsyncSessionLocal
 from app.models.user import User
 from app.utils.auth import hash_password, verify_password
+from app.services import price_service
 from sqlalchemy import select
 
 # Configure structlog
@@ -64,6 +65,14 @@ async def lifespan(app: FastAPI):
     try:
         await init_db()
         await _initialize_users()
+        async with AsyncSessionLocal() as db:
+            await price_service.load_cache(db)
+        works_count = len(price_service._works_cache)
+        mats_count = len(price_service._materials_cache)
+        if works_count == 0 and mats_count == 0:
+            logger.warning("Price cache is empty — all prices will be sourced via web search")
+        else:
+            logger.info("Price cache loaded", works=works_count, materials=mats_count)
         logger.info("Startup complete")
     except Exception as e:
         logger.error("Startup failed", error=str(e))
