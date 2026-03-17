@@ -1,8 +1,11 @@
+import base64
 import csv
 import io
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, func
@@ -312,6 +315,39 @@ async def get_task(
         error_message=task.error_message,
         created_at=task.created_at,
         updated_at=task.updated_at,
+    )
+
+
+@router.get("/tasks/{task_id}/download-input/{file_index}")
+async def download_input_file(
+    task_id: str,
+    file_index: int,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Download an original input file for a task by index."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    file_data_list = task.input_file_data or []
+    if file_index < 0 or file_index >= len(file_data_list):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+
+    file_info = file_data_list[file_index]
+    content_b64 = file_info.get("content_b64", "")
+    if not content_b64:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Содержимое файла отсутствует")
+
+    content = base64.b64decode(content_b64)
+    mime_type = file_info.get("mime_type", "application/octet-stream")
+    name = file_info.get("name", f"file_{file_index}")
+
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
     )
 
 

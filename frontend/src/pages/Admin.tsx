@@ -2,11 +2,12 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
 import {
-  getAdminTasks, deleteTask,
+  getAdminTasks, getAdminTask, deleteTask,
   getPriceListsInfo, uploadWorksPrice, uploadMaterialsPrice,
+  downloadInputFile,
   PriceListInfo,
 } from '../api/admin';
-import { downloadResult } from '../api/tasks';
+import { getTaskResults, downloadResult } from '../api/tasks';
 
 const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -177,6 +178,17 @@ const AdminPage: React.FC = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [taskError, setTaskError] = useState('');
 
+  // Per-task detail cache for expanded rows
+  interface ExpandedDetail {
+    loading: boolean;
+    input_files: Array<{ name: string; mime_type: string; size_bytes: number }>;
+    results: import('../types').TaskResult[];
+    chat_history: Array<{ role: string; content: string; timestamp: string }>;
+    chatExpanded: boolean;
+  }
+  const [expandedDetails, setExpandedDetails] = useState<Record<string, ExpandedDetail>>({});
+  const [downloadingInput, setDownloadingInput] = useState<string | null>(null);
+
   // Filters
   const [filterStatus, setFilterStatus] = useState<TaskStatus | ''>('');
   const [filterType, setFilterType] = useState<TaskType | ''>('');
@@ -196,6 +208,47 @@ const AdminPage: React.FC = () => {
   const [matsMsg, setMatsMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [downloadingFile, setDownloadingFile] = useState<number | null>(null);
+
+  const handleExpand = useCallback(async (taskId: string) => {
+    if (expandedTask === taskId) {
+      setExpandedTask(null);
+      return;
+    }
+    setExpandedTask(taskId);
+    if (expandedDetails[taskId]) return; // already loaded
+
+    setExpandedDetails((prev) => ({ ...prev, [taskId]: { loading: true, input_files: [], results: [], chat_history: [], chatExpanded: false } }));
+    try {
+      const [detail, results] = await Promise.all([
+        getAdminTask(taskId),
+        getTaskResults(taskId).catch(() => []),
+      ]);
+      setExpandedDetails((prev) => ({
+        ...prev,
+        [taskId]: {
+          loading: false,
+          input_files: detail.input_files || [],
+          results,
+          chat_history: detail.chat_history || [],
+          chatExpanded: false,
+        },
+      }));
+    } catch {
+      setExpandedDetails((prev) => ({ ...prev, [taskId]: { loading: false, input_files: [], results: [], chat_history: [], chatExpanded: false } }));
+    }
+  }, [expandedTask, expandedDetails]);
+
+  const handleDownloadInput = async (taskId: string, fileIndex: number, fileName: string) => {
+    const key = `${taskId}-${fileIndex}`;
+    setDownloadingInput(key);
+    try {
+      await downloadInputFile(taskId, fileIndex, fileName);
+    } catch {
+      setTaskError('Ошибка при скачивании входного файла.');
+    } finally {
+      setDownloadingInput(null);
+    }
+  };
 
   const fetchTasks = useCallback(async () => {
     setLoading(true);
@@ -488,7 +541,7 @@ const AdminPage: React.FC = () => {
                                 cursor: 'pointer',
                                 transition: 'background-color 0.1s',
                               }}
-                              onClick={() => setExpandedTask(isExpanded ? null : task.id)}
+                              onClick={() => handleExpand(task.id)}
                             >
                               <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontSize: '12px', color: '#475569', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 {task.id}
@@ -535,86 +588,122 @@ const AdminPage: React.FC = () => {
                             </tr>
 
                             {/* Expanded row */}
-                            {isExpanded && (
-                              <tr style={{ backgroundColor: '#f8fafc' }}>
-                                <td colSpan={5} style={{ padding: '0 16px 20px' }}>
-                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
-                                    {/* Input files */}
-                                    <div>
-                                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
-                                        Входные файлы ({task.input_files?.length || 0})
+                            {isExpanded && (() => {
+                              const det = expandedDetails[task.id];
+                              if (!det || det.loading) {
+                                return (
+                                  <tr style={{ backgroundColor: '#f8fafc' }}>
+                                    <td colSpan={5} style={{ padding: '16px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                                      Загрузка...
+                                    </td>
+                                  </tr>
+                                );
+                              }
+                              return (
+                                <tr style={{ backgroundColor: '#f8fafc' }}>
+                                  <td colSpan={5} style={{ padding: '0 16px 20px' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
+                                      {/* Input files */}
+                                      <div>
+                                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
+                                          Входные файлы ({det.input_files.length})
+                                        </div>
+                                        {det.input_files.length > 0 ? (
+                                          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                            {det.input_files.map((f, i) => {
+                                              const dlKey = `${task.id}-${i}`;
+                                              return (
+                                                <li key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                                                  <span style={{ fontSize: '13px', color: '#475569' }}>
+                                                    {f.name} <span style={{ color: '#94a3b8' }}>({formatSize(f.size_bytes)})</span>
+                                                  </span>
+                                                  <button
+                                                    onClick={() => handleDownloadInput(task.id, i, f.name)}
+                                                    disabled={downloadingInput === dlKey}
+                                                    style={{ padding: '3px 10px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, flexShrink: 0, marginLeft: '8px' }}
+                                                  >
+                                                    {downloadingInput === dlKey ? '...' : 'Скачать'}
+                                                  </button>
+                                                </li>
+                                              );
+                                            })}
+                                          </ul>
+                                        ) : (
+                                          <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>Нет файлов</p>
+                                        )}
                                       </div>
-                                      {task.input_files?.length > 0 ? (
-                                        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                          {task.input_files.map((f, i) => (
-                                            <li key={i} style={{ fontSize: '13px', color: '#475569', padding: '5px 10px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                                              {f.name} <span style={{ color: '#94a3b8' }}>({formatSize(f.size_bytes)})</span>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      ) : (
-                                        <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>Нет файлов</p>
-                                      )}
+
+                                      {/* Result files */}
+                                      <div>
+                                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
+                                          Результаты ({det.results.length})
+                                        </div>
+                                        {det.results.length > 0 ? (
+                                          <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                            {det.results.map((r) => (
+                                              <li key={r.file_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px', backgroundColor: '#f0fdf4', borderRadius: '6px', border: '1px solid #86efac' }}>
+                                                <span style={{ fontSize: '13px', color: '#15803d' }}>{r.file_name}</span>
+                                                <button
+                                                  onClick={() => handleDownload(r.file_id, r.file_name)}
+                                                  disabled={downloadingFile === r.file_id}
+                                                  style={{ padding: '3px 10px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, flexShrink: 0, marginLeft: '8px' }}
+                                                >
+                                                  {downloadingFile === r.file_id ? '...' : 'Скачать'}
+                                                </button>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        ) : (
+                                          <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>Нет результатов</p>
+                                        )}
+                                      </div>
                                     </div>
 
-                                    {/* Result files */}
-                                    <div>
-                                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
-                                        Результаты ({task.results?.length || 0})
-                                      </div>
-                                      {task.results && task.results.length > 0 ? (
-                                        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                          {task.results.map((r) => (
-                                            <li key={r.file_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px', backgroundColor: '#f0fdf4', borderRadius: '6px', border: '1px solid #86efac' }}>
-                                              <span style={{ fontSize: '13px', color: '#15803d' }}>{r.file_name}</span>
-                                              <button
-                                                onClick={() => handleDownload(r.file_id, r.file_name)}
-                                                disabled={downloadingFile === r.file_id}
-                                                style={{ padding: '3px 10px', backgroundColor: '#16a34a', color: '#fff', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
-                                              >
-                                                {downloadingFile === r.file_id ? '...' : 'Скачать'}
-                                              </button>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      ) : (
-                                        <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>Нет результатов</p>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Chat history */}
-                                  {task.chat_history?.length > 0 && (
+                                    {/* Переписка с Claude */}
                                     <div style={{ marginTop: '16px' }}>
-                                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#374151', marginBottom: '8px' }}>
-                                        История чата ({task.chat_history.length})
-                                      </div>
-                                      <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                        {task.chat_history.map((msg, i) => (
-                                          <div
-                                            key={i}
-                                            style={{
-                                              padding: '8px 12px',
-                                              backgroundColor: msg.role === 'user' ? '#eff6ff' : '#ffffff',
-                                              border: `1px solid ${msg.role === 'user' ? '#bfdbfe' : '#e2e8f0'}`,
-                                              borderRadius: '8px',
-                                            }}
-                                          >
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                              <span style={{ fontSize: '12px', fontWeight: 700, color: msg.role === 'user' ? '#1d4ed8' : '#374151' }}>
-                                                {msg.role === 'user' ? 'Пользователь' : 'Ассистент'}
-                                              </span>
-                                              <span style={{ fontSize: '11px', color: '#94a3b8' }}>{formatDate(msg.timestamp)}</span>
-                                            </div>
-                                            <p style={{ margin: 0, fontSize: '13px', color: '#1e293b', lineHeight: '1.5' }}>{msg.content}</p>
+                                      <button
+                                        onClick={() => setExpandedDetails((prev) => ({
+                                          ...prev,
+                                          [task.id]: { ...prev[task.id], chatExpanded: !prev[task.id].chatExpanded },
+                                        }))}
+                                        style={{
+                                          display: 'flex', alignItems: 'center', gap: '6px',
+                                          fontSize: '13px', fontWeight: 700, color: '#374151',
+                                          background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginBottom: '8px',
+                                        }}
+                                      >
+                                        <span>{det.chatExpanded ? '▾' : '▸'}</span>
+                                        Переписка с Claude ({det.chat_history.length})
+                                      </button>
+                                      {det.chatExpanded && (
+                                        det.chat_history.length > 0 ? (
+                                          <div style={{ maxHeight: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                            {det.chat_history.map((msg, i) => (
+                                              <div
+                                                key={i}
+                                                style={{
+                                                  padding: '8px 12px',
+                                                  backgroundColor: msg.role === 'user' ? '#eff6ff' : '#ffffff',
+                                                  border: `1px solid ${msg.role === 'user' ? '#bfdbfe' : '#e2e8f0'}`,
+                                                  borderRadius: '8px',
+                                                }}
+                                              >
+                                                <div style={{ fontSize: '12px', fontWeight: 700, color: msg.role === 'user' ? '#1d4ed8' : '#374151', marginBottom: '4px' }}>
+                                                  {msg.role === 'user' ? 'Пользователь' : 'Ассистент'}
+                                                </div>
+                                                <p style={{ margin: 0, fontSize: '13px', color: '#1e293b', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{msg.content}</p>
+                                              </div>
+                                            ))}
                                           </div>
-                                        ))}
-                                      </div>
+                                        ) : (
+                                          <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0 }}>Нет данных</p>
+                                        )
+                                      )}
                                     </div>
-                                  )}
-                                </td>
-                              </tr>
-                            )}
+                                  </td>
+                                </tr>
+                              );
+                            })()}
                           </React.Fragment>
                         );
                       })}

@@ -56,6 +56,20 @@ export async function uploadMaterialsPrice(file: File): Promise<SinglePriceUploa
   return response.data;
 }
 
+export async function downloadInputFile(taskId: string, fileIndex: number, fileName: string): Promise<void> {
+  const response = await apiClient.get(`/admin/tasks/${taskId}/download-input/${fileIndex}`, {
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 // Legacy combined upload kept for backward compatibility
 export async function uploadPrices(file: File): Promise<{ message: string }> {
   const formData = new FormData();
