@@ -29,4 +29,4 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
-        sync: false
+        value: 'https://smeta-ai-backend.onrender.com'
