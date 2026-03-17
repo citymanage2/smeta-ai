@@ -31,7 +31,6 @@ export async function createTask(
   onUploadProgress?: (percent: number) => void,
 ): Promise<TaskCreateResponse> {
   const response = await apiClient.post<TaskCreateResponse>('/tasks', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: (event) => {
       if (onUploadProgress && event.total) {
         onUploadProgress(Math.round((event.loaded * 100) / event.total));
