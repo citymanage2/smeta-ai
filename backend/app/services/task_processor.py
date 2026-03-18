@@ -638,25 +638,39 @@ class TaskProcessor:
         return messages, image_blocks
 
     def _parse_json_response(self, response: str) -> dict:
-        """Extract and parse JSON from Claude response, stripping preamble and fences."""
+        """Extract and parse JSON from Claude response using four fallback strategies."""
         import re
 
-        # Strip markdown code fences (```json ... ``` or ``` ... ```)
-        stripped = re.sub(r'```(?:json)?\s*', '', response).strip()
+        text = response.strip()
 
-        # Try direct parse after stripping fences
+        # Strategy 1: direct parse (Claude returned clean JSON)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: strip ALL markdown fences, then parse
+        # Removes ```json ... ``` and ``` ... ``` blocks entirely
+        stripped = re.sub(r'```(?:json)?\s*', '', text).strip()
         try:
             return json.loads(stripped)
         except json.JSONDecodeError:
             pass
 
-        # Find the outermost JSON object (skip any text preamble)
+        # Strategy 3: regex extract — find the outermost {...} spanning the whole response
+        m = re.search(r'\{.*\}', stripped, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except json.JSONDecodeError:
+                pass
+
+        # Strategy 4: slice from first { to last } on the stripped text
         start = stripped.find('{')
         end = stripped.rfind('}')
         if start != -1 and end != -1 and end > start:
-            candidate = stripped[start:end + 1]
             try:
-                return json.loads(candidate)
+                return json.loads(stripped[start:end + 1])
             except json.JSONDecodeError:
                 pass
 
@@ -683,7 +697,15 @@ class TaskProcessor:
             logger.warning("JSON parse failed on first attempt, retrying with explicit instruction", task_id=self.task_id)
             retry_messages = list(messages) + [
                 {"role": "assistant", "content": response},
-                {"role": "user", "content": "Ответь ТОЛЬКО валидным JSON, без преамбулы, без markdown, начиная с { и заканчивая }."},
+                {
+                    "role": "user",
+                    "content": (
+                        "Ответь ТОЛЬКО валидным JSON-объектом. "
+                        "Никакого текста до или после. "
+                        "Никаких markdown-блоков, никаких обратных кавычек, никаких символов ``` . "
+                        "Первый символ ответа — {, последний символ — }."
+                    ),
+                },
             ]
             retry_response = await call_claude(
                 retry_messages,
