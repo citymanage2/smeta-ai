@@ -282,6 +282,149 @@ def _write_note_section(ws, start_row: int, title: str, body: str) -> int:
     return current_row
 
 
+def generate_smeta_from_project(
+    smeta_items: list,
+    list_items: list,
+    research_result: Optional[str] = None,
+    changes_summary: Optional[str] = None,
+) -> bytes:
+    """
+    Generate 5-sheet Excel for SMETA_FROM_PROJECT (3-stage) tasks.
+    Sheet 1 "Смета"                      — priced estimate (Stage 3 items)
+    Sheet 2 "Перечень работ и материалов" — all items from Stage 2
+    Sheet 3 "Перечень работ"              — works from Stage 2
+    Sheet 4 "Перечень материалов"         — materials from Stage 2
+    Sheet 5 "Пояснительная записка"       — research_result + changes_summary
+    """
+    VAT_RATE = 0.20
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: Смета ─────────────────────────────────────────────────────
+    ws_smeta = wb.active
+    ws_smeta.title = "Смета"
+
+    smeta_headers = [
+        "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
+        "Цена работы (за ед.)", "Цена материала (за ед.)",
+        "Стоимость работ", "Стоимость материалов",
+        "Итого без НДС", "НДС (20%)", "Итого с НДС",
+        "Наименование в прайсе", "Источники", "Примечание",
+    ]
+    for col, h in enumerate(smeta_headers, start=1):
+        ws_smeta.cell(row=1, column=col, value=h)
+    _style_header_row(ws_smeta, 1, len(smeta_headers))
+    ws_smeta.row_dimensions[1].height = 40
+
+    for i, item in enumerate(smeta_items, start=1):
+        row = i + 1
+        qty = item.get("quantity") or 0
+        wp = item.get("work_price") or 0
+        mp = item.get("material_price") or 0
+        work_total = qty * wp
+        mat_total = qty * mp
+        subtotal = work_total + mat_total
+        vat = subtotal * VAT_RATE
+        total = subtotal + vat
+
+        ws_smeta.cell(row=row, column=1, value=i)
+        ws_smeta.cell(row=row, column=2, value=item.get("type", ""))
+        ws_smeta.cell(row=row, column=3, value=item.get("name", ""))
+        ws_smeta.cell(row=row, column=4, value=item.get("unit", ""))
+        ws_smeta.cell(row=row, column=5, value=qty)
+        ws_smeta.cell(row=row, column=6, value=wp if wp else None)
+        ws_smeta.cell(row=row, column=7, value=mp if mp else None)
+        ws_smeta.cell(row=row, column=8, value=work_total if work_total else None)
+        ws_smeta.cell(row=row, column=9, value=mat_total if mat_total else None)
+        ws_smeta.cell(row=row, column=10, value=subtotal if subtotal else None)
+        ws_smeta.cell(row=row, column=11, value=vat if vat else None)
+        ws_smeta.cell(row=row, column=12, value=total if total else None)
+        ws_smeta.cell(row=row, column=13, value=item.get("price_list_name", "") or "")
+        ws_smeta.cell(row=row, column=14, value=item.get("sources", "") or "")
+        ws_smeta.cell(row=row, column=15, value=item.get("notes", ""))
+        _style_data_row(ws_smeta, row, len(smeta_headers))
+
+    if smeta_items:
+        total_row = len(smeta_items) + 2
+        ws_smeta.cell(row=total_row, column=1, value="ИТОГО")
+        ws_smeta.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=7)
+        data_end = len(smeta_items) + 1
+        for col in [8, 9, 10, 11, 12]:
+            cl = get_column_letter(col)
+            ws_smeta.cell(row=total_row, column=col,
+                          value=f"=SUM({cl}2:{cl}{data_end})")
+            ws_smeta.cell(row=total_row, column=col).number_format = '#,##0.00'
+        for col in range(1, len(smeta_headers) + 1):
+            c = ws_smeta.cell(row=total_row, column=col)
+            c.fill = TOTAL_FILL
+            c.font = BOLD_FONT
+            c.border = THIN_BORDER
+
+    for col in [6, 7, 8, 9, 10, 11, 12]:
+        for row in range(2, len(smeta_items) + 2):
+            ws_smeta.cell(row=row, column=col).number_format = '#,##0.00'
+
+    _auto_fit_columns(ws_smeta)
+    ws_smeta.freeze_panes = "A2"
+
+    # ── Sheets 2-4: Перечень from Stage 2 ──────────────────────────────────
+    list_headers_all = ["№", "Тип", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
+    list_headers_sub = ["№", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
+
+    def _write_list_sheet(ws, rows, headers, include_type=False):
+        for col, h in enumerate(headers, start=1):
+            ws.cell(row=1, column=col, value=h)
+        _style_header_row(ws, 1, len(headers))
+        ws.row_dimensions[1].height = 30
+        for i, item in enumerate(rows, start=1):
+            r = i + 1
+            if include_type:
+                vals = [
+                    i, item.get("type", ""), item.get("section", ""),
+                    item.get("name", ""), item.get("unit", ""),
+                    item.get("quantity"), item.get("notes", ""),
+                ]
+            else:
+                vals = [
+                    i, item.get("section", ""), item.get("name", ""),
+                    item.get("unit", ""), item.get("quantity"), item.get("notes", ""),
+                ]
+            for col, val in enumerate(vals, start=1):
+                ws.cell(row=r, column=col, value=val)
+            _style_data_row(ws, r, len(headers))
+        _auto_fit_columns(ws)
+        ws.freeze_panes = "A2"
+
+    ws_all = wb.create_sheet("Перечень работ и материалов")
+    _write_list_sheet(ws_all, list_items, list_headers_all, include_type=True)
+
+    works = [it for it in list_items if it.get("type", "").lower() in ("работа", "work", "работы")]
+    ws_works = wb.create_sheet("Перечень работ")
+    _write_list_sheet(ws_works, works, list_headers_sub)
+
+    materials = [it for it in list_items if it.get("type", "").lower() in ("материал", "material", "материалы")]
+    ws_mats = wb.create_sheet("Перечень материалов")
+    _write_list_sheet(ws_mats, materials, list_headers_sub)
+
+    # ── Sheet 5: Пояснительная записка ────────────────────────────────────
+    ws_note = wb.create_sheet("Пояснительная записка")
+    ws_note.column_dimensions["A"].width = 120
+
+    current_row = _write_note_section(
+        ws_note, 1,
+        "Проверка проекта",
+        research_result or "Результаты проверки проекта отсутствуют.",
+    )
+    _write_note_section(
+        ws_note, current_row + 1,
+        "Замечания к перечню",
+        changes_summary or "Перечень соответствует документации, дополнений не требуется.",
+    )
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def generate_smeta_from_tz_project(
     smeta_items: list,
     list_items: list,

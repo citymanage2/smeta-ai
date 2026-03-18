@@ -11,7 +11,7 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.services.claude_service import call_claude
 from app.services import price_service
-from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_detailed, generate_scan_result
+from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_from_project, generate_smeta_detailed, generate_scan_result
 from app.services.pdf_service import generate_comparison_report
 from app.utils.file_parser import parse_file
 
@@ -341,6 +341,102 @@ PROMPT_STAGE1_FROM_PROJECT = """Ты — опытный инженер-смет�
 
 Формат каждой позиции:
 [Тип: Работа/Материал] | [Наименование] | [Ед.изм.] | [Кол-во] | [Примечание]"""
+
+PROMPT_RESEARCH_PROJECT = """Ты профессиональный инженер-сметчик в строительной сфере.
+
+Проведи проверку проектной документации по следующему плану и зафикси результаты.
+
+1. ОБЩАЯ РЕВИЗИЯ ПАКЕТА ДОКУМЕНТОВ
+Проверь наличие: задание на проектирование или ТЗ, заключение экспертизы, пояснительная записка (ПЗ), рабочая документация по разделам (АР, КР/КЖ, ОВ, ВК, ЭО, СС, ТХ), ведомость объёмов работ (ВОР), спецификации оборудования и материалов, генплан, геологический отчёт (ИГИ), сметное задание.
+Зафикси что присутствует, что отсутствует.
+
+2. АНАЛИЗ ПОЯСНИТЕЛЬНОЙ ЗАПИСКИ И ОБЩИХ ДАННЫХ
+Извлеки: класс функциональной пожарной опасности, климатический район, сейсмика, нагрузки снег/ветер, уровень грунтовых вод (УГВ), категория грунта, наличие стеснённых условий, этапы строительства.
+Зафикси риски: устаревшая ПЗ, отсутствие ссылок на нормативы, неописанные условия производства работ.
+
+3. АНАЛИЗ АРХИТЕКТУРНО-СТРОИТЕЛЬНЫХ ЧЕРТЕЖЕЙ (АР + КЖ/КМ)
+Проверь: соответствие отметок на планах и разрезах, комплектность чертежей, спецификации к чертежам, марки и конструктивные решения, проёмы (размеры и количество), лестницы/пандусы, наружные работы (отмостка, крыльца, козырьки), узлы примыканий кровли, гидроизоляция, утепление.
+Контрольный пересчёт: площадь пола, объём земляных работ, объём бетона, площадь кладки, площадь кровли, площадь фасадных работ, площадь внутренней отделки.
+Зафикси расхождения объёмов ВОР и чертежей (расхождение > 5% — критично).
+
+4. АНАЛИЗ ИНЖЕНЕРНЫХ РАЗДЕЛОВ (ОВ, ВК, ЭО, СС, ТХ)
+По каждому разделу проверь: спецификацию оборудования, схемы, длины трасс, типы труб/кабелей.
+Типичные ошибки ВОР: нет изоляции труб, не учтены испытания систем, занижены длины кабелей, нет заземления, отсутствуют марки оборудования в СС.
+Зафикси разграничение поставки: что в смете ГП, что — заказчика.
+
+5. АНАЛИЗ ВЕДОМОСТИ ОБЪЁМОВ РАБОТ (ВОР)
+Структурная проверка: все разделы представлены, единицы измерения соответствуют ГЭСН, нет нулевых объёмов, нет дублей.
+Часто пропускаемое: вывоз мусора, временные здания и сооружения (гл.8 ССР), зимнее удорожание (гл.9 ССР), монтаж/демонтаж лесов (ГЭСН 08-07), водоотлив, уплотнение обратной засыпки, перемычки над проёмами, антикоррозионная обработка, испытания и промывки систем, ПНР.
+
+6. ПРОВЕРКА СПЕЦИФИКАЦИЙ НА МАТЕРИАЛЫ И ОБОРУДОВАНИЕ
+Проверь: указаны ли марки и типоразмеры, класс бетона, марка стали/арматуры, плотность утеплителя, профиль окон/дверей, артикулы оборудования ОВ/ВК, наличие аналогов.
+Риски: материал без марки (разброс цен 2-5 раз), спецификация не совпадает с ВОР.
+
+7. ОЦЕНКА УСЛОВИЙ ПРОИЗВОДСТВА РАБОТ
+Выяви применимые коэффициенты: стеснённые условия (МДС 81-35.2004, до 1,35), зимнее удорожание (ГСН 81-05-02-2007), высотные работы, подземные работы/водоотлив, работа в действующем цехе (до 1,5).
+
+8. ИТОГОВЫЙ ПРОТОКОЛ ЗАМЕЧАНИЙ
+Таблица: Раздел ПД | Описание замечания | Запрашиваемое уточнение | Критичность (высокая/средняя/низкая)
+Реестр допущений: позиции где данных нет и принято допущение.
+
+Верни результат в виде структурированного текста на русском языке.
+Это вспомогательный анализ — он будет использован на следующем этапе для составления перечня работ и материалов."""
+
+PROMPT_LIST_FROM_PROJECT = """Ты — опытный инженер-сметчик со знанием нормативной базы РФ (ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области, СП, ГОСТ).
+
+Задача: на основе проведённой проверки проекта и проектной документации составить полный нормативный перечень работ и материалов.
+
+Результаты проверки проекта:
+{research_result}
+
+ПОРЯДОК СТРОК В ПЕРЕЧНЕ — строго по структуре проекта:
+Работа 1 (в порядке как в проекте)
+  Материал 1 к Работе 1
+  Материал 2 к Работе 1
+  ...
+Работа 2
+  Материал 1 к Работе 2
+  ...
+
+ЭТАП 1 — ФОРМИРОВАНИЕ ПЕРЕЧНЯ:
+Для каждого вида работы определи полный перечень материалов по нормативной базе:
+- ГЭСН / ФСНБ-2022 — нормы расхода материалов
+- ФЕР/ТЕР Свердловской области — региональная специфика
+- Технические части сборников ГЭСН — что включено в норму, что отдельно
+- СП и ГОСТ — для нестандартных решений
+
+Один материал может фигурировать в проекте одной строкой с суммарным объёмом на несколько видов работ. В этом случае раздели объём между работами согласно нормам ГЭСН.
+
+ФИКСАЦИЯ ИЗМЕНЕНИЙ в поле notes:
+- "Добавлено по ГЭСН XX-XX-XXX: [обоснование]"
+- "Объём скорректирован: суммарный объём из проекта распределён между работами по норме ГЭСН"
+- "Замечание из проверки: [суть]"
+
+ПОЯСНИТЕЛЬНЫЙ ТЕКСТ (поле changes_summary):
+Раздел 1 — Ключевые замечания к проекту (из проверки):
+  - Критичные замечания, требующие уточнения до начала работ
+  - Риски выявленных несоответствий
+Раздел 2 — Изменения перечня по сравнению с проектом:
+  - Что добавлено нормативно и почему
+  - Что скорректировано по объёмам и почему
+  - Если изменений нет — "Перечень соответствует документации, дополнений не требуется"
+
+Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
+{
+  "items": [
+    {
+      "type": "Работа" | "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "section": "Раздел проекта",
+      "notes": "Примечание / обоснование изменения"
+    }
+  ],
+  "changes_summary": "Пояснительный текст: Раздел 1 — замечания к проекту, Раздел 2 — изменения перечня"
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
 
 PROMPT_STAGE1_FROM_EDC = """Ты — опытный инженер-сметчик. Тебе предоставлены два документа: проектная документация и ЭДЦ (элементные дефектные ведомости/ценники).
 
@@ -979,11 +1075,84 @@ class TaskProcessor:
         logger.info("Two-stage smeta completed", task_id=self.task_id, items=len(items))
 
     async def _handle_smeta_from_project(self, task: Task) -> None:
-        await self._handle_two_stage_smeta(
-            task,
-            stage1_prompt=PROMPT_STAGE1_FROM_PROJECT,
-            stage2_prompt_template=PROMPT_STAGE2_SMETA,
-            file_suffix="SMETA_FROM_PROJECT",
+        from datetime import date
+
+        # ── Stage 1: research project documentation ───────────────────────
+        await self.update_progress("Этап 1: проверка проектной документации...")
+        messages, image_blocks = self._build_messages_with_files(task, PROMPT_RESEARCH_PROJECT)
+        research_result = await call_claude(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks if image_blocks else None,
+        )
+        logger.info("Stage 1 (research) complete", task_id=self.task_id, length=len(research_result))
+
+        # ── Stage 2: build normalised items list from project + research ──
+        await self.update_progress("Этап 2: формирование перечня работ и материалов...")
+        stage2_prompt = PROMPT_LIST_FROM_PROJECT.replace("{research_result}", research_result)
+        messages2, image_blocks2 = self._build_messages_with_files(task, stage2_prompt)
+        stage2_data = await self._call_claude_json(
+            messages2,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks2 if image_blocks2 else None,
+        )
+
+        stage2_items = stage2_data.get("items", [])
+        changes_summary = stage2_data.get("changes_summary")
+
+        if not stage2_items:
+            raise ValueError("Claude не вернул позиции на этапе 2. Проверьте содержимое документов.")
+
+        logger.info("Stage 2 (list) complete", task_id=self.task_id, items=len(stage2_items))
+
+        # ── Stage 3: price the items list ────────────────────────────────
+        await self.update_progress("Загрузка базы расценок...")
+        await price_service.load_cache(self.db)
+        works_text, mats_text = self._format_price_list_text()
+        current_date = date.today().strftime("%d.%m.%Y")
+
+        await self.update_progress("Этап 3: составление сметы с ценами (поиск по прайсу и интернету)...")
+        stage3_prompt = (
+            PROMPT_SMETA_FROM_LIST
+            .replace("{price_list_works}", works_text)
+            .replace("{price_list_materials}", mats_text)
+            .replace("{current_date}", current_date)
+        )
+        stage2_items_json = json.dumps({"items": stage2_items}, ensure_ascii=False, indent=2)
+        stage3_content = f"Перечень работ и материалов:\n\n{stage2_items_json}\n\n{stage3_prompt}"
+        if task.user_prompt:
+            stage3_content += f"\n\nДополнительные требования: {task.user_prompt}"
+
+        stage3_data = await self._call_claude_json(
+            [{"role": "user", "content": stage3_content}],
+            system_prompt=SYSTEM_BASE,
+            use_web_search=True,
+        )
+
+        stage3_items = stage3_data.get("items", [])
+        if not stage3_items:
+            raise ValueError("Claude не вернул позиции сметы на этапе 3. Проверьте содержимое документов.")
+
+        await self.update_progress(
+            f"Формирование Excel (смета: {len(stage3_items)} поз., перечень: {len(stage2_items)} поз.)..."
+        )
+        excel_data = generate_smeta_from_project(
+            stage3_items, stage2_items,
+            research_result=research_result,
+            changes_summary=changes_summary,
+        )
+        await self.save_result(
+            "Смета_из_проекта.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            excel_data,
+        )
+        logger.info(
+            "Smeta from project (3-stage) completed",
+            task_id=self.task_id,
+            stage2_items=len(stage2_items),
+            stage3_items=len(stage3_items),
         )
 
     async def _handle_smeta_from_edc(self, task: Task) -> None:
