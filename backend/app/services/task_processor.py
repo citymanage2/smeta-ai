@@ -11,7 +11,7 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.services.claude_service import call_claude
 from app.services import price_service
-from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_detailed, generate_scan_result
+from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_detailed, generate_scan_result
 from app.services.pdf_service import generate_comparison_report
 from app.utils.file_parser import parse_file
 
@@ -628,7 +628,7 @@ class TaskProcessor:
             elif task_type == "SMETA_FROM_TZ":
                 await self._handle_smeta(task, PROMPT_SMETA_FROM_TZ)
             elif task_type == "SMETA_FROM_TZ_PROJECT":
-                await self._handle_smeta(task, PROMPT_SMETA_FROM_TZ_PROJECT)
+                await self._handle_smeta_from_tz_project(task)
             elif task_type == "SCAN_TO_EXCEL":
                 await self._handle_scan_to_excel(task)
             elif task_type == "COMPARE_PROJECT_SMETA":
@@ -706,6 +706,74 @@ class TaskProcessor:
             excel_data,
         )
         logger.info("List TZ+project task completed", items=len(items))
+
+    async def _handle_smeta_from_tz_project(self, task: Task) -> None:
+        from datetime import date
+
+        # Stage 1: extract items list from TZ + project docs
+        await self.update_progress("Этап 1: формирование перечня работ и материалов из ТЗ и проекта...")
+        messages, image_blocks = self._build_messages_with_files(task, PROMPT_LIST_FROM_TZ_PROJECT)
+        stage1_data = await self._call_claude_json(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks if image_blocks else None,
+        )
+
+        stage1_items = stage1_data.get("items", [])
+        changes_summary = stage1_data.get("changes_summary")
+
+        if not stage1_items:
+            raise ValueError("Claude не вернул позиции на этапе 1. Проверьте содержимое документов.")
+
+        logger.info("Stage 1 complete", task_id=self.task_id, items=len(stage1_items))
+
+        # Load price lists
+        await self.update_progress("Загрузка базы расценок...")
+        await price_service.load_cache(self.db)
+        works_text, mats_text = self._format_price_list_text()
+        current_date = date.today().strftime("%d.%m.%Y")
+
+        # Stage 2: price the Stage 1 items
+        await self.update_progress("Этап 2: составление сметы с ценами (поиск по прайсу и интернету)...")
+        stage2_prompt = (
+            PROMPT_SMETA_FROM_LIST
+            .replace("{price_list_works}", works_text)
+            .replace("{price_list_materials}", mats_text)
+            .replace("{current_date}", current_date)
+        )
+        stage1_items_json = json.dumps({"items": stage1_items}, ensure_ascii=False, indent=2)
+        stage2_content = f"Перечень работ и материалов:\n\n{stage1_items_json}\n\n{stage2_prompt}"
+        if task.user_prompt:
+            stage2_content += f"\n\nДополнительные требования: {task.user_prompt}"
+
+        stage2_data = await self._call_claude_json(
+            [{"role": "user", "content": stage2_content}],
+            system_prompt=SYSTEM_BASE,
+            use_web_search=True,
+        )
+
+        stage2_items = stage2_data.get("items", [])
+        if not stage2_items:
+            raise ValueError("Claude не вернул позиции сметы на этапе 2. Проверьте содержимое документов.")
+
+        await self.update_progress(
+            f"Формирование Excel (смета: {len(stage2_items)} поз., перечень: {len(stage1_items)} поз.)..."
+        )
+        excel_data = generate_smeta_from_tz_project(
+            stage2_items, stage1_items, changes_summary=changes_summary
+        )
+        await self.save_result(
+            "Смета_ТЗ_и_проект.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            excel_data,
+        )
+        logger.info(
+            "Smeta TZ+project task completed",
+            task_id=self.task_id,
+            stage1_items=len(stage1_items),
+            stage2_items=len(stage2_items),
+        )
 
     async def _handle_smeta(self, task: Task, prompt: str) -> None:
         await self.update_progress("Анализ документов...")
