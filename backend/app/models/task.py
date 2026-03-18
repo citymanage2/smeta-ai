@@ -2,6 +2,7 @@ from typing import Optional
 from sqlalchemy import Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from datetime import datetime, timezone
 from app.database import Base
 
@@ -10,7 +11,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id: Mapped[str] = mapped_column(
-        String(36),
+        PG_UUID(as_uuid=False),
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
