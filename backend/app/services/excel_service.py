@@ -1,5 +1,5 @@
 import io
-from typing import Any
+from typing import Any, Optional
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -49,7 +49,7 @@ def _auto_fit_columns(ws, min_width: int = 10, max_width: int = 60) -> None:
         ws.column_dimensions[col_letter].width = adjusted
 
 
-def generate_list(items: list, changes_summary: str | None = None) -> bytes:
+def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     """
     Generate Excel file with list of works/materials.
     items: list of dicts with keys: type, name, unit, quantity
@@ -145,6 +145,141 @@ def generate_list(items: list, changes_summary: str | None = None) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def generate_list_project(items: list, changes_summary: Optional[str] = None) -> bytes:
+    """
+    Generate Excel for LIST_FROM_TZ_PROJECT tasks.
+    Same 3 item sheets as generate_list, plus a 2-section "Пояснительная записка" sheet
+    that splits changes_summary at "Раздел 2".
+    """
+    wb = openpyxl.Workbook()
+
+    # Sheet 1: Перечень (All items) — includes section column
+    ws_all = wb.active
+    ws_all.title = "Перечень"
+
+    headers_all = ["№", "Тип", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
+    for col, h in enumerate(headers_all, start=1):
+        ws_all.cell(row=1, column=col, value=h)
+    _style_header_row(ws_all, 1, len(headers_all))
+    ws_all.row_dimensions[1].height = 30
+
+    for i, item in enumerate(items, start=1):
+        row = i + 1
+        ws_all.cell(row=row, column=1, value=i)
+        ws_all.cell(row=row, column=2, value=item.get("type", ""))
+        ws_all.cell(row=row, column=3, value=item.get("section", ""))
+        ws_all.cell(row=row, column=4, value=item.get("name", ""))
+        ws_all.cell(row=row, column=5, value=item.get("unit", ""))
+        ws_all.cell(row=row, column=6, value=item.get("quantity"))
+        ws_all.cell(row=row, column=7, value=item.get("notes", ""))
+        _style_data_row(ws_all, row, len(headers_all))
+
+    _auto_fit_columns(ws_all)
+    ws_all.freeze_panes = "A2"
+
+    # Sheet 2: Работы
+    works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
+    ws_works = wb.create_sheet("Работы")
+    headers_works = ["№", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
+    for col, h in enumerate(headers_works, start=1):
+        ws_works.cell(row=1, column=col, value=h)
+    _style_header_row(ws_works, 1, len(headers_works))
+    ws_works.row_dimensions[1].height = 30
+
+    for i, item in enumerate(works, start=1):
+        row = i + 1
+        ws_works.cell(row=row, column=1, value=i)
+        ws_works.cell(row=row, column=2, value=item.get("section", ""))
+        ws_works.cell(row=row, column=3, value=item.get("name", ""))
+        ws_works.cell(row=row, column=4, value=item.get("unit", ""))
+        ws_works.cell(row=row, column=5, value=item.get("quantity"))
+        ws_works.cell(row=row, column=6, value=item.get("notes", ""))
+        _style_data_row(ws_works, row, len(headers_works))
+
+    _auto_fit_columns(ws_works)
+    ws_works.freeze_panes = "A2"
+
+    # Sheet 3: Материалы
+    materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
+    ws_mats = wb.create_sheet("Материалы")
+    headers_mats = ["№", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
+    for col, h in enumerate(headers_mats, start=1):
+        ws_mats.cell(row=1, column=col, value=h)
+    _style_header_row(ws_mats, 1, len(headers_mats))
+    ws_mats.row_dimensions[1].height = 30
+
+    for i, item in enumerate(materials, start=1):
+        row = i + 1
+        ws_mats.cell(row=row, column=1, value=i)
+        ws_mats.cell(row=row, column=2, value=item.get("section", ""))
+        ws_mats.cell(row=row, column=3, value=item.get("name", ""))
+        ws_mats.cell(row=row, column=4, value=item.get("unit", ""))
+        ws_mats.cell(row=row, column=5, value=item.get("quantity"))
+        ws_mats.cell(row=row, column=6, value=item.get("notes", ""))
+        _style_data_row(ws_mats, row, len(headers_mats))
+
+    _auto_fit_columns(ws_mats)
+    ws_mats.freeze_panes = "A2"
+
+    # Sheet 4: Пояснительная записка (two sections)
+    ws_note = wb.create_sheet("Пояснительная записка")
+    ws_note.column_dimensions["A"].width = 120
+
+    FALLBACK = "Документация соответствует друг другу, дополнений не требуется"
+
+    if not changes_summary:
+        # No summary — write fallback under a single header
+        _write_note_section(ws_note, 1, "Пояснительная записка", FALLBACK)
+    else:
+        # Split on "Раздел 2" (case-insensitive, strip surrounding whitespace)
+        import re
+        split_match = re.search(r"(?i)раздел\s*2", changes_summary)
+        if split_match:
+            part1 = changes_summary[: split_match.start()].strip()
+            part2 = changes_summary[split_match.start() :].strip()
+        else:
+            part1 = changes_summary.strip()
+            part2 = ""
+
+        current_row = _write_note_section(
+            ws_note, 1,
+            "Раздел 1 — Сравнение ТЗ и проекта",
+            part1 or FALLBACK,
+        )
+        if part2:
+            _write_note_section(
+                ws_note, current_row + 1,
+                "Раздел 2 — Изменения по нормативной базе",
+                part2,
+            )
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _write_note_section(ws, start_row: int, title: str, body: str) -> int:
+    """
+    Write a bold section header at start_row, then body lines below it.
+    Returns the last row written.
+    """
+    # Section header
+    header_cell = ws.cell(row=start_row, column=1, value=title)
+    header_cell.font = BOLD_FONT
+    header_cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    header_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.row_dimensions[start_row].height = 22
+
+    current_row = start_row + 1
+    for line in body.splitlines():
+        cell = ws.cell(row=current_row, column=1, value=line)
+        cell.font = NORMAL_FONT
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+        current_row += 1
+
+    return current_row
 
 
 def generate_smeta(items: list) -> bytes:

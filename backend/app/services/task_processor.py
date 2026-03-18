@@ -11,7 +11,7 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.services.claude_service import call_claude
 from app.services import price_service
-from app.services.excel_service import generate_list, generate_smeta, generate_smeta_detailed, generate_scan_result
+from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_detailed, generate_scan_result
 from app.services.pdf_service import generate_comparison_report
 from app.utils.file_parser import parse_file
 
@@ -84,9 +84,59 @@ PROMPT_LIST_FROM_TZ = """Ты — опытный инженер-сметчик �
 
 ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
 
-PROMPT_LIST_FROM_TZ_PROJECT = """Проанализируй техническое задание (ТЗ) и проектную документацию, составь комплексный перечень работ и материалов.
+PROMPT_LIST_FROM_TZ_PROJECT = """Ты — опытный инженер-сметчик со знанием нормативной базы РФ (ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области, СП, ГОСТ).
 
-Верни результат СТРОГО в формате JSON (без markdown блоков):
+Задача: проанализировать ТЗ и проектную документацию, провести их сравнение, составить полный нормативный перечень работ и материалов.
+
+ПОРЯДОК СТРОК В ПЕРЕЧНЕ — строго по структуре проекта:
+Работа 1 (в порядке как в проекте)
+  Материал 1 к Работе 1
+  Материал 2 к Работе 1
+  ...
+Работа 2
+  Материал 1 к Работе 2
+  ...
+
+ЭТАП 1 — СРАВНЕНИЕ ТЗ И ПРОЕКТА:
+Проведи полное тщательное сравнение ТЗ с проектом. Для каждого отличия зафикси:
+- Работы/материалы, которые есть в ТЗ, но отсутствуют в проекте
+- Работы/материалы, которые есть в проекте, но отсутствуют в ТЗ
+- Расхождения в объёмах (ТЗ указывает один объём, проект — другой)
+- Расхождения в марках, типах, характеристиках материалов
+- Риски выявленных различий (финансовые, технические, юридические)
+- Необходимые действия: что нужно уточнить в ТЗ, что скорректировать в проекте
+
+ЭТАП 2 — ФОРМИРОВАНИЕ ПЕРЕЧНЯ:
+За основу бери проектную документацию как более детальный источник.
+Дополняй данными из ТЗ при необходимости.
+
+Для каждого вида работы определи полный перечень материалов по нормативной базе:
+- ГЭСН / ФСНБ-2022 — нормы расхода материалов
+- ФЕР/ТЕР Свердловской области — региональная специфика
+- Технические части сборников ГЭСН — что включено в норму, что отдельно
+- СП и ГОСТ — для нестандартных решений
+
+Один материал может фигурировать в ТЗ/проекте одной строкой с суммарным объёмом на несколько видов работ. В этом случае раздели объём между работами согласно нормам ГЭСН.
+
+ФИКСАЦИЯ ИЗМЕНЕНИЙ в поле notes:
+- "Добавлено по ГЭСН XX-XX-XXX: [обоснование]"
+- "Объём по проекту [X], в ТЗ [Y], принят по проекту / принято среднее / требует уточнения"
+- "Есть в ТЗ, отсутствует в проекте: включено с пометкой — требует согласования"
+- "Объём скорректирован: суммарный объём из ТЗ/проекта распределён между работами по норме ГЭСН"
+
+ПОЯСНИТЕЛЬНЫЙ ТЕКСТ (поле changes_summary):
+Раздел 1 — Сравнение ТЗ и проекта:
+  - Полный список всех выявленных расхождений
+  - Риски каждого расхождения
+  - Рекомендуемые действия по каждому расхождению
+
+Раздел 2 — Изменения по сравнению с исходными документами:
+  - Что добавлено нормативно и почему
+  - Что скорректировано по объёмам и почему
+  - Что разбито на несколько позиций и почему
+  - Если изменений нет — "Перечень соответствует документации, дополнений не требуется"
+
+Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
 {
   "items": [
     {
@@ -95,15 +145,13 @@ PROMPT_LIST_FROM_TZ_PROJECT = """Проанализируй техническо
       "unit": "Ед. изм.",
       "quantity": число или null,
       "section": "Раздел проекта",
-      "notes": "Примечание"
+      "notes": "Примечание / обоснование изменения"
     }
-  ]
+  ],
+  "changes_summary": "Пояснительный текст: Раздел 1 — сравнение ТЗ и проекта, Раздел 2 — изменения по нормативной базе"
 }
 
-Требования:
-- Используй данные из ТЗ и проекта
-- Соблюдай технологическую последовательность
-- Учти все разделы проектной документации"""
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
 
 PROMPT_SMETA_FROM_LIST = """Ты — снабженец/сметчик с опытом в строительстве. На основании предоставленного перечня работ и материалов составь полную смету для закупки/бюджетирования.
 
@@ -574,7 +622,7 @@ class TaskProcessor:
             if task_type == "LIST_FROM_TZ":
                 await self._handle_list_from_tz(task, PROMPT_LIST_FROM_TZ)
             elif task_type == "LIST_FROM_TZ_PROJECT":
-                await self._handle_list_from_tz(task, PROMPT_LIST_FROM_TZ_PROJECT)
+                await self._handle_list_from_tz_project(task)
             elif task_type == "SMETA_FROM_LIST":
                 await self._handle_smeta(task, PROMPT_SMETA_FROM_LIST)
             elif task_type == "SMETA_FROM_TZ":
@@ -625,10 +673,39 @@ class TaskProcessor:
         await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
         excel_data = generate_list(items, changes_summary=changes_summary)
 
-        await self.save_result("Перечень_работ_и_материалов.xlsx", 
+        await self.save_result("Перечень_работ_и_материалов.xlsx",
                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                excel_data)
         logger.info("List task completed", items=len(items))
+
+    async def _handle_list_from_tz_project(self, task: Task) -> None:
+        await self.update_progress("Анализ ТЗ и проектной документации...")
+        messages, image_blocks = self._build_messages_with_files(task, PROMPT_LIST_FROM_TZ_PROJECT)
+
+        await self.update_progress("Сравнение ТЗ и проекта, формирование перечня с помощью ИИ...")
+        data = await self._call_claude_json(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks if image_blocks else None,
+        )
+
+        await self.update_progress("Обработка результатов...")
+        items = data.get("items", [])
+        changes_summary = data.get("changes_summary")
+
+        if not items:
+            raise ValueError("Claude не вернул позиции. Проверьте содержимое документов.")
+
+        await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
+        excel_data = generate_list_project(items, changes_summary=changes_summary)
+
+        await self.save_result(
+            "Перечень_ТЗ_и_проект.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            excel_data,
+        )
+        logger.info("List TZ+project task completed", items=len(items))
 
     async def _handle_smeta(self, task: Task, prompt: str) -> None:
         await self.update_progress("Анализ документов...")
