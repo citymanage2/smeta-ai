@@ -49,10 +49,11 @@ def _auto_fit_columns(ws, min_width: int = 10, max_width: int = 60) -> None:
         ws.column_dimensions[col_letter].width = adjusted
 
 
-def generate_list(items: list) -> bytes:
+def generate_list(items: list, changes_summary: str | None = None) -> bytes:
     """
     Generate Excel file with list of works/materials.
     items: list of dicts with keys: type, name, unit, quantity
+    changes_summary: optional explanatory text about deviations from TZ
     """
     wb = openpyxl.Workbook()
 
@@ -119,6 +120,27 @@ def generate_list(items: list) -> bytes:
 
     _auto_fit_columns(ws_mats)
     ws_mats.freeze_panes = "A2"
+
+    # Sheet 4: Пояснительная записка
+    ws_note = wb.create_sheet("Пояснительная записка")
+    note_text = (
+        changes_summary
+        if changes_summary
+        else "Перечень соответствует ТЗ, дополнений не требуется"
+    )
+    ws_note.cell(row=1, column=1, value="Пояснительная записка").font = BOLD_FONT
+    ws_note.cell(row=1, column=1).fill = HEADER_FILL
+    ws_note.cell(row=1, column=1).font = HEADER_FONT
+    ws_note.row_dimensions[1].height = 30
+
+    # Write text wrapped across rows (split by newline for readability)
+    for row_offset, line in enumerate(note_text.splitlines(), start=2):
+        cell = ws_note.cell(row=row_offset, column=1, value=line)
+        cell.font = NORMAL_FONT
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    ws_note.column_dimensions["A"].width = 120
+    ws_note.freeze_panes = "A2"
 
     buf = io.BytesIO()
     wb.save(buf)
