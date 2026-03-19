@@ -6,7 +6,7 @@ from app.config import settings
 
 logger = structlog.get_logger()
 
-CLAUDE_MODEL = "claude-sonnet-4-5"
+CLAUDE_MODEL = "claude-sonnet-4-6"
 
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
