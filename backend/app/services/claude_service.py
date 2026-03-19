@@ -73,7 +73,7 @@ async def call_claude(
 
     kwargs: dict[str, Any] = {
         "model": CLAUDE_MODEL,
-        "max_tokens": 8096,
+        "max_tokens": 32000,
         "temperature": 0.1,
         "messages": built_messages,
     }
@@ -96,6 +96,19 @@ async def call_claude(
             )
 
             response = await _client.messages.create(**kwargs)
+
+            # Detect output truncation before trying to use the response
+            if response.stop_reason == "max_tokens":
+                logger.error(
+                    "Claude response truncated: max_tokens limit reached",
+                    chars=sum(
+                        len(b.text) for b in response.content if hasattr(b, "text")
+                    ),
+                    max_tokens=kwargs["max_tokens"],
+                )
+                raise ValueError(
+                    "Ответ слишком большой, разбейте выполнение на подэтапы"
+                )
 
             # Extract all text blocks; skip tool_use / tool_result blocks
             text_parts = [
