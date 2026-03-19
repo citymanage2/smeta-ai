@@ -1,7 +1,10 @@
 import asyncio
 from typing import Any, Optional
+
+import httpx
 import anthropic
 import structlog
+
 from app.config import settings
 
 logger = structlog.get_logger()
@@ -13,6 +16,22 @@ WEB_SEARCH_TOOL = {
     "name": "web_search",
 }
 
+# Single shared client with generous timeouts.
+# read=300s covers large project documents that take a long time to process.
+_http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(
+        connect=10.0,
+        read=300.0,
+        write=30.0,
+        pool=10.0,
+    )
+)
+
+_client = anthropic.AsyncAnthropic(
+    api_key=settings.ANTHROPIC_API_KEY,
+    http_client=_http_client,
+)
+
 
 def _build_messages(
     messages: list[dict],
@@ -22,7 +41,6 @@ def _build_messages(
     if not image_data:
         return messages
 
-    # If image_data provided, inject into first user message or prepend new one
     result = list(messages)
     if result and result[0]["role"] == "user":
         first_content = result[0]["content"]
@@ -33,13 +51,7 @@ def _build_messages(
             "content": image_data + first_content,
         }
     else:
-        result.insert(
-            0,
-            {
-                "role": "user",
-                "content": image_data,
-            },
-        )
+        result.insert(0, {"role": "user", "content": image_data})
     return result
 
 
@@ -50,11 +62,12 @@ async def call_claude(
     image_data: Optional[list[dict]] = None,
 ) -> str:
     """
-    Call Claude API with retry logic and optional web search tool.
+    Call Claude API (non-streaming) with retry logic and optional web search.
     Returns the final text response.
-    """
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+    Uses non-streaming to avoid httpx.RemoteProtocolError (incomplete chunked read)
+    that occurs when the server closes a streaming connection before completion.
+    """
     tools = [WEB_SEARCH_TOOL] if use_web_search else []
     built_messages = _build_messages(messages, image_data)
 
@@ -69,7 +82,7 @@ async def call_claude(
     if tools:
         kwargs["tools"] = tools
 
-    # Delays for retryable errors: rate limits, 5xx, connection errors
+    # Retryable error delays: rate limits, 5xx, connection / protocol errors
     delays = [2, 8, 30]
     last_error: Optional[Exception] = None
 
@@ -81,20 +94,17 @@ async def call_claude(
                 attempt=attempt,
                 use_web_search=use_web_search,
             )
-            text_parts: list[str] = []
 
-            async with client.messages.stream(**kwargs) as stream:
-                async for event in stream:
-                    pass
-                final_msg = await stream.get_final_message()
+            response = await _client.messages.create(**kwargs)
 
-            # Extract text; skip tool_use/tool_result blocks that have no .text
-            for block in final_msg.content:
-                if hasattr(block, "text") and isinstance(block.text, str):
-                    text_parts.append(block.text)
-
+            # Extract all text blocks; skip tool_use / tool_result blocks
+            text_parts = [
+                block.text
+                for block in response.content
+                if hasattr(block, "text") and isinstance(block.text, str)
+            ]
             result = "".join(text_parts)
-            logger.info("Claude API call successful", chars=len(result))
+            logger.info("Claude API call successful", chars=len(result), attempt=attempt)
             return result
 
         except anthropic.RateLimitError as e:
@@ -108,10 +118,13 @@ async def call_claude(
             if attempt < len(delays):
                 await asyncio.sleep(delay)
 
-        except anthropic.APIConnectionError as e:
+        except (anthropic.APIConnectionError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
+            # httpx.RemoteProtocolError = incomplete chunked read (server closed stream early)
+            # httpx.ReadTimeout       = read timeout exceeded
+            # anthropic.APIConnectionError wraps other low-level connection failures
             last_error = e
             logger.warning(
-                "Claude connection error, retrying",
+                "Claude connection/protocol error, retrying",
                 attempt=attempt,
                 delay=delay,
                 error=str(e) or repr(e),
@@ -121,7 +134,6 @@ async def call_claude(
                 await asyncio.sleep(delay)
 
         except anthropic.APIStatusError as e:
-            # 5xx — transient server errors, retry
             if e.status_code >= 500:
                 last_error = e
                 logger.warning(
@@ -134,7 +146,7 @@ async def call_claude(
                 if attempt < len(delays):
                     await asyncio.sleep(delay)
             else:
-                # 4xx — client errors (401 auth, 400 bad request, etc.), do not retry
+                # 4xx — do not retry (auth, bad request, etc.)
                 logger.error(
                     "Claude API client error (not retrying)",
                     status_code=e.status_code,
