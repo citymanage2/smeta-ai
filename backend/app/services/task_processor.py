@@ -14,6 +14,7 @@ from app.services import price_service
 from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_from_project, generate_smeta_detailed, generate_scan_result
 from app.services.pdf_service import generate_comparison_report
 from app.utils.file_parser import parse_file
+from app.utils.json_utils import extract_json
 
 logger = structlog.get_logger()
 
@@ -638,44 +639,12 @@ class TaskProcessor:
         return messages, image_blocks
 
     def _parse_json_response(self, response: str) -> dict:
-        """Extract and parse JSON from Claude response using four fallback strategies."""
-        import re
-
-        text = response.strip()
-
-        # Strategy 1: direct parse (Claude returned clean JSON)
+        """Delegate to shared extract_json utility."""
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-
-        # Strategy 2: strip ALL markdown fences, then parse
-        # Removes ```json ... ``` and ``` ... ``` blocks entirely
-        stripped = re.sub(r'```(?:json)?\s*', '', text).strip()
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            pass
-
-        # Strategy 3: regex extract — find the outermost {...} spanning the whole response
-        m = re.search(r'\{.*\}', stripped, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except json.JSONDecodeError:
-                pass
-
-        # Strategy 4: slice from first { to last } on the stripped text
-        start = stripped.find('{')
-        end = stripped.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(stripped[start:end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        logger.error("Failed to parse JSON response", response=response[:500])
-        raise ValueError("Не удалось распознать ответ Claude как JSON")
+            return extract_json(response)
+        except ValueError:
+            logger.error("Failed to parse JSON response", response=response[:500])
+            raise ValueError("Не удалось распознать ответ Claude как JSON")
 
     async def _call_claude_json(
         self,

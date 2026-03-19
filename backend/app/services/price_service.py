@@ -5,6 +5,7 @@ from sqlalchemy import select
 import structlog
 from app.models.price import PriceWork, PriceMaterial
 from app.services.claude_service import claude_service as _claude_svc
+from app.utils.json_utils import extract_json
 
 async def call_claude(messages: list, system_prompt: str = "", use_web_search: bool = False) -> str:
     return await _claude_svc.call(messages, system_prompt=system_prompt, use_web_search=use_web_search)
@@ -138,16 +139,14 @@ async def _web_search_work_price(name: str) -> Optional[dict]:
             system_prompt="Ты эксперт по ценообразованию в строительстве.",
             use_web_search=True,
         )
-        import json
-        # Try to extract JSON from response
-        import re
-        json_match = re.search(r'\{[^{}]+\}', response)
-        if json_match:
-            data = json.loads(json_match.group())
+        try:
+            data = extract_json(response)
             price = float(data.get("price", 0))
             unit = data.get("unit", "")
             if price > 0:
                 return {"prices": {"web": price}, "min_price": price, "unit": unit}
+        except (ValueError, TypeError):
+            pass
         return None
     except Exception as e:
         logger.error("Web search work price failed", error=str(e))
@@ -172,13 +171,13 @@ async def _web_search_material_price(name: str) -> Optional[float]:
             system_prompt="Ты эксперт по строительным материалам и ценообразованию.",
             use_web_search=True,
         )
-        import json, re
-        json_match = re.search(r'\{[^{}]+\}', response)
-        if json_match:
-            data = json.loads(json_match.group())
+        try:
+            data = extract_json(response)
             price = float(data.get("price", 0))
             if price > 0:
                 return price
+        except (ValueError, TypeError):
+            pass
         return None
     except Exception as e:
         logger.error("Web search material price failed", error=str(e))
