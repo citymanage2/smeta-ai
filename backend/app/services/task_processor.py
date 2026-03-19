@@ -21,6 +21,11 @@ logger = structlog.get_logger()
 # ---- System prompts / task prompts ----
 
 SYSTEM_BASE = (
+    "IMPORTANT: When the task requires JSON output, return ONLY raw JSON without any "
+    "markdown formatting, code blocks, backticks, or explanations. "
+    "Start your response directly with { or [ and end with } or ]. "
+    "Do not wrap JSON in ```json ... ``` or any other markup. "
+    "\n\n"
     "Ты — эксперт по строительному сметному делу в России. "
     "Отвечай чётко, структурированно, на русском языке. "
     "Используй актуальные нормы и расценки (ФЕР/ТЕР/ГЭСН). "
