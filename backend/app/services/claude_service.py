@@ -69,7 +69,8 @@ async def call_claude(
     if tools:
         kwargs["tools"] = tools
 
-    delays = [1, 4, 16]
+    # Delays for retryable errors: rate limits, 5xx, connection errors
+    delays = [2, 8, 30]
     last_error: Optional[Exception] = None
 
     for attempt, delay in enumerate(delays, start=1):
@@ -84,12 +85,10 @@ async def call_claude(
 
             async with client.messages.stream(**kwargs) as stream:
                 async for event in stream:
-                    # Collect text deltas
                     pass
                 final_msg = await stream.get_final_message()
 
-            # Extract text from response
-            # block.text can be None for web-search tool_use/result blocks
+            # Extract text; skip tool_use/tool_result blocks that have no .text
             for block in final_msg.content:
                 if hasattr(block, "text") and isinstance(block.text, str):
                     text_parts.append(block.text)
@@ -104,11 +103,25 @@ async def call_claude(
                 "Claude rate limit hit, retrying",
                 attempt=attempt,
                 delay=delay,
+                error=str(e) or repr(e),
+            )
+            if attempt < len(delays):
+                await asyncio.sleep(delay)
+
+        except anthropic.APIConnectionError as e:
+            last_error = e
+            logger.warning(
+                "Claude connection error, retrying",
+                attempt=attempt,
+                delay=delay,
+                error=str(e) or repr(e),
+                exc_info=True,
             )
             if attempt < len(delays):
                 await asyncio.sleep(delay)
 
         except anthropic.APIStatusError as e:
+            # 5xx — transient server errors, retry
             if e.status_code >= 500:
                 last_error = e
                 logger.warning(
@@ -116,17 +129,34 @@ async def call_claude(
                     attempt=attempt,
                     status_code=e.status_code,
                     delay=delay,
+                    error=str(e) or repr(e),
                 )
                 if attempt < len(delays):
                     await asyncio.sleep(delay)
             else:
-                logger.error("Claude API error", status_code=e.status_code, error=str(e))
+                # 4xx — client errors (401 auth, 400 bad request, etc.), do not retry
+                logger.error(
+                    "Claude API client error (not retrying)",
+                    status_code=e.status_code,
+                    error=str(e) or repr(e),
+                    response_body=getattr(e, "response", None) and e.response.text,
+                    exc_info=True,
+                )
                 raise
 
         except Exception as e:
-            logger.error("Unexpected Claude API error", error=str(e))
+            logger.error(
+                "Unexpected Claude API error",
+                error=str(e) or repr(e),
+                exc_info=True,
+            )
             raise
 
+    logger.error(
+        "Claude API call failed after all retries",
+        attempts=len(delays),
+        last_error=str(last_error) or repr(last_error),
+    )
     raise last_error or RuntimeError("Claude API call failed after all retries")
 
 
