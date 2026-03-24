@@ -50,6 +50,10 @@ export async function getTaskResults(taskId: string): Promise<TaskResult[]> {
   return response.data;
 }
 
+export async function cancelTask(taskId: string): Promise<void> {
+  await apiClient.post(`/tasks/${taskId}/cancel`);
+}
+
 export async function sendMessage(taskId: string, message: string): Promise<TaskChatResponse> {
   const response = await apiClient.post<TaskChatResponse>(`/tasks/${taskId}/message`, { message });
   return response.data;
