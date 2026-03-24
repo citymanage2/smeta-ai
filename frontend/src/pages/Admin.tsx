@@ -14,15 +14,16 @@ const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: stri
   processing: { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' },
   completed: { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },
   failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
+  cancelled: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
 };
 
 const TASK_TYPES: TaskType[] = [
-  'LIST_FROM_TZ', 'LIST_FROM_TZ_PROJECT', 'SMETA_FROM_GRAND_PROJECT',
-  'SMETA_FROM_PROJECT', 'SMETA_FROM_EDC_PROJECT', 'SMETA_FROM_LIST',
-  'SCAN_TO_EXCEL', 'COMPARE_PROJECT_SMETA',
+  'LIST_FROM_TZ', 'LIST_FROM_TZ_PROJECT', 'RESEARCH_PROJECT', 'LIST_FROM_PROJECT',
+  'SMETA_FROM_GRAND_PROJECT', 'SMETA_FROM_PROJECT', 'SMETA_FROM_EDC_PROJECT',
+  'SMETA_FROM_LIST', 'SCAN_TO_EXCEL', 'COMPARE_PROJECT_SMETA',
 ];
 
-const STATUSES: TaskStatus[] = ['pending', 'processing', 'completed', 'failed'];
+const STATUSES: TaskStatus[] = ['pending', 'processing', 'completed', 'failed', 'cancelled'];
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', {

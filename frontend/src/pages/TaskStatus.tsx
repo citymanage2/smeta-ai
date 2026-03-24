@@ -6,6 +6,7 @@ import {
   getTaskStatus,
   getTaskResults,
   sendMessage,
+  cancelTask,
   downloadResult,
   TaskStatusResponse,
   ChatMessage,
@@ -16,6 +17,7 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
   processing: { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' },
   completed: { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },
   failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
+  cancelled: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
 };
 
 function Spinner() {
@@ -52,6 +54,7 @@ const TaskStatusPage: React.FC = () => {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [downloading, setDownloading] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -102,7 +105,7 @@ const TaskStatusPage: React.FC = () => {
         const res = await getTaskResults(taskId);
         setResults(res);
         stopTimers();
-      } else if (data.status === 'failed') {
+      } else if (data.status === 'failed' || data.status === 'cancelled') {
         stopTimers();
       }
     } catch (err: unknown) {
@@ -174,6 +177,20 @@ const TaskStatusPage: React.FC = () => {
       setError('Не удалось отправить сообщение.');
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!taskId || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelTask(taskId);
+      setTask((prev) => prev ? { ...prev, status: 'cancelled', error_message: 'Задача остановлена пользователем' } : prev);
+      stopTimers();
+    } catch {
+      setError('Не удалось остановить задачу.');
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -279,7 +296,7 @@ const TaskStatusPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Status badge + elapsed */}
+              {/* Status badge + elapsed + STOP button */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <span
                   style={{
@@ -303,6 +320,25 @@ const TaskStatusPage: React.FC = () => {
                       ? `${elapsedSeconds} сек.`
                       : `${Math.floor(elapsedSeconds / 60)} мин. ${elapsedSeconds % 60} сек.`}
                   </span>
+                )}
+                {(task.status === 'pending' || task.status === 'processing') && (
+                  <button
+                    onClick={handleCancel}
+                    disabled={cancelling}
+                    style={{
+                      padding: '6px 16px',
+                      backgroundColor: cancelling ? '#fca5a5' : '#dc2626',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '20px',
+                      cursor: cancelling ? 'not-allowed' : 'pointer',
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      letterSpacing: '0.3px',
+                    }}
+                  >
+                    {cancelling ? 'Остановка...' : '⏹ Стоп'}
+                  </button>
                 )}
               </div>
 
@@ -349,6 +385,23 @@ const TaskStatusPage: React.FC = () => {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Cancelled message */}
+              {task.status === 'cancelled' && (
+                <div
+                  style={{
+                    marginTop: '16px',
+                    padding: '14px 16px',
+                    backgroundColor: '#f8fafc',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    color: '#64748b',
+                  }}
+                >
+                  Задача была остановлена пользователем.
                 </div>
               )}
 
