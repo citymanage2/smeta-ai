@@ -557,10 +557,23 @@ PROMPT_STAGE2_GRAND = """Ты — снабженец/сметчик с опыт�
 Язык: русский."""
 
 
+class TaskCancelledError(Exception):
+    """Raised when a task has been cancelled by the user."""
+
+
 class TaskProcessor:
     def __init__(self, task_id: str, db: AsyncSession):
         self.task_id = task_id
         self.db = db
+
+    async def _check_cancelled(self) -> None:
+        """Raise TaskCancelledError if the task status is 'cancelled' in the DB."""
+        result = await self.db.execute(
+            select(Task).where(Task.id == self.task_id)
+        )
+        task = result.scalar_one_or_none()
+        if task and task.status == "cancelled":
+            raise TaskCancelledError("Задача остановлена пользователем")
 
     async def update_progress(self, message: str) -> None:
         result = await self.db.execute(
@@ -690,6 +703,10 @@ class TaskProcessor:
 
     async def process(self) -> None:
         """Main processing method."""
+        stop_event = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat(stop_event)
+        )
         try:
             await self.update_status("processing")
             await self.update_progress("Начало обработки задачи...")
@@ -737,10 +754,26 @@ class TaskProcessor:
             await self.update_status("completed")
             await self.update_progress("Задача успешно выполнена")
 
+        except TaskCancelledError:
+            logger.info("Task was cancelled by user", task_id=self.task_id)
+            # Status already set to 'cancelled' by the cancel endpoint — do not overwrite
         except Exception as e:
             logger.error("Task processing failed", task_id=self.task_id, error=str(e))
             await self.update_status("failed", error=str(e))
             await self.update_progress(f"Ошибка: {str(e)[:400]}")
+        finally:
+            stop_event.set()
+            heartbeat_task.cancel()
+
+    async def _heartbeat(self, stop_event: asyncio.Event) -> None:
+        """Log a heartbeat every 30 s so it's clear the task is alive, not hung."""
+        elapsed = 0
+        while not stop_event.is_set():
+            await asyncio.sleep(30)
+            if stop_event.is_set():
+                break
+            elapsed += 30
+            logger.info("Task still running", task_id=self.task_id, elapsed_seconds=elapsed)
             raise
 
     async def _handle_list_from_tz(self, task: Task, prompt: str) -> None:
@@ -819,6 +852,8 @@ class TaskProcessor:
             raise ValueError("Claude не вернул позиции на этапе 1. Проверьте содержимое документов.")
 
         logger.info("Stage 1 complete", task_id=self.task_id, items=len(stage1_items))
+
+        await self._check_cancelled()
 
         # Load price lists
         await self.update_progress("Загрузка базы расценок...")
@@ -1025,6 +1060,8 @@ class TaskProcessor:
         )
         logger.info("Stage 1 complete", task_id=self.task_id, length=len(stage1_response))
 
+        await self._check_cancelled()
+
         # Load price cache
         await self.update_progress("Загрузка базы расценок...")
         await price_service.load_cache(self.db)
@@ -1084,6 +1121,17 @@ class TaskProcessor:
         )
         logger.info("Stage 1 (research) complete", task_id=self.task_id, length=len(research_result))
 
+        # Save Stage 1 result immediately so the user can download it now
+        await self.update_progress("Этап 1 завершён: сохранение результата проверки проекта...")
+        stage1_file_name = f"Этап1_Проверка_проекта_{date.today().strftime('%Y-%m-%d')}.txt"
+        await self.save_result(
+            stage1_file_name,
+            "text/plain; charset=utf-8",
+            research_result.encode("utf-8"),
+        )
+
+        await self._check_cancelled()
+
         # ── Stage 2: build normalised items list from project + research ──
         await self.update_progress("Этап 2: формирование перечня работ и материалов...")
         stage2_prompt = PROMPT_LIST_FROM_PROJECT.replace("{research_result}", research_result)
@@ -1102,6 +1150,18 @@ class TaskProcessor:
             raise ValueError("Claude не вернул позиции на этапе 2. Проверьте содержимое документов.")
 
         logger.info("Stage 2 (list) complete", task_id=self.task_id, items=len(stage2_items))
+
+        # Save Stage 2 result immediately so the user can download it now
+        await self.update_progress("Этап 2 завершён: сохранение перечня работ и материалов...")
+        stage2_excel = generate_list_project(stage2_items, changes_summary)
+        stage2_file_name = f"Этап2_Перечень_работ_{date.today().strftime('%Y-%m-%d')}.xlsx"
+        await self.save_result(
+            stage2_file_name,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            stage2_excel,
+        )
+
+        await self._check_cancelled()
 
         # ── Stage 3: price the items list ────────────────────────────────
         await self.update_progress("Загрузка базы расценок...")
