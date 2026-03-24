@@ -210,6 +210,36 @@ async def get_task_status(
     )
 
 
+@router.post("/{task_id}/cancel")
+async def cancel_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Cancel a pending or processing task."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
+
+    if task.status not in ("pending", "processing"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Задача не может быть остановлена (статус: {task.status})",
+        )
+
+    task.status = "cancelled"
+    task.error_message = "Задача остановлена пользователем"
+    await db.commit()
+
+    logger.info("Task cancelled by user", task_id=task_id)
+    return {"task_id": task_id, "status": "cancelled"}
+
+
 @router.post("/{task_id}/message")
 async def send_message(
     task_id: str,

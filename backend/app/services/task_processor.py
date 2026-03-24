@@ -557,6 +557,10 @@ PROMPT_STAGE2_GRAND = """Ты — снабженец/сметчик с опыт�
 Язык: русский."""
 
 
+SMETA_BATCH_SIZE = 10          # items per Claude call for SMETA_FROM_LIST
+SMETA_BATCH_TIMEOUT_SECS = 180  # seconds before a single batch call is abandoned
+
+
 class TaskCancelledError(Exception):
     """Raised when a task has been cancelled by the user."""
 
@@ -733,7 +737,7 @@ class TaskProcessor:
             elif task_type == "LIST_FROM_TZ_PROJECT":
                 await self._handle_list_from_tz_project(task)
             elif task_type == "SMETA_FROM_LIST":
-                await self._handle_smeta(task, PROMPT_SMETA_FROM_LIST)
+                await self._handle_smeta_from_list(task)
             elif task_type == "SMETA_FROM_TZ":
                 await self._handle_smeta(task, PROMPT_SMETA_FROM_TZ)
             elif task_type == "SMETA_FROM_TZ_PROJECT":
@@ -1213,6 +1217,190 @@ class TaskProcessor:
             task_id=self.task_id,
             stage2_items=len(stage2_items),
             stage3_items=len(stage3_items),
+        )
+
+    # ------------------------------------------------------------------
+    # SMETA_FROM_LIST — batched processing
+    # ------------------------------------------------------------------
+
+    def _parse_xlsx_items(self, task: Task) -> list[dict]:
+        """Extract items from the first XLSX in task.input_file_data as dicts."""
+        import base64 as _b64
+        import io as _io
+        import openpyxl as _xl
+
+        for file_info in task.input_file_data or []:
+            mime = file_info.get("mime_type", "")
+            if mime not in (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel",
+            ):
+                continue
+            try:
+                raw = _b64.b64decode(file_info.get("content_b64", ""))
+                wb = _xl.load_workbook(_io.BytesIO(raw), data_only=True)
+                ws = wb.active
+                rows = [
+                    row for row in ws.iter_rows(values_only=True)
+                    if not all(c is None for c in row)
+                ]
+                if len(rows) < 2:
+                    return []
+                headers = [
+                    str(h).lower().strip() if h is not None else ""
+                    for h in rows[0]
+                ]
+                col: dict[str, int] = {}
+                for idx, h in enumerate(headers):
+                    if "тип" in h or h == "type":
+                        col.setdefault("type", idx)
+                    elif any(k in h for k in ("наименование", "name", "название")):
+                        col.setdefault("name", idx)
+                    elif any(k in h for k in ("ед", "unit")):
+                        col.setdefault("unit", idx)
+                    elif any(k in h for k in ("кол", "quantity", "qty", "объём", "объем")):
+                        col.setdefault("quantity", idx)
+                    elif any(k in h for k in ("прим", "notes", "note")):
+                        col.setdefault("notes", idx)
+
+                if "name" not in col:
+                    return []
+
+                items: list[dict] = []
+                for row in rows[1:]:
+                    def _cell(key: str):
+                        i = col.get(key)
+                        return row[i] if i is not None and i < len(row) else None
+
+                    name = _cell("name")
+                    if not name:
+                        continue
+                    qty = _cell("quantity")
+                    try:
+                        qty = float(qty) if qty is not None else None
+                    except (TypeError, ValueError):
+                        qty = None
+                    items.append({
+                        "type": str(_cell("type") or "Работа"),
+                        "name": str(name),
+                        "unit": str(_cell("unit") or ""),
+                        "quantity": qty,
+                        "notes": str(_cell("notes") or ""),
+                    })
+                return items
+            except Exception as exc:
+                logger.warning("Failed to parse xlsx items", task_id=self.task_id, error=str(exc))
+                return []
+        return []
+
+    async def _handle_smeta_from_list(self, task: Task) -> None:
+        """Batch-process SMETA_FROM_LIST: split items into SMETA_BATCH_SIZE chunks."""
+        from datetime import date
+
+        # 1. Load price lists
+        await self.update_progress("Загрузка базы расценок...")
+        await price_service.load_cache(self.db)
+        works_text, mats_text = self._format_price_list_text()
+        current_date = date.today().strftime("%d.%m.%Y")
+
+        # 2. Extract items from uploaded Excel
+        await self.update_progress("Извлечение позиций из файла...")
+        items = self._parse_xlsx_items(task)
+
+        if not items:
+            logger.warning(
+                "No items parsed from xlsx, falling back to single-call mode",
+                task_id=self.task_id,
+            )
+            await self.update_progress("Составление сметы (одиночный запрос)...")
+            await self._handle_smeta(task, PROMPT_SMETA_FROM_LIST)
+            return
+
+        # 3. Build prompt with price list injected
+        base_prompt = (
+            PROMPT_SMETA_FROM_LIST
+            .replace("{price_list_works}", works_text)
+            .replace("{price_list_materials}", mats_text)
+            .replace("{current_date}", current_date)
+        )
+
+        # 4. Split into batches
+        batches = [
+            items[i:i + SMETA_BATCH_SIZE]
+            for i in range(0, len(items), SMETA_BATCH_SIZE)
+        ]
+        total_batches = len(batches)
+        logger.info(
+            "Batched smeta starting",
+            task_id=self.task_id,
+            total_items=len(items),
+            total_batches=total_batches,
+        )
+
+        # 5. Process each batch
+        all_results: list[dict] = []
+        for batch_num, batch in enumerate(batches, start=1):
+            await self._check_cancelled()
+            await self.update_progress(
+                f"Обработка батча {batch_num} из {total_batches} ({len(batch)} позиций)..."
+            )
+
+            batch_json = json.dumps({"items": batch}, ensure_ascii=False, indent=2)
+            content = (
+                f"Перечень работ и материалов:\n\n{batch_json}\n\n{base_prompt}"
+            )
+            if task.user_prompt:
+                content += f"\n\nДополнительные требования: {task.user_prompt}"
+
+            try:
+                batch_data = await asyncio.wait_for(
+                    self._call_claude_json(
+                        [{"role": "user", "content": content}],
+                        system_prompt=SYSTEM_BASE,
+                        use_web_search=True,
+                    ),
+                    timeout=SMETA_BATCH_TIMEOUT_SECS,
+                )
+                batch_items = batch_data.get("items", [])
+                all_results.extend(batch_items)
+                logger.info(
+                    "Batch processed",
+                    task_id=self.task_id,
+                    batch=batch_num,
+                    total=total_batches,
+                    items_in=len(batch),
+                    items_out=len(batch_items),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Batch timed out, keeping original items without pricing",
+                    task_id=self.task_id,
+                    batch=batch_num,
+                    total=total_batches,
+                    timeout=SMETA_BATCH_TIMEOUT_SECS,
+                )
+                for item in batch:
+                    item.setdefault(
+                        "notes",
+                        f"Превышено время ожидания ({SMETA_BATCH_TIMEOUT_SECS}с)",
+                    )
+                all_results.extend(batch)
+
+        if not all_results:
+            raise ValueError("Не удалось получить ни одной позиции сметы.")
+
+        await self.update_progress(f"Генерация Excel-сметы ({len(all_results)} позиций)...")
+        excel_data = generate_smeta(all_results)
+        await self.save_result(
+            "Смета.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            excel_data,
+        )
+        logger.info(
+            "Batched smeta_from_list completed",
+            task_id=self.task_id,
+            total_items=len(all_results),
+            total_batches=total_batches,
         )
 
     async def _handle_research_project(self, task: Task) -> None:

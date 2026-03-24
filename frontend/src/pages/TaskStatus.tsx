@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
+import { BatchProgressBar } from '../components/BatchProgressBar';
 import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
 import {
   getTaskStatus,
@@ -359,29 +360,31 @@ const TaskStatusPage: React.FC = () => {
                   {progressLog.map((msg, i) => {
                     const isLast = i === progressLog.length - 1;
                     return (
-                      <div
-                        key={i}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'flex-start',
-                          gap: '8px',
-                          marginBottom: i < progressLog.length - 1 ? '6px' : 0,
-                          opacity: isLast ? 1 : 0.5,
-                        }}
-                      >
-                        <span style={{ fontSize: '14px', marginTop: '1px', flexShrink: 0 }}>
-                          {isLast ? '⏳' : '✓'}
-                        </span>
-                        <span
+                      <div key={i}>
+                        <div
                           style={{
-                            fontSize: '14px',
-                            color: isLast ? '#0c4a6e' : '#64748b',
-                            fontWeight: isLast ? 500 : 400,
-                            animation: isLast ? 'pulse 1.8s ease-in-out infinite' : 'none',
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '8px',
+                            marginBottom: i < progressLog.length - 1 ? '6px' : 0,
+                            opacity: isLast ? 1 : 0.5,
                           }}
                         >
-                          {msg}
-                        </span>
+                          <span style={{ fontSize: '14px', marginTop: '1px', flexShrink: 0 }}>
+                            {isLast ? '⏳' : '✓'}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '14px',
+                              color: isLast ? '#0c4a6e' : '#64748b',
+                              fontWeight: isLast ? 500 : 400,
+                              animation: isLast ? 'pulse 1.8s ease-in-out infinite' : 'none',
+                            }}
+                          >
+                            {msg}
+                          </span>
+                        </div>
+                        {isLast && <BatchProgressBar message={msg} />}
                       </div>
                     );
                   })}
