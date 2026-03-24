@@ -24,6 +24,7 @@ frontend/.vite/
 backend/alembic/versions/*.py
 !backend/alembic/versions/001_initial.py
 !backend/alembic/versions/002_price_lists.py
+!backend/alembic/versions/003_projects_optimizations.py
 
 # IDE
 .vscode/

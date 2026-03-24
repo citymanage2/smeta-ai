@@ -472,8 +472,20 @@ const TaskStatusPage: React.FC = () => {
               marginBottom: '20px',
             }}
           >
-            <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+            <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               Результаты
+              {taskStatus?.task_type?.toUpperCase().startsWith('SMETA_') && (
+                <button
+                  onClick={() => navigate(`/task/${taskId}/estimate`)}
+                  style={{
+                    border: 'none', background: '#2563eb', color: '#fff',
+                    borderRadius: 8, padding: '6px 14px', cursor: 'pointer',
+                    fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  ✨ Открыть смету
+                </button>
+              )}
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {results.map((result) => (

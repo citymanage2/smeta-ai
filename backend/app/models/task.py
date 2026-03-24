@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import Integer, String, Text, DateTime, JSON
+from sqlalchemy import Integer, String, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -25,6 +25,22 @@ class Task(Base):
     chat_history: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     progress_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Project grouping
+    project_id: Mapped[Optional[str]] = mapped_column(
+        PG_UUID(as_uuid=False),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Estimate workflow status (independent from processing status)
+    estimate_status: Mapped[str] = mapped_column(
+        String(50), default="uploaded", nullable=False
+    )
+    estimate_status_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    estimate_status_updated_by: Mapped[str] = mapped_column(
+        String(20), default="manual", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

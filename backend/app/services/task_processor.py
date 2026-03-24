@@ -9,6 +9,7 @@ import structlog
 
 from app.models.task import Task
 from app.models.result import TaskResult
+from app.models.estimate_item import EstimateItem
 from app.services.claude_service import call_claude
 from app.services import price_service
 from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_from_project, generate_smeta_detailed, generate_scan_result
@@ -617,6 +618,50 @@ class TaskProcessor:
         self.db.add(result_record)
         await self.db.commit()
 
+    async def _save_estimate_items(self, items: list[dict]) -> None:
+        """Persist smeta items to estimate_items table (clears previous rows first)."""
+        from sqlalchemy import delete as sa_delete
+        await self.db.execute(
+            sa_delete(EstimateItem).where(EstimateItem.task_id == self.task_id)
+        )
+        for idx, raw in enumerate(items):
+            # Normalise price field names (some handlers use material_price, others mat_price)
+            work_price = raw.get("work_price")
+            mat_price = raw.get("mat_price") or raw.get("material_price")
+            extra = {
+                k: v for k, v in raw.items()
+                if k not in (
+                    "type", "name", "unit", "quantity", "work_price", "mat_price",
+                    "material_price", "section", "notes",
+                )
+            }
+            item = EstimateItem(
+                task_id=self.task_id,
+                position=idx,
+                type=raw.get("type", "Работа"),
+                name=raw.get("name", ""),
+                unit=raw.get("unit"),
+                quantity=raw.get("quantity"),
+                work_price=float(work_price) if work_price is not None else None,
+                mat_price=float(mat_price) if mat_price is not None else None,
+                section=raw.get("section"),
+                notes=raw.get("notes"),
+                extra=extra,
+            )
+            self.db.add(item)
+        await self.db.commit()
+        logger.info("Estimate items saved", task_id=self.task_id, count=len(items))
+
+    async def _set_estimate_status(self, new_status: str) -> None:
+        """Update estimate_status on the task row."""
+        result = await self.db.execute(select(Task).where(Task.id == self.task_id))
+        task = result.scalar_one_or_none()
+        if task:
+            task.estimate_status = new_status
+            task.estimate_status_updated_at = datetime.now(timezone.utc)
+            task.estimate_status_updated_by = "auto"
+            await self.db.commit()
+
     def _build_file_contents(self, task: Task) -> list:
         """Build list of file content blocks/strings for Claude."""
         content_blocks = []
@@ -916,6 +961,8 @@ class TaskProcessor:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             excel_data,
         )
+        await self._save_estimate_items(stage2_items)
+        await self._set_estimate_status("calculated")
         logger.info(
             "Smeta TZ+project task completed",
             task_id=self.task_id,
@@ -985,6 +1032,8 @@ class TaskProcessor:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             excel_data,
         )
+        await self._save_estimate_items(items)
+        await self._set_estimate_status("calculated")
         logger.info("Smeta task completed", items=len(items))
 
     async def _handle_scan_to_excel(self, task: Task) -> None:
@@ -1126,6 +1175,8 @@ class TaskProcessor:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             excel_data,
         )
+        await self._save_estimate_items(items)
+        await self._set_estimate_status("calculated")
         logger.info("Two-stage smeta completed", task_id=self.task_id, items=len(items))
 
     async def _handle_smeta_from_project(self, task: Task) -> None:
@@ -1225,6 +1276,8 @@ class TaskProcessor:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             excel_data,
         )
+        await self._save_estimate_items(stage3_items)
+        await self._set_estimate_status("calculated")
         logger.info(
             "Smeta from project (3-stage) completed",
             task_id=self.task_id,
@@ -1437,6 +1490,8 @@ class TaskProcessor:
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             excel_data,
         )
+        await self._save_estimate_items(all_results)
+        await self._set_estimate_status("calculated")
         logger.info(
             "Batched smeta_from_list completed",
             task_id=self.task_id,
