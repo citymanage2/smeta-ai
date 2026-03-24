@@ -17,7 +17,103 @@ from app.models.result import TaskResult  # noqa: F401
 from app.models.user import User          # noqa: F401
 from app.models.price import PriceWork, PriceMaterial  # noqa: F401
 from app.models.price_list import PriceList             # noqa: F401
+# Migration-003 models — imported here so Base.metadata knows about them before
+# the session-scoped create_tables fixture runs.  These tables use
+#   server_default=text("gen_random_uuid()")
+# which SQLite rejects in CREATE TABLE DEFAULT constraints.  We pre-create them
+# below with SQLite built-in equivalents (randomblob/hex/lower) so that
+# Base.metadata.create_all (checkfirst=True by default) simply skips them.
+from app.models.project import Project                  # noqa: F401
+from app.models.task_version import TaskVersion         # noqa: F401
+from app.models.estimate_item import EstimateItem       # noqa: F401
 from app.utils.auth import hash_password, create_access_token
+
+# ---------------------------------------------------------------------------
+# SQLite-compatible CREATE TABLE statements for all UUID-primary-key tables.
+#
+# PostgreSQL's gen_random_uuid() is not a valid SQLite DEFAULT expression.
+# SQLite rejects function calls in DEFAULT unless wrapped in parentheses AND
+# the function is a recognised built-in.  We use randomblob/hex/lower which
+# are SQLite built-ins.  These tables are pre-created before create_all so
+# that create_all (checkfirst=True by default) skips them.
+# ---------------------------------------------------------------------------
+
+# tasks: includes ALL columns from the current model (migration-003 added
+# project_id, estimate_status, estimate_status_updated_at,
+# estimate_status_updated_by).
+_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id                         TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+    user_role                  VARCHAR(10) NOT NULL,
+    task_type                  VARCHAR(50) NOT NULL,
+    status                     VARCHAR(20) NOT NULL DEFAULT 'pending',
+    input_files                TEXT NOT NULL DEFAULT '[]',
+    input_file_data            TEXT NOT NULL DEFAULT '[]',
+    user_prompt                TEXT,
+    chat_history               TEXT NOT NULL DEFAULT '[]',
+    progress_message           VARCHAR(500),
+    error_message              TEXT,
+    project_id                 TEXT,
+    estimate_status            VARCHAR(50) NOT NULL DEFAULT 'uploaded',
+    estimate_status_updated_at TIMESTAMP,
+    estimate_status_updated_by VARCHAR(20) NOT NULL DEFAULT 'manual',
+    created_at                 TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at                 TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+)
+"""
+
+_PROJECTS_DDL = """
+CREATE TABLE IF NOT EXISTS projects (
+    id          TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+    name        VARCHAR(255) NOT NULL,
+    description TEXT,
+    user_id     INTEGER,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+)
+"""
+
+_TASK_VERSIONS_DDL = """
+CREATE TABLE IF NOT EXISTS task_versions (
+    id                 TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+    task_id            TEXT NOT NULL,
+    version_number     INTEGER NOT NULL,
+    snapshot           TEXT NOT NULL DEFAULT '{}',
+    change_description TEXT,
+    change_type        VARCHAR(50),
+    created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by         VARCHAR(20) NOT NULL DEFAULT 'user',
+    PRIMARY KEY (id),
+    FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+)
+"""
+
+_ESTIMATE_ITEMS_DDL = """
+CREATE TABLE IF NOT EXISTS estimate_items (
+    id               TEXT NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+    task_id          TEXT NOT NULL,
+    position         INTEGER NOT NULL,
+    type             VARCHAR(20) NOT NULL,
+    name             TEXT NOT NULL,
+    unit             VARCHAR(100),
+    quantity         REAL,
+    work_price       REAL,
+    mat_price        REAL,
+    section          TEXT,
+    notes            TEXT,
+    is_analogue      BOOLEAN NOT NULL DEFAULT 0,
+    original_item_id TEXT,
+    analogue_note    TEXT,
+    extra            TEXT NOT NULL DEFAULT '{}',
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+)
+"""
 
 # ---------------------------------------------------------------------------
 # Test engine — SQLite in-memory
@@ -53,6 +149,14 @@ TestSessionLocal = async_sessionmaker(
 @pytest_asyncio.fixture(scope="session", autouse=True)
 async def create_tables():
     async with test_engine.begin() as conn:
+        # Pre-create all tables that use gen_random_uuid() in their DEFAULT
+        # constraint using SQLite-compatible built-ins.  create_all below
+        # (checkfirst=True by default) will skip pre-existing tables.
+        await conn.execute(text(_TASKS_DDL))         # must come before task_versions/estimate_items
+        await conn.execute(text(_PROJECTS_DDL))
+        await conn.execute(text(_TASK_VERSIONS_DDL))
+        await conn.execute(text(_ESTIMATE_ITEMS_DDL))
+        # Create all remaining tables (users, task_results, price_*, etc.)
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with test_engine.begin() as conn:
@@ -91,11 +195,26 @@ def admin_token() -> str:
 @pytest_asyncio.fixture
 async def test_app(db_session: AsyncSession):
     """Return the FastAPI app with get_db overridden to use the test session."""
-    # Patch the database module so the lifespan does not connect to PostgreSQL
+    from contextlib import asynccontextmanager
+
     import app.database as db_module
+    import app.main as main_module
+
     original_engine = db_module.engine
     original_session_local = db_module.AsyncSessionLocal
+    original_lifespan = main_module.lifespan
 
+    # Replace the lifespan with a no-op so the startup sequence
+    # (init_db, _initialize_users, price_service.load_cache) is skipped.
+    # Tables are already created by the session-scoped create_tables fixture.
+    # _initialize_users uses app.main.AsyncSessionLocal (a local import-time
+    # binding) which still points to the production engine even after patching
+    # db_module.AsyncSessionLocal — patching lifespan avoids this entirely.
+    @asynccontextmanager
+    async def _noop_lifespan(app):
+        yield
+
+    main_module.lifespan = _noop_lifespan
     db_module.engine = test_engine
     db_module.AsyncSessionLocal = TestSessionLocal
 
@@ -112,6 +231,7 @@ async def test_app(db_session: AsyncSession):
 
     # Restore
     application.dependency_overrides.clear()
+    main_module.lifespan = original_lifespan
     db_module.engine = original_engine
     db_module.AsyncSessionLocal = original_session_local
 
