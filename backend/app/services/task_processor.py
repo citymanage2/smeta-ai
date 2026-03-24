@@ -557,8 +557,13 @@ PROMPT_STAGE2_GRAND = """Ты — снабженец/сметчик с опыт�
 Язык: русский."""
 
 
-SMETA_BATCH_SIZE = 10          # items per Claude call for SMETA_FROM_LIST
-SMETA_BATCH_TIMEOUT_SECS = 180  # seconds before a single batch call is abandoned
+SMETA_BATCH_SIZE = 5            # items per Claude call for SMETA_FROM_LIST
+SMETA_BATCH_TIMEOUT_SECS = 180  # processing_timeout passed to each main-batch call
+SMETA_INTER_BATCH_DELAY = 4     # seconds to sleep between main batches
+
+SMETA_RETRY_BATCH_SIZE = 2      # items per Claude call in the retry queue
+SMETA_RETRY_TIMEOUT_SECS = 600  # processing_timeout for retry-queue calls
+SMETA_RETRY_INTER_BATCH_DELAY = 30  # seconds to sleep between retry batches
 
 
 class TaskCancelledError(Exception):
@@ -674,13 +679,20 @@ class TaskProcessor:
         system_prompt: str,
         use_web_search: bool = False,
         image_data: Optional[list] = None,
+        processing_timeout: Optional[float] = None,
     ) -> dict:
-        """Call Claude and parse the JSON response, retrying once if parsing fails."""
+        """Call Claude and parse the JSON response, retrying once if parsing fails.
+
+        processing_timeout — passed through to call_claude where it wraps only the
+        actual _client.messages.create() call, NOT the rate-limit sleep.
+        asyncio.TimeoutError propagates up if the API call itself is too slow.
+        """
         response = await call_claude(
             messages,
             system_prompt=system_prompt,
             use_web_search=use_web_search,
             image_data=image_data,
+            processing_timeout=processing_timeout,
         )
         try:
             return self._parse_json_response(response)
@@ -702,6 +714,7 @@ class TaskProcessor:
                 retry_messages,
                 system_prompt=system_prompt,
                 use_web_search=False,
+                processing_timeout=processing_timeout,
             )
             return self._parse_json_response(retry_response)
 
@@ -1294,7 +1307,19 @@ class TaskProcessor:
         return []
 
     async def _handle_smeta_from_list(self, task: Task) -> None:
-        """Batch-process SMETA_FROM_LIST: split items into SMETA_BATCH_SIZE chunks."""
+        """Batch-process SMETA_FROM_LIST: split items into SMETA_BATCH_SIZE chunks.
+
+        Design:
+        - processing_timeout is passed to each call_claude call; it wraps ONLY the
+          actual API call, NOT the rate-limit sleep.  This means a 429 with a long
+          retry-after value never causes the batch to time out.
+        - asyncio.TimeoutError from a true processing timeout marks the batch items
+          as needs_retry (not silently unpriced).
+        - After all main batches a retry queue processes needs_retry items in smaller
+          sub-batches with a longer timeout.
+        - Items that fail even in the retry queue receive a "требует ручной проверки"
+          note so they are visible in the final Excel.
+        """
         from datetime import date
 
         # 1. Load price lists
@@ -1337,8 +1362,10 @@ class TaskProcessor:
             total_batches=total_batches,
         )
 
-        # 5. Process each batch
+        # 5. Main pass — one Claude call per batch
         all_results: list[dict] = []
+        needs_retry: list[dict] = []
+
         for batch_num, batch in enumerate(batches, start=1):
             await self._check_cancelled()
             await self.update_progress(
@@ -1346,23 +1373,33 @@ class TaskProcessor:
             )
 
             batch_json = json.dumps({"items": batch}, ensure_ascii=False, indent=2)
-            content = (
-                f"Перечень работ и материалов:\n\n{batch_json}\n\n{base_prompt}"
-            )
+            content = f"Перечень работ и материалов:\n\n{batch_json}\n\n{base_prompt}"
             if task.user_prompt:
                 content += f"\n\nДополнительные требования: {task.user_prompt}"
 
             try:
-                batch_data = await asyncio.wait_for(
-                    self._call_claude_json(
-                        [{"role": "user", "content": content}],
-                        system_prompt=SYSTEM_BASE,
-                        use_web_search=True,
-                    ),
-                    timeout=SMETA_BATCH_TIMEOUT_SECS,
+                batch_data = await self._call_claude_json(
+                    [{"role": "user", "content": content}],
+                    system_prompt=SYSTEM_BASE,
+                    use_web_search=True,
+                    processing_timeout=SMETA_BATCH_TIMEOUT_SECS,
                 )
                 batch_items = batch_data.get("items", [])
                 all_results.extend(batch_items)
+
+                # If Claude returned fewer items than sent, queue the rest for retry.
+                unmatched = batch[len(batch_items):]
+                if unmatched:
+                    logger.warning(
+                        "Batch partial response: queuing unmatched items for retry",
+                        task_id=self.task_id,
+                        batch=batch_num,
+                        items_in=len(batch),
+                        items_out=len(batch_items),
+                        unmatched=len(unmatched),
+                    )
+                    needs_retry.extend(unmatched)
+
                 logger.info(
                     "Batch processed",
                     task_id=self.task_id,
@@ -1373,18 +1410,22 @@ class TaskProcessor:
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    "Batch timed out, keeping original items without pricing",
+                    "Batch timed out, queuing items for retry",
                     task_id=self.task_id,
                     batch=batch_num,
                     total=total_batches,
                     timeout=SMETA_BATCH_TIMEOUT_SECS,
                 )
-                for item in batch:
-                    item.setdefault(
-                        "notes",
-                        f"Превышено время ожидания ({SMETA_BATCH_TIMEOUT_SECS}с)",
-                    )
-                all_results.extend(batch)
+                needs_retry.extend(batch)
+
+            # Pause between batches to reduce token-rate pressure (skip after last).
+            if batch_num < total_batches:
+                await asyncio.sleep(SMETA_INTER_BATCH_DELAY)
+
+        # 6. Retry queue — process needs_retry items with smaller batches / longer timeout
+        if needs_retry:
+            retried = await self._process_retry_queue(needs_retry, base_prompt, task)
+            all_results.extend(retried)
 
         if not all_results:
             raise ValueError("Не удалось получить ни одной позиции сметы.")
@@ -1402,6 +1443,85 @@ class TaskProcessor:
             total_items=len(all_results),
             total_batches=total_batches,
         )
+
+    async def _process_retry_queue(
+        self,
+        items: list[dict],
+        base_prompt: str,
+        task: Task,
+    ) -> list[dict]:
+        """Process items that could not be priced in the main pass.
+
+        Uses smaller batches (SMETA_RETRY_BATCH_SIZE), a longer per-call timeout
+        (SMETA_RETRY_TIMEOUT_SECS), and a longer pause between batches
+        (SMETA_RETRY_INTER_BATCH_DELAY).
+
+        Items that still time out after the retry are returned with a
+        "требует ручной проверки" note so the user can find them in the Excel.
+        """
+        results: list[dict] = []
+        retry_batches = [
+            items[i:i + SMETA_RETRY_BATCH_SIZE]
+            for i in range(0, len(items), SMETA_RETRY_BATCH_SIZE)
+        ]
+        total = len(retry_batches)
+        logger.info(
+            "Starting retry queue",
+            task_id=self.task_id,
+            needs_retry=len(items),
+            retry_batches=total,
+        )
+
+        for batch_num, batch in enumerate(retry_batches, start=1):
+            await self._check_cancelled()
+            await self.update_progress(
+                f"Повторная обработка {batch_num} из {total} ({len(batch)} позиций)..."
+            )
+
+            batch_json = json.dumps({"items": batch}, ensure_ascii=False, indent=2)
+            content = f"Перечень работ и материалов:\n\n{batch_json}\n\n{base_prompt}"
+            if task.user_prompt:
+                content += f"\n\nДополнительные требования: {task.user_prompt}"
+
+            try:
+                batch_data = await self._call_claude_json(
+                    [{"role": "user", "content": content}],
+                    system_prompt=SYSTEM_BASE,
+                    use_web_search=True,
+                    processing_timeout=SMETA_RETRY_TIMEOUT_SECS,
+                )
+                batch_items = batch_data.get("items", [])
+                results.extend(batch_items)
+
+                # Any input items not represented in the output → manual check.
+                for item in batch[len(batch_items):]:
+                    item["notes"] = "требует ручной проверки"
+                    results.append(item)
+
+                logger.info(
+                    "Retry batch processed",
+                    task_id=self.task_id,
+                    batch=batch_num,
+                    total=total,
+                    items_in=len(batch),
+                    items_out=len(batch_items),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Retry batch timed out, marking items for manual check",
+                    task_id=self.task_id,
+                    batch=batch_num,
+                    total=total,
+                    timeout=SMETA_RETRY_TIMEOUT_SECS,
+                )
+                for item in batch:
+                    item["notes"] = "требует ручной проверки"
+                    results.append(item)
+
+            if batch_num < total:
+                await asyncio.sleep(SMETA_RETRY_INTER_BATCH_DELAY)
+
+        return results
 
     async def _handle_research_project(self, task: Task) -> None:
         """Standalone stage-1 equivalent: review project docs, save plain-text result."""

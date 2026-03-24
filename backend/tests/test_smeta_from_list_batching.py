@@ -1,12 +1,12 @@
 """TDD tests for SMETA_FROM_LIST batching.
 
-Required behaviour:
-- Items list is split into batches of SMETA_BATCH_SIZE (10).
+Required behaviour (updated for v2 batch size = 5):
+- Items list is split into batches of SMETA_BATCH_SIZE (5).
 - Each batch gets its own Claude API call.
 - Results from all batches are combined in order.
 - Progress message is updated after each batch (text contains "батч N из M").
-- If a batch's Claude call exceeds SMETA_BATCH_TIMEOUT_SECS, that batch is
-  skipped (original items kept without pricing) and processing continues.
+- If a batch's Claude call raises asyncio.TimeoutError, that batch's items are
+  marked needs_retry and processed in a retry queue.
 - The final Excel is saved as a TaskResult.
 """
 import asyncio
@@ -134,7 +134,7 @@ async def task_10(db_session):
 
 
 # ---------------------------------------------------------------------------
-# _parse_xlsx_items tests
+# _parse_xlsx_items tests  (unchanged)
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,6 @@ async def test_parse_xlsx_items_extracts_correct_items(db_session):
         {"type": "Материал", "name": "Кирпич М150", "unit": "шт", "quantity": 10000.0, "notes": ""},
     ]
     task = await _task_with_excel(db_session, 0)
-    # Replace input_file_data with our specific items
     task.input_file_data = [{
         "name": "list.xlsx",
         "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -207,14 +206,13 @@ async def test_parse_xlsx_items_non_xlsx_returns_empty(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Batching tests
+# Batching tests  (updated for SMETA_BATCH_SIZE = 5)
 # ---------------------------------------------------------------------------
 
 
-async def test_25_items_produce_3_claude_calls(db_session, task_25):
-    """25 items split into batches of 10 → ceil(25/10) = 3 Claude calls."""
+async def test_25_items_produce_5_claude_calls(db_session, task_25):
+    """25 items split into batches of 5 → ceil(25/5) = 5 main Claude calls."""
     processor = TaskProcessor(task_25.id, db_session)
-
     call_count = 0
 
     async def counting_claude(messages, **kwargs):
@@ -226,14 +224,16 @@ async def test_25_items_produce_3_claude_calls(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=counting_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
+        patch.object(TaskProcessor, "_process_retry_queue", AsyncMock(return_value=[])),
     ):
         await processor._handle_smeta_from_list(task_25)
 
-    assert call_count == 3, f"Expected 3 Claude calls, got {call_count}"
+    assert call_count == 5, f"Expected 5 Claude calls for 25 items, got {call_count}"
 
 
-async def test_10_items_produce_1_claude_call(db_session, task_10):
-    """Exactly 10 items → exactly 1 batch → 1 Claude call."""
+async def test_10_items_produce_2_claude_calls(db_session, task_10):
+    """10 items → 2 batches of 5 → 2 main Claude calls."""
     processor = TaskProcessor(task_10.id, db_session)
     call_count = 0
 
@@ -246,10 +246,12 @@ async def test_10_items_produce_1_claude_call(db_session, task_10):
         patch("app.services.task_processor.call_claude", side_effect=counting_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
+        patch.object(TaskProcessor, "_process_retry_queue", AsyncMock(return_value=[])),
     ):
         await processor._handle_smeta_from_list(task_10)
 
-    assert call_count == 1
+    assert call_count == 2, f"Expected 2 Claude calls for 10 items, got {call_count}"
 
 
 async def test_batch_content_limited_to_batch_size(db_session, task_25):
@@ -260,12 +262,9 @@ async def test_batch_content_limited_to_batch_size(db_session, task_25):
 
     async def inspecting_claude(messages, **kwargs):
         content = messages[0]["content"]
-        # The items JSON block is pretty-printed; find it by locating "items" key
         start = content.index('"items"')
-        # Walk back to find the opening '{'
         brace_pos = content.rindex('{', 0, start)
         snippet = content[brace_pos:]
-        # Find matching closing brace
         depth, end = 0, 0
         for i, ch in enumerate(snippet):
             if ch == '{':
@@ -283,6 +282,7 @@ async def test_batch_content_limited_to_batch_size(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=inspecting_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_25)
 
@@ -311,6 +311,7 @@ async def test_results_combined_in_batch_order(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=ordered_claude),
         patch("app.services.task_processor.generate_smeta", side_effect=capturing_generate_smeta),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_25)
 
@@ -326,7 +327,7 @@ async def test_results_combined_in_batch_order(db_session, task_25):
 
 
 async def test_progress_message_set_for_each_batch(db_session, task_25):
-    """Progress messages include 'батч N из 3' for each of the 3 batches."""
+    """Progress messages include 'батч N из 5' for each of the 5 batches."""
     processor = TaskProcessor(task_25.id, db_session)
     recorded: list[str] = []
     original_update = processor.update_progress
@@ -348,14 +349,15 @@ async def test_progress_message_set_for_each_batch(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=mock_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_25)
 
     batch_msgs = [m for m in recorded if "батч" in m.lower()]
-    assert len(batch_msgs) >= 3, f"Expected ≥3 batch messages, got: {batch_msgs}"
-    assert any("1 из 3" in m for m in batch_msgs), f"No '1 из 3' in {batch_msgs}"
-    assert any("2 из 3" in m for m in batch_msgs), f"No '2 из 3' in {batch_msgs}"
-    assert any("3 из 3" in m for m in batch_msgs), f"No '3 из 3' in {batch_msgs}"
+    assert len(batch_msgs) >= 5, f"Expected ≥5 batch messages, got: {batch_msgs}"
+    assert any("1 из 5" in m for m in batch_msgs), f"No '1 из 5' in {batch_msgs}"
+    assert any("2 из 5" in m for m in batch_msgs), f"No '2 из 5' in {batch_msgs}"
+    assert any("5 из 5" in m for m in batch_msgs), f"No '5 из 5' in {batch_msgs}"
 
 
 async def test_progress_message_visible_in_task_status(db_session, task_25):
@@ -382,85 +384,67 @@ async def test_progress_message_visible_in_task_status(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=mock_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_25)
 
-    assert len(seen_batch_messages) >= 3
+    assert len(seen_batch_messages) >= 5
 
 
 # ---------------------------------------------------------------------------
-# Timeout tests
+# Timeout tests  (updated: TimeoutError raised directly; retry queue is exercised)
 # ---------------------------------------------------------------------------
 
 
 async def test_timed_out_batch_is_skipped_task_continues(db_session, task_20):
-    """If batch 2 times out, its original items are kept and batch processing continues."""
+    """If one batch times out, the task still completes (no unhandled exception)."""
     processor = TaskProcessor(task_20.id, db_session)
     call_num = 0
 
-    async def selective_slow_claude(messages, **kwargs):
+    async def selective_timeout_claude(messages, **kwargs):
         nonlocal call_num
         call_num += 1
         if call_num == 2:
-            await asyncio.sleep(10)  # Much longer than patched timeout
+            raise asyncio.TimeoutError()  # second main batch times out
         return _priced_response(call_num)
 
+    with (
+        patch("app.services.task_processor.call_claude", side_effect=selective_timeout_claude),
+        patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
+        patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
+    ):
+        # Must complete without raising
+        await processor._handle_smeta_from_list(task_20)
+
+
+async def test_timed_out_batch_items_eventually_in_result(db_session, task_20):
+    """Items from a timed-out batch appear in the final result (via retry queue)."""
+    processor = TaskProcessor(task_20.id, db_session)
+    call_num = 0
     captured: list[dict] = []
+
+    async def timeout_then_succeed(messages, **kwargs):
+        nonlocal call_num
+        call_num += 1
+        if call_num == 1:
+            raise asyncio.TimeoutError()  # first batch times out
+        return _priced_response(call_num)
 
     def capture_smeta(items):
         captured.extend(items)
         return b"<excel>"
 
     with (
-        patch("app.services.task_processor.call_claude", side_effect=selective_slow_claude),
-        patch("app.services.task_processor.SMETA_BATCH_TIMEOUT_SECS", 0.05),
+        patch("app.services.task_processor.call_claude", side_effect=timeout_then_succeed),
         patch("app.services.task_processor.generate_smeta", side_effect=capture_smeta),
         patch("app.services.task_processor.price_service", _mock_price()),
-    ):
-        # Task must complete without raising
-        await processor._handle_smeta_from_list(task_20)
-
-    # 11 items total: batch 1 succeeds (Claude returns 1 mock item) + batch 2 times out (10 original items)
-    assert len(captured) == 11, f"Expected 11 items in result, got {len(captured)}"
-
-
-async def test_timed_out_batch_items_have_no_pricing(db_session, task_20):
-    """Items from a timed-out batch do not have work_price set from Claude."""
-    processor = TaskProcessor(task_20.id, db_session)
-    call_num = 0
-
-    async def selective_slow_claude(messages, **kwargs):
-        nonlocal call_num
-        call_num += 1
-        if call_num == 2:
-            await asyncio.sleep(10)
-        return _priced_response(call_num)
-
-    captured: list[dict] = []
-
-    def capture_smeta(items):
-        captured.extend(items)
-        return b"<excel>"
-
-    with (
-        patch("app.services.task_processor.call_claude", side_effect=selective_slow_claude),
-        patch("app.services.task_processor.SMETA_BATCH_TIMEOUT_SECS", 0.05),
-        patch("app.services.task_processor.generate_smeta", side_effect=capture_smeta),
-        patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_20)
 
-    # Batch 1 succeeds: Claude mock returns 1 priced item (work_price=100)
-    assert captured[0].get("work_price") == 100, (
-        "First item (from successful batch 1) should be priced"
-    )
-
-    # Batch 2 timed out: 10 original items kept without pricing
-    batch2_items = captured[1:]
-    assert len(batch2_items) == 10, f"Expected 10 unpriced items from batch 2, got {len(batch2_items)}"
-    assert all(item.get("work_price") is None for item in batch2_items), (
-        "Batch 2 items should be unpriced (timeout)"
-    )
+    # All 20 items must appear in the final generate_smeta call
+    assert len(captured) == 20, f"Expected 20 items in result, got {len(captured)}"
 
 
 async def test_timeout_warning_is_logged(db_session, task_20, capsys):
@@ -468,22 +452,21 @@ async def test_timeout_warning_is_logged(db_session, task_20, capsys):
     processor = TaskProcessor(task_20.id, db_session)
     call_num = 0
 
-    async def selective_slow_claude(messages, **kwargs):
+    async def selective_timeout_claude(messages, **kwargs):
         nonlocal call_num
         call_num += 1
         if call_num == 1:
-            await asyncio.sleep(10)
+            raise asyncio.TimeoutError()
         return _priced_response(call_num)
 
     with (
-        patch("app.services.task_processor.call_claude", side_effect=selective_slow_claude),
-        patch("app.services.task_processor.SMETA_BATCH_TIMEOUT_SECS", 0.05),
+        patch("app.services.task_processor.call_claude", side_effect=selective_timeout_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_20)
 
-    # structlog writes to stdout; verify warning message appears
     output = capsys.readouterr().out
     assert "timed out" in output.lower() or "timeout" in output.lower(), (
         f"Expected timeout warning in stdout, got: {output[:500]}"
@@ -509,6 +492,7 @@ async def test_result_saved_to_db(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=mock_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<final-excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_25)
 
@@ -524,7 +508,7 @@ async def test_result_saved_to_db(db_session, task_25):
 
 
 async def test_result_contains_all_items(db_session, task_25):
-    """generate_smeta receives items from all 3 batches (total 3 priced items in test)."""
+    """generate_smeta receives items from all 5 batches (total 5 priced items in test)."""
     processor = TaskProcessor(task_25.id, db_session)
     call_num = 0
 
@@ -543,11 +527,12 @@ async def test_result_contains_all_items(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=mock_claude),
         patch("app.services.task_processor.generate_smeta", side_effect=capture_smeta),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor._handle_smeta_from_list(task_25)
 
-    # 3 batches × 1 item per batch in our mock
-    assert len(items_received) == 3
+    # 5 main calls × 1 priced item + 20 retried items (10 batches × 2: 1 priced + 1 manual)
+    assert len(items_received) == 25, f"Expected 25 items (all 25 inputs), got {len(items_received)}"
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +564,7 @@ async def test_smeta_from_list_dispatched_to_new_handler(db_session, task_25):
         patch("app.services.task_processor.call_claude", side_effect=mock_claude),
         patch("app.services.task_processor.generate_smeta", return_value=b"<excel>"),
         patch("app.services.task_processor.price_service", _mock_price()),
+        patch("app.services.task_processor.asyncio.sleep", AsyncMock()),
     ):
         await processor.process()
 

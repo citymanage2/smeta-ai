@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 import anthropic
@@ -12,8 +12,14 @@ logger = structlog.get_logger()
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 # Seconds to wait after a 429 when the API does not send a retry-after header.
-# One full minute covers the standard per-minute token-rate window.
 DEFAULT_RATE_LIMIT_DELAY = 60
+
+# Per-attempt minimum wait after consecutive 429 responses (exponential backoff).
+# Index 0 = first 429, index 1 = second, index 2+ = third and beyond.
+RATE_LIMIT_BACKOFF_MINIMUMS = [60, 120, 240]
+
+# Hard cap on any single rate-limit wait.
+RATE_LIMIT_MAX_WAIT = 900
 
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
@@ -64,13 +70,19 @@ async def call_claude(
     system_prompt: str = "",
     use_web_search: bool = False,
     image_data: Optional[list[dict]] = None,
+    processing_timeout: Optional[float] = None,
+    on_rate_limit_wait: Optional[Callable[[float], None]] = None,
 ) -> str:
     """
     Call Claude API (non-streaming) with retry logic and optional web search.
     Returns the final text response.
 
-    Uses non-streaming to avoid httpx.RemoteProtocolError (incomplete chunked read)
-    that occurs when the server closes a streaming connection before completion.
+    processing_timeout — if set, wraps ONLY the _client.messages.create() call
+        (not the rate-limit sleep).  asyncio.TimeoutError is raised and propagated
+        immediately if the API call itself exceeds this budget.
+
+    on_rate_limit_wait — optional callback(wait_seconds) invoked just before each
+        rate-limit sleep so callers can react (e.g. extend a batch deadline).
     """
     tools = [WEB_SEARCH_TOOL] if use_web_search else []
     built_messages = _build_messages(messages, image_data)
@@ -86,9 +98,12 @@ async def call_claude(
     if tools:
         kwargs["tools"] = tools
 
-    # Retryable error delays: rate limits, 5xx, connection / protocol errors
-    delays = [2, 8, 30]
+    # Retryable error delays for connection / 5xx errors (NOT used for rate limits).
+    delays = [2, 8, 30, 60]
     last_error: Optional[Exception] = None
+
+    # Count consecutive 429 responses to apply escalating backoff minimums.
+    rate_limit_count = 0
 
     for attempt, delay in enumerate(delays, start=1):
         try:
@@ -99,7 +114,14 @@ async def call_claude(
                 use_web_search=use_web_search,
             )
 
-            response = await _client.messages.create(**kwargs)
+            # Wrap only the API call — rate-limit sleeps are intentionally outside.
+            if processing_timeout is not None:
+                response = await asyncio.wait_for(
+                    _client.messages.create(**kwargs),
+                    timeout=processing_timeout,
+                )
+            else:
+                response = await _client.messages.create(**kwargs)
 
             # Detect output truncation before trying to use the response
             if response.stop_reason == "max_tokens":
@@ -124,26 +146,44 @@ async def call_claude(
             logger.info("Claude API call successful", chars=len(result), attempt=attempt)
             return result
 
+        except asyncio.TimeoutError:
+            # Real processing timeout — propagate immediately without retry.
+            raise
+
         except anthropic.RateLimitError as e:
+            rate_limit_count += 1
             last_error = e
-            # Honour the retry-after header when the API tells us exactly how long
-            # to wait (common for the 30 000 input-tokens-per-minute limit).
-            retry_after_raw = getattr(e, "response", None) and e.response.headers.get("retry-after")
-            wait = float(retry_after_raw) if retry_after_raw else DEFAULT_RATE_LIMIT_DELAY
+
+            # Honour the retry-after header if provided, but apply backoff minimums.
+            retry_after_raw = (
+                e.response.headers.get("retry-after")
+                if getattr(e, "response", None) is not None
+                else None
+            )
+            api_retry_after = float(retry_after_raw) if retry_after_raw else DEFAULT_RATE_LIMIT_DELAY
+
+            # Exponential backoff minimum: escalates with each consecutive 429.
+            backoff_min = RATE_LIMIT_BACKOFF_MINIMUMS[
+                min(rate_limit_count - 1, len(RATE_LIMIT_BACKOFF_MINIMUMS) - 1)
+            ]
+            wait = min(max(api_retry_after, backoff_min), RATE_LIMIT_MAX_WAIT)
+
             logger.warning(
                 "Claude rate limit hit, retrying",
                 attempt=attempt,
-                wait=wait,
-                retry_after_header=retry_after_raw,
+                rate_limit_count=rate_limit_count,
+                api_retry_after=api_retry_after,
+                actual_wait=wait,
                 error=str(e) or repr(e),
             )
+
+            if on_rate_limit_wait is not None:
+                on_rate_limit_wait(wait)
+
             if attempt < len(delays):
                 await asyncio.sleep(wait)
 
         except (anthropic.APIConnectionError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
-            # httpx.RemoteProtocolError = incomplete chunked read (server closed stream early)
-            # httpx.ReadTimeout       = read timeout exceeded
-            # anthropic.APIConnectionError wraps other low-level connection failures
             last_error = e
             logger.warning(
                 "Claude connection/protocol error, retrying",
@@ -168,7 +208,6 @@ async def call_claude(
                 if attempt < len(delays):
                     await asyncio.sleep(delay)
             else:
-                # 4xx — do not retry (auth, bad request, etc.)
                 logger.error(
                     "Claude API client error (not retrying)",
                     status_code=e.status_code,
