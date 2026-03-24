@@ -474,7 +474,7 @@ const TaskStatusPage: React.FC = () => {
           >
             <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               Результаты
-              {taskStatus?.task_type?.toUpperCase().startsWith('SMETA_') && (
+              {task?.task_type?.toUpperCase().startsWith('SMETA_') && (
                 <button
                   onClick={() => navigate(`/task/${taskId}/estimate`)}
                   style={{

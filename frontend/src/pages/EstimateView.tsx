@@ -35,7 +35,6 @@ const EstimateView: React.FC = () => {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [optimizationOpen, setOptimizationOpen] = useState(false);
   const [expandedAnalogue, setExpandedAnalogue] = useState<string | null>(null);
-  const [optimizationResults, setOptimizationResults] = useState<Record<string, { saving_reason?: string; new_price?: number }>>({});
 
   const loadData = useCallback(async () => {
     if (!taskId) return;

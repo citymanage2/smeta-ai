@@ -1,10 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   listProjects, createProject, updateProject, deleteProject,
-  addTaskToProject, removeTaskFromProject,
+  addTaskToProject, removeTaskFromProject, getProject,
   Project, TaskSummary,
 } from '../api/projects';
-import { listProjects as fetchProjects, getProject } from '../api/projects';
 import StatusBadge from './StatusBadge';
 
 interface Props {
