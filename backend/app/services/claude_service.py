@@ -11,6 +11,10 @@ logger = structlog.get_logger()
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
+# Seconds to wait after a 429 when the API does not send a retry-after header.
+# One full minute covers the standard per-minute token-rate window.
+DEFAULT_RATE_LIMIT_DELAY = 60
+
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
     "name": "web_search",
@@ -122,14 +126,19 @@ async def call_claude(
 
         except anthropic.RateLimitError as e:
             last_error = e
+            # Honour the retry-after header when the API tells us exactly how long
+            # to wait (common for the 30 000 input-tokens-per-minute limit).
+            retry_after_raw = getattr(e, "response", None) and e.response.headers.get("retry-after")
+            wait = float(retry_after_raw) if retry_after_raw else DEFAULT_RATE_LIMIT_DELAY
             logger.warning(
                 "Claude rate limit hit, retrying",
                 attempt=attempt,
-                delay=delay,
+                wait=wait,
+                retry_after_header=retry_after_raw,
                 error=str(e) or repr(e),
             )
             if attempt < len(delays):
-                await asyncio.sleep(delay)
+                await asyncio.sleep(wait)
 
         except (anthropic.APIConnectionError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
             # httpx.RemoteProtocolError = incomplete chunked read (server closed stream early)
