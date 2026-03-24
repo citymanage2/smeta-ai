@@ -1,6 +1,8 @@
 export type TaskType =
   | 'LIST_FROM_TZ'
   | 'LIST_FROM_TZ_PROJECT'
+  | 'RESEARCH_PROJECT'
+  | 'LIST_FROM_PROJECT'
   | 'SMETA_FROM_GRAND_PROJECT'
   | 'SMETA_FROM_PROJECT'
   | 'SMETA_FROM_EDC_PROJECT'
@@ -8,7 +10,7 @@ export type TaskType =
   | 'SCAN_TO_EXCEL'
   | 'COMPARE_PROJECT_SMETA';
 
-export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
 export interface Task {
   id: string;
@@ -53,6 +55,8 @@ export interface AdminTasksResponse {
 export const TASK_TYPE_LABELS: Record<TaskType, string> = {
   LIST_FROM_TZ: 'Перечень из ТЗ',
   LIST_FROM_TZ_PROJECT: 'Перечень из ТЗ + Проект',
+  RESEARCH_PROJECT: 'Проверка проектной документации',
+  LIST_FROM_PROJECT: 'Перечень из Проекта',
   SMETA_FROM_GRAND_PROJECT: 'Смета: ГРАНД-смета + Проект',
   SMETA_FROM_PROJECT: 'Смета из Проекта',
   SMETA_FROM_EDC_PROJECT: 'Смета: ЭДЦ + Проект',
@@ -66,4 +70,5 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   processing: 'Обработка',
   completed: 'Завершено',
   failed: 'Ошибка',
+  cancelled: 'Остановлено',
 };

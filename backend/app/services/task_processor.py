@@ -742,6 +742,10 @@ class TaskProcessor:
                 await self._handle_scan_to_excel(task)
             elif task_type == "COMPARE_PROJECT_SMETA":
                 await self._handle_compare(task)
+            elif task_type == "RESEARCH_PROJECT":
+                await self._handle_research_project(task)
+            elif task_type == "LIST_FROM_PROJECT":
+                await self._handle_list_from_project(task)
             elif task_type == "SMETA_FROM_PROJECT":
                 await self._handle_smeta_from_project(task)
             elif task_type == "SMETA_FROM_EDC_PROJECT":
@@ -1210,6 +1214,64 @@ class TaskProcessor:
             stage2_items=len(stage2_items),
             stage3_items=len(stage3_items),
         )
+
+    async def _handle_research_project(self, task: Task) -> None:
+        """Standalone stage-1 equivalent: review project docs, save plain-text result."""
+        from datetime import date
+
+        await self.update_progress("Анализ проектной документации...")
+        messages, image_blocks = self._build_messages_with_files(task, PROMPT_RESEARCH_PROJECT)
+
+        await self.update_progress("Проверка проекта с помощью ИИ...")
+        result_text = await call_claude(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks if image_blocks else None,
+        )
+
+        await self.update_progress("Сохранение результата проверки проекта...")
+        file_name = f"Проверка_проекта_{date.today().strftime('%Y-%m-%d')}.txt"
+        await self.save_result(
+            file_name,
+            "text/plain; charset=utf-8",
+            result_text.encode("utf-8"),
+        )
+        logger.info("Research project task completed", task_id=self.task_id, length=len(result_text))
+
+    async def _handle_list_from_project(self, task: Task) -> None:
+        """Standalone stage-2 equivalent: build items list from project docs, save Excel."""
+        _NO_RESEARCH = (
+            "Предварительная проверка проекта не проводилась. "
+            "Составляй перечень напрямую по проектной документации."
+        )
+        prompt = PROMPT_LIST_FROM_PROJECT.replace("{research_result}", _NO_RESEARCH)
+
+        await self.update_progress("Анализ проектной документации...")
+        messages, image_blocks = self._build_messages_with_files(task, prompt)
+
+        await self.update_progress("Формирование перечня работ и материалов с помощью ИИ...")
+        data = await self._call_claude_json(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            use_web_search=False,
+            image_data=image_blocks if image_blocks else None,
+        )
+
+        items = data.get("items", [])
+        changes_summary = data.get("changes_summary")
+
+        if not items:
+            raise ValueError("Claude не вернул позиции. Проверьте содержимое документов.")
+
+        await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
+        excel_data = generate_list_project(items, changes_summary)
+        await self.save_result(
+            "Перечень_из_проекта.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            excel_data,
+        )
+        logger.info("List from project task completed", task_id=self.task_id, items=len(items))
 
     async def _handle_smeta_from_edc(self, task: Task) -> None:
         await self._handle_two_stage_smeta(
