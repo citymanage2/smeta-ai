@@ -48,9 +48,3 @@ async def get_db():
             await session.close()
 
 
-async def init_db():
-    """Create all tables on startup."""
-    from app.models import task, result, price, user, price_list  # noqa: F401
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database tables created/verified")

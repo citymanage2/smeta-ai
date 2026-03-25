@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import settings
-from app.database import init_db, AsyncSessionLocal
+from app.database import AsyncSessionLocal
 from app.models.user import User
 from app.utils.auth import hash_password, verify_password
 from app.services import price_service
@@ -63,7 +63,6 @@ async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
     logger.info("Starting Smeta AI backend...")
     try:
-        await init_db()
         await _initialize_users()
         async with AsyncSessionLocal() as db:
             await price_service.load_cache(db)
