@@ -1,4 +1,5 @@
 import base64
+import io
 import uuid
 from decimal import Decimal
 from typing import Optional
@@ -13,6 +14,7 @@ from fastapi import (
     status,
     Request,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -504,3 +506,43 @@ async def link_task_to_project(
     task.project_id = body.project_id
     await db.commit()
     return ProjectLinkResponse(task_id=task_id, project_id=body.project_id)
+
+
+@router.get("/{task_id}/files/{slot}/download")
+async def download_file_from_slot(
+    task_id: str,
+    slot: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if slot not in VALID_SLOTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Недопустимый слот. Допустимые значения: {', '.join(VALID_SLOTS)}",
+        )
+
+    task_row = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_row.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    result_row = await db.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == task_id,
+            TaskResult.slot == slot,
+        )
+    )
+    task_result = result_row.scalar_one_or_none()
+    if not task_result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл в указанном слоте не найден",
+        )
+
+    return StreamingResponse(
+        io.BytesIO(task_result.file_data),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{task_result.file_name}"',
+        },
+    )
