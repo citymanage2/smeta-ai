@@ -769,6 +769,8 @@ class TaskProcessor:
                 await self._handle_smeta_from_edc(task)
             elif task_type == "SMETA_FROM_GRAND_PROJECT":
                 await self._handle_smeta_from_grand(task)
+            elif task_type == "OPTIMIZE_SMETA":
+                await self._handle_optimize_smeta(task)
             else:
                 raise ValueError(f"Неизвестный тип задачи: {task.task_type}")
 
@@ -1596,6 +1598,81 @@ class TaskProcessor:
             stage2_prompt_template=PROMPT_STAGE2_GRAND,
             file_suffix="SMETA_FROM_GRAND_PROJECT",
         )
+
+    async def _handle_optimize_smeta(self, task: Task) -> None:
+        """Handle OPTIMIZE_SMETA: parse uploaded xlsx, find analogues, save optimized xlsx."""
+        import base64 as _base64
+        from app.utils.xlsx_optimizer import parse_estimate_xlsx, get_top_items, generate_optimized_xlsx
+
+        if not task.input_file_data:
+            raise ValueError("Нет загруженного файла сметы")
+
+        file_entry = task.input_file_data[0]
+        file_bytes = _base64.b64decode(file_entry["content_b64"])
+
+        await self.update_progress("Разбираю файл сметы...")
+        items = parse_estimate_xlsx(file_bytes)
+        top_items = get_top_items(items, categories=["work", "material"], threshold=0.7)
+
+        await price_service.load_cache(self.db)
+        optimization_results = []
+        total = len(top_items)
+
+        for i, item in enumerate(top_items):
+            name = item["name"]
+            item_type = item["type"]
+            original_price = item["price_incl_vat"]
+            await self.update_progress(f"Поиск аналогов {i + 1}/{total}: {name[:40]}")
+
+            found_price = None
+            source = "Не найдено"
+            try:
+                if item_type == "work":
+                    price_data = await price_service.find_work_price(name)
+                else:
+                    price_data = await price_service.find_material_price(name)
+                if price_data and price_data.get("price"):
+                    found_price = float(price_data["price"])
+                    source = price_data.get("source", "Прайс-лист")
+            except Exception:
+                pass
+
+            savings_abs = None
+            savings_pct = None
+            if found_price is not None and found_price < original_price:
+                savings_abs = round(original_price - found_price, 4)
+                savings_pct = round(savings_abs / original_price * 100, 2)
+            elif found_price is not None:
+                found_price = None
+                source = "Не найдено (цена не ниже)"
+
+            optimization_results.append({
+                "row_index": item["row_index"],
+                "name": name,
+                "original_price": original_price,
+                "new_price": found_price,
+                "source": source,
+                "savings_abs": savings_abs,
+                "savings_pct": savings_pct,
+                "has_vat": True,
+            })
+
+        await self.update_progress("Генерирую оптимизированный файл...")
+        optimized_bytes = generate_optimized_xlsx(file_bytes, optimization_results)
+
+        result_record = TaskResult(
+            task_id=self.task_id,
+            slot="optimized",
+            file_name="optimized.xlsx",
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_data=optimized_bytes,
+        )
+        self.db.add(result_record)
+        await self.db.commit()
+
+        # Override the default update_status call in process() with optimized status
+        task.estimation_status = "optimized"
+        await self.db.commit()
 
 
 async def process_task(task_id: str, db: AsyncSession) -> None:
