@@ -288,7 +288,7 @@ const ProjectDetailPage: React.FC = () => {
                 >
                   {/* Main task row */}
                   <div
-                    onClick={() => navigate(`/task/${task.id}/status`)}
+                    onClick={() => { if (task.id) navigate(`/tasks/${task.id}/status`); }}
                     style={{ padding: '14px 18px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                   >
                     <div>

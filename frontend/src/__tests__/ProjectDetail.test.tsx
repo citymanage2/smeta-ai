@@ -103,23 +103,21 @@ describe('ProjectDetail — Bug 1: task card click navigates to status page', ()
     vi.mocked(getProject).mockResolvedValue(makeProject());
   });
 
-  it('clicking the task row navigates to /task/{id}/status', async () => {
+  it('clicking the task row navigates to /tasks/{id}/status', async () => {
     renderPage();
     const row = await screen.findByText('Смета из перечня');
-    // The click target is the row container — click the task type label area
     fireEvent.click(row);
-    expect(mockNavigate).toHaveBeenCalledWith(`/task/${TASK_ID}/status`);
+    expect(mockNavigate).toHaveBeenCalledWith(`/tasks/${TASK_ID}/status`);
   });
 
-  it('does NOT call navigate when task id is falsy (guard against rerun-via-create)', () => {
+  it('does NOT navigate when task id is falsy (guard against catch-all→/task/create redirect)', async () => {
     vi.mocked(getProject).mockResolvedValue(makeProject({ id: '' }));
     renderPage();
-    // Even if the row is rendered and clicked, navigate should not be called with an empty id
-    // (this is the guard against /task/undefined/status → /task/create redirect)
-    mockNavigate.mockClear();
-    // Test verifies the navigate path always contains a real id, not empty/undefined
-    expect(mockNavigate).not.toHaveBeenCalledWith('/task//status');
-    expect(mockNavigate).not.toHaveBeenCalledWith('/task/undefined/status');
+    const row = await screen.findByText('Смета из перечня');
+    fireEvent.click(row);
+    expect(mockNavigate).not.toHaveBeenCalledWith('/tasks//status');
+    expect(mockNavigate).not.toHaveBeenCalledWith('/tasks/undefined/status');
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
 

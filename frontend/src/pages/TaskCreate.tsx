@@ -62,7 +62,7 @@ const TaskCreate: React.FC = () => {
         setError('Задача создана, но ID не получен. Попробуйте обновить страницу.');
         return;
       }
-      navigate(`/task/${task.task_id}/status`);
+      navigate(`/tasks/${task.task_id}/status`);
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string } } };
       setError(axiosError.response?.data?.detail ?? 'Ошибка при создании задачи. Попробуйте ещё раз.');

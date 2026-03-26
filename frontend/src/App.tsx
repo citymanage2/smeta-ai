@@ -37,7 +37,7 @@ const App: React.FC = () => {
           }
         />
         <Route
-          path="/task/:taskId/status"
+          path="/tasks/:taskId/status"
           element={
             <ProtectedRoute>
               <TaskStatus />
