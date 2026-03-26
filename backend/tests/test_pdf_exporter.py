@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.utils.pdf_exporter import generate_project_pdf
+from app.utils.pdf_exporter import generate_project_pdf, _build_html
 
 
 class _FakeProject:
@@ -66,3 +66,33 @@ def test_pdf_no_description():
     tasks = [_FakeTask("t1", "SMETA_FROM_LIST", "unestimated", None, _DT)]
     data = generate_project_pdf(project, tasks, {"source": [], "estimate": [], "optimized": []}, "http://localhost:8000")
     assert len(data) > 0
+
+
+def test_pdf_html_contains_project_name():
+    project, tasks, slot_results = _make_data()
+    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
+    assert "Тест проект" in html
+
+
+def test_pdf_html_contains_task_type_label():
+    project, tasks, slot_results = _make_data()
+    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
+    assert "Смета из ТЗ" in html  # SMETA_FROM_LIST label
+
+
+def test_pdf_html_contains_download_link():
+    project, tasks, slot_results = _make_data()
+    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
+    assert "http://localhost:8000/tasks/t1/files/estimate/download" in html
+
+
+def test_pdf_html_empty_slot_shows_placeholder():
+    project, tasks, slot_results = _make_data()
+    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
+    assert "Файлы отсутствуют" in html
+
+
+def test_pdf_html_contains_itogo_row():
+    project, tasks, slot_results = _make_data()
+    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
+    assert "ИТОГО" in html

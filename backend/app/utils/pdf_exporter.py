@@ -1,4 +1,5 @@
 from datetime import datetime
+from html import escape
 
 from weasyprint import HTML
 
@@ -42,8 +43,8 @@ def _build_html(project, tasks: list, slot_results: dict, base_url: str) -> str:
             created = str(task.created_at)
         task_rows += (
             f"<tr>"
-            f"<td>{type_label}</td>"
-            f"<td>{status_label}</td>"
+            f"<td>{escape(type_label)}</td>"
+            f"<td>{escape(status_label)}</td>"
             f"<td>{cost_str}</td>"
             f"<td>{created}</td>"
             f"</tr>\n"
@@ -63,7 +64,7 @@ def _build_html(project, tasks: list, slot_results: dict, base_url: str) -> str:
         if pairs:
             items = "".join(
                 f'<li><a href="{base_url}/tasks/{task.id}/files/{slot}/download">'
-                f"{tr.file_name}</a></li>"
+                f"{escape(tr.file_name)}</a></li>"
                 for task, tr in pairs
             )
             slot_sections += f"<ul>{items}</ul>"
@@ -71,7 +72,7 @@ def _build_html(project, tasks: list, slot_results: dict, base_url: str) -> str:
             slot_sections += "<p>Файлы отсутствуют</p>"
 
     export_date = datetime.now().strftime("%d.%m.%Y")
-    description_html = f"<p>{project.description}</p>" if project.description else ""
+    description_html = f"<p>{escape(project.description)}</p>" if project.description else ""
 
     return f"""<!DOCTYPE html>
 <html lang="ru">
@@ -93,7 +94,7 @@ def _build_html(project, tasks: list, slot_results: dict, base_url: str) -> str:
 </style>
 </head>
 <body>
-<h1>{project.name}</h1>
+<h1>{escape(project.name)}</h1>
 {description_html}
 <p class="meta">Дата экспорта: {export_date}</p>
 <table>
