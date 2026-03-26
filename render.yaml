@@ -22,8 +22,12 @@ services:
 
   - type: static
     name: smeta-ai
-    buildCommand: cd frontend && npm install && npm run build && cp dist/index.html dist/404.html
+    buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: ./frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
         value: 'https://smeta-ai-backend.onrender.com'
