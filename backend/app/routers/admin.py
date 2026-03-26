@@ -12,7 +12,6 @@ from sqlalchemy import select, delete, func
 import openpyxl
 import structlog
 
-from sqlalchemy import text
 from app.database import get_db
 from app.models.task import Task
 from app.models.price import PriceWork, PriceMaterial
@@ -552,93 +551,3 @@ async def upload_prices(
 
     logger.info("Combined prices uploaded", works=len(works_data), materials=len(materials_data))
     return PriceUploadResponse(works_loaded=len(works_data), materials_loaded=len(materials_data))
-
-
-# ---------------------------------------------------------------------------
-# TEMPORARY: one-shot DB repair endpoint (remove after prod fix confirmed)
-# ---------------------------------------------------------------------------
-
-@router.get("/fix-db")
-async def fix_db(
-    db: AsyncSession = Depends(get_db),
-    admin: dict = Depends(get_admin_user),
-):
-    """
-    Applies missing migrations 004–006 directly via SQL (idempotent).
-
-    Use once on production when alembic_version was stamped to '006' without
-    running the actual migration SQL. Remove this endpoint after confirmation.
-    """
-    steps = []
-
-    ddl_statements = [
-        (
-            "create_projects_table",
-            """
-            CREATE TABLE IF NOT EXISTS projects (
-                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                name        VARCHAR(255) NOT NULL,
-                description TEXT,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-                updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-            )
-            """,
-        ),
-        (
-            "add_tasks_project_id",
-            """
-            ALTER TABLE tasks
-                ADD COLUMN IF NOT EXISTS project_id UUID
-                    REFERENCES projects(id) ON DELETE SET NULL
-            """,
-        ),
-        (
-            "add_tasks_estimation_status",
-            """
-            ALTER TABLE tasks
-                ADD COLUMN IF NOT EXISTS estimation_status VARCHAR(20)
-                    NOT NULL DEFAULT 'not_applicable'
-            """,
-        ),
-        (
-            "add_tasks_cost",
-            """
-            ALTER TABLE tasks
-                ADD COLUMN IF NOT EXISTS cost NUMERIC(12,2)
-            """,
-        ),
-        (
-            "add_task_results_slot",
-            """
-            ALTER TABLE task_results
-                ADD COLUMN IF NOT EXISTS slot VARCHAR(20)
-                    NOT NULL DEFAULT 'result'
-            """,
-        ),
-        (
-            "update_alembic_version",
-            "UPDATE alembic_version SET version_num = '006'",
-        ),
-    ]
-
-    for step_name, sql in ddl_statements:
-        try:
-            await db.execute(text(sql))
-            steps.append({"step": step_name, "status": "ok"})
-            logger.info("fix-db step completed", step=step_name)
-        except Exception as exc:
-            steps.append({"step": step_name, "status": "error", "detail": str(exc)})
-            logger.error("fix-db step failed", step=step_name, error=str(exc))
-
-    await db.commit()
-
-    all_ok = all(s["status"] == "ok" for s in steps)
-    return {
-        "success": all_ok,
-        "steps": steps,
-        "message": (
-            "All steps completed successfully. Schema is now up to date."
-            if all_ok
-            else "Some steps failed — see steps for details."
-        ),
-    }
