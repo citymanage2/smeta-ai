@@ -4,33 +4,29 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_slot_download_returns_file(async_client: AsyncClient, user_token: str, db_session):
-    """Upload a file to source slot, then download it."""
+    """Source slot download serves from task.input_file_data (not TaskResult)."""
     import uuid
+    import base64
     from app.models.task import Task
-    from app.models.result import TaskResult
 
     task_id = str(uuid.uuid4())
+    file_content = b"fake-xlsx-bytes"
     task = Task(
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_TZ",
         status="completed",
-        input_files=[],
-        input_file_data=[],
+        input_files=[{"name": "source.xlsx", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size_bytes": len(file_content)}],
+        input_file_data=[{
+            "name": "source.xlsx",
+            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "size_bytes": len(file_content),
+            "content_b64": base64.b64encode(file_content).decode(),
+        }],
         chat_history=[],
         estimation_status="not_applicable",
     )
     db_session.add(task)
-    await db_session.flush()
-
-    task_result = TaskResult(
-        task_id=task_id,
-        file_name="source.xlsx",
-        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        file_data=b"fake-xlsx-bytes",
-        slot="source",
-    )
-    db_session.add(task_result)
     await db_session.commit()
 
     resp = await async_client.get(
@@ -38,7 +34,7 @@ async def test_slot_download_returns_file(async_client: AsyncClient, user_token:
         headers={"Authorization": user_token},
     )
     assert resp.status_code == 200
-    assert resp.content == b"fake-xlsx-bytes"
+    assert resp.content == file_content
     assert "attachment" in resp.headers.get("content-disposition", "")
 
 

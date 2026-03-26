@@ -527,6 +527,23 @@ async def download_file_from_slot(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
+    # Source slot: serve original uploaded file from task.input_file_data
+    if slot == "source":
+        if not task.input_file_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Исходный файл не найден",
+            )
+        first_file = task.input_file_data[0]
+        file_data = base64.b64decode(first_file.get("content_b64", ""))
+        return StreamingResponse(
+            io.BytesIO(file_data),
+            media_type=first_file.get("mime_type", "application/octet-stream"),
+            headers={
+                "Content-Disposition": f'attachment; filename="{first_file.get("name", "source")}"',
+            },
+        )
+
     result_row = await db.execute(
         select(TaskResult).where(
             TaskResult.task_id == task_id,

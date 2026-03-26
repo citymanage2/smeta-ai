@@ -73,6 +73,21 @@ export async function linkTaskToProject(
   return resp.data;
 }
 
+export async function downloadSlotFile(taskId: string, slot: string): Promise<void> {
+  const response = await apiClient.get(`/tasks/${taskId}/files/${slot}/download`, {
+    responseType: 'blob',
+  });
+  const contentDisposition: string = response.headers['content-disposition'] ?? '';
+  const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+  const fileName = match ? match[1].replace(/['"]/g, '') : `${slot}.xlsx`;
+  const url = URL.createObjectURL(response.data as Blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function exportProject(projectId: string, format: 'xlsx' | 'pdf'): Promise<void> {
   const response = await apiClient.get(`/projects/${projectId}/export`, {
     params: { format },

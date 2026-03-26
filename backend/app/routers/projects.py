@@ -12,6 +12,7 @@ import structlog
 from app.database import get_db
 from app.models.project import Project
 from app.models.task import Task
+from app.models.result import TaskResult
 from app.utils.auth import get_current_user, get_admin_user
 
 logger = structlog.get_logger()
@@ -57,6 +58,8 @@ class TaskBrief(BaseModel):
     estimation_status: str
     cost: Optional[float]
     created_at: str
+    source_file_name: Optional[str] = None
+    slot_files: dict[str, str] = {}
 
 
 class ProjectDetailResponse(BaseModel):
@@ -192,6 +195,20 @@ async def get_project(
     )
     tasks = tasks_result.scalars().all()
 
+    # Fetch slot file names for all tasks in one query
+    slot_files_by_task: dict[str, dict[str, str]] = {}
+    task_ids = [str(t.id) for t in tasks]
+    if task_ids:
+        slots_res = await db.execute(
+            select(TaskResult.task_id, TaskResult.slot, TaskResult.file_name).where(
+                TaskResult.task_id.in_(task_ids),
+                TaskResult.slot.in_(["estimate", "optimized"]),
+            )
+        )
+        for row in slots_res.all():
+            tid = str(row.task_id)
+            slot_files_by_task.setdefault(tid, {})[row.slot] = row.file_name
+
     return ProjectDetailResponse(
         id=str(project.id),
         name=project.name,
@@ -206,6 +223,8 @@ async def get_project(
                 estimation_status=t.estimation_status,
                 cost=float(t.cost) if t.cost is not None else None,
                 created_at=t.created_at.isoformat(),
+                source_file_name=(t.input_files[0]["name"] if t.input_files else None),
+                slot_files=slot_files_by_task.get(str(t.id), {}),
             )
             for t in tasks
         ],
@@ -273,11 +292,10 @@ async def export_project(
     slot_results: dict = {"source": [], "estimate": [], "optimized": []}
     if tasks:
         task_ids = [t.id for t in tasks]
-        from app.models.result import TaskResult as _TaskResult
         results_stmt = await db.execute(
-            select(_TaskResult).where(
-                _TaskResult.task_id.in_(task_ids),
-                _TaskResult.slot.in_(["source", "estimate", "optimized"]),
+            select(TaskResult).where(
+                TaskResult.task_id.in_(task_ids),
+                TaskResult.slot.in_(["source", "estimate", "optimized"]),
             )
         )
         task_results = list(results_stmt.scalars().all())

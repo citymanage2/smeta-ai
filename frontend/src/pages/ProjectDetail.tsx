@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS } from '../types';
-import { getProject, updateProject, deleteProject, exportProject } from '../api/projects';
+import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
+import { getProject, updateProject, deleteProject, exportProject, downloadSlotFile, uploadFileToSlot } from '../api/projects';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
@@ -26,6 +26,58 @@ const ESTIMATION_COLORS: Record<string, { bg: string; text: string }> = {
 function formatCost(cost: number | null): string {
   if (cost === null || cost === undefined) return '—';
   return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(cost);
+}
+
+function SlotRow({
+  label,
+  fileName,
+  onDownload,
+  allowUpload = false,
+  onUpload,
+}: {
+  label: string;
+  fileName: string | null;
+  onDownload: () => void;
+  allowUpload?: boolean;
+  onUpload?: (file: File) => Promise<void>;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+      <span style={{ fontWeight: 500, color: '#94a3b8', minWidth: '100px' }}>{label}:</span>
+      {fileName ? (
+        <>
+          <span style={{ color: '#475569' }}>{fileName}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onDownload(); }}
+            style={{ padding: '2px 8px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+          >
+            ↓
+          </button>
+        </>
+      ) : (
+        <>
+          <span style={{ color: '#cbd5e1' }}>—</span>
+          {allowUpload && onUpload && (
+            <label onClick={(e) => e.stopPropagation()} style={{ cursor: 'pointer' }}>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onUpload(f);
+                  e.target.value = '';
+                }}
+              />
+              <span style={{ padding: '2px 8px', backgroundColor: '#f0fdf4', color: '#15803d', border: '1px solid #86efac', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
+                Загрузить
+              </span>
+            </label>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 const ProjectDetailPage: React.FC = () => {
@@ -220,81 +272,89 @@ const ProjectDetailPage: React.FC = () => {
           <div style={{ display: 'grid', gap: '8px' }}>
             {project.tasks.map((task: TaskBrief) => {
               const estColors = ESTIMATION_COLORS[task.estimation_status] ?? ESTIMATION_COLORS.not_applicable;
+              const isEstimateType = ESTIMATE_TASK_TYPES.has(task.task_type as any);
+              const slots = task.slot_files ?? {};
               return (
                 <div
                   key={task.id}
-                  onClick={() => navigate(`/task/${task.id}/status`)}
                   style={{
                     backgroundColor: '#fff',
                     border: '1px solid #e2e8f0',
                     borderRadius: '10px',
-                    padding: '14px 18px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
+                    overflow: 'hidden',
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)')}
                   onMouseLeave={(e) => (e.currentTarget.style.boxShadow = 'none')}
                 >
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>
-                      {TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type}
+                  {/* Main task row */}
+                  <div
+                    onClick={() => navigate(`/task/${task.id}/status`)}
+                    style={{ padding: '14px 18px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>
+                        {TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                        {new Date(task.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </div>
                     </div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
-                      {new Date(task.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {task.estimation_status === 'estimated' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setOptimizingTaskId(task.id); }}
+                          style={{ padding: '4px 12px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+                        >
+                          Оптимизировать
+                        </button>
+                      )}
+                      {['estimated', 'optimized'].includes(task.estimation_status) && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setHistoryTaskId(task.id); }}
+                          style={{ padding: '4px 12px', backgroundColor: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+                        >
+                          История
+                        </button>
+                      )}
+                      {task.cost !== null && (
+                        <span style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost)}</span>
+                      )}
+                      {task.estimation_status !== 'not_applicable' && (
+                        <span style={{ padding: '3px 10px', backgroundColor: estColors.bg, color: estColors.text, borderRadius: '12px', fontSize: '12px', fontWeight: 500 }}>
+                          {ESTIMATION_LABELS[task.estimation_status]}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {task.estimation_status === 'estimated' && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOptimizingTaskId(task.id);
+
+                  {/* Slot files (only for ESTIMATE_TASK_TYPES) */}
+                  {isEstimateType && (
+                    <div style={{ borderTop: '1px solid #f1f5f9', padding: '10px 18px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                      {/* Source */}
+                      <SlotRow
+                        label="Исходный"
+                        fileName={task.source_file_name ?? null}
+                        onDownload={() => downloadSlotFile(task.id, 'source')}
+                      />
+                      {/* Estimate */}
+                      <SlotRow
+                        label="Смета"
+                        fileName={slots['estimate'] ?? null}
+                        onDownload={() => downloadSlotFile(task.id, 'estimate')}
+                      />
+                      {/* Optimized */}
+                      <SlotRow
+                        label="Оптимизированная"
+                        fileName={slots['optimized'] ?? null}
+                        onDownload={() => downloadSlotFile(task.id, 'optimized')}
+                        allowUpload
+                        onUpload={async (file) => {
+                          await uploadFileToSlot(task.id, 'optimized', file);
+                          loadProject();
                         }}
-                        style={{
-                          padding: '4px 12px',
-                          backgroundColor: '#eff6ff',
-                          color: '#2563eb',
-                          border: '1px solid #bfdbfe',
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                        }}
-                      >
-                        Оптимизировать
-                      </button>
-                    )}
-                    {['estimated', 'optimized'].includes(task.estimation_status) && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setHistoryTaskId(task.id);
-                        }}
-                        style={{
-                          padding: '4px 12px',
-                          backgroundColor: '#f8fafc',
-                          color: '#475569',
-                          border: '1px solid #e2e8f0',
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                        }}
-                      >
-                        История
-                      </button>
-                    )}
-                    {task.cost !== null && (
-                      <span style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost)}</span>
-                    )}
-                    {task.estimation_status !== 'not_applicable' && (
-                      <span style={{ padding: '3px 10px', backgroundColor: estColors.bg, color: estColors.text, borderRadius: '12px', fontSize: '12px', fontWeight: 500 }}>
-                        {ESTIMATION_LABELS[task.estimation_status]}
-                      </span>
-                    )}
-                  </div>
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}

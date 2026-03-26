@@ -266,3 +266,154 @@ async def test_detach_task_from_project(
     )
     assert resp.status_code == 200
     assert resp.json()["project_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for _auto_fill_estimate_slot (called when task completes)
+# ---------------------------------------------------------------------------
+
+AUTO_TASK_ID = "c2000000-0000-0000-0000-000000000099"
+
+
+async def _make_task(db, task_id: str, task_type: str) -> Task:
+    task = Task(
+        id=task_id,
+        user_role="user",
+        task_type=task_type,
+        status="processing",
+        estimation_status="not_applicable",
+        input_files=[],
+        input_file_data=[],
+        chat_history=[],
+    )
+    db.add(task)
+    await db.flush()
+    return task
+
+
+@pytest.mark.asyncio
+async def test_auto_fill_estimate_slot_sets_status_and_slot(
+    seed_users,
+    db_session: AsyncSession,
+):
+    """
+    _auto_fill_estimate_slot() must promote slot='result' → 'estimate'
+    and set estimation_status='estimated' with parsed cost.
+    """
+    from app.services.task_processor import TaskProcessor
+
+    task = await _make_task(db_session, AUTO_TASK_ID, "SMETA_FROM_LIST")
+
+    xlsx_bytes = _make_xlsx_with_итого(99500.0)
+    result_row = TaskResult(
+        task_id=AUTO_TASK_ID,
+        file_name="smeta.xlsx",
+        mime_type=XLSX_MIME,
+        file_data=xlsx_bytes,
+        slot="result",
+    )
+    db_session.add(result_row)
+    await db_session.commit()
+
+    processor = TaskProcessor(AUTO_TASK_ID, db_session)
+    await processor._auto_fill_estimate_slot()
+
+    await db_session.refresh(task)
+    assert task.estimation_status == "estimated", (
+        f"Expected 'estimated', got '{task.estimation_status}'"
+    )
+    assert task.cost is not None and float(task.cost) == pytest.approx(99500.0), (
+        f"Expected cost 99500.0, got {task.cost}"
+    )
+
+    res = await db_session.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == AUTO_TASK_ID, TaskResult.slot == "estimate"
+        )
+    )
+    estimate_row = res.scalar_one_or_none()
+    assert estimate_row is not None, "TaskResult with slot='estimate' must exist after auto-fill"
+    assert estimate_row.file_name == "smeta.xlsx"
+
+    res2 = await db_session.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == AUTO_TASK_ID, TaskResult.slot == "result"
+        )
+    )
+    assert res2.scalar_one_or_none() is None, "slot='result' must be gone after promotion"
+
+
+@pytest.mark.asyncio
+async def test_auto_fill_skipped_for_non_estimate_task(
+    seed_users,
+    db_session: AsyncSession,
+):
+    """_auto_fill_estimate_slot is a no-op for non-ESTIMATE_TASK_TYPES."""
+    from app.services.task_processor import TaskProcessor
+
+    task_id = "c2000000-0000-0000-0000-000000000098"
+    task = await _make_task(db_session, task_id, "LIST_FROM_TZ")
+
+    result_row = TaskResult(
+        task_id=task_id,
+        file_name="list.xlsx",
+        mime_type=XLSX_MIME,
+        file_data=_make_xlsx_with_итого(1000.0),
+        slot="result",
+    )
+    db_session.add(result_row)
+    await db_session.commit()
+
+    processor = TaskProcessor(task_id, db_session)
+    await processor._auto_fill_estimate_slot()
+
+    await db_session.refresh(task)
+    # Non-estimate task: estimation_status must remain unchanged
+    assert task.estimation_status == "not_applicable"
+
+    # slot='result' must still be there (untouched)
+    res = await db_session.execute(
+        select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "result")
+    )
+    assert res.scalar_one_or_none() is not None
+
+
+@pytest.mark.asyncio
+async def test_auto_fill_skipped_for_optimize_smeta(
+    seed_users,
+    db_session: AsyncSession,
+):
+    """OPTIMIZE_SMETA manages its own slots; _auto_fill_estimate_slot must not interfere."""
+    from app.services.task_processor import TaskProcessor
+
+    task_id = "c2000000-0000-0000-0000-000000000097"
+    task = await _make_task(db_session, task_id, "OPTIMIZE_SMETA")
+    task.estimation_status = "optimized"
+    await db_session.commit()
+
+    processor = TaskProcessor(task_id, db_session)
+    await processor._auto_fill_estimate_slot()
+
+    await db_session.refresh(task)
+    assert task.estimation_status == "optimized", (
+        "OPTIMIZE_SMETA estimation_status must not be changed by auto-fill"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_fill_no_result_sets_unestimated(
+    seed_users,
+    db_session: AsyncSession,
+):
+    """If the task completed but saved no result, estimation_status must be 'unestimated'."""
+    from app.services.task_processor import TaskProcessor
+
+    task_id = "c2000000-0000-0000-0000-000000000096"
+    task = await _make_task(db_session, task_id, "SMETA_FROM_LIST")
+    await db_session.commit()
+
+    processor = TaskProcessor(task_id, db_session)
+    await processor._auto_fill_estimate_slot()
+
+    await db_session.refresh(task)
+    assert task.estimation_status == "unestimated"

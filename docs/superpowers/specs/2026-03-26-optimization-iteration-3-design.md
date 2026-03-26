@@ -146,6 +146,13 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
     Возвращает список позиций:
     {row_index, name, type, quantity, unit, price_excl_vat, price_incl_vat, total}
     Строки без наименования пропускаются.
+
+    Определение типа позиции:
+    - Ищет колонку «тип» (если есть) → значения «Работа»/«Материал»/«work»/«material»
+    - Если колонки нет — эвристика по наименованию:
+      слова «монтаж», «устройство», «разборка», «прокладка», «установка» → work
+      иначе → material
+    - Дополнительные расходы: строки с «накладные», «прибыль», «НДС», «итого» → extra
     """
 
 def get_top_items(items: list[dict], categories: list[str], threshold: float = 0.7) -> list[dict]:

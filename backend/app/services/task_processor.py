@@ -11,6 +11,8 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.services.claude_service import call_claude
 from app.services import price_service
+from app.constants import ESTIMATE_TASK_TYPES
+from app.utils.xlsx_cost_parser import extract_total_cost
 from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_from_project, generate_smeta_detailed, generate_scan_result
 from app.services.pdf_service import generate_comparison_report
 from app.utils.file_parser import parse_file
@@ -617,6 +619,50 @@ class TaskProcessor:
         self.db.add(result_record)
         await self.db.commit()
 
+    async def _auto_fill_estimate_slot(self) -> None:
+        """Promote slot='result' → 'estimate' and set estimation_status after task completes.
+
+        Called automatically when an ESTIMATE_TASK_TYPE (except OPTIMIZE_SMETA, which
+        manages its own slots) transitions to 'completed'.
+        """
+        task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
+        task = task_res.scalar_one_or_none()
+        if not task or task.task_type not in ESTIMATE_TASK_TYPES or task.task_type == "OPTIMIZE_SMETA":
+            return
+
+        result_res = await self.db.execute(
+            select(TaskResult)
+            .where(TaskResult.task_id == self.task_id, TaskResult.slot == "result")
+            .order_by(TaskResult.created_at.desc())
+            .limit(1)
+        )
+        result_row = result_res.scalar_one_or_none()
+
+        if not result_row:
+            task.estimation_status = "unestimated"
+            task.updated_at = datetime.now(timezone.utc)
+            await self.db.commit()
+            return
+
+        result_row.slot = "estimate"
+
+        cost = None
+        xlsx_mimes = {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        }
+        if result_row.mime_type in xlsx_mimes:
+            try:
+                cost = extract_total_cost(result_row.file_data)
+            except Exception:
+                pass
+
+        task.estimation_status = "estimated"
+        task.cost = cost
+        task.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        logger.info("Auto-filled estimate slot", task_id=self.task_id, cost=cost)
+
     def _build_file_contents(self, task: Task) -> list:
         """Build list of file content blocks/strings for Claude."""
         content_blocks = []
@@ -775,6 +821,7 @@ class TaskProcessor:
                 raise ValueError(f"Неизвестный тип задачи: {task.task_type}")
 
             await self.update_status("completed")
+            await self._auto_fill_estimate_slot()
             await self.update_progress("Задача успешно выполнена")
 
         except TaskCancelledError:

@@ -112,6 +112,8 @@ export interface TaskBrief {
   estimation_status: EstimationStatus;
   cost: number | null;
   created_at: string;
+  source_file_name?: string | null;
+  slot_files?: Record<string, string>;
 }
 
 export interface ProjectDetail extends ProjectCard {
