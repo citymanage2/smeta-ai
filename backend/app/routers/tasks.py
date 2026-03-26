@@ -17,12 +17,13 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 import structlog
 
 from app.database import get_db, AsyncSessionLocal
 from app.models.task import Task
 from app.models.result import TaskResult
+from app.models.history import TaskHistory
 from app.models.project import Project
 from app.utils.auth import get_current_user
 from app.config import settings
@@ -622,6 +623,7 @@ async def _run_optimization_background(
     session_factory,
 ):
     """Background task: search analogues and generate optimized xlsx."""
+    import base64 as _b64
     import structlog as _structlog
     from app.utils.xlsx_optimizer import generate_optimized_xlsx
     from app.services.price_service import PriceService
@@ -633,6 +635,16 @@ async def _run_optimization_background(
             task = await db.get(Task, task_id)
             if not task:
                 return
+
+            # Capture previous optimized slot before overwriting
+            prev_result_q = await db.execute(
+                select(TaskResult).where(
+                    TaskResult.task_id == task_id,
+                    TaskResult.slot == "optimized",
+                )
+            )
+            prev_optimized = prev_result_q.scalar_one_or_none()
+            prev_estimation_status = "optimized" if prev_optimized else "estimated"
 
             price_service = PriceService()
             optimization_results = []
@@ -702,6 +714,35 @@ async def _run_optimization_background(
                     file_data=optimized_bytes,
                 )
                 db.add(new_result)
+
+            # Write history entry
+            found_count = sum(1 for r in optimization_results if r["new_price"] is not None)
+            previous_value: dict = {}
+            if prev_optimized:
+                previous_value = {
+                    "file_name": prev_optimized.file_name,
+                    "file_data_b64": _b64.b64encode(prev_optimized.file_data).decode(),
+                    "estimation_status": prev_estimation_status,
+                }
+            else:
+                previous_value = {"estimation_status": prev_estimation_status}
+
+            new_value = {
+                "file_name": "optimized.xlsx",
+                "file_data_b64": _b64.b64encode(optimized_bytes).decode(),
+                "estimation_status": "optimized",
+            }
+
+            history = TaskHistory(
+                id=str(uuid.uuid4()),
+                task_id=task_id,
+                operation_type="optimization",
+                slot="optimized",
+                description=f"Оптимизация: найдено {found_count} из {total} аналогов",
+                previous_value=previous_value,
+                new_value=new_value,
+            )
+            db.add(history)
 
             task.status = "completed"
             task.estimation_status = "optimized"
