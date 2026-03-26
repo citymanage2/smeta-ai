@@ -1,4 +1,5 @@
 import io
+import re
 from decimal import Decimal
 from datetime import datetime, timezone
 
@@ -114,7 +115,24 @@ def test_xlsx_slot_sheet_with_file_has_hyperlink():
     ws = wb["Расчёты"]
     # Row 2 has the estimate file
     assert ws.cell(2, 2).value == "smeta.xlsx"
-    assert ws.cell(2, 3).hyperlink is not None
+    link_value = ws.cell(2, 3).value
+    assert isinstance(link_value, str) and link_value.startswith("=HYPERLINK(")
+    assert "http://localhost:8000/tasks/t1/files/estimate/download" in link_value
+
+
+def test_xlsx_date_column_has_no_time():
+    project, tasks, slot_results = _make_data()
+    data = generate_project_xlsx(project, tasks, slot_results, "http://localhost:8000")
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    ws = wb["Задачи"]
+    for row_idx in range(2, len(tasks) + 2):
+        date_val = ws.cell(row_idx, 4).value
+        assert date_val is not None
+        assert ":" not in str(date_val), f"Date value {date_val!r} must not contain time"
+        # Must match DD.MM.YYYY pattern
+        assert re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", str(date_val)), (
+            f"Date value {date_val!r} does not match DD.MM.YYYY"
+        )
 
 
 def test_xlsx_empty_slot_shows_placeholder():
@@ -123,3 +141,14 @@ def test_xlsx_empty_slot_shows_placeholder():
     wb = openpyxl.load_workbook(io.BytesIO(data))
     ws = wb["Исходные файлы"]
     assert ws.cell(2, 1).value == "Файлы отсутствуют"
+
+
+def test_xlsx_total_row_summary_counts():
+    # Fixture has: t1 estimated=1, t2 not_applicable (none of the three) → 0/1/0
+    project, tasks, slot_results = _make_data()
+    data = generate_project_xlsx(project, tasks, slot_results, "http://localhost:8000")
+    wb = openpyxl.load_workbook(io.BytesIO(data))
+    ws = wb["Задачи"]
+    total_row = len(tasks) + 2
+    expected = "не рассчитано: 0 / рассчитано: 1 / оптимизировано: 0"
+    assert ws.cell(total_row, 2).value == expected

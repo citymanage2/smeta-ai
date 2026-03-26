@@ -9,10 +9,10 @@ from app.constants import TASK_TYPE_LABELS, ESTIMATION_STATUS_LABELS
 _HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
 _BOLD = Font(bold=True)
-_BOLD_HEADER = Font(bold=True)
 
 
 def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: str) -> bytes:
+    # project is accepted for API consistency with pdf_exporter (name, description used there)
     """
     Generate xlsx bytes for a project export.
 
@@ -34,7 +34,7 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
     headers = ["Тип задачи", "Статус сметы", "Стоимость (₽)", "Дата создания"]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
-        cell.font = _BOLD_HEADER
+        cell.font = _BOLD
         cell.fill = _HEADER_FILL
 
     ws.column_dimensions["A"].width = 35
@@ -51,7 +51,7 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
         status_label = ESTIMATION_STATUS_LABELS.get(task.estimation_status, task.estimation_status)
         cost = float(task.cost) if task.cost is not None else None
         if isinstance(task.created_at, datetime):
-            created = task.created_at.strftime("%d.%m.%Y %H:%M")
+            created = task.created_at.strftime("%d.%m.%Y")
         else:
             created = str(task.created_at)
 
@@ -92,7 +92,7 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
         ws_s = wb.create_sheet(title=sheet_name)
         for col, h in enumerate(["Тип задачи", "Имя файла", "Ссылка"], 1):
             cell = ws_s.cell(row=1, column=col, value=h)
-            cell.font = _BOLD_HEADER
+            cell.font = _BOLD
             cell.fill = _HEADER_FILL
         ws_s.column_dimensions["A"].width = 35
         ws_s.column_dimensions["B"].width = 30
@@ -106,9 +106,7 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
                 url = f"{base_url}/tasks/{task.id}/files/{slot}/download"
                 ws_s.cell(row=row_idx, column=1, value=TASK_TYPE_LABELS.get(task.task_type, task.task_type))
                 ws_s.cell(row=row_idx, column=2, value=task_result.file_name)
-                link_cell = ws_s.cell(row=row_idx, column=3, value=task_result.file_name)
-                link_cell.hyperlink = url
-                link_cell.style = "Hyperlink"
+                link_cell = ws_s.cell(row=row_idx, column=3, value=f'=HYPERLINK("{url}")')
 
     buf = io.BytesIO()
     wb.save(buf)
