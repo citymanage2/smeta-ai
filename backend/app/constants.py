@@ -25,6 +25,6 @@ ESTIMATION_STATUS_LABELS: dict[str, str] = {
     "unestimated": "Не рассчитано",
     "estimated": "Рассчитано",
     "optimized": "Оптимизировано",
-    "processing_optimization": "Оптимизируется",
+    "optimizing": "Оптимизируется",
     "not_applicable": "—",
 }

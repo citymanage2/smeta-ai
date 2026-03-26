@@ -33,7 +33,7 @@ class Task(Base):
         index=True,
     )
     estimation_status: Mapped[str] = mapped_column(
-        String(20),
+        String(50),
         nullable=False,
         default="not_applicable",
     )

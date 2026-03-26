@@ -805,7 +805,7 @@ async def optimize_run(
     estimate_bytes = task_result.file_data
 
     task.status = "processing"
-    task.estimation_status = "processing_optimization"
+    task.estimation_status = "optimizing"
     task.progress_message = "Начинаем оптимизацию..."
     await db.commit()
 
