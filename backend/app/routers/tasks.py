@@ -634,7 +634,7 @@ async def _run_optimization_background(
             if not task:
                 return
 
-            price_service = PriceService(db)
+            price_service = PriceService()
             optimization_results = []
             total = len(items)
 
