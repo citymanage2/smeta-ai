@@ -219,7 +219,10 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
     Add sheet 'Сравнение' with before/after comparison table.
     Returns modified xlsx as bytes.
     """
-    wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть xlsx файл для оптимизации: {e}") from e
     ws = wb.active
 
     # Find actual header row (may not be row 1)
@@ -244,9 +247,6 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
     ws.cell(row=header_row, column=new_total_col, value="Стоимость сниженная")
     ws.cell(row=header_row, column=source_col, value="Источник")
     ws.cell(row=header_row, column=note_col, value="Примечание")
-
-    # Build row_index → result map
-    result_map = {r["row_index"]: r for r in optimization_results}
 
     for opt in optimization_results:
         row_idx = opt["row_index"]
