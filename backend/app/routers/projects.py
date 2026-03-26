@@ -130,23 +130,50 @@ async def list_projects(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Project).order_by(Project.created_at.desc())
+    stmt = (
+        select(
+            Project.id,
+            Project.name,
+            Project.description,
+            Project.created_at,
+            Project.updated_at,
+            func.count(case((Task.estimation_status == "unestimated", 1), else_=None)).label("unestimated"),
+            func.count(case((Task.estimation_status == "estimated", 1), else_=None)).label("estimated"),
+            func.count(case((Task.estimation_status == "optimized", 1), else_=None)).label("optimized"),
+            func.count(case((Task.estimation_status == "not_applicable", 1), else_=None)).label("other"),
+            func.sum(
+                case(
+                    (Task.estimation_status.in_(["estimated", "optimized"]), Task.cost),
+                    else_=None,
+                )
+            ).label("total_cost"),
+        )
+        .outerjoin(Task, Task.project_id == Project.id)
+        .group_by(
+            Project.id,
+            Project.name,
+            Project.description,
+            Project.created_at,
+            Project.updated_at,
+        )
+        .order_by(Project.created_at.desc())
     )
-    projects = result.scalars().all()
-
-    cards = []
-    for p in projects:
-        agg = await _aggregate(str(p.id), db)
-        cards.append(ProjectCardResponse(
-            id=str(p.id),
-            name=p.name,
-            description=p.description,
-            created_at=p.created_at.isoformat(),
-            updated_at=p.updated_at.isoformat(),
-            **agg,
-        ))
-    return cards
+    rows = (await db.execute(stmt)).all()
+    return [
+        ProjectCardResponse(
+            id=str(row.id),
+            name=row.name,
+            description=row.description,
+            created_at=row.created_at.isoformat(),
+            updated_at=row.updated_at.isoformat(),
+            unestimated=row.unestimated or 0,
+            estimated=row.estimated or 0,
+            optimized=row.optimized or 0,
+            other=row.other or 0,
+            total_cost=float(row.total_cost) if row.total_cost is not None else None,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/{project_id}", response_model=ProjectDetailResponse)
