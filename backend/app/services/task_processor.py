@@ -1602,7 +1602,10 @@ class TaskProcessor:
     async def _handle_optimize_smeta(self, task: Task) -> None:
         """Handle OPTIMIZE_SMETA: parse uploaded xlsx, find analogues, save optimized xlsx."""
         import base64 as _base64
+        import uuid as _uuid
         from app.utils.xlsx_optimizer import parse_estimate_xlsx, get_top_items, generate_optimized_xlsx
+        from app.models.history import TaskHistory
+        from sqlalchemy import select
 
         if not task.input_file_data:
             raise ValueError("Нет загруженного файла сметы")
@@ -1613,6 +1616,16 @@ class TaskProcessor:
         await self.update_progress("Разбираю файл сметы...")
         items = parse_estimate_xlsx(file_bytes)
         top_items = get_top_items(items, categories=["work", "material"], threshold=0.7)
+
+        # Capture previous optimized slot before overwriting
+        prev_result_q = await self.db.execute(
+            select(TaskResult).where(
+                TaskResult.task_id == self.task_id,
+                TaskResult.slot == "optimized",
+            )
+        )
+        prev_optimized = prev_result_q.scalar_one_or_none()
+        prev_estimation_status = "optimized" if prev_optimized else "estimated"
 
         await price_service.load_cache(self.db)
         optimization_results = []
@@ -1669,6 +1682,35 @@ class TaskProcessor:
         )
         self.db.add(result_record)
         await self.db.commit()
+
+        # Write history entry
+        found_count = sum(1 for r in optimization_results if r["new_price"] is not None)
+        previous_value: dict = {}
+        if prev_optimized:
+            previous_value = {
+                "file_name": prev_optimized.file_name,
+                "file_data_b64": _base64.b64encode(prev_optimized.file_data).decode(),
+                "estimation_status": prev_estimation_status,
+            }
+        else:
+            previous_value = {"estimation_status": prev_estimation_status}
+
+        new_value = {
+            "file_name": "optimized.xlsx",
+            "file_data_b64": _base64.b64encode(optimized_bytes).decode(),
+            "estimation_status": "optimized",
+        }
+
+        history = TaskHistory(
+            id=str(_uuid.uuid4()),
+            task_id=self.task_id,
+            operation_type="optimization",
+            slot="optimized",
+            description=f"Оптимизация: найдено {found_count} из {total} аналогов",
+            previous_value=previous_value,
+            new_value=new_value,
+        )
+        self.db.add(history)
 
         # Override the default update_status call in process() with optimized status
         task.estimation_status = "optimized"
