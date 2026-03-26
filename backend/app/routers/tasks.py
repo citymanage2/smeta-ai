@@ -1,4 +1,5 @@
 import base64
+import uuid
 from decimal import Decimal
 from typing import Optional
 from fastapi import (
@@ -201,6 +202,7 @@ async def create_task(
 
     # Create task record
     task = Task(
+        id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
         task_type=task_type,
         status="pending",
