@@ -845,3 +845,114 @@ async def get_task_history(
         )
         for e in entries
     ]
+
+
+class RevertBody(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/{task_id}/history/{entry_id}/revert")
+async def revert_history(
+    task_id: str,
+    entry_id: str,
+    body: RevertBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Revert task to state before a given history entry.
+
+    confirm=False: if there are later dependent entries, returns a warning list.
+                   If no dependents, executes rollback immediately.
+    confirm=True:  executes cascade rollback unconditionally.
+    """
+    import base64 as _b64
+
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    entry_result = await db.execute(
+        select(TaskHistory).where(
+            TaskHistory.task_id == task_id,
+            TaskHistory.id == entry_id,
+        )
+    )
+    entry = entry_result.scalar_one_or_none()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Запись истории не найдена")
+
+    # Find dependent entries (created after this entry)
+    dep_result = await db.execute(
+        select(TaskHistory)
+        .where(
+            TaskHistory.task_id == task_id,
+            TaskHistory.created_at > entry.created_at,
+        )
+        .order_by(TaskHistory.created_at.asc())
+    )
+    dependent = dep_result.scalars().all()
+
+    if not body.confirm and dependent:
+        return {
+            "warning": True,
+            "dependent_entries": [
+                {
+                    "id": d.id,
+                    "description": d.description,
+                    "created_at": d.created_at.isoformat(),
+                }
+                for d in dependent
+            ],
+        }
+
+    # Execute rollback
+    prev = entry.previous_value or {}
+
+    # Delete current TaskResult for this slot and optionally restore previous
+    cur_result = await db.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == task_id,
+            TaskResult.slot == entry.slot,
+        )
+    )
+    current_file = cur_result.scalar_one_or_none()
+    if current_file:
+        await db.delete(current_file)
+        await db.flush()
+
+    if prev.get("file_data_b64"):
+        restored_bytes = _b64.b64decode(prev["file_data_b64"])
+        restored = TaskResult(
+            task_id=task_id,
+            slot=entry.slot,
+            file_name=prev.get("file_name", "restored.xlsx"),
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_data=restored_bytes,
+        )
+        db.add(restored)
+
+    # Restore task estimation_status
+    task.estimation_status = prev.get("estimation_status", "estimated")
+
+    # Delete this entry and all later entries for this task
+    await db.execute(
+        delete(TaskHistory).where(
+            TaskHistory.task_id == task_id,
+            TaskHistory.created_at >= entry.created_at,
+        )
+    )
+
+    # Write revert entry
+    revert_entry = TaskHistory(
+        id=str(uuid.uuid4()),
+        task_id=task_id,
+        operation_type="revert",
+        slot=entry.slot,
+        description=f"Откат к состоянию до: {entry.description}",
+        previous_value=entry.new_value,
+        new_value=prev,
+    )
+    db.add(revert_entry)
+    await db.commit()
+
+    return {"reverted": True}

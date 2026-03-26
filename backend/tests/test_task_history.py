@@ -132,3 +132,130 @@ async def test_get_history_task_not_found(async_client: AsyncClient, user_token:
         headers={"Authorization": user_token},
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for revert tests
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def seed_two_history_entries(db_session: AsyncSession):
+    """Seed a task with two sequential history entries (for cascade test)."""
+    task = Task(
+        id=TASK_ID,
+        user_role="user",
+        task_type="SMETA_FROM_LIST",
+        status="completed",
+        estimation_status="optimized",
+        input_files=[],
+        input_file_data=[],
+        chat_history=[],
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    entry1 = TaskHistory(
+        id=ENTRY_ID_1,
+        task_id=TASK_ID,
+        operation_type="optimization",
+        slot="optimized",
+        description="Оптимизация первая",
+        previous_value={"estimation_status": "estimated"},
+        new_value={"file_name": "opt1.xlsx", "file_data_b64": "dGVzdA==", "estimation_status": "optimized"},
+        created_at=_NOW,
+    )
+    entry2 = TaskHistory(
+        id=ENTRY_ID_2,
+        task_id=TASK_ID,
+        operation_type="optimization",
+        slot="optimized",
+        description="Оптимизация вторая",
+        previous_value={"file_name": "opt1.xlsx", "file_data_b64": "dGVzdA==", "estimation_status": "optimized"},
+        new_value={"file_name": "opt2.xlsx", "file_data_b64": "dGVzdDI=", "estimation_status": "optimized"},
+        created_at=_LATER,
+    )
+    db_session.add(entry1)
+    db_session.add(entry2)
+    await db_session.commit()
+    yield
+    await db_session.execute(
+        text("DELETE FROM task_history WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.execute(
+        text("DELETE FROM tasks WHERE id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Tests: POST /history/{entry_id}/revert
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_revert_no_dependents_executes_immediately(
+    async_client: AsyncClient, user_token: str, seed_history_task
+):
+    """Revert with confirm=False and no dependents executes immediately."""
+    resp = await async_client.post(
+        f"/tasks/{TASK_ID}/history/{ENTRY_ID_1}/revert",
+        json={"confirm": False},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("reverted") is True
+
+
+@pytest.mark.asyncio
+async def test_revert_with_dependents_returns_warning(
+    async_client: AsyncClient, user_token: str, seed_two_history_entries
+):
+    """Revert entry1 with confirm=False returns warning when entry2 exists."""
+    resp = await async_client.post(
+        f"/tasks/{TASK_ID}/history/{ENTRY_ID_1}/revert",
+        json={"confirm": False},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("warning") is True
+    assert isinstance(data.get("dependent_entries"), list)
+    assert len(data["dependent_entries"]) == 1
+    assert data["dependent_entries"][0]["id"] == ENTRY_ID_2
+
+
+@pytest.mark.asyncio
+async def test_revert_confirm_true_cascades(
+    async_client: AsyncClient, user_token: str, seed_two_history_entries
+):
+    """confirm=True executes cascade rollback and returns reverted=True."""
+    resp = await async_client.post(
+        f"/tasks/{TASK_ID}/history/{ENTRY_ID_1}/revert",
+        json={"confirm": True},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("reverted") is True
+
+    # Verify via GET /history: original entries are gone, a revert entry exists
+    hist_resp = await async_client.get(
+        f"/tasks/{TASK_ID}/history",
+        headers={"Authorization": user_token},
+    )
+    assert hist_resp.status_code == 200
+    history = hist_resp.json()
+    ids = [e["id"] for e in history]
+    assert ENTRY_ID_1 not in ids
+    assert ENTRY_ID_2 not in ids
+    assert any(e["operation_type"] == "revert" for e in history)
+
+
+@pytest.mark.asyncio
+async def test_revert_entry_not_found(async_client: AsyncClient, user_token: str, seed_history_task):
+    """Revert returns 404 for nonexistent history entry."""
+    resp = await async_client.post(
+        f"/tasks/{TASK_ID}/history/nonexistent-entry-id/revert",
+        json={"confirm": False},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 404
