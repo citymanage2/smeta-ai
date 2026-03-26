@@ -3,7 +3,7 @@ import uuid
 import pytest
 
 
-SEEDED_TASK_ID = "00000000-0000-0000-0000-000000000001"
+SEEDED_TASK_ID = "a1000000-0000-0000-0000-000000000001"
 
 
 async def test_admin_list_tasks(async_client, seed_users, admin_token):

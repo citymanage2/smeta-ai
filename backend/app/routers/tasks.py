@@ -1,4 +1,5 @@
 import base64
+from decimal import Decimal
 from typing import Optional
 from fastapi import (
     APIRouter,
@@ -18,9 +19,13 @@ import structlog
 
 from app.database import get_db, AsyncSessionLocal
 from app.models.task import Task
+from app.models.result import TaskResult
+from app.models.project import Project
 from app.utils.auth import get_current_user
 from app.config import settings
 from app.services.task_processor import process_task
+from app.constants import ESTIMATE_TASK_TYPES
+from app.utils.xlsx_cost_parser import extract_total_cost
 
 logger = structlog.get_logger()
 
@@ -52,6 +57,10 @@ GSN_REJECTION_MESSAGE = (
     "Экспортируйте смету в XML: Файл → Экспорт → XML"
 )
 
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+XLSX_MIME_ALT = "application/vnd.ms-excel"
+VALID_SLOTS = {"source", "estimate", "optimized"}
+
 
 def _get_mime_type(file: UploadFile) -> str:
     """Determine MIME type from content_type or filename extension."""
@@ -70,6 +79,9 @@ class TaskStatusResponse(BaseModel):
     status: str
     progress_message: Optional[str]
     error_message: Optional[str]
+    estimation_status: str
+    cost: Optional[float]
+    project_id: Optional[str]
     created_at: str
     updated_at: str
 
@@ -81,6 +93,33 @@ class TaskCreateResponse(BaseModel):
 
 class ChatMessageRequest(BaseModel):
     message: str
+
+
+class FileSlotResponse(BaseModel):
+    task_id: str
+    slot: str
+    file_name: str
+    estimation_status: Optional[str] = None
+    cost: Optional[float] = None
+    warning: Optional[str] = None
+
+
+class EstimationConfirmRequest(BaseModel):
+    estimation_status: str
+
+
+class EstimationStatusResponse(BaseModel):
+    task_id: str
+    estimation_status: str
+
+
+class ProjectLinkRequest(BaseModel):
+    project_id: Optional[str] = None
+
+
+class ProjectLinkResponse(BaseModel):
+    task_id: str
+    project_id: Optional[str]
 
 
 async def _run_task_in_background(task_id: str) -> None:
@@ -98,6 +137,8 @@ async def create_task(
     background_tasks: BackgroundTasks,
     task_type: str = Form(...),
     prompt: Optional[str] = Form(None),
+    project_id: Optional[str] = Form(None),
+    project_name: Optional[str] = Form(None),
     files: list[UploadFile] = File(default=[]),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -155,6 +196,9 @@ async def create_task(
             "size_bytes": len(file_data),
         })
 
+    # Set estimation_status based on task type
+    estimation_status = "unestimated" if task_type in ESTIMATE_TASK_TYPES else "not_applicable"
+
     # Create task record
     task = Task(
         user_role=current_user.get("role", "user"),
@@ -164,10 +208,24 @@ async def create_task(
         input_file_data=input_file_data,
         user_prompt=prompt,
         chat_history=[],
+        estimation_status=estimation_status,
     )
     db.add(task)
     await db.commit()
     await db.refresh(task)
+
+    if project_name and not project_id:
+        new_proj = Project(name=project_name)
+        db.add(new_proj)
+        await db.flush()
+        task.project_id = str(new_proj.id)
+        await db.commit()
+        await db.refresh(task)
+    elif project_id:
+        proj_check = await db.execute(select(Project).where(Project.id == project_id))
+        if proj_check.scalar_one_or_none():
+            task.project_id = project_id
+            await db.commit()
 
     task_id = str(task.id)
     logger.info(
@@ -205,6 +263,9 @@ async def get_task_status(
         status=task.status,
         progress_message=task.progress_message,
         error_message=task.error_message,
+        estimation_status=task.estimation_status,
+        cost=float(task.cost) if task.cost is not None else None,
+        project_id=str(task.project_id) if task.project_id else None,
         created_at=task.created_at.isoformat(),
         updated_at=task.updated_at.isoformat(),
     )
@@ -276,3 +337,168 @@ async def send_message(
     background_tasks.add_task(_run_task_in_background, task_id)
 
     return {"task_id": task_id, "status": "pending", "message": "Сообщение принято, задача перезапущена"}
+
+
+@router.post("/{task_id}/files", response_model=FileSlotResponse)
+async def upload_file_to_slot(
+    task_id: str,
+    slot: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if slot not in VALID_SLOTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Недопустимый слот. Допустимые значения: {', '.join(VALID_SLOTS)}",
+        )
+
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    mime = _get_mime_type(file)
+    if mime not in (XLSX_MIME, XLSX_MIME_ALT):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимый формат для файловых слотов: XLSX",
+        )
+
+    file_bytes = await file.read()
+
+    existing = await db.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == task_id, TaskResult.slot == slot
+        )
+    )
+    old = existing.scalar_one_or_none()
+    if old:
+        await db.delete(old)
+
+    new_result = TaskResult(
+        task_id=task_id,
+        file_name=file.filename or f"{slot}.xlsx",
+        mime_type=mime,
+        file_data=file_bytes,
+        slot=slot,
+    )
+    db.add(new_result)
+
+    warning: Optional[str] = None
+
+    if slot == "estimate" and task.task_type in ESTIMATE_TASK_TYPES:
+        cost = extract_total_cost(file_bytes)
+        if cost is not None:
+            task.cost = cost
+            task.estimation_status = "estimated"
+        else:
+            task.cost = None
+            task.estimation_status = "unestimated"
+            warning = "Строка 'Итого'/'Всего' не найдена или не содержит числового значения. Стоимость не определена."
+
+    await db.commit()
+    await db.refresh(task)
+
+    return FileSlotResponse(
+        task_id=task_id,
+        slot=slot,
+        file_name=file.filename or f"{slot}.xlsx",
+        estimation_status=task.estimation_status,
+        cost=float(task.cost) if task.cost is not None else None,
+        warning=warning,
+    )
+
+
+@router.delete("/{task_id}/files/{slot}")
+async def delete_file_from_slot(
+    task_id: str,
+    slot: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if slot not in VALID_SLOTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Недопустимый слот: {slot}",
+        )
+
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    existing = await db.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == task_id, TaskResult.slot == slot
+        )
+    )
+    row = existing.scalar_one_or_none()
+    if row:
+        await db.delete(row)
+
+    if slot == "estimate" and task.task_type in ESTIMATE_TASK_TYPES:
+        task.cost = None
+        task.estimation_status = "unestimated"
+
+    await db.commit()
+    return {"task_id": task_id, "slot": slot, "status": "deleted"}
+
+
+@router.patch("/{task_id}/estimation", response_model=EstimationStatusResponse)
+async def confirm_estimation(
+    task_id: str,
+    body: EstimationConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if body.estimation_status != "optimized":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимое значение: 'optimized'",
+        )
+
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    slot_result = await db.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == task_id, TaskResult.slot == "optimized"
+        )
+    )
+    if slot_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Файл в слоте 'optimized' отсутствует. Загрузите файл перед подтверждением.",
+        )
+
+    task.estimation_status = "optimized"
+    await db.commit()
+    return EstimationStatusResponse(task_id=task_id, estimation_status="optimized")
+
+
+@router.patch("/{task_id}/project", response_model=ProjectLinkResponse)
+async def link_task_to_project(
+    task_id: str,
+    body: ProjectLinkRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    if body.project_id is not None:
+        proj_result = await db.execute(select(Project).where(Project.id == body.project_id))
+        if proj_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Проект не найден",
+            )
+
+    task.project_id = body.project_id
+    await db.commit()
+    return ProjectLinkResponse(task_id=task_id, project_id=body.project_id)

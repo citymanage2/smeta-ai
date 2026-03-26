@@ -135,7 +135,7 @@ async def async_client(test_app):
 # Seed data — inserted once per test function (uses db_session)
 # ---------------------------------------------------------------------------
 
-SEEDED_TASK_ID = "00000000-0000-0000-0000-000000000001"
+SEEDED_TASK_ID = "a1000000-0000-0000-0000-000000000001"
 
 
 @pytest_asyncio.fixture
