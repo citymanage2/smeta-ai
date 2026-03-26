@@ -85,6 +85,30 @@ def test_render_yaml_upgrade_head_before_uvicorn():
     )
 
 
+def test_render_yaml_fix_script_before_upgrade_head():
+    """
+    fix_production_db.py must run before alembic upgrade head.
+
+    The script resets alembic_version from '006' (stamped without migrations)
+    back to '003' so that upgrade head re-applies migrations 004–006.
+    Without this the upgrade head is a no-op and the schema stays broken.
+    """
+    cmd = _get_start_command(RENDER_YAML)
+    fix_pos = cmd.find("fix_production_db.py")
+    upgrade_pos = cmd.find("alembic upgrade head")
+    assert fix_pos != -1, (
+        "scripts/fix_production_db.py is missing from render.yaml startCommand.\n"
+        f"Current command: {cmd}"
+    )
+    assert upgrade_pos != -1, (
+        "alembic upgrade head is missing from render.yaml startCommand."
+    )
+    assert fix_pos < upgrade_pos, (
+        "fix_production_db.py must run BEFORE alembic upgrade head.\n"
+        f"Current command: {cmd}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Level 2: integration — real migrations on PostgreSQL
 # ---------------------------------------------------------------------------
