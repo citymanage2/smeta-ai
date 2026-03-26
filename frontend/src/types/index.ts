@@ -13,7 +13,7 @@ export type TaskType =
 
 export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
-export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'processing_optimization';
+export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'optimizing';
 
 export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set([
   'SMETA_FROM_LIST',

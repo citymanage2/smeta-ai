@@ -8,17 +8,17 @@ import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
 
 const ESTIMATION_LABELS: Record<string, string> = {
-  unestimated: 'Не рассчитано',
-  estimated: 'Рассчитано',
-  processing_optimization: 'Оптимизируется',
-  optimized: 'Оптимизировано',
+  unestimated: 'Не рассчитана',
+  estimated: 'Рассчитана',
+  optimizing: 'Оптимизируется',
+  optimized: 'Оптимизирована',
   not_applicable: '—',
 };
 
 const ESTIMATION_COLORS: Record<string, { bg: string; text: string }> = {
   unestimated: { bg: '#fef2f2', text: '#dc2626' },
   estimated: { bg: '#fef9c3', text: '#854d0e' },
-  processing_optimization: { bg: '#eff6ff', text: '#2563eb' },
+  optimizing: { bg: '#eff6ff', text: '#2563eb' },
   optimized: { bg: '#f0fdf4', text: '#15803d' },
   not_applicable: { bg: '#f8fafc', text: '#94a3b8' },
 };
@@ -300,7 +300,7 @@ const ProjectDetailPage: React.FC = () => {
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {task.estimation_status === 'estimated' && (
+                      {isEstimateType && task.estimation_status === 'estimated' && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setOptimizingTaskId(task.id); }}
                           style={{ padding: '4px 12px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
