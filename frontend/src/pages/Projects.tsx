@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { ProjectCard } from '../types';
-import { listProjects, createProject } from '../api/projects';
+import { listProjects, createProject, exportProject } from '../api/projects';
 
 function formatCost(cost: number | null): string {
   if (cost === null || cost === undefined) return '—';
@@ -18,6 +18,7 @@ const Projects: React.FC = () => {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
+  const [exportingCard, setExportingCard] = useState<{ id: string; format: 'xlsx' | 'pdf' } | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -32,6 +33,18 @@ const Projects: React.FC = () => {
       setError('Ошибка при загрузке проектов');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleCardExport(projectId: string, format: 'xlsx' | 'pdf', e: React.MouseEvent) {
+    e.stopPropagation();
+    setExportingCard({ id: projectId, format });
+    try {
+      await exportProject(projectId, format);
+    } catch {
+      setError('Ошибка при экспорте проекта');
+    } finally {
+      setExportingCard(null);
     }
   }
 
@@ -211,6 +224,25 @@ const Projects: React.FC = () => {
                   {p.unestimated === 0 && p.estimated === 0 && p.optimized === 0 && p.other === 0 && (
                     <span style={{ fontSize: '13px', color: '#94a3b8' }}>Задач нет</span>
                   )}
+                </div>
+                <div
+                  style={{ display: 'flex', gap: '8px', marginTop: '12px', borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    onClick={(e) => handleCardExport(p.id, 'xlsx', e)}
+                    disabled={exportingCard !== null}
+                    style={{ padding: '5px 12px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: exportingCard !== null ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#15803d', fontWeight: 500 }}
+                  >
+                    {exportingCard?.id === p.id && exportingCard?.format === 'xlsx' ? '...' : '↓ xlsx'}
+                  </button>
+                  <button
+                    onClick={(e) => handleCardExport(p.id, 'pdf', e)}
+                    disabled={exportingCard !== null}
+                    style={{ padding: '5px 12px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: exportingCard !== null ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#dc2626', fontWeight: 500 }}
+                  >
+                    {exportingCard?.id === p.id && exportingCard?.format === 'pdf' ? '...' : '↓ PDF'}
+                  </button>
                 </div>
               </div>
             ))}

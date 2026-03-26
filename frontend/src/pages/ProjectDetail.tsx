@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS } from '../types';
-import { getProject, updateProject, deleteProject } from '../api/projects';
+import { getProject, updateProject, deleteProject, exportProject } from '../api/projects';
 import { useAuthStore } from '../stores/auth';
 
 const ESTIMATION_LABELS: Record<string, string> = {
@@ -36,6 +36,7 @@ const ProjectDetailPage: React.FC = () => {
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
 
   useEffect(() => {
     if (projectId) loadProject();
@@ -81,6 +82,18 @@ const ProjectDetailPage: React.FC = () => {
       navigate('/projects');
     } catch {
       setError('Ошибка при удалении проекта');
+    }
+  }
+
+  async function handleExport(format: 'xlsx' | 'pdf') {
+    if (!projectId) return;
+    setExporting(format);
+    try {
+      await exportProject(projectId, format);
+    } catch {
+      setError('Ошибка при экспорте проекта');
+    } finally {
+      setExporting(null);
     }
   }
 
@@ -137,7 +150,21 @@ const ProjectDetailPage: React.FC = () => {
                   <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 700, color: '#1e293b' }}>{project.name}</h1>
                   {project.description && <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>{project.description}</p>}
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    onClick={() => handleExport('xlsx')}
+                    disabled={exporting !== null}
+                    style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#15803d', fontWeight: 500 }}
+                  >
+                    {exporting === 'xlsx' ? '...' : '↓ xlsx'}
+                  </button>
+                  <button
+                    onClick={() => handleExport('pdf')}
+                    disabled={exporting !== null}
+                    style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}
+                  >
+                    {exporting === 'pdf' ? '...' : '↓ PDF'}
+                  </button>
                   <button onClick={() => setEditing(true)} style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#64748b' }}>
                     Изменить
                   </button>
