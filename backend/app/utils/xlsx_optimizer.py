@@ -81,6 +81,16 @@ def _map_columns(ws, header_row: int) -> dict:
     return mapping
 
 
+def _to_float(val) -> float:
+    """Safely convert a cell value to float, returning 0.0 on failure."""
+    if val is None:
+        return 0.0
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
     """
     Parse estimate xlsx. Finds header row by 'наименование' keyword in first 10 rows.
@@ -88,7 +98,10 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
                              price_excl_vat, price_incl_vat, total}
     Skips rows without a name value and rows matching 'extra' keywords (totals/НДС rows).
     """
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть xlsx файл: {e}") from e
     ws = wb.active
 
     header_row = _find_header_row(ws)
@@ -120,7 +133,7 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
         quantity = 0.0
         if "quantity" in cols:
             q = ws.cell(row=row_idx, column=cols["quantity"]).value
-            quantity = float(q) if q is not None else 0.0
+            quantity = _to_float(q)
 
         unit = ""
         if "unit" in cols:
@@ -131,21 +144,21 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
         price_excl_vat = 0.0
         if "work_price" in cols:
             wp = ws.cell(row=row_idx, column=cols["work_price"]).value
-            price_excl_vat += float(wp) if wp else 0.0
+            price_excl_vat += _to_float(wp)
         if "material_price" in cols:
             mp = ws.cell(row=row_idx, column=cols["material_price"]).value
-            price_excl_vat += float(mp) if mp else 0.0
+            price_excl_vat += _to_float(mp)
 
         # Fallback: if no work/material price cols, try unit_price col
         if price_excl_vat == 0.0 and "unit_price" in cols:
             up = ws.cell(row=row_idx, column=cols["unit_price"]).value
-            price_excl_vat = float(up) if up else 0.0
+            price_excl_vat = _to_float(up)
 
         # Fallback: derive from total_excl_vat / quantity
         if price_excl_vat == 0.0 and "total_excl_vat" in cols and quantity:
             tv = ws.cell(row=row_idx, column=cols["total_excl_vat"]).value
             if tv:
-                price_excl_vat = float(tv) / quantity
+                price_excl_vat = _to_float(tv) / quantity
 
         price_incl_vat = price_excl_vat * (1 + VAT_RATE)
 
@@ -153,7 +166,7 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
         total = 0.0
         if "total_incl_vat" in cols:
             t = ws.cell(row=row_idx, column=cols["total_incl_vat"]).value
-            total = float(t) if t else 0.0
+            total = _to_float(t)
         if total == 0.0:
             total = quantity * price_incl_vat
 
@@ -209,17 +222,28 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
     wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
     ws = wb.active
 
-    # Find how many columns exist
+    # Find actual header row (may not be row 1)
+    header_row = _find_header_row(ws) or 1
+
+    # Find quantity column in original data (before appending new columns)
+    qty_col = None
+    for c in range(1, ws.max_column + 1):
+        h = ws.cell(row=header_row, column=c).value
+        if h and isinstance(h, str) and "кол" in h.lower():
+            qty_col = c
+            break
+
+    # Find how many columns exist and append new ones
     last_col = ws.max_column
     new_price_col = last_col + 1
     new_total_col = last_col + 2
     source_col = last_col + 3
     note_col = last_col + 4
 
-    ws.cell(row=1, column=new_price_col, value="Цена сниженная")
-    ws.cell(row=1, column=new_total_col, value="Стоимость сниженная")
-    ws.cell(row=1, column=source_col, value="Источник")
-    ws.cell(row=1, column=note_col, value="Примечание")
+    ws.cell(row=header_row, column=new_price_col, value="Цена сниженная")
+    ws.cell(row=header_row, column=new_total_col, value="Стоимость сниженная")
+    ws.cell(row=header_row, column=source_col, value="Источник")
+    ws.cell(row=header_row, column=note_col, value="Примечание")
 
     # Build row_index → result map
     result_map = {r["row_index"]: r for r in optimization_results}
@@ -231,13 +255,10 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
 
         fill = _GREEN_FILL if new_price is not None else _YELLOW_FILL
 
-        # Determine quantity from the row — find quantity column
+        # Determine quantity from the row using pre-scanned qty_col
         qty = None
-        for c in range(1, ws.max_column + 1):
-            h = ws.cell(row=1, column=c).value
-            if h and isinstance(h, str) and "кол" in h.lower():
-                qty = ws.cell(row=row_idx, column=c).value
-                break
+        if qty_col is not None:
+            qty = ws.cell(row=row_idx, column=qty_col).value
 
         new_total = None
         if new_price is not None and qty:
@@ -266,7 +287,7 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
 
     # Add comparison sheet
     ws_cmp = wb.create_sheet("Сравнение")
-    cmp_headers = ["Наименование", "Тип", "Кол-во", "Ед.", "Цена было", "Цена стало",
+    cmp_headers = ["Наименование", "Цена было", "Цена стало",
                    "Экономия на ед.", "Экономия %", "Источник"]
     for col, h in enumerate(cmp_headers, start=1):
         ws_cmp.cell(row=1, column=col, value=h)
@@ -276,15 +297,14 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
 
     for i, opt in enumerate(optimization_results, start=2):
         ws_cmp.cell(row=i, column=1, value=opt.get("name", ""))
-        ws_cmp.cell(row=i, column=3, value=None)  # qty not directly available
-        ws_cmp.cell(row=i, column=5, value=round(opt.get("original_price", 0), 4))
+        ws_cmp.cell(row=i, column=2, value=round(opt.get("original_price", 0), 4))
         new_price = opt.get("new_price")
-        ws_cmp.cell(row=i, column=6, value=round(new_price, 4) if new_price is not None else "Не найдено")
+        ws_cmp.cell(row=i, column=3, value=round(new_price, 4) if new_price is not None else "Не найдено")
         savings_abs = opt.get("savings_abs")
-        ws_cmp.cell(row=i, column=7, value=round(savings_abs, 4) if savings_abs is not None else None)
+        ws_cmp.cell(row=i, column=4, value=round(savings_abs, 4) if savings_abs is not None else None)
         savings_pct = opt.get("savings_pct")
-        ws_cmp.cell(row=i, column=8, value=round(savings_pct, 2) if savings_pct is not None else None)
-        ws_cmp.cell(row=i, column=9, value=opt.get("source", ""))
+        ws_cmp.cell(row=i, column=5, value=round(savings_pct, 2) if savings_pct is not None else None)
+        ws_cmp.cell(row=i, column=6, value=opt.get("source", ""))
         if savings_abs is not None:
             total_savings += savings_abs
         total_original += opt.get("original_price", 0)
@@ -292,9 +312,9 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
     # Summary row
     summary_row = len(optimization_results) + 2
     ws_cmp.cell(row=summary_row, column=1, value="ИТОГО экономия")
-    ws_cmp.cell(row=summary_row, column=7, value=round(total_savings, 2))
+    ws_cmp.cell(row=summary_row, column=4, value=round(total_savings, 2))
     if total_original > 0:
-        ws_cmp.cell(row=summary_row, column=8, value=round(total_savings / total_original * 100, 2))
+        ws_cmp.cell(row=summary_row, column=5, value=round(total_savings / total_original * 100, 2))
 
     buf = io.BytesIO()
     wb.save(buf)
