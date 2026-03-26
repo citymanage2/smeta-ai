@@ -26,6 +26,7 @@ backend/alembic/versions/*.py
 !backend/alembic/versions/002_price_lists.py
 !backend/alembic/versions/003_fix_user_role_column_type.py
 !backend/alembic/versions/004_projects.py
+!backend/alembic/versions/005_task_history.py
 
 # IDE
 .vscode/

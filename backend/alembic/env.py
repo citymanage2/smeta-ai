@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import settings
 from app.database import Base
 # Import all models to register them with Base.metadata
-from app.models import User, Task, TaskResult, PriceWork, PriceMaterial  # noqa: F401
+from app.models import User, Task, TaskResult, PriceWork, PriceMaterial, Project, TaskHistory  # noqa: F401
 
 # this is the Alembic Config object
 config = context.config
