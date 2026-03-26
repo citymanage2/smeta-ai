@@ -639,7 +639,7 @@ async def _run_optimization_background(
     estimate_bytes: bytes,
     session_factory,
 ):
-    """Background task: search analogues and generate optimized xlsx."""
+    """Background task: search lower prices for the same items and generate optimized xlsx."""
     import base64 as _b64
     import structlog as _structlog
     from app.utils.xlsx_optimizer import generate_optimized_xlsx
@@ -680,9 +680,9 @@ async def _run_optimization_background(
 
                 try:
                     if item_type == "work":
-                        price_data = await price_service.find_work_price(name)
+                        price_data = await price_service.find_work_price(name, user_prompt=prompt)
                     else:
-                        price_data = await price_service.find_material_price(name)
+                        price_data = await price_service.find_material_price(name, user_prompt=prompt)
 
                     if price_data and price_data.get("price"):
                         found_price = float(price_data["price"])
@@ -755,7 +755,7 @@ async def _run_optimization_background(
                 task_id=task_id,
                 operation_type="optimization",
                 slot="optimized",
-                description=f"Оптимизация: найдено {found_count} из {total} аналогов",
+                description=f"Поиск сниженных цен: найдено {found_count} из {total} позиций",
                 previous_value=previous_value,
                 new_value=new_value,
             )
@@ -787,7 +787,7 @@ async def optimize_run(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Start background optimization: search analogues and generate optimized xlsx."""
+    """Start background optimization: search lower prices for the same items and generate optimized xlsx."""
     task = await db.get(Task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Задача не найдена")

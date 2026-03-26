@@ -120,15 +120,20 @@ async def _semantic_match_material(name: str) -> Optional[float]:
         return None
 
 
-async def _web_search_work_price(name: str) -> Optional[dict]:
-    """Use Claude with web search to find work price."""
+async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
+    """Use Claude with web search to find lower price for the same work item."""
+    extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
     messages = [
         {
             "role": "user",
             "content": (
-                f"Найди актуальную рыночную цену на строительную работу: '{name}' в России (2024-2025). "
+                f"Найди актуальную рыночную цену на строительную работу: '{name}' "
+                f"в Екатеринбурге (текущий год). "
+                "Найди до 3 предложений от разных подрядчиков и выбери наименьшую цену "
+                "на ту же позицию (не аналог — именно эту работу). "
                 "Укажи цену за единицу измерения. "
-                "Ответь в формате JSON: {{\"price\": число, \"unit\": \"ед. изм.\", \"source\": \"источник\"}}"
+                "Ответь в формате JSON: {\"price\": число, \"unit\": \"ед. изм.\", \"source\": \"источник\"}"
+                f"{extra}"
             ),
         }
     ]
@@ -153,14 +158,19 @@ async def _web_search_work_price(name: str) -> Optional[dict]:
         return None
 
 
-async def _web_search_material_price(name: str) -> Optional[float]:
-    """Use Claude with web search to find material price."""
+async def _web_search_material_price(name: str, user_prompt: str = "") -> Optional[float]:
+    """Use Claude with web search to find lower price for the same material."""
+    extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
     messages = [
         {
             "role": "user",
             "content": (
-                f"Найди актуальную розничную цену на строительный материал: '{name}' в России (2024-2025). "
-                "Ответь в формате JSON: {{\"price\": число, \"unit\": \"ед. изм.\"}}"
+                f"Найди актуальную розничную цену на строительный материал: '{name}' "
+                f"в Екатеринбурге (текущий год). "
+                "Найди до 3 предложений от разных поставщиков и выбери наименьшую цену "
+                "на ту же позицию (не аналог — именно этот материал). "
+                "Ответь в формате JSON: {\"price\": число, \"unit\": \"ед. изм.\", \"source\": \"источник\"}"
+                f"{extra}"
             ),
         }
     ]
@@ -221,7 +231,7 @@ async def load_cache(db: AsyncSession) -> None:
     )
 
 
-async def find_work_price(name: str) -> Optional[dict]:
+async def find_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
     """Find work price: exact match -> Claude semantic -> web search."""
     # 1. Exact match
     result = _exact_match_work(name)
@@ -233,12 +243,12 @@ async def find_work_price(name: str) -> Optional[dict]:
     if result:
         return result
 
-    # 3. Web search
-    result = await _web_search_work_price(name)
+    # 3. Web search (passes user_prompt for region/instructions context)
+    result = await _web_search_work_price(name, user_prompt=user_prompt)
     return result
 
 
-async def find_material_price(name: str) -> Optional[float]:
+async def find_material_price(name: str, user_prompt: str = "") -> Optional[float]:
     """Find material price: exact match -> Claude semantic -> web search."""
     # 1. Exact match
     result = _exact_match_material(name)
@@ -250,13 +260,21 @@ async def find_material_price(name: str) -> Optional[float]:
     if result is not None:
         return result
 
-    # 3. Web search
-    result = await _web_search_material_price(name)
+    # 3. Web search (passes user_prompt for region/instructions context)
+    result = await _web_search_material_price(name, user_prompt=user_prompt)
     return result
 
 
 class PriceService:
     """Singleton wrapper for price service functions."""
+
+    async def find_work_price(self, name: str, user_prompt: str = "") -> Optional[dict]:
+        """Find lower price for the same work item."""
+        return await find_work_price(name, user_prompt=user_prompt)
+
+    async def find_material_price(self, name: str, user_prompt: str = "") -> Optional[float]:
+        """Find lower price for the same material."""
+        return await find_material_price(name, user_prompt=user_prompt)
 
     async def load_cache(self) -> None:
         """Load price cache from DB."""

@@ -16,7 +16,7 @@ const CATEGORIES = [
 ];
 
 const DEFAULT_PROMPT =
-  'Ищи аналоги с более низкой ценой. Предпочитай проверенных поставщиков. Указывай источник (URL или название поставщика).';
+  'Ищи более низкую цену на ту же позицию. Регион: Екатеринбург, дата: текущая. До 3 предложений от разных поставщиков, выбирай наименьшую цену. Указывай источник (URL или название поставщика).';
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('ru-RU', {
@@ -40,7 +40,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
   const [timedOut, setTimedOut] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
-  const TIMEOUT_MS = 5 * 60 * 1000;
+  const TIMEOUT_MS = 15 * 60 * 1000;
 
   useEffect(() => {
     return () => {
@@ -171,7 +171,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
           <span style={{ marginLeft: '8px', fontSize: '14px', color: '#64748b' }}>
             {step === 1 && 'Выбор категорий'}
             {step === 2 && 'Предварительный анализ'}
-            {step === 3 && 'Поиск аналогов...'}
+            {step === 3 && 'Поиск сниженных цен...'}
             {step === 4 && 'Результат'}
           </span>
         </div>
@@ -183,7 +183,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
               Оптимизация сметы
             </h3>
             <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '20px' }}>
-              Выберите категории позиций для поиска аналогов по более низкой цене.
+              Выберите категории позиций для поиска сниженных цен.
             </p>
             {CATEGORIES.map((cat) => (
               <label
@@ -304,10 +304,10 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
         {step === 3 && (
           <div style={{ textAlign: 'center', padding: '20px 0' }}>
             <h3 style={{ margin: '0 0 16px', fontSize: '18px', fontWeight: 700 }}>
-              Поиск аналогов...
+              Поиск сниженных цен...
             </h3>
             {timedOut ? (
-              <p style={{ color: '#dc2626', fontSize: '14px' }}>Превышено время ожидания (5 минут). Проверьте статус задачи позже.</p>
+              <p style={{ color: '#dc2626', fontSize: '14px' }}>Превышено время ожидания (15 минут). Проверьте статус задачи позже.</p>
             ) : runError ? (
               <p style={{ color: '#dc2626', fontSize: '14px' }}>{runError}</p>
             ) : (
@@ -343,7 +343,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
               Оптимизация завершена
             </h3>
             <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '24px' }}>
-              Оптимизированный файл сметы готов. Скачайте xlsx с выделенными аналогами и листом сравнения.
+              Оптимизированный файл сметы готов. Скачайте xlsx со сниженными ценами и листом сравнения.
             </p>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
