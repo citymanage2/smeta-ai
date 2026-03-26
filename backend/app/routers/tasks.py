@@ -804,3 +804,44 @@ async def optimize_run(
     )
 
     return {"task_id": task_id, "status": "optimization_started"}
+
+
+# ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
+
+class HistoryEntryOut(BaseModel):
+    id: str
+    operation_type: str
+    slot: str
+    description: str
+    created_at: str
+
+
+@router.get("/{task_id}/history")
+async def get_task_history(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return list of history entries for a task (without file_data_b64)."""
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    result = await db.execute(
+        select(TaskHistory)
+        .where(TaskHistory.task_id == task_id)
+        .order_by(TaskHistory.created_at.desc())
+    )
+    entries = result.scalars().all()
+    return [
+        HistoryEntryOut(
+            id=e.id,
+            operation_type=e.operation_type,
+            slot=e.slot,
+            description=e.description,
+            created_at=e.created_at.isoformat(),
+        )
+        for e in entries
+    ]
