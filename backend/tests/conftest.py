@@ -31,6 +31,7 @@ from app.models.user import User          # noqa: F401
 from app.models.price import PriceWork, PriceMaterial  # noqa: F401
 from app.models.price_list import PriceList             # noqa: F401
 from app.models.project import Project    # noqa: F401
+from app.models.history import TaskHistory  # noqa: F401
 from app.utils.auth import hash_password, create_access_token
 
 # ---------------------------------------------------------------------------
