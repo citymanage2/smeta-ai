@@ -12,6 +12,16 @@ export type TaskType =
 
 export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
+export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable';
+
+export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set([
+  'SMETA_FROM_LIST',
+  'SMETA_FROM_PROJECT',
+  'SMETA_FROM_EDC_PROJECT',
+  'SMETA_FROM_GRAND_PROJECT',
+  'SCAN_TO_EXCEL',
+]);
+
 export interface Task {
   id: string;
   task_type: TaskType;
@@ -19,6 +29,9 @@ export interface Task {
   user_prompt?: string;
   progress_message?: string;
   error_message?: string;
+  estimation_status: EstimationStatus;
+  cost?: number | null;
+  project_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -27,6 +40,7 @@ export interface TaskResult {
   file_id: number;
   file_name: string;
   mime_type: string;
+  slot: string;
 }
 
 export interface AdminTask extends Task {
@@ -72,3 +86,32 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   failed: 'Ошибка',
   cancelled: 'Остановлено',
 };
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectCard extends Project {
+  unestimated: number;
+  estimated: number;
+  optimized: number;
+  other: number;
+  total_cost: number | null;
+}
+
+export interface TaskBrief {
+  id: string;
+  task_type: string;
+  status: string;
+  estimation_status: EstimationStatus;
+  cost: number | null;
+  created_at: string;
+}
+
+export interface ProjectDetail extends ProjectCard {
+  tasks: TaskBrief[];
+}

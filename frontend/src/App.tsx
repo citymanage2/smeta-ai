@@ -5,6 +5,8 @@ import Login from './pages/Login';
 import TaskCreate from './pages/TaskCreate';
 import TaskStatus from './pages/TaskStatus';
 import Admin from './pages/Admin';
+import Projects from './pages/Projects';
+import ProjectDetail from './pages/ProjectDetail';
 import { useAuthStore } from './stores/auth';
 
 const App: React.FC = () => {
@@ -39,6 +41,22 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <TaskStatus />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects"
+          element={
+            <ProtectedRoute>
+              <Projects />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects/:projectId"
+          element={
+            <ProtectedRoute>
+              <ProjectDetail />
             </ProtectedRoute>
           }
         />
