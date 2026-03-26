@@ -7,6 +7,9 @@ export interface TaskStatusResponse {
   task_type: Task['task_type'];
   progress_message?: string;
   error_message?: string;
+  estimation_status: string;
+  cost?: number | null;
+  project_id?: string | null;
   created_at: string;
   updated_at: string;
 }

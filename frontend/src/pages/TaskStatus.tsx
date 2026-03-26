@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { BatchProgressBar } from '../components/BatchProgressBar';
-import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
+import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS, ESTIMATE_TASK_TYPES, ProjectCard } from '../types';
 import {
   getTaskStatus,
   getTaskResults,
@@ -12,6 +12,13 @@ import {
   TaskStatusResponse,
   ChatMessage,
 } from '../api/tasks';
+import {
+  uploadFileToSlot,
+  deleteFileFromSlot,
+  confirmOptimized,
+  linkTaskToProject,
+  listProjects,
+} from '../api/projects';
 
 const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -60,6 +67,19 @@ const TaskStatusPage: React.FC = () => {
   const [error, setError] = useState('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [progressLog, setProgressLog] = useState<string[]>([]);
+  const [slotUploading, setSlotUploading] = useState<string | null>(null);
+  const [slotFiles, setSlotFiles] = useState<Record<string, { file_name: string } | null>>({
+    source: null,
+    estimate: null,
+    optimized: null,
+  });
+  const [estimationStatus, setEstimationStatus] = useState<string>('not_applicable');
+  const [taskCost, setTaskCost] = useState<number | null>(null);
+  const [taskProjectId, setTaskProjectId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectCard[]>([]);
+  const [attachingProject, setAttachingProject] = useState(false);
+  const [selectedAttachProjectId, setSelectedAttachProjectId] = useState('');
+  const [slotWarning, setSlotWarning] = useState('');
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -76,12 +96,71 @@ const TaskStatusPage: React.FC = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, []);
 
+  useEffect(() => {
+    listProjects().then(setProjects).catch(() => {});
+  }, []);
+
+  async function handleSlotUpload(slot: 'source' | 'estimate' | 'optimized', file: File) {
+    if (!taskId) return;
+    setSlotUploading(slot);
+    setSlotWarning('');
+    try {
+      const result = await uploadFileToSlot(taskId, slot, file);
+      setSlotFiles((prev) => ({ ...prev, [slot]: { file_name: file.name } }));
+      if (result.estimation_status) setEstimationStatus(result.estimation_status);
+      if (result.cost !== undefined) setTaskCost(result.cost ?? null);
+      if (result.warning) setSlotWarning(result.warning);
+    } catch {
+      setError('Ошибка при загрузке файла в слот');
+    } finally {
+      setSlotUploading(null);
+    }
+  }
+
+  async function handleSlotDelete(slot: 'source' | 'estimate' | 'optimized') {
+    if (!taskId) return;
+    try {
+      await deleteFileFromSlot(taskId, slot);
+      setSlotFiles((prev) => ({ ...prev, [slot]: null }));
+      if (slot === 'estimate') {
+        setEstimationStatus('unestimated');
+        setTaskCost(null);
+      }
+    } catch {
+      setError('Ошибка при удалении файла');
+    }
+  }
+
+  async function handleConfirmOptimized() {
+    if (!taskId) return;
+    try {
+      const result = await confirmOptimized(taskId);
+      setEstimationStatus(result.estimation_status);
+    } catch {
+      setError('Файл в слоте "Оптимизированный" отсутствует');
+    }
+  }
+
+  async function handleAttachProject() {
+    if (!taskId || !selectedAttachProjectId) return;
+    try {
+      await linkTaskToProject(taskId, selectedAttachProjectId);
+      setTaskProjectId(selectedAttachProjectId);
+      setAttachingProject(false);
+    } catch {
+      setError('Ошибка при прикреплении к проекту');
+    }
+  }
+
   const fetchStatus = useCallback(async () => {
     if (!taskId || taskId === 'undefined') return;
     try {
       const data = await getTaskStatus(taskId);
       setError('');
       setTask(data);
+      setEstimationStatus(data.estimation_status ?? 'not_applicable');
+      setTaskCost(data.cost ?? null);
+      setTaskProjectId(data.project_id ?? null);
 
       if (data.progress_message) {
         setProgressLog((prev) => {
@@ -459,6 +538,157 @@ const TaskStatusPage: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Estimation status badge */}
+        {task && estimationStatus !== 'not_applicable' && (
+          <div style={{ marginBottom: '16px' }}>
+            <span style={{
+              display: 'inline-block',
+              padding: '5px 14px',
+              borderRadius: '20px',
+              fontSize: '13px',
+              fontWeight: 600,
+              ...({
+                unestimated: { backgroundColor: '#fef2f2', color: '#dc2626' },
+                estimated: { backgroundColor: '#fef9c3', color: '#854d0e' },
+                optimized: { backgroundColor: '#f0fdf4', color: '#15803d' },
+              }[estimationStatus] ?? { backgroundColor: '#f8fafc', color: '#94a3b8' }),
+            }}>
+              {{
+                unestimated: 'Смета: не рассчитана',
+                estimated: `Смета: рассчитана${taskCost !== null ? ` · ${new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(taskCost)}` : ''}`,
+                optimized: `Смета: оптимизирована${taskCost !== null ? ` · ${new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(taskCost)}` : ''}`,
+              }[estimationStatus] ?? estimationStatus}
+            </span>
+          </div>
+        )}
+
+        {/* File slots (only for ESTIMATE_TASK_TYPES) */}
+        {task && ESTIMATE_TASK_TYPES.has(task.task_type) && (
+          <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', marginBottom: '16px' }}>
+            <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 600, color: '#1e293b' }}>Файловые слоты</h3>
+
+            {slotWarning && (
+              <div style={{ padding: '10px 14px', backgroundColor: '#fef9c3', color: '#854d0e', borderRadius: '8px', fontSize: '13px', marginBottom: '12px' }}>
+                {slotWarning}
+              </div>
+            )}
+
+            {(['source', 'estimate', 'optimized'] as const).map((slot) => {
+              const labels: Record<string, string> = {
+                source: 'Исходный файл',
+                estimate: 'Расчёт (смета)',
+                optimized: 'Оптимизированный',
+              };
+              const fileInfo = slotFiles[slot];
+              const isLoading = slotUploading === slot;
+
+              return (
+                <div key={slot} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', borderBottom: slot !== 'optimized' ? '1px solid #f1f5f9' : 'none' }}>
+                  <span style={{ fontSize: '14px', color: '#374151', fontWeight: 500, minWidth: '160px' }}>{labels[slot]}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {fileInfo ? (
+                      <>
+                        <span style={{ fontSize: '13px', color: '#64748b' }}>{fileInfo.file_name}</span>
+                        <button
+                          onClick={() => handleSlotDelete(slot)}
+                          style={{ padding: '3px 10px', backgroundColor: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px' }}
+                        >
+                          Удалить
+                        </button>
+                        {slot === 'optimized' && estimationStatus !== 'optimized' && (
+                          <button
+                            onClick={handleConfirmOptimized}
+                            style={{ padding: '3px 10px', backgroundColor: '#f0fdf4', color: '#15803d', border: '1px solid #86efac', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+                          >
+                            Подтвердить
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <label style={{ cursor: isLoading ? 'not-allowed' : 'pointer' }}>
+                        <input
+                          type="file"
+                          accept=".xlsx,.xls"
+                          style={{ display: 'none' }}
+                          disabled={isLoading}
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleSlotUpload(slot, f);
+                            e.target.value = '';
+                          }}
+                        />
+                        <span style={{
+                          padding: '5px 14px',
+                          backgroundColor: isLoading ? '#e2e8f0' : '#eff6ff',
+                          color: isLoading ? '#94a3b8' : '#2563eb',
+                          border: '1px solid #bfdbfe',
+                          borderRadius: '6px',
+                          fontSize: '13px',
+                          fontWeight: 500,
+                        }}>
+                          {isLoading ? 'Загрузка...' : 'Загрузить .xlsx'}
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Attach to project */}
+        {task && (
+          <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '16px 20px', marginBottom: '16px' }}>
+            {taskProjectId ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '14px', color: '#64748b' }}>
+                  Проект: <strong style={{ color: '#1e293b' }}>{projects.find((p) => p.id === taskProjectId)?.name ?? taskProjectId}</strong>
+                </span>
+                <button
+                  onClick={async () => { await linkTaskToProject(taskId!, null); setTaskProjectId(null); }}
+                  style={{ padding: '4px 12px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', color: '#64748b' }}
+                >
+                  Открепить
+                </button>
+              </div>
+            ) : attachingProject ? (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <select
+                  value={selectedAttachProjectId}
+                  onChange={(e) => setSelectedAttachProjectId(e.target.value)}
+                  style={{ flex: 1, padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}
+                >
+                  <option value="">— Выберите проект —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleAttachProject}
+                  disabled={!selectedAttachProjectId}
+                  style={{ padding: '8px 16px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', cursor: selectedAttachProjectId ? 'pointer' : 'not-allowed', fontSize: '14px', fontWeight: 600 }}
+                >
+                  Прикрепить
+                </button>
+                <button
+                  onClick={() => setAttachingProject(false)}
+                  style={{ padding: '8px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', color: '#64748b' }}
+                >
+                  Отмена
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAttachingProject(true)}
+                style={{ padding: '6px 16px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#2563eb', fontWeight: 500 }}
+              >
+                + Прикрепить к проекту
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Results */}
         {results.length > 0 && (

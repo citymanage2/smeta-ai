@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import TaskTypeSelector from '../components/TaskTypeSelector';
 import FileUpload from '../components/FileUpload';
-import { TaskType } from '../types';
+import { TaskType, ProjectCard } from '../types';
 import { createTask } from '../api/tasks';
+import { listProjects } from '../api/projects';
 
 const TaskCreate: React.FC = () => {
   const navigate = useNavigate();
@@ -15,6 +16,14 @@ const TaskCreate: React.FC = () => {
   const [uploadPercent, setUploadPercent] = useState(0);
   const [submitStep, setSubmitStep] = useState<'upload' | 'create' | null>(null);
   const [error, setError] = useState('');
+  const [projects, setProjects] = useState<ProjectCard[]>([]);
+  const [projectMode, setProjectMode] = useState<'none' | 'existing' | 'new'>('none');
+  const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [newProjectName, setNewProjectName] = useState('');
+
+  useEffect(() => {
+    listProjects().then(setProjects).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,6 +47,12 @@ const TaskCreate: React.FC = () => {
       files.forEach((file) => {
         formData.append('files', file);
       });
+
+      if (projectMode === 'existing' && selectedProjectId) {
+        formData.append('project_id', selectedProjectId);
+      } else if (projectMode === 'new' && newProjectName.trim()) {
+        formData.append('project_name', newProjectName.trim());
+      }
 
       const task = await createTask(formData, (pct) => {
         setUploadPercent(pct);
@@ -148,6 +163,68 @@ const TaskCreate: React.FC = () => {
                 onFocus={(e) => { e.target.style.borderColor = '#2563eb'; }}
                 onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }}
               />
+            </div>
+
+            {/* Project selector */}
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '10px' }}>
+                Добавить в проект
+              </label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {(['none', 'existing', 'new'] as const).map((mode) => (
+                  <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="radio"
+                      name="projectMode"
+                      value={mode}
+                      checked={projectMode === mode}
+                      onChange={() => setProjectMode(mode)}
+                    />
+                    <span style={{ fontSize: '14px', color: '#374151' }}>
+                      {mode === 'none' ? 'Не добавлять' : mode === 'existing' ? 'Выбрать существующий' : 'Создать новый'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {projectMode === 'existing' && (
+                <select
+                  value={selectedProjectId}
+                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  style={{
+                    marginTop: '12px',
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    backgroundColor: '#fff',
+                  }}
+                >
+                  <option value="">— Выберите проект —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              )}
+
+              {projectMode === 'new' && (
+                <input
+                  type="text"
+                  placeholder="Название нового проекта"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  style={{
+                    marginTop: '12px',
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              )}
             </div>
 
             {/* Submit */}
