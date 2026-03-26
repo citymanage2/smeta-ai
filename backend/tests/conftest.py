@@ -4,12 +4,25 @@ Async test fixtures for Smeta AI backend tests.
 Uses an in-memory SQLite database so no PostgreSQL is needed.
 All fixtures are async-compatible via pytest-asyncio auto mode.
 """
+import sys
 import uuid
 import pytest
 import pytest_asyncio
+from unittest.mock import MagicMock
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy import event, text
+
+# Mock weasyprint before importing app modules (to avoid system dependency errors on macOS)
+weasyprint_mock = MagicMock()
+html_class_mock = MagicMock()
+
+def mock_write_pdf():
+    return b"%PDF-1.4\n%Mock PDF content\nendstream"
+
+html_class_mock.return_value.write_pdf = mock_write_pdf
+weasyprint_mock.HTML = html_class_mock
+sys.modules['weasyprint'] = weasyprint_mock
 
 from app.database import Base, get_db
 from app.models.task import Task          # noqa: F401  (registers with Base.metadata)
