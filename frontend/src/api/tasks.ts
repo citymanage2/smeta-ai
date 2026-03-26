@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { Task, TaskResult } from '../types';
+import { Task, TaskResult, HistoryEntry, RevertResponse } from '../types';
 
 export interface TaskStatusResponse {
   id: string;
@@ -123,5 +123,26 @@ export async function runOptimize(
     prompt,
     categories,
   });
+  return res.data;
+}
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+export async function getTaskHistory(taskId: string): Promise<HistoryEntry[]> {
+  const res = await apiClient.get<HistoryEntry[]>(`/tasks/${taskId}/history`);
+  return res.data;
+}
+
+export async function revertHistory(
+  taskId: string,
+  entryId: string,
+  confirm: boolean,
+): Promise<RevertResponse> {
+  const res = await apiClient.post<RevertResponse>(
+    `/tasks/${taskId}/history/${entryId}/revert`,
+    { confirm },
+  );
   return res.data;
 }

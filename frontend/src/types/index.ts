@@ -117,3 +117,21 @@ export interface TaskBrief {
 export interface ProjectDetail extends ProjectCard {
   tasks: TaskBrief[];
 }
+
+export interface HistoryEntry {
+  id: string;
+  operation_type: 'optimization' | 'analog' | 'manual_edit' | 'revert';
+  slot: string;
+  description: string;
+  created_at: string;
+}
+
+export interface RevertResponse {
+  reverted?: boolean;
+  warning?: boolean;
+  dependent_entries?: Array<{
+    id: string;
+    description: string;
+    created_at: string;
+  }>;
+}
