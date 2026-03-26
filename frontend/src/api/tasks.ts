@@ -76,3 +76,52 @@ export async function downloadResult(fileId: number, fileName: string): Promise<
   link.remove();
   window.URL.revokeObjectURL(url);
 }
+
+// ---------------------------------------------------------------------------
+// Optimization
+// ---------------------------------------------------------------------------
+
+export interface OptimizeItem {
+  row_index: number;
+  name: string;
+  type: string;
+  quantity: number;
+  unit: string;
+  price_excl_vat: number;
+  price_incl_vat: number;
+  total: number;
+  selected?: boolean;
+}
+
+export interface AnalyzeOptimizeResponse {
+  items: OptimizeItem[];
+  total_analyzed: number;
+  total_selected: number;
+  coverage_pct: number;
+}
+
+export async function analyzeOptimize(
+  taskId: string,
+  categories: string[],
+  otherDescription?: string
+): Promise<AnalyzeOptimizeResponse> {
+  const res = await apiClient.post(`/tasks/${taskId}/optimize/analyze`, {
+    categories,
+    other_description: otherDescription ?? null,
+  });
+  return res.data;
+}
+
+export async function runOptimize(
+  taskId: string,
+  items: OptimizeItem[],
+  prompt: string,
+  categories: string[]
+): Promise<{ task_id: string; status: string }> {
+  const res = await apiClient.post(`/tasks/${taskId}/optimize/run`, {
+    items,
+    prompt,
+    categories,
+  });
+  return res.data;
+}

@@ -18,6 +18,7 @@ const TASK_TYPES: TaskType[] = [
   'SMETA_FROM_LIST',
   'SCAN_TO_EXCEL',
   'COMPARE_PROJECT_SMETA',
+  'OPTIMIZE_SMETA',
 ];
 
 const TaskTypeSelector: React.FC<TaskTypeSelectorProps> = ({ value, onChange, disabled }) => {

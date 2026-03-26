@@ -8,11 +8,12 @@ export type TaskType =
   | 'SMETA_FROM_EDC_PROJECT'
   | 'SMETA_FROM_LIST'
   | 'SCAN_TO_EXCEL'
-  | 'COMPARE_PROJECT_SMETA';
+  | 'COMPARE_PROJECT_SMETA'
+  | 'OPTIMIZE_SMETA';
 
 export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
-export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable';
+export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'processing_optimization';
 
 export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set([
   'SMETA_FROM_LIST',
@@ -77,6 +78,7 @@ export const TASK_TYPE_LABELS: Record<TaskType, string> = {
   SMETA_FROM_LIST: 'Смета из перечня',
   SCAN_TO_EXCEL: 'Скан сметы → Excel',
   COMPARE_PROJECT_SMETA: 'Сравнение проект/смета',
+  OPTIMIZE_SMETA: 'Оптимизация сметы',
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
