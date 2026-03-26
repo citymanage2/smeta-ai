@@ -5,6 +5,7 @@ import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS } from '..
 import { getProject, updateProject, deleteProject, exportProject } from '../api/projects';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
+import HistoryModal from '../components/HistoryModal';
 
 const ESTIMATION_LABELS: Record<string, string> = {
   unestimated: 'Не рассчитано',
@@ -41,6 +42,7 @@ const ProjectDetailPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
+  const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (projectId) loadProject();
@@ -264,6 +266,26 @@ const ProjectDetailPage: React.FC = () => {
                         Оптимизировать
                       </button>
                     )}
+                    {['estimated', 'optimized'].includes(task.estimation_status) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setHistoryTaskId(task.id);
+                        }}
+                        style={{
+                          padding: '4px 12px',
+                          backgroundColor: '#f8fafc',
+                          color: '#475569',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                        }}
+                      >
+                        История
+                      </button>
+                    )}
                     {task.cost !== null && (
                       <span style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost)}</span>
                     )}
@@ -284,6 +306,15 @@ const ProjectDetailPage: React.FC = () => {
           taskId={optimizingTaskId}
           onClose={() => {
             setOptimizingTaskId(null);
+            loadProject();
+          }}
+        />
+      )}
+      {historyTaskId && (
+        <HistoryModal
+          taskId={historyTaskId}
+          onClose={() => {
+            setHistoryTaskId(null);
             loadProject();
           }}
         />
