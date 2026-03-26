@@ -1,6 +1,8 @@
+import io
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
@@ -245,3 +247,67 @@ async def delete_project(
     await db.commit()
     logger.info("Project deleted", project_id=project_id)
     return {"project_id": project_id, "status": "deleted"}
+
+
+@router.get("/{project_id}/export")
+async def export_project(
+    project_id: str,
+    format: str = "xlsx",
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if format not in ("xlsx", "pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Параметр format должен быть xlsx или pdf",
+        )
+
+    project = await _get_project_or_404(project_id, db)
+
+    tasks_result = await db.execute(
+        select(Task).where(Task.project_id == project_id).order_by(Task.created_at.asc())
+    )
+    tasks = list(tasks_result.scalars().all())
+
+    slot_results: dict = {"source": [], "estimate": [], "optimized": []}
+    if tasks:
+        task_ids = [t.id for t in tasks]
+        from app.models.result import TaskResult as _TaskResult
+        results_stmt = await db.execute(
+            select(_TaskResult).where(
+                _TaskResult.task_id.in_(task_ids),
+                _TaskResult.slot.in_(["source", "estimate", "optimized"]),
+            )
+        )
+        task_results = list(results_stmt.scalars().all())
+        task_map = {t.id: t for t in tasks}
+        for tr in task_results:
+            if tr.task_id in task_map:
+                slot_results[tr.slot].append((task_map[tr.task_id], tr))
+
+    base_url = str(request.base_url).rstrip("/") if request else ""
+
+    from urllib.parse import quote
+
+    if format == "xlsx":
+        from app.utils.xlsx_exporter import generate_project_xlsx
+        file_bytes = generate_project_xlsx(project, tasks, slot_results, base_url)
+        safe_name = project.name.replace('"', '').replace('/', '-')
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = f"{safe_name}.xlsx"
+    else:
+        from app.utils.pdf_exporter import generate_project_pdf
+        file_bytes = generate_project_pdf(project, tasks, slot_results, base_url)
+        safe_name = project.name.replace('"', '').replace('/', '-')
+        media_type = "application/pdf"
+        filename = f"{safe_name}.pdf"
+
+    encoded_filename = quote(filename, safe="")
+    content_disposition = f"attachment; filename*=UTF-8''{encoded_filename}"
+
+    return StreamingResponse(
+        io.BytesIO(file_bytes),
+        media_type=media_type,
+        headers={"Content-Disposition": content_disposition},
+    )
