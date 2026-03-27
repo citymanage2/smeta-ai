@@ -451,21 +451,18 @@ const TaskStatusPage: React.FC = () => {
                     Ошибка выполнения
                   </div>
                   {task.error_message && (
-                    <pre
+                    <div
                       style={{
                         margin: 0,
                         fontSize: '13px',
                         color: '#7f1d1d',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                        fontFamily: 'monospace',
                         lineHeight: 1.6,
                         maxHeight: '200px',
                         overflowY: 'auto',
                       }}
                     >
                       {task.error_message}
-                    </pre>
+                    </div>
                   )}
                   {progressLog.length > 0 && (
                     <div style={{ marginTop: '12px', borderTop: '1px solid #fecaca', paddingTop: '10px' }}>

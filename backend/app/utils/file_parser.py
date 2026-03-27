@@ -99,8 +99,19 @@ def extract_text_from_image_for_claude(data: bytes, mime_type: str) -> dict:
     return file_to_base64(data, mime_type)
 
 
+_PDF_MAX_SIZE = 32 * 1024 * 1024  # 32 MB — Claude API hard limit
+
+
 def pdf_to_content_block(data: bytes) -> dict:
-    """Return a PDF document content block for Claude."""
+    """Return a PDF document content block for Claude.
+
+    Raises ValueError with a human-readable Russian message if the file
+    exceeds the 32 MB API limit or does not start with the %PDF magic bytes.
+    """
+    if len(data) > _PDF_MAX_SIZE:
+        raise ValueError("Файл слишком большой. Максимальный размер PDF: 32MB")
+    if not data.startswith(b"%PDF"):
+        raise ValueError("Файл не является валидным PDF")
     encoded = base64.b64encode(data).decode("utf-8")
     return {
         "type": "document",
