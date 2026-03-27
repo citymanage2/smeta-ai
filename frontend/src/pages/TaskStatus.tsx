@@ -371,6 +371,21 @@ const TaskStatusPage: React.FC = () => {
                 )}
               </div>
 
+              {/* Current progress message — shown directly, independent of progressLog */}
+              {(task.status === 'pending' || task.status === 'processing') && task.progress_message && (
+                <div
+                  data-testid="progress-message"
+                  style={{
+                    marginTop: '12px',
+                    fontSize: '14px',
+                    color: '#0c4a6e',
+                    fontWeight: 500,
+                  }}
+                >
+                  {task.progress_message}
+                </div>
+              )}
+
               {/* Progress log */}
               {(task.status === 'pending' || task.status === 'processing') && progressLog.length > 0 && (
                 <div
