@@ -55,11 +55,12 @@ vi.mock('../components/HistoryModal', () => ({
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 import { getProject } from '../api/projects';
+import { EstimationStatus } from '../types';
 import ProjectDetailPage from '../pages/ProjectDetail';
 
 const TASK_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
-function makeProject(taskOverrides: object = {}) {
+function makeProject(taskOverrides: { estimation_status?: EstimationStatus; task_type?: string; id?: string } = {}) {
   return {
     id: 'proj-1',
     name: 'Тестовый проект',
@@ -76,7 +77,7 @@ function makeProject(taskOverrides: object = {}) {
         id: TASK_ID,
         task_type: 'SMETA_FROM_LIST',
         status: 'completed',
-        estimation_status: 'estimated',
+        estimation_status: 'estimated' as EstimationStatus,
         cost: 100000,
         created_at: '2026-01-01T00:00:00Z',
         slot_files: { estimate: 'estimate.xlsx' },
