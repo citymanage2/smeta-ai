@@ -1,5 +1,6 @@
 import structlog
 import os
+import asyncio
 from alembic.config import Config
 from alembic import command
 from contextlib import asynccontextmanager
@@ -68,7 +69,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Smeta AI backend...")
     try:
         alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
-        command.upgrade(alembic_cfg, "head")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, command.upgrade, alembic_cfg, "head")
         logger.info("Alembic migrations applied")
         await _initialize_users()
         async with AsyncSessionLocal() as db:
