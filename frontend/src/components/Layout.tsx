@@ -1,15 +1,15 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/auth';
+import ProjectsSidebar from './ProjectsSidebar';
 
 interface LayoutProps {
   children: React.ReactNode;
-  noPadding?: boolean;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, noPadding }) => {
+const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
-  const { role, logout, isAdmin } = useAuthStore();
+  const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
 
   const handleLogout = () => {
     logout();
@@ -17,20 +17,20 @@ const Layout: React.FC<LayoutProps> = ({ children, noPadding }) => {
   };
 
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc', display: 'flex', flexDirection: 'column' }}>
-      {/* Header */}
+    <div style={{ height: '100vh', backgroundColor: '#f8fafc', display: 'flex', flexDirection: 'column' }}>
+
+      {/* ── Header ── */}
       <header
         style={{
           backgroundColor: '#ffffff',
           borderBottom: '1px solid #e2e8f0',
           padding: '0 24px',
           height: '64px',
+          flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-          position: 'sticky',
-          top: 0,
           zIndex: 100,
         }}
       >
@@ -146,27 +146,41 @@ const Layout: React.FC<LayoutProps> = ({ children, noPadding }) => {
         </div>
       </header>
 
-      {/* Main content */}
-      <main style={noPadding
-        ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
-        : { flex: 1, padding: '32px 24px', maxWidth: '1280px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }
-      }>
-        {children}
-      </main>
+      {/* ── Body: sidebar + content ── */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
 
-      {/* Footer */}
-      <footer
-        style={{
-          borderTop: '1px solid #e2e8f0',
-          padding: '16px 24px',
-          textAlign: 'center',
-          color: '#94a3b8',
-          fontSize: '13px',
-          backgroundColor: '#ffffff',
-        }}
-      >
-        © {new Date().getFullYear()} Smeta AI — Автоматизация строительных смет
-      </footer>
+        {/* Projects sidebar — visible for all authenticated users */}
+        {isAuthenticated && <ProjectsSidebar />}
+
+        {/* Main content + footer */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <main
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '32px 24px',
+              boxSizing: 'border-box',
+            }}
+          >
+            {children}
+          </main>
+
+          <footer
+            style={{
+              borderTop: '1px solid #e2e8f0',
+              padding: '14px 24px',
+              textAlign: 'center',
+              color: '#94a3b8',
+              fontSize: '13px',
+              backgroundColor: '#ffffff',
+              flexShrink: 0,
+            }}
+          >
+            © {new Date().getFullYear()} Smeta AI — Автоматизация строительных смет
+          </footer>
+        </div>
+      </div>
+
     </div>
   );
 };

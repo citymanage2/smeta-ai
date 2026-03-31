@@ -1,87 +1,54 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
-import { listProjects, createProject, getProject, getUnassignedTasks } from '../api/projects';
+import { ProjectCard } from '../types';
+import { listProjects, createProject, exportProject } from '../api/projects';
 
-const SIDEBAR_WIDTH = 290;
-
-const STATUS_DOT_COLOR: Record<string, string> = {
-  pending: '#f59e0b',
-  processing: '#3b82f6',
-  completed: '#16a34a',
-  failed: '#dc2626',
-  cancelled: '#94a3b8',
-};
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
+function formatCost(cost: number | null): string {
+  if (cost === null || cost === undefined) return '—';
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: 'RUB',
+    maximumFractionDigits: 0,
+  }).format(cost);
 }
 
 const Projects: React.FC = () => {
   const navigate = useNavigate();
-
   const [projects, setProjects] = useState<ProjectCard[]>([]);
-  const [unassignedTasks, setUnassignedTasks] = useState<TaskBrief[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-
-  // Expanded sections: 'unassigned' or project id
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(['unassigned']));
-  // Tasks per project (lazy loaded on expand)
-  const [projectTasks, setProjectTasks] = useState<Record<string, TaskBrief[]>>({});
-  const [loadingTasks, setLoadingTasks] = useState<Set<string>>(new Set());
-
-  // Create form
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
+  const [exportingCard, setExportingCard] = useState<{ id: string; format: 'xlsx' | 'pdf' } | null>(null);
 
-  const loadData = useCallback(async () => {
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  async function loadProjects() {
     setLoading(true);
-    setError('');
     try {
-      const [projectsData, unassigned] = await Promise.all([
-        listProjects(),
-        getUnassignedTasks(),
-      ]);
-      setProjects(projectsData);
-      setUnassignedTasks(unassigned);
+      const data = await listProjects();
+      setProjects(data);
     } catch {
-      setError('Ошибка при загрузке данных');
+      setError('Ошибка при загрузке проектов');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  async function toggleSection(id: string) {
-    const isExpanding = !expanded.has(id);
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-
-    if (isExpanding && id !== 'unassigned' && !projectTasks[id]) {
-      setLoadingTasks(prev => new Set(prev).add(id));
-      try {
-        const detail = await getProject(id);
-        setProjectTasks(prev => ({ ...prev, [id]: detail.tasks }));
-      } catch {
-        // ignore
-      } finally {
-        setLoadingTasks(prev => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      }
+  async function handleCardExport(projectId: string, format: 'xlsx' | 'pdf', e: React.MouseEvent) {
+    e.stopPropagation();
+    setExportingCard({ id: projectId, format });
+    try {
+      await exportProject(projectId, format);
+    } catch {
+      setError('Ошибка при экспорте проекта');
+    } finally {
+      setExportingCard(null);
     }
   }
 
@@ -94,7 +61,7 @@ const Projects: React.FC = () => {
       setNewName('');
       setNewDesc('');
       setShowCreate(false);
-      await loadData();
+      await loadProjects();
     } catch {
       setError('Ошибка при создании проекта');
     } finally {
@@ -102,359 +69,190 @@ const Projects: React.FC = () => {
     }
   }
 
-  function renderTaskItem(task: TaskBrief) {
-    const label = TASK_TYPE_LABELS[task.task_type as TaskType] ?? task.task_type;
-    const dotColor = STATUS_DOT_COLOR[task.status] ?? '#94a3b8';
-    const subtitle = task.source_file_name ?? formatDate(task.created_at);
-
-    return (
-      <div
-        key={task.id}
-        onClick={() => navigate(`/tasks/${task.id}/status`)}
-        title={`${label}\n${STATUS_LABELS[task.status as keyof typeof STATUS_LABELS] ?? task.status}`}
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '8px',
-          padding: '7px 10px 7px 32px',
-          margin: '1px 6px',
-          borderRadius: '6px',
-          cursor: 'pointer',
-          transition: 'background 0.1s',
-        }}
-        onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
-        onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-      >
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            backgroundColor: dotColor,
-            flexShrink: 0,
-            marginTop: 4,
-          }}
-        />
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: '13px',
-              color: '#1e293b',
-              lineHeight: '1.3',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {label}
-          </div>
-          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {subtitle}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderSection(
-    id: string,
-    label: string,
-    tasks: TaskBrief[],
-    taskCount: number,
-    isLoadingSection?: boolean,
-  ) {
-    const isOpen = expanded.has(id);
-
-    return (
-      <div key={id} style={{ marginBottom: '2px' }}>
-        {/* Section header */}
-        <div
-          onClick={() => toggleSection(id)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '7px 10px',
-            margin: '0 6px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            userSelect: 'none',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
-          onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-        >
-          <span
-            style={{
-              fontSize: '9px',
-              color: '#64748b',
-              display: 'inline-block',
-              transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-              transition: 'transform 0.15s',
-              lineHeight: 1,
-              flexShrink: 0,
-            }}
-          >
-            ▶
-          </span>
-          <span
-            style={{
-              fontSize: '13px',
-              fontWeight: 600,
-              color: '#334155',
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {label}
-          </span>
-          <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500, flexShrink: 0 }}>
-            {taskCount}
-          </span>
-        </div>
-
-        {/* Task list */}
-        {isOpen && (
-          <div>
-            {isLoadingSection ? (
-              <div style={{ padding: '6px 32px', fontSize: '12px', color: '#94a3b8' }}>
-                Загрузка...
-              </div>
-            ) : tasks.length === 0 ? (
-              <div style={{ padding: '6px 32px', fontSize: '12px', color: '#94a3b8' }}>
-                Нет задач
-              </div>
-            ) : (
-              tasks.map(task => renderTaskItem(task))
-            )}
-          </div>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <Layout noPadding>
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+    <Layout>
+      <div style={{ maxWidth: '860px', margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+          <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#1e293b', margin: 0 }}>Проекты</h1>
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            style={{
+              padding: '8px 18px',
+              backgroundColor: '#2563eb',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 600,
+            }}
+          >
+            + Новый проект
+          </button>
+        </div>
 
-        {/* ── Left sidebar ── */}
-        <div
-          style={{
-            width: SIDEBAR_WIDTH,
-            minWidth: SIDEBAR_WIDTH,
-            borderRight: '1px solid #e2e8f0',
-            backgroundColor: '#f8fafc',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
-          {/* Top: new project button */}
-          <div style={{ padding: '14px 12px 12px', borderBottom: '1px solid #e2e8f0', flexShrink: 0 }}>
-            <button
-              onClick={() => setShowCreate(v => !v)}
+        {showCreate && (
+          <form
+            onSubmit={handleCreate}
+            style={{
+              backgroundColor: '#fff',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '20px',
+              marginBottom: '24px',
+            }}
+          >
+            <h3 style={{ margin: '0 0 16px', fontSize: '16px', fontWeight: 600 }}>Новый проект</h3>
+            <input
+              type="text"
+              placeholder="Название проекта *"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              required
               style={{
                 width: '100%',
-                padding: '8px 12px',
-                backgroundColor: '#2563eb',
-                color: '#fff',
-                border: 'none',
+                padding: '10px 12px',
+                border: '1px solid #e2e8f0',
                 borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                fontWeight: 600,
-                textAlign: 'left',
+                fontSize: '14px',
+                marginBottom: '12px',
+                boxSizing: 'border-box',
               }}
-            >
-              + Новый проект
-            </button>
-          </div>
-
-          {/* Create form */}
-          {showCreate && (
-            <form
-              onSubmit={handleCreate}
+            />
+            <textarea
+              placeholder="Описание (необязательно)"
+              value={newDesc}
+              onChange={e => setNewDesc(e.target.value)}
+              rows={3}
               style={{
-                padding: '12px',
-                borderBottom: '1px solid #e2e8f0',
-                backgroundColor: '#fff',
-                flexShrink: 0,
+                width: '100%',
+                padding: '10px 12px',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                fontSize: '14px',
+                marginBottom: '12px',
+                resize: 'vertical',
+                boxSizing: 'border-box',
               }}
-            >
-              <input
-                type="text"
-                placeholder="Название проекта *"
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                required
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="submit"
+                disabled={creating}
                 style={{
-                  width: '100%',
-                  padding: '7px 10px',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  marginBottom: '8px',
-                  boxSizing: 'border-box',
-                  outline: 'none',
+                  padding: '8px 18px',
+                  backgroundColor: '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: creating ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 600,
                 }}
-              />
-              <textarea
-                placeholder="Описание (необязательно)"
-                value={newDesc}
-                onChange={e => setNewDesc(e.target.value)}
-                rows={2}
-                style={{
-                  width: '100%',
-                  padding: '7px 10px',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  marginBottom: '8px',
-                  resize: 'vertical',
-                  boxSizing: 'border-box',
-                  outline: 'none',
-                }}
-              />
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  type="submit"
-                  disabled={creating}
-                  style={{
-                    flex: 1,
-                    padding: '6px 10px',
-                    backgroundColor: '#2563eb',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: creating ? 'not-allowed' : 'pointer',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                  }}
-                >
-                  {creating ? 'Создание...' : 'Создать'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCreate(false)}
-                  style={{
-                    padding: '6px 10px',
-                    backgroundColor: 'transparent',
-                    color: '#64748b',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                  }}
-                >
-                  Отмена
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* Error */}
-          {error && (
-            <div
-              style={{
-                padding: '8px 12px',
-                fontSize: '12px',
-                color: '#dc2626',
-                backgroundColor: '#fef2f2',
-                borderBottom: '1px solid #fecaca',
-                flexShrink: 0,
-              }}
-            >
-              {error}
-            </div>
-          )}
-
-          {/* Scrollable tree */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-            {loading ? (
-              <div
-                style={{ padding: '32px 12px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}
               >
-                Загрузка...
-              </div>
-            ) : (
-              <>
-                {renderSection(
-                  'unassigned',
-                  'Без проекта',
-                  unassignedTasks,
-                  unassignedTasks.length,
+                {creating ? 'Создание...' : 'Создать'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCreate(false)}
+                style={{
+                  padding: '8px 18px',
+                  backgroundColor: 'transparent',
+                  color: '#64748b',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+              >
+                Отмена
+              </button>
+            </div>
+          </form>
+        )}
+
+        {error && (
+          <div style={{ padding: '12px', backgroundColor: '#fef2f2', color: '#dc2626', borderRadius: '8px', marginBottom: '16px' }}>
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px' }}>Загрузка...</div>
+        ) : projects.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+            Проекты не найдены. Создайте первый проект.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: '16px' }}>
+            {projects.map(p => (
+              <div
+                key={p.id}
+                onClick={() => navigate(`/projects/${p.id}`)}
+                style={{
+                  backgroundColor: '#fff',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '12px',
+                  padding: '20px 24px',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.08)')}
+                onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
+              >
+                <h2 style={{ margin: '0 0 6px', fontSize: '17px', fontWeight: 600, color: '#1e293b' }}>{p.name}</h2>
+                {p.description && (
+                  <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#64748b' }}>{p.description}</p>
                 )}
 
-                {projects.length > 0 && (
-                  <div
-                    style={{
-                      height: '1px',
-                      backgroundColor: '#e2e8f0',
-                      margin: '8px 12px',
-                    }}
-                  />
-                )}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '10px' }}>
+                  {p.unestimated > 0 && (
+                    <span style={{ padding: '3px 10px', backgroundColor: '#fef2f2', color: '#dc2626', borderRadius: '20px', fontSize: '12px', fontWeight: 500 }}>
+                      {p.unestimated} не рассчитано
+                    </span>
+                  )}
+                  {p.estimated > 0 && (
+                    <span style={{ padding: '3px 10px', backgroundColor: '#fef9c3', color: '#854d0e', borderRadius: '20px', fontSize: '12px', fontWeight: 500 }}>
+                      {p.estimated} рассчитано{p.total_cost !== null ? ` · ${formatCost(p.total_cost)}` : ''}
+                    </span>
+                  )}
+                  {p.optimized > 0 && (
+                    <span style={{ padding: '3px 10px', backgroundColor: '#f0fdf4', color: '#15803d', borderRadius: '20px', fontSize: '12px', fontWeight: 500 }}>
+                      {p.optimized} оптимизировано
+                    </span>
+                  )}
+                  {p.other > 0 && (
+                    <span style={{ padding: '3px 10px', backgroundColor: '#f8fafc', color: '#64748b', borderRadius: '20px', fontSize: '12px', fontWeight: 500 }}>
+                      {p.other} прочих задач
+                    </span>
+                  )}
+                  {p.unestimated === 0 && p.estimated === 0 && p.optimized === 0 && p.other === 0 && (
+                    <span style={{ fontSize: '12px', color: '#94a3b8' }}>Задач нет</span>
+                  )}
+                </div>
 
-                {projects.map(p =>
-                  renderSection(
-                    p.id,
-                    p.name,
-                    projectTasks[p.id] ?? [],
-                    p.unestimated + p.estimated + p.optimized + p.other,
-                    loadingTasks.has(p.id),
-                  ),
-                )}
-
-                {projects.length === 0 && !loading && (
-                  <div
-                    style={{ padding: '12px 16px', fontSize: '12px', color: '#94a3b8' }}
+                <div
+                  style={{ display: 'flex', gap: '8px', marginTop: '12px', borderTop: '1px solid #f1f5f9', paddingTop: '12px' }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <button
+                    onClick={e => handleCardExport(p.id, 'xlsx', e)}
+                    disabled={exportingCard !== null}
+                    style={{ padding: '4px 10px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: exportingCard !== null ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#15803d', fontWeight: 500 }}
                   >
-                    Проектов пока нет
-                  </div>
-                )}
-              </>
-            )}
+                    {exportingCard?.id === p.id && exportingCard?.format === 'xlsx' ? '...' : '↓ xlsx'}
+                  </button>
+                  <button
+                    onClick={e => handleCardExport(p.id, 'pdf', e)}
+                    disabled={exportingCard !== null}
+                    style={{ padding: '4px 10px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: exportingCard !== null ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#dc2626', fontWeight: 500 }}
+                  >
+                    {exportingCard?.id === p.id && exportingCard?.format === 'pdf' ? '...' : '↓ PDF'}
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
-
-        {/* ── Right panel ── */}
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: '#fff',
-            overflow: 'auto',
-          }}
-        >
-          <div style={{ textAlign: 'center', padding: '32px' }}>
-            <div
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: '12px',
-                backgroundColor: '#eff6ff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 16px',
-              }}
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
-            </div>
-            <div style={{ fontSize: '15px', fontWeight: 600, color: '#334155', marginBottom: '8px' }}>
-              Выберите задачу из списка
-            </div>
-            <div style={{ fontSize: '13px', color: '#94a3b8', lineHeight: 1.5 }}>
-              Нажмите на задачу в боковой панели,<br />чтобы перейти на её страницу
-            </div>
-          </div>
-        </div>
-
+        )}
       </div>
     </Layout>
   );
