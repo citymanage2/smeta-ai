@@ -1,8 +1,44 @@
 import io
+import os
 from typing import Any
 import structlog
 
 logger = structlog.get_logger()
+
+_CYRILLIC_FONT_CANDIDATES = [
+    # Debian/Ubuntu (fonts-dejavu-core)
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    # macOS
+    "/Library/Fonts/Arial Unicode MS.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Unicode MS.ttf",
+]
+
+
+def generate_text_pdf(text: str) -> bytes:
+    """Generate a PDF from plain text with Cyrillic support using fpdf2."""
+    from fpdf import FPDF
+
+    font_path = next((p for p in _CYRILLIC_FONT_CANDIDATES if os.path.exists(p)), None)
+    if font_path is None:
+        raise RuntimeError(
+            "Не найден шрифт с поддержкой кириллицы. "
+            "Установите пакет fonts-dejavu-core или аналог."
+        )
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.add_font("main", "", font_path)
+    pdf.set_font("main", size=11)
+
+    for line in text.split("\n"):
+        if line.strip():
+            pdf.multi_cell(0, 6, line)
+        else:
+            pdf.ln(4)
+
+    return bytes(pdf.output())
 
 
 def _build_comparison_html(data: dict) -> str:

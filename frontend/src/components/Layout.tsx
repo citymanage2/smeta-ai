@@ -4,9 +4,10 @@ import { useAuthStore } from '../stores/auth';
 
 interface LayoutProps {
   children: React.ReactNode;
+  noPadding?: boolean;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children }) => {
+const Layout: React.FC<LayoutProps> = ({ children, noPadding }) => {
   const navigate = useNavigate();
   const { role, logout, isAdmin } = useAuthStore();
 
@@ -131,7 +132,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </header>
 
       {/* Main content */}
-      <main style={{ flex: 1, padding: '32px 24px', maxWidth: '1280px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+      <main style={noPadding
+        ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+        : { flex: 1, padding: '32px 24px', maxWidth: '1280px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }
+      }>
         {children}
       </main>
 

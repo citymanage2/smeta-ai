@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { Project, ProjectCard, ProjectDetail } from '../types';
+import { Project, ProjectCard, ProjectDetail, TaskBrief } from '../types';
 
 export interface ProjectCreatePayload {
   name: string;
@@ -18,6 +18,11 @@ export async function listProjects(): Promise<ProjectCard[]> {
 
 export async function getProject(projectId: string): Promise<ProjectDetail> {
   const resp = await apiClient.get<ProjectDetail>(`/projects/${projectId}`);
+  return resp.data;
+}
+
+export async function getUnassignedTasks(): Promise<TaskBrief[]> {
+  const resp = await apiClient.get<TaskBrief[]>('/projects/unassigned');
   return resp.data;
 }
 

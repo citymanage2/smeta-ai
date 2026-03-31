@@ -14,7 +14,7 @@ from app.services import price_service
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost
 from app.services.excel_service import generate_list, generate_list_project, generate_smeta, generate_smeta_from_tz_project, generate_smeta_from_project, generate_smeta_detailed, generate_scan_result
-from app.services.pdf_service import generate_comparison_report
+from app.services.pdf_service import generate_comparison_report, generate_text_pdf
 from app.utils.file_parser import parse_file
 from app.utils.json_utils import extract_json
 
@@ -1193,11 +1193,11 @@ class TaskProcessor:
 
         # Save Stage 1 result immediately so the user can download it now
         await self.update_progress("Этап 1 завершён: сохранение результата проверки проекта...")
-        stage1_file_name = f"Этап1_Проверка_проекта_{date.today().strftime('%Y-%m-%d')}.txt"
+        stage1_file_name = f"Этап1_Проверка_проекта_{date.today().strftime('%Y-%m-%d')}.pdf"
         await self.save_result(
             stage1_file_name,
-            "text/plain; charset=utf-8",
-            research_result.encode("utf-8"),
+            "application/pdf",
+            generate_text_pdf(research_result),
         )
 
         await self._check_cancelled()
@@ -1588,11 +1588,11 @@ class TaskProcessor:
         )
 
         await self.update_progress("Сохранение результата проверки проекта...")
-        file_name = f"Проверка_проекта_{date.today().strftime('%Y-%m-%d')}.txt"
+        file_name = f"Проверка_проекта_{date.today().strftime('%Y-%m-%d')}.pdf"
         await self.save_result(
             file_name,
-            "text/plain; charset=utf-8",
-            result_text.encode("utf-8"),
+            "application/pdf",
+            generate_text_pdf(result_text),
         )
         logger.info("Research project task completed", task_id=self.task_id, length=len(result_text))
 

@@ -181,6 +181,29 @@ async def list_projects(
     ]
 
 
+@router.get("/unassigned", response_model=list[TaskBrief])
+async def list_unassigned_tasks(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    tasks_result = await db.execute(
+        select(Task).where(Task.project_id.is_(None)).order_by(Task.created_at.desc())
+    )
+    tasks = tasks_result.scalars().all()
+    return [
+        TaskBrief(
+            id=str(t.id),
+            task_type=t.task_type,
+            status=t.status,
+            estimation_status=t.estimation_status,
+            cost=float(t.cost) if t.cost is not None else None,
+            created_at=t.created_at.isoformat(),
+            source_file_name=(t.input_files[0]["name"] if t.input_files else None),
+        )
+        for t in tasks
+    ]
+
+
 @router.get("/{project_id}", response_model=ProjectDetailResponse)
 async def get_project(
     project_id: str,
