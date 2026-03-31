@@ -109,12 +109,14 @@ def create_app() -> FastAPI:
 
     # Include routers
     from app.routers import auth, tasks, results, admin, projects
+    from app.routers.calculator import router as calculator_router
 
     app.include_router(auth.router)
     app.include_router(tasks.router)
     app.include_router(results.router)
     app.include_router(admin.router)
     app.include_router(projects.router)
+    app.include_router(calculator_router)
 
     # Global error handler
     @app.exception_handler(Exception)

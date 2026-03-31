@@ -114,6 +114,21 @@ const Layout: React.FC<LayoutProps> = ({ children, noPadding }) => {
             Проекты
           </button>
           <button
+            onClick={() => navigate('/calculator')}
+            style={{
+              padding: '7px 16px',
+              backgroundColor: 'transparent',
+              color: '#64748b',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 500,
+            }}
+          >
+            Калькулятор
+          </button>
+          <button
             onClick={handleLogout}
             style={{
               padding: '7px 16px',
