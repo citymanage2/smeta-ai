@@ -27,14 +27,18 @@ def generate_text_pdf(text: str) -> bytes:
         )
 
     pdf = FPDF()
+    pdf.set_margins(left=15, top=15, right=15)
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.add_font("main", "", font_path)
     pdf.set_font("main", size=11)
 
+    # Effective text width: page width minus left and right margins
+    text_width = pdf.w - pdf.l_margin - pdf.r_margin
+
     for line in text.split("\n"):
         if line.strip():
-            pdf.multi_cell(0, 6, line)
+            pdf.multi_cell(text_width, 6, line)
         else:
             pdf.ln(4)
 
