@@ -9,8 +9,6 @@ services:
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: DATABASE_URL
-        sync: false
       - key: JWT_SECRET
         sync: false
       - key: USER_PASSWORD
