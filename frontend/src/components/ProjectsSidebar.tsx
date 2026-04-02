@@ -1,7 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Pencil, Check, X } from 'lucide-react';
 import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
-import { listProjects, createProject, getProject, getUnassignedTasks } from '../api/projects';
+import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
+import { updateTask } from '../api/tasks';
 
 const SIDEBAR_WIDTH = 260;
 
@@ -16,6 +18,12 @@ const STATUS_DOT_COLOR: Record<string, string> = {
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
+
+const iconStyle: React.CSSProperties = {
+  color: '#94a3b8',
+  cursor: 'pointer',
+  flexShrink: 0,
+};
 
 const ProjectsSidebar: React.FC = () => {
   const navigate = useNavigate();
@@ -33,6 +41,12 @@ const ProjectsSidebar: React.FC = () => {
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
+
+  // Inline edit state
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const editInputRef = useRef<HTMLInputElement>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -54,6 +68,13 @@ const ProjectsSidebar: React.FC = () => {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingProjectId, editingTaskId]);
 
   async function toggleSection(id: string) {
     const isExpanding = !expanded.has(id);
@@ -98,17 +119,81 @@ const ProjectsSidebar: React.FC = () => {
     }
   }
 
-  function renderTaskItem(task: TaskBrief) {
+  function startProjectEdit(id: string, currentName: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditingTaskId(null);
+    setEditingProjectId(id);
+    setEditValue(currentName);
+  }
+
+  function startTaskEdit(taskId: string, currentName: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditingProjectId(null);
+    setEditingTaskId(taskId);
+    setEditValue(currentName);
+  }
+
+  function cancelEdit() {
+    setEditingProjectId(null);
+    setEditingTaskId(null);
+    setEditValue('');
+  }
+
+  async function saveProjectEdit(projectId: string) {
+    const trimmed = editValue.trim();
+    if (!trimmed) { cancelEdit(); return; }
+    try {
+      await updateProject(projectId, { name: trimmed });
+      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, name: trimmed } : p));
+    } catch {
+      setError('Ошибка при сохранении');
+    }
+    cancelEdit();
+  }
+
+  async function saveTaskEdit(taskId: string, isUnassigned: boolean, projectId?: string) {
+    const trimmed = editValue.trim();
+    if (!trimmed) { cancelEdit(); return; }
+    try {
+      await updateTask(taskId, { name: trimmed });
+      const updater = (tasks: TaskBrief[]) =>
+        tasks.map(t => t.id === taskId ? { ...t, name: trimmed } : t);
+      if (isUnassigned) {
+        setUnassignedTasks(updater);
+      } else if (projectId) {
+        setProjectTasks(prev => ({
+          ...prev,
+          [projectId]: updater(prev[projectId] ?? []),
+        }));
+      }
+    } catch {
+      setError('Ошибка при сохранении');
+    }
+    cancelEdit();
+  }
+
+  function handleProjectEditKeyDown(e: React.KeyboardEvent, projectId: string) {
+    if (e.key === 'Enter') { e.preventDefault(); saveProjectEdit(projectId); }
+    if (e.key === 'Escape') cancelEdit();
+  }
+
+  function handleTaskEditKeyDown(e: React.KeyboardEvent, taskId: string, isUnassigned: boolean, projectId?: string) {
+    if (e.key === 'Enter') { e.preventDefault(); saveTaskEdit(taskId, isUnassigned, projectId); }
+    if (e.key === 'Escape') cancelEdit();
+  }
+
+  function renderTaskItem(task: TaskBrief, isUnassigned: boolean, projectId?: string) {
     const label = TASK_TYPE_LABELS[task.task_type as TaskType] ?? task.task_type;
+    const displayName = task.name || label;
     const dotColor = STATUS_DOT_COLOR[task.status] ?? '#94a3b8';
     const subtitle = task.source_file_name ?? formatDate(task.created_at);
     const statusLabel = STATUS_LABELS[task.status as keyof typeof STATUS_LABELS] ?? task.status;
+    const isEditing = editingTaskId === task.id;
 
     return (
       <div
         key={task.id}
-        onClick={() => navigate(`/tasks/${task.id}/status`)}
-        title={`${label}\n${statusLabel}`}
+        title={isEditing ? undefined : `${displayName}\n${statusLabel}`}
         style={{
           display: 'flex',
           alignItems: 'flex-start',
@@ -116,7 +201,6 @@ const ProjectsSidebar: React.FC = () => {
           padding: '6px 8px 6px 28px',
           margin: '1px 4px',
           borderRadius: '5px',
-          cursor: 'pointer',
         }}
         onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
         onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -131,31 +215,75 @@ const ProjectsSidebar: React.FC = () => {
             marginTop: 4,
           }}
         />
-        <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: '12px',
-              color: '#1e293b',
-              lineHeight: '1.3',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {label}
-          </div>
-          <div
-            style={{
-              fontSize: '11px',
-              color: '#94a3b8',
-              marginTop: '1px',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {subtitle}
-          </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          {isEditing ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <input
+                ref={editInputRef}
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onKeyDown={e => handleTaskEditKeyDown(e, task.id, isUnassigned, projectId)}
+                onClick={e => e.stopPropagation()}
+                style={{
+                  flex: 1,
+                  fontSize: '12px',
+                  border: '1px solid #93c5fd',
+                  borderRadius: '4px',
+                  padding: '2px 5px',
+                  outline: 'none',
+                  minWidth: 0,
+                }}
+              />
+              <Check
+                size={13}
+                style={{ ...iconStyle, color: '#16a34a' }}
+                onClick={e => { e.stopPropagation(); saveTaskEdit(task.id, isUnassigned, projectId); }}
+              />
+              <X
+                size={13}
+                style={{ ...iconStyle, color: '#dc2626' }}
+                onClick={e => { e.stopPropagation(); cancelEdit(); }}
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <div
+                onClick={() => navigate(`/tasks/${task.id}/status`)}
+                style={{
+                  fontSize: '12px',
+                  color: '#1e293b',
+                  lineHeight: '1.3',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                {displayName}
+              </div>
+              <Pencil
+                size={11}
+                style={iconStyle}
+                onClick={e => startTaskEdit(task.id, displayName, e)}
+              />
+            </div>
+          )}
+          {!isEditing && (
+            <div
+              style={{
+                fontSize: '11px',
+                color: '#94a3b8',
+                marginTop: '1px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {subtitle}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -166,14 +294,15 @@ const ProjectsSidebar: React.FC = () => {
     label: string,
     tasks: TaskBrief[],
     taskCount: number,
+    isUnassigned: boolean,
     isLoadingSection?: boolean,
   ) {
     const isOpen = expanded.has(id);
+    const isEditingProject = !isUnassigned && editingProjectId === id;
 
     return (
       <div key={id} style={{ marginBottom: '1px' }}>
         <div
-          onClick={() => toggleSection(id)}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -181,13 +310,14 @@ const ProjectsSidebar: React.FC = () => {
             padding: '6px 8px',
             margin: '0 4px',
             borderRadius: '5px',
-            cursor: 'pointer',
             userSelect: 'none',
           }}
           onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
+          {/* Toggle arrow */}
           <span
+            onClick={e => { e.stopPropagation(); toggleSection(id); }}
             style={{
               fontSize: '8px',
               color: '#64748b',
@@ -196,26 +326,73 @@ const ProjectsSidebar: React.FC = () => {
               transition: 'transform 0.15s',
               lineHeight: 1,
               flexShrink: 0,
+              cursor: 'pointer',
+              padding: '2px',
             }}
           >
             ▶
           </span>
-          <span
-            style={{
-              fontSize: '12px',
-              fontWeight: 600,
-              color: '#334155',
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {label}
-          </span>
-          <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500, flexShrink: 0 }}>
-            {taskCount}
-          </span>
+
+          {/* Project name / edit input */}
+          {isEditingProject ? (
+            <>
+              <input
+                ref={editInputRef}
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onKeyDown={e => handleProjectEditKeyDown(e, id)}
+                onClick={e => e.stopPropagation()}
+                style={{
+                  flex: 1,
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  border: '1px solid #93c5fd',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  outline: 'none',
+                  minWidth: 0,
+                }}
+              />
+              <Check
+                size={14}
+                style={{ ...iconStyle, color: '#16a34a' }}
+                onClick={e => { e.stopPropagation(); saveProjectEdit(id); }}
+              />
+              <X
+                size={14}
+                style={{ ...iconStyle, color: '#dc2626' }}
+                onClick={e => { e.stopPropagation(); cancelEdit(); }}
+              />
+            </>
+          ) : (
+            <>
+              <span
+                onClick={isUnassigned ? undefined : e => { e.stopPropagation(); navigate(`/projects/${id}`); }}
+                style={{
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#334155',
+                  flex: 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  cursor: isUnassigned ? 'default' : 'pointer',
+                }}
+              >
+                {label}
+              </span>
+              {!isUnassigned && (
+                <Pencil
+                  size={12}
+                  style={iconStyle}
+                  onClick={e => startProjectEdit(id, label, e)}
+                />
+              )}
+              <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500, flexShrink: 0 }}>
+                {taskCount}
+              </span>
+            </>
+          )}
         </div>
 
         {isOpen && (
@@ -229,7 +406,7 @@ const ProjectsSidebar: React.FC = () => {
                 Нет задач
               </div>
             ) : (
-              tasks.map(task => renderTaskItem(task))
+              tasks.map(task => renderTaskItem(task, isUnassigned, isUnassigned ? undefined : id))
             )}
           </div>
         )}
@@ -389,7 +566,7 @@ const ProjectsSidebar: React.FC = () => {
           </div>
         ) : (
           <>
-            {renderSection('unassigned', 'Без проекта', unassignedTasks, unassignedTasks.length)}
+            {renderSection('unassigned', 'Без проекта', unassignedTasks, unassignedTasks.length, true)}
 
             {projects.length > 0 && (
               <div
@@ -403,6 +580,7 @@ const ProjectsSidebar: React.FC = () => {
                 p.name,
                 projectTasks[p.id] ?? [],
                 p.unestimated + p.estimated + p.optimized + p.other,
+                false,
                 loadingTasks.has(p.id),
               ),
             )}

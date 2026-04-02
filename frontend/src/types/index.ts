@@ -103,6 +103,7 @@ export interface ProjectCard extends Project {
   optimized: number;
   other: number;
   total_cost: number | null;
+  optimized_cost?: number | null;
 }
 
 export interface TaskBrief {
@@ -114,6 +115,7 @@ export interface TaskBrief {
   created_at: string;
   source_file_name?: string | null;
   slot_files?: Record<string, string>;
+  name?: string | null;
 }
 
 export interface ProjectDetail extends ProjectCard {

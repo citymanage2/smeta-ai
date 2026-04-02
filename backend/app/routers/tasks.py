@@ -88,6 +88,7 @@ class TaskStatusResponse(BaseModel):
     project_id: Optional[str]
     created_at: str
     updated_at: str
+    name: Optional[str] = None
 
 
 class TaskCreateResponse(BaseModel):
@@ -273,6 +274,7 @@ async def get_task_status(
         project_id=str(task.project_id) if task.project_id else None,
         created_at=task.created_at.isoformat(),
         updated_at=task.updated_at.isoformat(),
+        name=task.name,
     )
 
 
@@ -448,6 +450,63 @@ async def delete_file_from_slot(
 
     await db.commit()
     return {"task_id": task_id, "slot": slot, "status": "deleted"}
+
+
+class TaskUpdateRequest(BaseModel):
+    name: Optional[str] = None
+
+
+class TaskUpdateResponse(BaseModel):
+    task_id: str
+    name: Optional[str]
+
+
+@router.patch("/{task_id}", response_model=TaskUpdateResponse)
+async def update_task(
+    task_id: str,
+    body: TaskUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if body.name is not None:
+        task.name = body.name.strip() or None
+    await db.commit()
+    return TaskUpdateResponse(task_id=str(task.id), name=task.name)
+
+
+class SlotRenameRequest(BaseModel):
+    name: str
+
+
+@router.patch("/{task_id}/files/{slot}")
+async def rename_slot_file(
+    task_id: str,
+    slot: str,
+    body: SlotRenameRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    if slot not in VALID_SLOTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Недопустимый слот. Допустимые значения: {', '.join(VALID_SLOTS)}",
+        )
+    result = await db.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == task_id,
+            TaskResult.slot == slot,
+        )
+    )
+    task_result = result.scalar_one_or_none()
+    if not task_result:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    task_result.file_name = body.name.strip()
+    await db.commit()
+    return {"task_id": task_id, "slot": slot, "file_name": task_result.file_name}
 
 
 @router.patch("/{task_id}/estimation", response_model=EstimationStatusResponse)

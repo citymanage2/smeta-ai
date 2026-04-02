@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
 import { getProject, updateProject, deleteProject, exportProject, downloadSlotFile, uploadFileToSlot } from '../api/projects';
+import { updateTask, renameSlotFile } from '../api/tasks';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
@@ -23,36 +25,179 @@ const ESTIMATION_COLORS: Record<string, { bg: string; text: string }> = {
   not_applicable: { bg: '#f8fafc', text: '#94a3b8' },
 };
 
-function formatCost(cost: number | null): string {
+function formatCost(cost: number | null | undefined): string {
   if (cost === null || cost === undefined) return '—';
   return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(cost);
+}
+
+const iconBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  padding: '2px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  color: '#94a3b8',
+};
+
+function InlineEditName({
+  value,
+  onSave,
+  inputStyle,
+  iconSize = 16,
+}: {
+  value: string;
+  onSave: (name: string) => Promise<void>;
+  inputStyle?: React.CSSProperties;
+  iconSize?: number;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  async function save() {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) {
+      await onSave(trimmed);
+    }
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(value);
+    setEditing(false);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Escape') cancel();
+  }
+
+  if (editing) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={handleKeyDown}
+          style={{
+            border: '1px solid #93c5fd',
+            borderRadius: '6px',
+            padding: '4px 8px',
+            outline: 'none',
+            ...inputStyle,
+          }}
+        />
+        <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={save}>
+          <Check size={iconSize} />
+        </button>
+        <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={cancel}>
+          <X size={iconSize} />
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+      <span>{value}</span>
+      <button style={iconBtnStyle} onClick={() => { setDraft(value); setEditing(true); }}>
+        <Pencil size={iconSize} />
+      </button>
+    </span>
+  );
 }
 
 function SlotRow({
   label,
   fileName,
+  slot,
   onDownload,
   allowUpload = false,
   onUpload,
+  onRename,
 }: {
   label: string;
   fileName: string | null;
+  taskId?: string;
+  slot: string;
   onDownload: () => void;
   allowUpload?: boolean;
   onUpload?: (file: File) => Promise<void>;
+  onRename?: (newName: string) => Promise<void>;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(fileName ?? '');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  async function saveRename() {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== fileName && onRename) {
+      await onRename(trimmed);
+    }
+    setEditing(false);
+  }
+
+  function cancelRename() {
+    setDraft(fileName ?? '');
+    setEditing(false);
+  }
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
       <span style={{ fontWeight: 500, color: '#94a3b8', minWidth: '100px' }}>{label}:</span>
       {fileName ? (
         <>
-          <span style={{ color: '#475569' }}>{fileName}</span>
-          <button
-            onClick={(e) => { e.stopPropagation(); onDownload(); }}
-            style={{ padding: '2px 8px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
-          >
-            ↓
-          </button>
+          {editing ? (
+            <>
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); saveRename(); }
+                  if (e.key === 'Escape') cancelRename();
+                }}
+                style={{ border: '1px solid #93c5fd', borderRadius: '4px', padding: '2px 6px', outline: 'none', fontSize: '12px', minWidth: 0, flex: 1 }}
+              />
+              <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={saveRename}>
+                <Check size={13} />
+              </button>
+              <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={cancelRename}>
+                <X size={13} />
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ color: '#475569' }}>{fileName}</span>
+              {onRename && slot !== 'source' && (
+                <button style={iconBtnStyle} onClick={() => { setDraft(fileName); setEditing(true); }}>
+                  <Pencil size={11} />
+                </button>
+              )}
+              <button
+                onClick={(e) => { e.stopPropagation(); onDownload(); }}
+                style={{ padding: '2px 8px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
+              >
+                ↓
+              </button>
+            </>
+          )}
         </>
       ) : (
         <>
@@ -88,9 +233,8 @@ const ProjectDetailPage: React.FC = () => {
   const [project, setProject] = useState<IProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState(false);
-  const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
+  const [editingDesc, setEditingDesc] = useState(false);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
@@ -105,7 +249,6 @@ const ProjectDetailPage: React.FC = () => {
     try {
       const data = await getProject(projectId!);
       setProject(data);
-      setEditName(data.name);
       setEditDesc(data.description ?? '');
     } catch {
       setError('Проект не найден');
@@ -114,22 +257,44 @@ const ProjectDetailPage: React.FC = () => {
     }
   }
 
-  async function handleSave(e: React.FormEvent) {
+  async function handleSaveProjectName(name: string) {
+    if (!projectId) return;
+    const updated = await updateProject(projectId, { name });
+    setProject(prev => prev ? { ...prev, name: updated.name } : prev);
+  }
+
+  async function handleSaveDesc(e: React.FormEvent) {
     e.preventDefault();
-    if (!editName.trim() || !projectId) return;
+    if (!projectId) return;
     setSaving(true);
     try {
-      const updated = await updateProject(projectId, {
-        name: editName.trim(),
-        description: editDesc.trim() || undefined,
-      });
-      setProject((prev) => prev ? { ...prev, name: updated.name, description: updated.description } : prev);
-      setEditing(false);
+      const updated = await updateProject(projectId, { description: editDesc.trim() || undefined });
+      setProject(prev => prev ? { ...prev, description: updated.description } : prev);
+      setEditingDesc(false);
     } catch {
       setError('Ошибка при сохранении');
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSaveTaskName(taskId: string, name: string) {
+    await updateTask(taskId, { name });
+    setProject(prev => prev ? {
+      ...prev,
+      tasks: prev.tasks.map(t => t.id === taskId ? { ...t, name } : t),
+    } : prev);
+  }
+
+  async function handleRenameSlotFile(taskId: string, slot: string, name: string) {
+    await renameSlotFile(taskId, slot, name);
+    setProject(prev => prev ? {
+      ...prev,
+      tasks: prev.tasks.map(t => t.id === taskId ? {
+        ...t,
+        slot_files: { ...(t.slot_files ?? {}), [slot]: name },
+      } : t),
+    } : prev);
   }
 
   async function handleDelete() {
@@ -167,6 +332,9 @@ const ProjectDetailPage: React.FC = () => {
     );
   }
 
+  const totalCost = project.total_cost ?? null;
+  const optimizedCost = (project as any).optimized_cost ?? null;
+
   return (
     <Layout>
       <div style={{ maxWidth: '900px', margin: '0 auto' }}>
@@ -178,85 +346,111 @@ const ProjectDetailPage: React.FC = () => {
         </button>
 
         <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
-          {editing ? (
-            <form onSubmit={handleSave}>
-              <input
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                required
-                style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '18px', fontWeight: 600, marginBottom: '12px', boxSizing: 'border-box' }}
-              />
-              <textarea
-                value={editDesc}
-                onChange={(e) => setEditDesc(e.target.value)}
-                rows={3}
-                style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', marginBottom: '12px', resize: 'vertical', boxSizing: 'border-box' }}
-              />
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button type="submit" disabled={saving} style={{ padding: '8px 18px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '14px' }}>
-                  {saving ? 'Сохранение...' : 'Сохранить'}
-                </button>
-                <button type="button" onClick={() => setEditing(false)} style={{ padding: '8px 18px', backgroundColor: 'transparent', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '14px' }}>
-                  Отмена
-                </button>
-              </div>
-            </form>
-          ) : (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 700, color: '#1e293b' }}>{project.name}</h1>
-                  {project.description && <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>{project.description}</p>}
-                </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <button
-                    onClick={() => handleExport('xlsx')}
-                    disabled={exporting !== null}
-                    style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#15803d', fontWeight: 500 }}
-                  >
-                    {exporting === 'xlsx' ? '...' : '↓ xlsx'}
-                  </button>
-                  <button
-                    onClick={() => handleExport('pdf')}
-                    disabled={exporting !== null}
-                    style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}
-                  >
-                    {exporting === 'pdf' ? '...' : '↓ PDF'}
-                  </button>
-                  <button onClick={() => setEditing(true)} style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#64748b' }}>
-                    Изменить
-                  </button>
-                  {isAdmin && (
-                    <button onClick={handleDelete} style={{ padding: '7px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
-                      Удалить
-                    </button>
-                  )}
-                </div>
-              </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ flex: 1, minWidth: 0, marginRight: '16px' }}>
+              {/* Project name with inline edit */}
+              <h1 style={{ margin: '0 0 8px', fontSize: '22px', fontWeight: 700, color: '#1e293b' }}>
+                <InlineEditName
+                  value={project.name}
+                  onSave={handleSaveProjectName}
+                  inputStyle={{ fontSize: '20px', fontWeight: 700, width: '280px' }}
+                  iconSize={18}
+                />
+              </h1>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '16px' }}>
-                {project.unestimated > 0 && (
-                  <span style={{ padding: '4px 12px', backgroundColor: '#fef2f2', color: '#dc2626', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
-                    {project.unestimated} не рассчитано
-                  </span>
-                )}
-                {project.estimated > 0 && (
-                  <span style={{ padding: '4px 12px', backgroundColor: '#fef9c3', color: '#854d0e', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
-                    {project.estimated} рассчитано · {formatCost(project.total_cost)}
-                  </span>
-                )}
-                {project.optimized > 0 && (
-                  <span style={{ padding: '4px 12px', backgroundColor: '#f0fdf4', color: '#15803d', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
-                    {project.optimized} оптимизировано
-                  </span>
-                )}
-                {project.other > 0 && (
-                  <span style={{ padding: '4px 12px', backgroundColor: '#f8fafc', color: '#64748b', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
-                    {project.other} прочих задач
-                  </span>
-                )}
-              </div>
-            </>
+              {/* Description */}
+              {editingDesc ? (
+                <form onSubmit={handleSaveDesc} style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                  <textarea
+                    value={editDesc}
+                    onChange={e => setEditDesc(e.target.value)}
+                    rows={2}
+                    style={{ flex: 1, padding: '6px 8px', border: '1px solid #93c5fd', borderRadius: '6px', fontSize: '14px', resize: 'vertical', outline: 'none' }}
+                  />
+                  <button type="submit" disabled={saving} style={{ ...iconBtnStyle, color: '#16a34a' }}>
+                    <Check size={16} />
+                  </button>
+                  <button type="button" onClick={() => setEditingDesc(false)} style={{ ...iconBtnStyle, color: '#dc2626' }}>
+                    <X size={16} />
+                  </button>
+                </form>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {project.description ? (
+                    <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>{project.description}</p>
+                  ) : (
+                    <span style={{ fontSize: '13px', color: '#cbd5e1' }}>Без описания</span>
+                  )}
+                  <button style={iconBtnStyle} onClick={() => { setEditDesc(project.description ?? ''); setEditingDesc(true); }}>
+                    <Pencil size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+              <button
+                onClick={() => handleExport('xlsx')}
+                disabled={exporting !== null}
+                style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#15803d', fontWeight: 500 }}
+              >
+                {exporting === 'xlsx' ? '...' : '↓ xlsx'}
+              </button>
+              <button
+                onClick={() => handleExport('pdf')}
+                disabled={exporting !== null}
+                style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}
+              >
+                {exporting === 'pdf' ? '...' : '↓ PDF'}
+              </button>
+              {isAdmin && (
+                <button onClick={handleDelete} style={{ padding: '7px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
+                  Удалить
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Stats badges + totals */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '16px' }}>
+            {project.unestimated > 0 && (
+              <span style={{ padding: '4px 12px', backgroundColor: '#fef2f2', color: '#dc2626', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
+                {project.unestimated} не рассчитано
+              </span>
+            )}
+            {project.estimated > 0 && (
+              <span style={{ padding: '4px 12px', backgroundColor: '#fef9c3', color: '#854d0e', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
+                {project.estimated} рассчитано
+              </span>
+            )}
+            {project.optimized > 0 && (
+              <span style={{ padding: '4px 12px', backgroundColor: '#f0fdf4', color: '#15803d', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
+                {project.optimized} оптимизировано
+              </span>
+            )}
+            {project.other > 0 && (
+              <span style={{ padding: '4px 12px', backgroundColor: '#f8fafc', color: '#64748b', borderRadius: '20px', fontSize: '13px', fontWeight: 500 }}>
+                {project.other} прочих задач
+              </span>
+            )}
+          </div>
+
+          {/* Cost totals */}
+          {(totalCost !== null || optimizedCost !== null) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f1f5f9' }}>
+              {totalCost !== null && (
+                <div>
+                  <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Итого по сметам: </span>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{formatCost(totalCost)}</span>
+                </div>
+              )}
+              {optimizedCost !== null && (
+                <div>
+                  <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Итого оптимизированных: </span>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#15803d' }}>{formatCost(optimizedCost)}</span>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -274,6 +468,13 @@ const ProjectDetailPage: React.FC = () => {
               const estColors = ESTIMATION_COLORS[task.estimation_status] ?? ESTIMATION_COLORS.not_applicable;
               const isEstimateType = ESTIMATE_TASK_TYPES.has(task.task_type as any);
               const slots = task.slot_files ?? {};
+              const taskLabel = TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type;
+              const taskDisplayName = task.name || taskLabel;
+              const showCost = task.cost !== null && task.cost !== undefined &&
+                (task.estimation_status === 'estimated' || task.estimation_status === 'optimized');
+              const showOptimizedCost = task.cost !== null && task.cost !== undefined &&
+                task.estimation_status === 'optimized';
+
               return (
                 <div
                   key={task.id}
@@ -288,18 +489,43 @@ const ProjectDetailPage: React.FC = () => {
                 >
                   {/* Main task row */}
                   <div
-                    onClick={() => { if (task.id) navigate(`/tasks/${task.id}/status`); }}
-                    style={{ padding: '14px 18px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                    style={{ padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}
                   >
-                    <div>
-                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>
-                        {TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Task name with inline edit */}
+                      <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b', marginBottom: '2px' }}>
+                        <InlineEditName
+                          value={taskDisplayName}
+                          onSave={(name) => handleSaveTaskName(task.id, name)}
+                          inputStyle={{ fontSize: '13px', fontWeight: 600, width: '220px' }}
+                          iconSize={14}
+                        />
                       </div>
                       <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
                         {new Date(task.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </div>
+
+                      {/* Cost info */}
+                      {showCost && (
+                        <div style={{ marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                          <div>
+                            <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Сумма по смете: </span>
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost)}</span>
+                          </div>
+                          {showOptimizedCost && (
+                            <div>
+                              <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Сумма оптимизированная: </span>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#15803d' }}>{formatCost(task.cost)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+                    <div
+                      onClick={() => { if (task.id) navigate(`/tasks/${task.id}/status`); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0, marginLeft: '12px' }}
+                    >
                       {isEstimateType && task.estimation_status === 'estimated' && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setOptimizingTaskId(task.id); }}
@@ -316,9 +542,6 @@ const ProjectDetailPage: React.FC = () => {
                           История
                         </button>
                       )}
-                      {task.cost !== null && (
-                        <span style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost)}</span>
-                      )}
                       {task.estimation_status !== 'not_applicable' && (
                         <span style={{ padding: '3px 10px', backgroundColor: estColors.bg, color: estColors.text, borderRadius: '12px', fontSize: '12px', fontWeight: 500 }}>
                           {ESTIMATION_LABELS[task.estimation_status]}
@@ -330,28 +553,33 @@ const ProjectDetailPage: React.FC = () => {
                   {/* Slot files (only for ESTIMATE_TASK_TYPES) */}
                   {isEstimateType && (
                     <div style={{ borderTop: '1px solid #f1f5f9', padding: '10px 18px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                      {/* Source */}
                       <SlotRow
                         label="Исходный"
                         fileName={task.source_file_name ?? null}
+                        taskId={task.id}
+                        slot="source"
                         onDownload={() => downloadSlotFile(task.id, 'source')}
                       />
-                      {/* Estimate */}
                       <SlotRow
                         label="Смета"
                         fileName={slots['estimate'] ?? null}
+                        taskId={task.id}
+                        slot="estimate"
                         onDownload={() => downloadSlotFile(task.id, 'estimate')}
+                        onRename={(name) => handleRenameSlotFile(task.id, 'estimate', name)}
                       />
-                      {/* Optimized */}
                       <SlotRow
                         label="Оптимизированная"
                         fileName={slots['optimized'] ?? null}
+                        taskId={task.id}
+                        slot="optimized"
                         onDownload={() => downloadSlotFile(task.id, 'optimized')}
                         allowUpload
                         onUpload={async (file) => {
                           await uploadFileToSlot(task.id, 'optimized', file);
                           loadProject();
                         }}
+                        onRename={(name) => handleRenameSlotFile(task.id, 'optimized', name)}
                       />
                     </div>
                   )}

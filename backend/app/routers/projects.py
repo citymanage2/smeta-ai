@@ -49,6 +49,7 @@ class ProjectCardResponse(BaseModel):
     optimized: int
     other: int
     total_cost: Optional[float]
+    optimized_cost: Optional[float] = None
 
 
 class TaskBrief(BaseModel):
@@ -60,6 +61,7 @@ class TaskBrief(BaseModel):
     created_at: str
     source_file_name: Optional[str] = None
     slot_files: dict[str, str] = {}
+    name: Optional[str] = None
 
 
 class ProjectDetailResponse(BaseModel):
@@ -73,6 +75,7 @@ class ProjectDetailResponse(BaseModel):
     optimized: int
     other: int
     total_cost: Optional[float]
+    optimized_cost: Optional[float] = None
     tasks: list[TaskBrief]
 
 
@@ -106,6 +109,12 @@ async def _aggregate(project_id: str, db: AsyncSession) -> dict:
                 else_=None,
             )
         ).label("total_cost"),
+        func.sum(
+            case(
+                (Task.estimation_status == "optimized", Task.cost),
+                else_=None,
+            )
+        ).label("optimized_cost"),
     ).where(Task.project_id == project_id)
     row = (await db.execute(stmt)).one()
     return {
@@ -114,6 +123,7 @@ async def _aggregate(project_id: str, db: AsyncSession) -> dict:
         "optimized": row.optimized or 0,
         "other": row.other or 0,
         "total_cost": float(row.total_cost) if row.total_cost is not None else None,
+        "optimized_cost": float(row.optimized_cost) if row.optimized_cost is not None else None,
     }
 
 
@@ -152,6 +162,12 @@ async def list_projects(
                     else_=None,
                 )
             ).label("total_cost"),
+            func.sum(
+                case(
+                    (Task.estimation_status == "optimized", Task.cost),
+                    else_=None,
+                )
+            ).label("optimized_cost"),
         )
         .outerjoin(Task, Task.project_id == Project.id)
         .group_by(
@@ -176,6 +192,7 @@ async def list_projects(
             optimized=row.optimized or 0,
             other=row.other or 0,
             total_cost=float(row.total_cost) if row.total_cost is not None else None,
+            optimized_cost=float(row.optimized_cost) if row.optimized_cost is not None else None,
         )
         for row in rows
     ]
@@ -199,6 +216,7 @@ async def list_unassigned_tasks(
             cost=float(t.cost) if t.cost is not None else None,
             created_at=t.created_at.isoformat(),
             source_file_name=(t.input_files[0]["name"] if t.input_files else None),
+            name=t.name,
         )
         for t in tasks
     ]
@@ -248,6 +266,7 @@ async def get_project(
                 created_at=t.created_at.isoformat(),
                 source_file_name=(t.input_files[0]["name"] if t.input_files else None),
                 slot_files=slot_files_by_task.get(str(t.id), {}),
+                name=t.name,
             )
             for t in tasks
         ],

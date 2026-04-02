@@ -29,6 +29,7 @@ backend/alembic/versions/*.py
 !backend/alembic/versions/005_task_history.py
 !backend/alembic/versions/006_repair_missing_004.py
 !backend/alembic/versions/007_widen_estimation_status.py
+!backend/alembic/versions/008_task_name.py
 
 # IDE
 .vscode/

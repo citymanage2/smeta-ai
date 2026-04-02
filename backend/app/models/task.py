@@ -38,6 +38,7 @@ class Task(Base):
         default="not_applicable",
     )
     cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

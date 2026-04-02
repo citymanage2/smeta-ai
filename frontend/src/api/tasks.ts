@@ -12,6 +12,7 @@ export interface TaskStatusResponse {
   project_id?: string | null;
   created_at: string;
   updated_at: string;
+  name?: string | null;
 }
 
 export interface ChatMessage {
@@ -60,6 +61,15 @@ export async function cancelTask(taskId: string): Promise<void> {
 export async function sendMessage(taskId: string, message: string): Promise<TaskChatResponse> {
   const response = await apiClient.post<TaskChatResponse>(`/tasks/${taskId}/message`, { message });
   return response.data;
+}
+
+export async function updateTask(taskId: string, data: { name: string }): Promise<{ task_id: string; name: string | null }> {
+  const response = await apiClient.patch<{ task_id: string; name: string | null }>(`/tasks/${taskId}`, data);
+  return response.data;
+}
+
+export async function renameSlotFile(taskId: string, slot: string, name: string): Promise<void> {
+  await apiClient.patch(`/tasks/${taskId}/files/${slot}`, { name });
 }
 
 export async function downloadResult(fileId: number, fileName: string): Promise<void> {

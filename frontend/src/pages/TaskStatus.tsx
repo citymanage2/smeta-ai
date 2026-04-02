@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
 import { BatchProgressBar } from '../components/BatchProgressBar';
 import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS, ProjectCard } from '../types';
@@ -9,6 +10,7 @@ import {
   sendMessage,
   cancelTask,
   downloadResult,
+  updateTask,
   TaskStatusResponse,
   ChatMessage,
 } from '../api/tasks';
@@ -70,6 +72,10 @@ const TaskStatusPage: React.FC = () => {
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [attachingProject, setAttachingProject] = useState(false);
   const [selectedAttachProjectId, setSelectedAttachProjectId] = useState('');
+  const [taskName, setTaskName] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [editNameDraft, setEditNameDraft] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -110,6 +116,7 @@ const TaskStatusPage: React.FC = () => {
       setEstimationStatus(data.estimation_status ?? 'not_applicable');
       setTaskCost(data.cost ?? null);
       setTaskProjectId(data.project_id ?? null);
+      setTaskName(prev => prev === null ? (data.name ?? null) : prev);
 
       if (data.progress_message) {
         setProgressLog((prev) => {
@@ -290,6 +297,67 @@ const TaskStatusPage: React.FC = () => {
         >
           {task ? (
             <>
+              {/* Task name with inline edit */}
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+                  Название задачи
+                </div>
+                {editingName ? (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <input
+                      ref={nameInputRef}
+                      value={editNameDraft}
+                      onChange={e => setEditNameDraft(e.target.value)}
+                      onKeyDown={async e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const trimmed = editNameDraft.trim();
+                          if (trimmed && taskId) {
+                            await updateTask(taskId, { name: trimmed });
+                            setTaskName(trimmed);
+                          }
+                          setEditingName(false);
+                        }
+                        if (e.key === 'Escape') setEditingName(false);
+                      }}
+                      autoFocus
+                      style={{ border: '1px solid #93c5fd', borderRadius: '6px', padding: '5px 10px', outline: 'none', fontSize: '16px', fontWeight: 600, width: '280px' }}
+                    />
+                    <button
+                      onClick={async () => {
+                        const trimmed = editNameDraft.trim();
+                        if (trimmed && taskId) {
+                          await updateTask(taskId, { name: trimmed });
+                          setTaskName(trimmed);
+                        }
+                        setEditingName(false);
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', padding: '2px', display: 'inline-flex' }}
+                    >
+                      <Check size={18} />
+                    </button>
+                    <button
+                      onClick={() => setEditingName(false)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', padding: '2px', display: 'inline-flex' }}
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '18px', fontWeight: 700, color: '#1e293b' }}>
+                      {taskName || TASK_TYPE_LABELS[task.task_type]}
+                    </span>
+                    <button
+                      onClick={() => { setEditNameDraft(taskName || TASK_TYPE_LABELS[task.task_type] || ''); setEditingName(true); }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px', display: 'inline-flex' }}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
