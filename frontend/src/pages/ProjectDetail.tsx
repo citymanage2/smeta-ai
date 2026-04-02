@@ -25,9 +25,8 @@ const ESTIMATION_COLORS: Record<string, { bg: string; text: string }> = {
   not_applicable: { bg: '#f8fafc', text: '#94a3b8' },
 };
 
-function formatCost(cost: number | null | undefined): string {
-  if (cost === null || cost === undefined) return '—';
-  return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(cost);
+function formatCost(cost: number): string {
+  return cost.toLocaleString('ru-RU') + ' ₽';
 }
 
 const iconBtnStyle: React.CSSProperties = {
@@ -332,8 +331,13 @@ const ProjectDetailPage: React.FC = () => {
     );
   }
 
-  const totalCost = project.total_cost ?? null;
-  const optimizedCost = (project as any).optimized_cost ?? null;
+  const totalCost = project.tasks
+    .filter(t => (t.estimation_status === 'estimated' || t.estimation_status === 'optimized') && t.cost)
+    .reduce((sum, t) => sum + (t.cost as number), 0) || null;
+
+  const optimizedCost = project.tasks
+    .filter(t => t.estimation_status === 'optimized' && t.cost)
+    .reduce((sum, t) => sum + (t.cost as number), 0) || null;
 
   return (
     <Layout>
@@ -441,13 +445,13 @@ const ProjectDetailPage: React.FC = () => {
               {totalCost !== null && (
                 <div>
                   <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Итого по сметам: </span>
-                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{formatCost(totalCost)}</span>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{formatCost(totalCost as number)}</span>
                 </div>
               )}
               {optimizedCost !== null && (
                 <div>
                   <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Итого оптимизированных: </span>
-                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#15803d' }}>{formatCost(optimizedCost)}</span>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#15803d' }}>{formatCost(optimizedCost as number)}</span>
                 </div>
               )}
             </div>
@@ -470,9 +474,9 @@ const ProjectDetailPage: React.FC = () => {
               const slots = task.slot_files ?? {};
               const taskLabel = TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type;
               const taskDisplayName = task.name || taskLabel;
-              const showCost = task.cost !== null && task.cost !== undefined &&
+              const showCost = !!task.cost &&
                 (task.estimation_status === 'estimated' || task.estimation_status === 'optimized');
-              const showOptimizedCost = task.cost !== null && task.cost !== undefined &&
+              const showOptimizedCost = !!task.cost &&
                 task.estimation_status === 'optimized';
 
               return (
@@ -510,12 +514,12 @@ const ProjectDetailPage: React.FC = () => {
                         <div style={{ marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
                           <div>
                             <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Сумма по смете: </span>
-                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost)}</span>
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{formatCost(task.cost as number)}</span>
                           </div>
                           {showOptimizedCost && (
                             <div>
                               <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500 }}>Сумма оптимизированная: </span>
-                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#15803d' }}>{formatCost(task.cost)}</span>
+                              <span style={{ fontSize: '13px', fontWeight: 600, color: '#15803d' }}>{formatCost(task.cost as number)}</span>
                             </div>
                           )}
                         </div>
