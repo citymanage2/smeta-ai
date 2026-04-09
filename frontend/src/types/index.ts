@@ -1,27 +1,10 @@
-export type TaskType =
-  | 'LIST_FROM_TZ'
-  | 'LIST_FROM_TZ_PROJECT'
-  | 'RESEARCH_PROJECT'
-  | 'LIST_FROM_PROJECT'
-  | 'SMETA_FROM_GRAND_PROJECT'
-  | 'SMETA_FROM_PROJECT'
-  | 'SMETA_FROM_EDC_PROJECT'
-  | 'SMETA_FROM_LIST'
-  | 'SCAN_TO_EXCEL'
-  | 'COMPARE_PROJECT_SMETA'
-  | 'OPTIMIZE_SMETA';
+export type TaskType = string;
 
 export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
 export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'optimizing';
 
-export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set([
-  'SMETA_FROM_LIST',
-  'SMETA_FROM_PROJECT',
-  'SMETA_FROM_EDC_PROJECT',
-  'SMETA_FROM_GRAND_PROJECT',
-  'SCAN_TO_EXCEL',
-]);
+export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set();
 
 export interface Task {
   id: string;
@@ -67,18 +50,8 @@ export interface AdminTasksResponse {
   page_size: number;
 }
 
-export const TASK_TYPE_LABELS: Record<TaskType, string> = {
-  LIST_FROM_TZ: 'Перечень из ТЗ',
-  LIST_FROM_TZ_PROJECT: 'Перечень из ТЗ + Проект',
-  RESEARCH_PROJECT: 'Проверка проектной документации',
-  LIST_FROM_PROJECT: 'Перечень из Проекта',
-  SMETA_FROM_GRAND_PROJECT: 'Смета: ГРАНД-смета + Проект',
-  SMETA_FROM_PROJECT: 'Смета из Проекта',
-  SMETA_FROM_EDC_PROJECT: 'Смета: ЭДЦ + Проект',
-  SMETA_FROM_LIST: 'Смета из перечня',
-  SCAN_TO_EXCEL: 'Скан сметы → Excel',
-  COMPARE_PROJECT_SMETA: 'Сравнение проект/смета',
-  OPTIMIZE_SMETA: 'Оптимизация сметы',
+export const TASK_TYPE_LABELS: Record<string, string> = {
+  LIST_FROM_GRAND: 'Перечень из Гранд-сметы',
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {

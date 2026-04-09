@@ -8,17 +8,7 @@ interface TaskTypeSelectorProps {
 }
 
 const TASK_TYPES: TaskType[] = [
-  'LIST_FROM_TZ',
-  'LIST_FROM_TZ_PROJECT',
-  'RESEARCH_PROJECT',
-  'LIST_FROM_PROJECT',
-  'SMETA_FROM_GRAND_PROJECT',
-  'SMETA_FROM_PROJECT',
-  'SMETA_FROM_EDC_PROJECT',
-  'SMETA_FROM_LIST',
-  'SCAN_TO_EXCEL',
-  'COMPARE_PROJECT_SMETA',
-  'OPTIMIZE_SMETA',
+  'LIST_FROM_GRAND',
 ];
 
 const TaskTypeSelector: React.FC<TaskTypeSelectorProps> = ({ value, onChange, disabled }) => {

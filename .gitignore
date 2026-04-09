@@ -1,3 +1,6 @@
+# Business context (private)
+.business/
+
 # Environment
 .env
 *.env.local
