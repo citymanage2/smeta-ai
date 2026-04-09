@@ -362,3 +362,9 @@ class TaskProcessor:
                 break
             elapsed += 30
             logger.info("Task still running", task_id=self.task_id, elapsed_seconds=elapsed)
+
+
+async def process_task(task_id: str, db: AsyncSession) -> None:
+    """Wrapper function for backward compatibility with routers."""
+    processor = TaskProcessor(task_id, db)
+    await processor.process()
