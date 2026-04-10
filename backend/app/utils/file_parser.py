@@ -1,11 +1,209 @@
 import base64
 import io
+import re
 import xml.etree.ElementTree as ET
-from typing import Any
+from typing import Any, Optional, Tuple
 import openpyxl
 import structlog
 
 logger = structlog.get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Ключевые слова для определения колонок гранд-сметы
+# ---------------------------------------------------------------------------
+
+_NAME_KEYWORDS = ["наимен"]
+_UNIT_KEYWORDS = ["ед", "изм", "мер"]  # ед. изм. / единица измерения
+_QTY_KEYWORDS = ["колич", "объем", "объём", "кол-во", "кол.", "кол "]
+
+# Слова в строке-наименовании, указывающие на итоговую строку (пропускаем)
+_TOTAL_KEYWORDS = re.compile(
+    r"итого|всего|в том числе|накладные|сметная прибыль|нр\b|сп\b|зп\b|"
+    r"поправочн|индекс|лимитир|непредвиден|ндс|налог",
+    re.IGNORECASE,
+)
+
+
+def _col_score(header: str, keywords: list[str]) -> int:
+    """Количество ключевых слов из списка, найденных в заголовке."""
+    h = header.lower()
+    return sum(1 for kw in keywords if kw in h)
+
+
+def _find_header_row(ws) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+    """
+    Сканируем первые 40 строк листа в поиске строки с заголовками колонок.
+    Возвращает (header_row_idx, name_col, unit_col, qty_col) — 0-based индексы.
+    header_row_idx — 0-based номер строки с заголовками.
+    Если не нашли — возвращает (None, None, None, None).
+    """
+    all_rows = list(ws.iter_rows(values_only=True))
+    scan_limit = min(40, len(all_rows))
+
+    best_row_idx = None
+    best_score = 0
+    best_cols = (None, None, None)
+
+    for row_idx in range(scan_limit):
+        row = all_rows[row_idx]
+        cells = [str(c).strip() if c is not None else "" for c in row]
+
+        name_col = unit_col = qty_col = None
+        name_score = unit_score = qty_score = 0
+
+        for col_idx, cell in enumerate(cells):
+            if not cell or cell == "None":
+                continue
+
+            ns = _col_score(cell, _NAME_KEYWORDS)
+            us = _col_score(cell, _UNIT_KEYWORDS)
+            qs = _col_score(cell, _QTY_KEYWORDS)
+
+            if ns > name_score:
+                name_score = ns
+                name_col = col_idx
+            if us > unit_score:
+                unit_score = us
+                unit_col = col_idx
+            if qs > qty_score:
+                qty_score = qs
+                qty_col = col_idx
+
+        # Строка-заголовок: нашли хотя бы колонку с наименованием
+        row_score = name_score + unit_score + qty_score
+        if name_score > 0 and row_score > best_score:
+            best_score = row_score
+            best_row_idx = row_idx
+            best_cols = (name_col, unit_col, qty_col)
+
+    if best_row_idx is not None:
+        return (best_row_idx, *best_cols)
+    return (None, None, None, None)
+
+
+def _is_total_row(name: str) -> bool:
+    """True если строка — итог/суммарная, её нужно пропустить."""
+    return bool(_TOTAL_KEYWORDS.search(name))
+
+
+def _parse_quantity(value) -> Optional[float]:
+    """Преобразуем значение ячейки в число или None."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).replace(",", ".").replace(" ", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_xlsx_grand(data: bytes) -> "list[dict]":
+    """
+    Умный парсинг Excel-файла гранд-сметы.
+
+    Возвращает список словарей {name, unit, quantity} — только значимые строки
+    с работами и материалами, без итоговых строк, заголовков и пустых строк.
+
+    Если колонки определить не удалось — возвращает весь текст построчно
+    в поле name (fallback-режим).
+    """
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        ws = wb.active  # берём первый лист
+
+        all_rows = list(ws.iter_rows(values_only=True))
+        header_row_idx, name_col, unit_col, qty_col = _find_header_row(ws)
+
+        rows: list[dict] = []
+
+        if header_row_idx is not None and name_col is not None:
+            logger.info(
+                "Grand-смета: заголовок найден",
+                header_row=header_row_idx,
+                name_col=name_col,
+                unit_col=unit_col,
+                qty_col=qty_col,
+            )
+            data_rows = all_rows[header_row_idx + 1:]
+            for row in data_rows:
+                cells = [str(c).strip() if c is not None else "" for c in row]
+
+                name = cells[name_col] if name_col < len(cells) else ""
+                if not name or name == "None":
+                    continue
+                if _is_total_row(name):
+                    continue
+
+                unit = cells[unit_col] if unit_col is not None and unit_col < len(cells) else ""
+                unit = unit if unit != "None" else ""
+
+                qty_raw = row[qty_col] if qty_col is not None and qty_col < len(row) else None
+                qty = _parse_quantity(qty_raw)
+
+                rows.append({"name": name, "unit": unit, "quantity": qty})
+        else:
+            # Fallback: не нашли заголовок — берём все непустые строки,
+            # первая непустая ячейка = наименование
+            logger.warning("Grand-смета: заголовок не найден, fallback-режим")
+            for row in all_rows:
+                cells = [str(c).strip() if c is not None else "" for c in row]
+                non_empty = [c for c in cells if c and c != "None"]
+                if not non_empty:
+                    continue
+                name = non_empty[0]
+                if _is_total_row(name):
+                    continue
+                rows.append({"name": name, "unit": "", "quantity": None})
+
+        logger.info("Grand-смета: строк извлечено", count=len(rows))
+        return rows
+
+    except Exception as e:
+        logger.error("Ошибка парсинга гранд-сметы", error=str(e))
+        return []
+
+
+def chunk_rows(rows: "list[dict]", chunk_size: int = 250) -> "list[list[dict]]":
+    """
+    Делит список строк на чанки по chunk_size.
+    По возможности не разрывает группу: если последняя строка чанка —
+    не «Работа» (нет unit/quantity) — сдвигаем границу назад до ближайшей
+    строки без unit (предполагаем работу).
+    """
+    if not rows:
+        return []
+
+    chunks = []
+    start = 0
+    total = len(rows)
+
+    while start < total:
+        end = min(start + chunk_size, total)
+
+        # Пытаемся не резать на полуслове: откатываемся до строки без quantity
+        # (скорее всего это начало новой работы), но не более чем на 20 строк
+        if end < total:
+            for lookback in range(end - 1, max(start, end - 20) - 1, -1):
+                if rows[lookback].get("quantity") is None and rows[lookback].get("unit") == "":
+                    end = lookback
+                    break
+
+        chunks.append(rows[start:end])
+        start = end
+
+    return chunks
+
+
+def rows_to_text(rows: list[dict]) -> str:
+    """Компактное текстовое представление строк для отправки в Claude."""
+    lines = []
+    for r in rows:
+        qty = str(r["quantity"]) if r["quantity"] is not None else ""
+        unit = r.get("unit", "")
+        lines.append(f"{r['name']}\t{unit}\t{qty}")
+    return "\n".join(lines)
 
 
 def parse_xlsx(data: bytes) -> str:

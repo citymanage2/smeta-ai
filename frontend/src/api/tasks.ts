@@ -13,6 +13,7 @@ export interface TaskStatusResponse {
   created_at: string;
   updated_at: string;
   name?: string | null;
+  progress_data?: Record<string, unknown>;
 }
 
 export interface ChatMessage {
@@ -56,6 +57,18 @@ export async function getTaskResults(taskId: string): Promise<TaskResult[]> {
 
 export async function cancelTask(taskId: string): Promise<void> {
   await apiClient.post(`/tasks/${taskId}/cancel`);
+}
+
+export async function resumeTask(taskId: string): Promise<TaskCreateResponse> {
+  const response = await apiClient.post<TaskCreateResponse>(`/tasks/${taskId}/resume`);
+  return response.data;
+}
+
+export async function checkCompleteness(sourceTaskId: string): Promise<TaskCreateResponse> {
+  const response = await apiClient.post<TaskCreateResponse>('/tasks/check-completeness', {
+    source_task_id: sourceTaskId,
+  });
+  return response.data;
 }
 
 export async function sendMessage(taskId: string, message: string): Promise<TaskChatResponse> {

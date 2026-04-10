@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import json
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +13,10 @@ from app.services.claude_service import call_claude
 from app.services.excel_service import generate_list
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost
-from app.utils.file_parser import parse_file
+from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.json_utils import extract_json
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 logger = structlog.get_logger()
 
@@ -36,9 +40,11 @@ SYSTEM_BASE = (
 # Задача 1: Перечень из Гранд-сметы
 # ---------------------------------------------------------------------------
 
-PROMPT_LIST_FROM_GRAND = """Ты — опытный инженер-сметчик со знанием нормативной базы РФ (ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области, СП, ГОСТ).
+PROMPT_LIST_FROM_GRAND = """Ты — опытный инженер-сметчик.
 
-Задача: проанализировать техническое задание и составить полный нормативный перечень работ и материалов.
+Задача: составить перечень работ и материалов на основании гранд-сметы.
+
+Извлеки из гранд-сметы все позиции — работы и материалы — точно так, как они указаны в файле. Ничего не добавляй от себя, не дополняй по нормативам, не изменяй наименования.
 
 ПОРЯДОК СТРОК В ПЕРЕЧНЕ — строго соблюдать:
 Работа 1
@@ -51,25 +57,37 @@ PROMPT_LIST_FROM_GRAND = """Ты — опытный инженер-сметчи�
 
 Каждый вид работы должен идти ПЕРВОЙ строкой, затем сразу все материалы к этой работе.
 
-ТРЕБОВАНИЯ К МАТЕРИАЛАМ:
-1. Для каждого вида работы определи полный перечень материалов по нормативной базе:
-   - ГЭСН / ФСНБ-2022 — основной источник норм расхода материалов
-   - ФЕР/ТЕР Свердловской области — для региональной специфики
-   - Технические части сборников ГЭСН — что включено в норму, что учитывается отдельно
-   - СП и ГОСТ — для нестандартных решений
+Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
+{
+  "items": [
+    {
+      "type": "Работа" | "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "notes": ""
+    }
+  ]
+}
 
-2. Если в гранд-смете указан материал, но не указан объём — рассчитай объём по нормам ГЭСН исходя из объёма работ.
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
 
-3. Если в гранд-смете отсутствует материал, который нормативно необходим — добавь его с пометкой в примечании.
+PROMPT_CHECK_COMPLETENESS = """Ты — опытный инженер-сметчик со знанием нормативной базы РФ (ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области, СП, ГОСТ).
 
-ФИКСАЦИЯ ИЗМЕНЕНИЙ:
-- В поле notes для каждой изменённой позиции указывай:
-  * "Добавлено по ГЭСН XX-XX-XXX: [обоснование]"
-  * "Объём скорректирован: в ТЗ [X] [ед], распределено между работами по норме ГЭСН [норма]"
-  * "Наименование уточнено: в гранд-смете '[исходное]', скорректировано на '[новое]' согласно [норматив]"
+Задача: проверить полноту учтённых материалов для каждой работы в перечне.
 
-ПОЯСНИТЕЛЬНЫЙ ТЕКСТ:
-После формирования перечня добавь поле "changes_summary" — текст с обоснованием всех изменений по сравнению с гранд-сметой.
+Тебе передан готовый перечень работ и материалов. Для каждой работы:
+1. Проверь, все ли необходимые материалы учтены согласно нормативной базе ГЭСН/ФСНБ-2022.
+2. Если материал есть, но объём не указан или явно некорректен — рассчитай объём по нормам ГЭСН исходя из объёма работ.
+3. Если нормативно необходимый материал отсутствует — добавь его.
+4. Если материал и объём корректны — оставь без изменений.
+
+В поле notes для каждой изменённой или добавленной позиции указывай обоснование:
+- "Добавлено по ГЭСН XX-XX-XXX: [обоснование]"
+- "Объём скорректирован: в перечне [X] [ед], скорректировано на [Y] [ед] по норме ГЭСН [норма]"
+- "Соответствует норме" — если позиция корректна
+
+После проверки добавь поле "changes_summary" — краткий текст с перечнем всех добавленных и скорректированных позиций.
 
 Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
 {
@@ -79,13 +97,30 @@ PROMPT_LIST_FROM_GRAND = """Ты — опытный инженер-сметчи�
       "name": "Наименование",
       "unit": "Ед. изм.",
       "quantity": число или null,
-      "notes": "Примечание / обоснование изменения"
+      "notes": "Обоснование"
     }
   ],
-  "changes_summary": "Пояснительный текст обо всех изменениях по сравнению с гранд-сметой"
+  "changes_summary": "Краткое резюме всех изменений"
 }
 
 ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
+
+def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
+    """Split items into chunks, always starting a new chunk at a 'Работа' boundary."""
+    if not items:
+        return []
+    chunks = []
+    current_chunk: list = []
+    for item in items:
+        is_work = item.get("type", "").strip() == "Работа"
+        if is_work and current_chunk and len(current_chunk) >= max_chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = []
+        current_chunk.append(item)
+    if current_chunk:
+        chunks.append(current_chunk)
+    return chunks
 
 
 class TaskCancelledError(Exception):
@@ -129,15 +164,24 @@ class TaskProcessor:
                 task.error_message = error
             await self.db.commit()
 
-    async def save_result(self, file_name: str, mime_type: str, file_data: bytes) -> None:
+    async def save_result(self, file_name: str, mime_type: str, file_data: bytes, slot: str = "result") -> None:
         result_record = TaskResult(
             task_id=self.task_id,
             file_name=file_name,
             mime_type=mime_type,
             file_data=file_data,
+            slot=slot,
         )
         self.db.add(result_record)
         await self.db.commit()
+
+    async def _save_progress_data(self, data: dict) -> None:
+        result = await self.db.execute(select(Task).where(Task.id == self.task_id))
+        task = result.scalar_one_or_none()
+        if task:
+            task.progress_data = data
+            task.updated_at = datetime.now(timezone.utc)
+            await self.db.commit()
 
     async def _auto_fill_estimate_slot(self) -> None:
         """Promote slot='result' → 'estimate' and set estimation_status after task completes.
@@ -311,8 +355,12 @@ class TaskProcessor:
 
             if task_type == "LIST_FROM_GRAND":
                 await self._handle_list_from_grand(task)
+            elif task_type == "CHECK_LIST_COMPLETENESS":
+                await self._handle_check_completeness(task)
             else:
                 raise NotImplementedError(f"Тип задачи {task.task_type!r} ещё не настроен")
+
+            await self.update_status("completed")
 
         except TaskCancelledError:
             logger.info("Task was cancelled by user", task_id=self.task_id)
@@ -325,33 +373,167 @@ class TaskProcessor:
             heartbeat_task.cancel()
 
     async def _handle_list_from_grand(self, task: Task) -> None:
-        await self.update_progress("Анализ гранд-сметы...")
-        messages, image_blocks = self._build_messages_with_files(task, PROMPT_LIST_FROM_GRAND)
+        # --- Определяем, это resume или новый запуск ---
+        progress_data = task.progress_data or {}
+        start_chunk = progress_data.get("chunks_done", 0)
+        accumulated_items: list = list(progress_data.get("items", []))
+        partial_count: int = progress_data.get("partial_count", 0)
 
-        await self.update_progress("Формирование перечня с помощью ИИ...")
-        data = await self._call_claude_json(
-            messages,
-            system_prompt=SYSTEM_BASE,
-            use_web_search=False,
-            image_data=image_blocks if image_blocks else None,
-        )
+        # --- Извлекаем Excel из вложений ---
+        await self.update_progress("Анализ файла гранд-сметы...")
+        excel_bytes: Optional[bytes] = None
+        for f in task.input_file_data or []:
+            mime = f.get("mime_type", "")
+            if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
+                excel_bytes = base64.b64decode(f["content_b64"])
+                break
 
-        await self.update_progress("Обработка результатов...")
-        items = data.get("items", [])
-        changes_summary = data.get("changes_summary")
+        if not excel_bytes:
+            raise ValueError("Excel-файл (.xlsx) не найден во вложениях задачи")
 
-        if not items:
-            raise ValueError("Claude не вернул позиции. Проверьте содержимое документов.")
+        # --- Парсим и разбиваем на чанки ---
+        rows = parse_xlsx_grand(excel_bytes)
+        if not rows:
+            raise ValueError("Не удалось извлечь строки из Excel. Проверьте формат файла.")
 
-        await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
-        excel_data = generate_list(items, changes_summary=changes_summary)
+        chunks = chunk_rows(rows)
+        total_chunks = len(chunks)
 
+        if start_chunk >= total_chunks:
+            # Все чанки уже обработаны, просто генерируем финальный файл
+            logger.info("All chunks already done, generating final Excel", task_id=self.task_id)
+        else:
+            if start_chunk > 0:
+                await self.update_progress(
+                    f"Возобновление с части {start_chunk + 1} из {total_chunks}..."
+                )
+            else:
+                await self.update_progress(
+                    f"Файл разбит на {total_chunks} частей. Начинаем обработку..."
+                )
+
+            for i in range(start_chunk, total_chunks):
+                await self._check_cancelled()
+                await self.update_progress(f"Обрабатывается часть {i + 1} из {total_chunks}...")
+
+                chunk_text = rows_to_text(chunks[i])
+                messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND}"}]
+
+                try:
+                    data = await self._call_claude_json(
+                        messages,
+                        system_prompt=SYSTEM_BASE,
+                        use_web_search=False,
+                    )
+                    chunk_items = data.get("items", [])
+                    accumulated_items.extend(chunk_items)
+
+                    # Сохраняем прогресс после каждого успешного чанка
+                    await self._save_progress_data({
+                        "chunks_done": i + 1,
+                        "total_chunks": total_chunks,
+                        "items": accumulated_items,
+                        "partial_count": partial_count,
+                    })
+                    logger.info("Chunk processed", task_id=self.task_id, chunk=i + 1, total=total_chunks, items=len(chunk_items))
+
+                except Exception as chunk_error:
+                    # Сохраняем частичный Excel перед тем как пробросить ошибку
+                    if accumulated_items:
+                        partial_count += 1
+                        partial_excel = generate_list(accumulated_items)
+                        await self.save_result(
+                            f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
+                            _XLSX_MIME,
+                            partial_excel,
+                            slot=f"partial_{partial_count}",
+                        )
+                        await self._save_progress_data({
+                            "chunks_done": i,
+                            "total_chunks": total_chunks,
+                            "items": accumulated_items,
+                            "partial_count": partial_count,
+                        })
+                        await self.update_progress(
+                            f"Обработано {i} из {total_chunks} частей. Частичный результат сохранён."
+                        )
+                        logger.warning(
+                            "Chunk failed, partial result saved",
+                            task_id=self.task_id,
+                            chunk=i + 1,
+                            total=total_chunks,
+                            error=str(chunk_error),
+                        )
+                    raise
+
+        # --- Генерируем финальный Excel ---
+        if not accumulated_items:
+            raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое файла.")
+
+        await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
+        excel_data = generate_list(accumulated_items)
         await self.save_result(
             "Перечень_из_Гранд-сметы.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _XLSX_MIME,
             excel_data,
         )
-        logger.info("List from Grand task completed", items=len(items))
+        logger.info("List from Grand task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
+
+    async def _handle_check_completeness(self, task: Task) -> None:
+        source_task_id = (task.user_prompt or "").strip()
+        if not source_task_id:
+            raise ValueError("ID исходной задачи не указан")
+
+        res = await self.db.execute(select(Task).where(Task.id == source_task_id))
+        source_task = res.scalar_one_or_none()
+        if not source_task:
+            raise ValueError(f"Исходная задача {source_task_id!r} не найдена")
+        if source_task.task_type.upper() != "LIST_FROM_GRAND":
+            raise ValueError("Исходная задача должна быть типа LIST_FROM_GRAND")
+
+        items = (source_task.progress_data or {}).get("items", [])
+        if not items:
+            raise ValueError("В исходной задаче нет перечня позиций")
+
+        await self.update_progress(f"Загружено {len(items)} позиций. Начинаем проверку по ГЭСН...")
+
+        if len(items) <= 300:
+            chunks = [items]
+        else:
+            chunks = _chunk_by_work_boundaries(items)
+
+        total_chunks = len(chunks)
+        all_items: list = []
+        changes_summary_parts: list = []
+
+        for i, chunk in enumerate(chunks):
+            await self._check_cancelled()
+            if total_chunks > 1:
+                await self.update_progress(f"Проверка части {i + 1} из {total_chunks}...")
+            else:
+                await self.update_progress("Проверяем полноту материалов по ГЭСН...")
+
+            chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+            messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
+
+            data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE)
+            all_items.extend(data.get("items", []))
+            summary = data.get("changes_summary", "")
+            if summary:
+                changes_summary_parts.append(summary)
+
+        changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
+
+        await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
+        excel_data = generate_list(all_items, changes_summary=changes_summary)
+        await self.save_result("Проверка_полноты_ГЭСН.xlsx", _XLSX_MIME, excel_data)
+        logger.info(
+            "Check completeness task completed",
+            task_id=self.task_id,
+            source_task_id=source_task_id,
+            items=len(all_items),
+            chunks=total_chunks,
+        )
 
     async def _heartbeat(self, stop_event: asyncio.Event) -> None:
         """Log a heartbeat every 30 s so it's clear the task is alive, not hung."""

@@ -52,6 +52,7 @@ export interface AdminTasksResponse {
 
 export const TASK_TYPE_LABELS: Record<string, string> = {
   LIST_FROM_GRAND: 'Перечень из Гранд-сметы',
+  CHECK_LIST_COMPLETENESS: 'Проверка полноты перечня',
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {

@@ -11,6 +11,8 @@ import {
   cancelTask,
   downloadResult,
   updateTask,
+  resumeTask,
+  checkCompleteness,
   TaskStatusResponse,
   ChatMessage,
 } from '../api/tasks';
@@ -77,6 +79,16 @@ const TaskStatusPage: React.FC = () => {
   const [editNameDraft, setEditNameDraft] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
 
+  // Resume state
+  const [resuming, setResuming] = useState(false);
+
+  // Check completeness state
+  const [checkTaskId, setCheckTaskId] = useState<string | null>(null);
+  const [checkTask, setCheckTask] = useState<TaskStatusResponse | null>(null);
+  const [checkResults, setCheckResults] = useState<TaskResult[]>([]);
+  const [checkStarting, setCheckStarting] = useState(false);
+  const checkPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number | null>(null);
@@ -91,6 +103,64 @@ const TaskStatusPage: React.FC = () => {
     if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, []);
+
+  const stopCheckPolling = useCallback(() => {
+    if (checkPollingRef.current) { clearInterval(checkPollingRef.current); checkPollingRef.current = null; }
+  }, []);
+
+  const fetchCheckStatus = useCallback(async (cid: string) => {
+    try {
+      const data = await getTaskStatus(cid);
+      setCheckTask(data);
+      if (data.status === 'completed') {
+        const res = await getTaskResults(cid);
+        setCheckResults(res);
+        stopCheckPolling();
+      } else if (data.status === 'failed' || data.status === 'cancelled') {
+        stopCheckPolling();
+      }
+    } catch {
+      stopCheckPolling();
+    }
+  }, [stopCheckPolling]);
+
+  const handleCheckCompleteness = async () => {
+    if (!taskId || checkStarting) return;
+    setCheckStarting(true);
+    try {
+      const res = await checkCompleteness(taskId);
+      const cid = res.task_id;
+      setCheckTaskId(cid);
+      setCheckTask(null);
+      setCheckResults([]);
+      fetchCheckStatus(cid);
+      checkPollingRef.current = setInterval(() => fetchCheckStatus(cid), 3000);
+    } catch {
+      setError('Не удалось запустить проверку полноты.');
+    } finally {
+      setCheckStarting(false);
+    }
+  };
+
+  const handleResume = async () => {
+    if (!taskId || resuming) return;
+    setResuming(true);
+    try {
+      await resumeTask(taskId);
+      setTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
+      setProgressLog([]);
+      setElapsedSeconds(0);
+      startTimeRef.current = null;
+      if (!pollingRef.current) {
+        pollingRef.current = setInterval(fetchStatus, 3000);
+      }
+      fetchStatus();
+    } catch {
+      setError('Не удалось возобновить задачу.');
+    } finally {
+      setResuming(false);
+    }
+  };
 
   useEffect(() => {
     listProjects().then(setProjects).catch(() => {});
@@ -143,6 +213,9 @@ const TaskStatusPage: React.FC = () => {
         stopTimers();
       } else if (data.status === 'failed' || data.status === 'cancelled') {
         stopTimers();
+        if (data.status === 'failed' && data.task_type === 'LIST_FROM_GRAND') {
+          try { const res = await getTaskResults(taskId); setResults(res); } catch { /* нет результатов */ }
+        }
       }
     } catch (err: unknown) {
       const axiosErr = err as { response?: { status?: number; data?: { detail?: string } } };
@@ -178,9 +251,10 @@ const TaskStatusPage: React.FC = () => {
 
     return () => {
       stopTimers();
+      stopCheckPolling();
       document.head.removeChild(style);
     };
-  }, [fetchStatus, taskId, navigate, stopTimers]);
+  }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling]);
 
   const handleSendMessage = async () => {
     if (!taskId || !message.trim()) return;
@@ -557,6 +631,53 @@ const TaskStatusPage: React.FC = () => {
                       </span>
                     </div>
                   )}
+
+                  {/* Resume section for LIST_FROM_GRAND with saved progress */}
+                  {task.task_type === 'LIST_FROM_GRAND' && task.progress_data?.chunks_done != null && (
+                    <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
+                      <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
+                        Обработано {String(task.progress_data.chunks_done)} из {String(task.progress_data.total_chunks ?? '?')} частей.
+                        {results.some((r) => r.slot.startsWith('partial')) && ' Частичный результат доступен для скачивания.'}
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        {results.filter((r) => r.slot.startsWith('partial')).map((r) => (
+                          <button
+                            key={r.file_id}
+                            onClick={() => handleDownload(r.file_id, r.file_name)}
+                            disabled={downloading === r.file_id}
+                            style={{
+                              padding: '8px 16px',
+                              backgroundColor: downloading === r.file_id ? '#fca5a5' : '#ffffff',
+                              color: '#dc2626',
+                              border: '1.5px solid #fca5a5',
+                              borderRadius: '8px',
+                              cursor: downloading === r.file_id ? 'not-allowed' : 'pointer',
+                              fontSize: '13px',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
+                          </button>
+                        ))}
+                        <button
+                          onClick={handleResume}
+                          disabled={resuming}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: resuming ? '#fca5a5' : '#dc2626',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: resuming ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {resuming ? 'Запуск...' : '▶ Продолжить'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </>
@@ -698,6 +819,107 @@ const TaskStatusPage: React.FC = () => {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Check completeness card — shown after LIST_FROM_GRAND completes */}
+        {task && task.status === 'completed' && task.task_type === 'LIST_FROM_GRAND' && (
+          <div
+            style={{
+              backgroundColor: '#f0f9ff',
+              borderRadius: '12px',
+              border: '1px solid #bae6fd',
+              padding: '20px 24px',
+              marginBottom: '20px',
+            }}
+          >
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0c4a6e', marginBottom: '6px' }}>
+              Проверка полноты материалов по ГЭСН
+            </div>
+            <div style={{ fontSize: '14px', color: '#0369a1', marginBottom: '14px' }}>
+              Хотите проверить, все ли необходимые материалы учтены согласно нормативной базе?
+            </div>
+            {!checkTaskId ? (
+              <button
+                onClick={handleCheckCompleteness}
+                disabled={checkStarting}
+                style={{
+                  padding: '10px 22px',
+                  backgroundColor: checkStarting ? '#7dd3fc' : '#0284c7',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: checkStarting ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                }}
+              >
+                {checkStarting ? 'Запуск...' : 'Да, проверить'}
+              </button>
+            ) : (
+              <>
+                {/* Check task inline progress */}
+                {checkTask && (checkTask.status === 'pending' || checkTask.status === 'processing') && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <Spinner />
+                    <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500 }}>
+                      {checkTask.progress_message || 'Проверка запущена...'}
+                    </span>
+                  </div>
+                )}
+                {checkTask && checkTask.status === 'failed' && (
+                  <div style={{ fontSize: '14px', color: '#dc2626', marginBottom: '10px' }}>
+                    Проверка завершилась с ошибкой: {checkTask.error_message}
+                  </div>
+                )}
+                {checkResults.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#15803d', marginBottom: '10px' }}>
+                      Проверка завершена
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {checkResults.map((r) => (
+                        <div
+                          key={r.file_id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '10px 14px',
+                            backgroundColor: '#f0fdf4',
+                            border: '1px solid #86efac',
+                            borderRadius: '8px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '18px' }}>📋</span>
+                            <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
+                              {r.file_name}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleDownload(r.file_id, r.file_name)}
+                            disabled={downloading === r.file_id}
+                            style={{
+                              padding: '7px 16px',
+                              backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a',
+                              color: '#ffffff',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: downloading === r.file_id ? 'not-allowed' : 'pointer',
+                              fontSize: '13px',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 

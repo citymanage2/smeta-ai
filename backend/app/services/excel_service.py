@@ -61,7 +61,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     ws_all = wb.active
     ws_all.title = "Перечень"
 
-    headers_all = ["№", "Тип", "Наименование", "Ед. изм.", "Кол-во"]
+    headers_all = ["№", "Тип", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
     for col, h in enumerate(headers_all, start=1):
         ws_all.cell(row=1, column=col, value=h)
     _style_header_row(ws_all, 1, len(headers_all))
@@ -76,6 +76,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_all.cell(row=row, column=4, value=item.get("unit", ""))
         qty = item.get("quantity")
         ws_all.cell(row=row, column=5, value=qty)
+        ws_all.cell(row=row, column=6, value=item.get("notes", "") or "")
         _style_data_row(ws_all, row, len(headers_all))
 
     _auto_fit_columns(ws_all)
