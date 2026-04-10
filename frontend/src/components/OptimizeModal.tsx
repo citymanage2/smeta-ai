@@ -312,9 +312,6 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
               <p style={{ color: '#dc2626', fontSize: '14px' }}>{runError}</p>
             ) : (
               <>
-                <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '20px' }}>
-                  {progressMessage}
-                </p>
                 <div style={{ width: '100%', height: '6px', backgroundColor: '#e2e8f0', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
                   <div
                     style={{
@@ -330,6 +327,9 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
                     100% { transform: translateX(350%); }
                   }
                 `}</style>
+                <p style={{ color: '#64748b', fontSize: '13px', marginTop: '10px', marginBottom: '4px' }}>
+                  {progressMessage}
+                </p>
                 <p style={{ fontSize: '12px', color: '#94a3b8' }}>Это может занять несколько минут</p>
               </>
             )}

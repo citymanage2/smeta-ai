@@ -79,10 +79,5 @@ def test_extract_total_cost_float_value():
 
 
 def test_estimate_task_types_constant():
-    assert "SMETA_FROM_LIST" in ESTIMATE_TASK_TYPES
-    assert "SMETA_FROM_PROJECT" in ESTIMATE_TASK_TYPES
-    assert "SMETA_FROM_EDC_PROJECT" in ESTIMATE_TASK_TYPES
-    assert "SMETA_FROM_GRAND_PROJECT" in ESTIMATE_TASK_TYPES
-    assert "SCAN_TO_EXCEL" in ESTIMATE_TASK_TYPES
-    assert "COMPARE_PROJECT_SMETA" not in ESTIMATE_TASK_TYPES
+    assert "LIST_FROM_GRAND" in ESTIMATE_TASK_TYPES
     assert "LIST_FROM_TZ" not in ESTIMATE_TASK_TYPES

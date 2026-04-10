@@ -9,7 +9,7 @@ import { listProjects } from '../api/projects';
 
 const TaskCreate: React.FC = () => {
   const navigate = useNavigate();
-  const [taskType, setTaskType] = useState<TaskType>('LIST_FROM_TZ');
+  const [taskType, setTaskType] = useState<TaskType>('LIST_FROM_GRAND');
   const [files, setFiles] = useState<File[]>([]);
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);

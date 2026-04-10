@@ -18,7 +18,7 @@ class TaskResult(Base):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     file_data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    slot: Mapped[str] = mapped_column(String(20), nullable=False, default="result")
+    slot: Mapped[str] = mapped_column(String(50), nullable=False, default="result")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

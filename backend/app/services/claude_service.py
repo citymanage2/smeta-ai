@@ -245,23 +245,5 @@ class ClaudeService:
     ) -> str:
         return await call_claude(messages, system_prompt=system_prompt, use_web_search=use_web_search)
 
-    async def call_with_files(
-        self,
-        file_contents: list,
-        user_text: str,
-        system_prompt: str = "",
-        use_web_search: bool = False,
-        max_tokens: int = 8096,
-    ) -> str:
-        content = []
-        for fc in file_contents:
-            if isinstance(fc, dict):
-                content.append(fc)
-            else:
-                content.append({"type": "text", "text": str(fc)})
-        content.append({"type": "text", "text": user_text})
-        messages = [{"role": "user", "content": content}]
-        return await call_claude(messages, system_prompt=system_prompt, use_web_search=use_web_search)
-
 
 claude_service = ClaudeService()

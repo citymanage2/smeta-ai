@@ -7,15 +7,30 @@ from app.models.price import PriceWork, PriceMaterial
 from app.services.claude_service import claude_service as _claude_svc
 from app.utils.json_utils import extract_json
 
+try:
+    import numpy as np
+    _numpy_available = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _numpy_available = False
+
 async def call_claude(messages: list, system_prompt: str = "", use_web_search: bool = False) -> str:
     return await _claude_svc.call(messages, system_prompt=system_prompt, use_web_search=use_web_search)
 
 logger = structlog.get_logger()
 
+SIMILARITY_THRESHOLD = 0.82  # порог cosine similarity для embedding-поиска
+
 # In-memory cache
 _works_cache: list[dict] = []
 _materials_cache: list[dict] = []
 _cache_loaded: bool = False
+
+# Embedding matrices (shape N×1536, float32). None if no vectors available.
+_works_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
+_materials_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
+_works_row_norms: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
+_materials_row_norms: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 
 
 def normalize_text(text: str) -> str:
@@ -43,80 +58,59 @@ def _exact_match_material(name: str) -> Optional[float]:
     return None
 
 
-async def _semantic_match_work(name: str) -> Optional[dict]:
-    """Use Claude to find semantically matching work."""
-    if not _works_cache:
+async def _embedding_match_work(name: str) -> Optional[dict]:
+    """Find matching work via cosine similarity of OpenAI embeddings."""
+    if not _numpy_available or _works_embeddings is None or _works_row_norms is None:
         return None
-
-    work_names = [item["name"] for item in _works_cache[:200]]
-    names_text = "\n".join(f"- {n}" for n in work_names)
-
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"Найди наиболее подходящее наименование работы из списка для запроса: '{name}'\n\n"
-                f"Список доступных работ:\n{names_text}\n\n"
-                "Ответь ТОЛЬКО точным наименованием из списка (скопируй строку), "
-                "или 'НЕ НАЙДЕНО' если подходящего нет."
-            ),
-        }
-    ]
 
     try:
-        response = await call_claude(
-            messages,
-            system_prompt="Ты помощник по поиску строительных работ. Отвечай кратко и точно.",
-        )
-        response = response.strip()
-        if response == "НЕ НАЙДЕНО" or not response:
+        import asyncio
+        from app.services.embedding_service import normalize_name, generate_embedding
+
+        normalized = normalize_name(name)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized)
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
             return None
-        # Find matching item
-        norm_response = normalize_text(response)
-        for item in _works_cache:
-            if normalize_text(item["name"]) == norm_response:
-                return item
+
+        scores = np.dot(_works_embeddings, query_arr) / (_works_row_norms * query_norm)
+        best_idx = int(np.argmax(scores))
+
+        if scores[best_idx] >= SIMILARITY_THRESHOLD:
+            logger.info("Embedding work match", name=name, score=float(scores[best_idx]))
+            return _works_cache[best_idx]
         return None
     except Exception as e:
-        logger.error("Semantic work match failed", error=str(e))
+        logger.error("Embedding work match failed", error=str(e))
         return None
 
 
-async def _semantic_match_material(name: str) -> Optional[float]:
-    """Use Claude to find semantically matching material."""
-    if not _materials_cache:
+async def _embedding_match_material(name: str) -> Optional[float]:
+    """Find matching material via cosine similarity of OpenAI embeddings."""
+    if not _numpy_available or _materials_embeddings is None or _materials_row_norms is None:
         return None
-
-    material_names = [item["name"] for item in _materials_cache[:200]]
-    names_text = "\n".join(f"- {n}" for n in material_names)
-
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"Найди наиболее подходящее наименование материала из списка для запроса: '{name}'\n\n"
-                f"Список доступных материалов:\n{names_text}\n\n"
-                "Ответь ТОЛЬКО точным наименованием из списка (скопируй строку), "
-                "или 'НЕ НАЙДЕНО' если подходящего нет."
-            ),
-        }
-    ]
 
     try:
-        response = await call_claude(
-            messages,
-            system_prompt="Ты помощник по поиску строительных материалов. Отвечай кратко и точно.",
-        )
-        response = response.strip()
-        if response == "НЕ НАЙДЕНО" or not response:
+        import asyncio
+        from app.services.embedding_service import normalize_name, generate_embedding
+
+        normalized = normalize_name(name)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized)
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
             return None
-        norm_response = normalize_text(response)
-        for item in _materials_cache:
-            if normalize_text(item["name"]) == norm_response:
-                return item.get("price")
+
+        scores = np.dot(_materials_embeddings, query_arr) / (_materials_row_norms * query_norm)
+        best_idx = int(np.argmax(scores))
+
+        if scores[best_idx] >= SIMILARITY_THRESHOLD:
+            logger.info("Embedding material match", name=name, score=float(scores[best_idx]))
+            return _materials_cache[best_idx].get("price")
         return None
     except Exception as e:
-        logger.error("Semantic material match failed", error=str(e))
+        logger.error("Embedding material match failed", error=str(e))
         return None
 
 
@@ -148,8 +142,9 @@ async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[d
             data = extract_json(response)
             price = float(data.get("price", 0))
             unit = data.get("unit", "")
+            web_source = data.get("source", "Веб-поиск")
             if price > 0:
-                return {"prices": {"web": price}, "min_price": price, "unit": unit}
+                return {"prices": {"web": price}, "min_price": price, "unit": unit, "source": web_source}
         except (ValueError, TypeError):
             pass
         return None
@@ -195,8 +190,9 @@ async def _web_search_material_price(name: str, user_prompt: str = "") -> Option
 
 
 async def load_cache(db: AsyncSession) -> None:
-    """Load price data from DB into in-memory cache."""
+    """Load price data from DB into in-memory cache, including embedding matrices."""
     global _works_cache, _materials_cache, _cache_loaded
+    global _works_embeddings, _materials_embeddings, _works_row_norms, _materials_row_norms
 
     works_result = await db.execute(select(PriceWork))
     works = works_result.scalars().all()
@@ -211,6 +207,15 @@ async def load_cache(db: AsyncSession) -> None:
         for w in works
     ]
 
+    # Build works embedding matrix — only if ALL rows have embeddings
+    if _numpy_available and works and all(w.embedding for w in works):
+        emb_matrix = np.array([w.embedding for w in works], dtype=np.float32)
+        _works_embeddings = emb_matrix
+        _works_row_norms = np.linalg.norm(emb_matrix, axis=1)
+    else:
+        _works_embeddings = None
+        _works_row_norms = None
+
     materials_result = await db.execute(select(PriceMaterial))
     materials = materials_result.scalars().all()
     _materials_cache = [
@@ -223,23 +228,34 @@ async def load_cache(db: AsyncSession) -> None:
         for m in materials
     ]
 
+    # Build materials embedding matrix — only if ALL rows have embeddings
+    if _numpy_available and materials and all(m.embedding for m in materials):
+        emb_matrix = np.array([m.embedding for m in materials], dtype=np.float32)
+        _materials_embeddings = emb_matrix
+        _materials_row_norms = np.linalg.norm(emb_matrix, axis=1)
+    else:
+        _materials_embeddings = None
+        _materials_row_norms = None
+
     _cache_loaded = True
     logger.info(
         "Price cache loaded",
         works=len(_works_cache),
         materials=len(_materials_cache),
+        works_embeddings=_works_embeddings is not None,
+        materials_embeddings=_materials_embeddings is not None,
     )
 
 
 async def find_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
-    """Find work price: exact match -> Claude semantic -> web search."""
+    """Find work price: exact match -> embedding search -> web search."""
     # 1. Exact match
     result = _exact_match_work(name)
     if result:
         return result
 
-    # 2. Claude semantic match
-    result = await _semantic_match_work(name)
+    # 2. Embedding match (OpenAI cosine similarity)
+    result = await _embedding_match_work(name)
     if result:
         return result
 
@@ -249,14 +265,14 @@ async def find_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
 
 
 async def find_material_price(name: str, user_prompt: str = "") -> Optional[float]:
-    """Find material price: exact match -> Claude semantic -> web search."""
+    """Find material price: exact match -> embedding search -> web search."""
     # 1. Exact match
     result = _exact_match_material(name)
     if result is not None:
         return result
 
-    # 2. Claude semantic match
-    result = await _semantic_match_material(name)
+    # 2. Embedding match (OpenAI cosine similarity)
+    result = await _embedding_match_material(name)
     if result is not None:
         return result
 

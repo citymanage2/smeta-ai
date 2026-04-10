@@ -14,7 +14,7 @@ async def test_slot_download_returns_file(async_client: AsyncClient, user_token:
     task = Task(
         id=task_id,
         user_role="user",
-        task_type="LIST_FROM_TZ",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         input_files=[{"name": "source.xlsx", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size_bytes": len(file_content)}],
         input_file_data=[{
@@ -48,7 +48,7 @@ async def test_slot_download_empty_slot_returns_404(async_client: AsyncClient, u
     task = Task(
         id=task_id,
         user_role="user",
-        task_type="LIST_FROM_TZ",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         input_files=[],
         input_file_data=[],
@@ -75,7 +75,7 @@ async def test_slot_download_invalid_slot_returns_400(async_client: AsyncClient,
     task = Task(
         id=task_id,
         user_role="user",
-        task_type="LIST_FROM_TZ",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         input_files=[],
         input_file_data=[],

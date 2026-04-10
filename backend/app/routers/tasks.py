@@ -1,5 +1,6 @@
 import base64
 import io
+import time
 import uuid
 from decimal import Decimal
 from typing import Optional
@@ -691,6 +692,61 @@ async def optimize_analyze(
     }
 
 
+OPTIMIZATION_BATCH_SIZE = 4  # позиций обрабатывается параллельно
+
+
+async def _process_single_item(
+    item: dict,
+    price_service,
+    prompt: str,
+) -> dict:
+    """Обработать одну позицию сметы: найти цену, вернуть optimization_result.
+
+    Не обращается к БД — только вычисляет.
+    Все исключения поглощает внутри и возвращает заглушку.
+    """
+    name = item["name"]
+    item_type = item["type"]
+    original_price = item["price_incl_vat"]
+
+    found_price = None
+    source = "Не найдено"
+
+    try:
+        if item_type == "work":
+            price_data = await price_service.find_work_price(name, user_prompt=prompt)
+            if price_data:
+                found_price = float(price_data["min_price"])
+                source = price_data.get("source", "Прайс-лист")
+        else:
+            material_price = await price_service.find_material_price(name, user_prompt=prompt)
+            if material_price is not None:
+                found_price = float(material_price)
+                source = "Прайс-лист"
+    except Exception:
+        source = "Ошибка поиска"
+
+    savings_abs = None
+    savings_pct = None
+    if found_price is not None and found_price < original_price:
+        savings_abs = round(original_price - found_price, 4)
+        savings_pct = round(savings_abs / original_price * 100, 2)
+    elif found_price is not None:
+        found_price = None
+        source = "Не найдено (цена не ниже)"
+
+    return {
+        "row_index": item["row_index"],
+        "name": name,
+        "original_price": original_price,
+        "new_price": found_price,
+        "source": source,
+        "savings_abs": savings_abs,
+        "savings_pct": savings_pct,
+        "has_vat": True,
+    }
+
+
 async def _run_optimization_background(
     task_id: str,
     items: list[dict],
@@ -699,7 +755,6 @@ async def _run_optimization_background(
     session_factory,
 ):
     """Background task: search lower prices for the same items and generate optimized xlsx."""
-    import base64 as _b64
     import structlog as _structlog
     from app.utils.xlsx_optimizer import generate_optimized_xlsx
     from app.services.price_service import PriceService
@@ -712,7 +767,7 @@ async def _run_optimization_background(
             if not task:
                 return
 
-            # Capture previous optimized slot before overwriting
+            # Check if an "optimized" slot already exists (previous run)
             prev_result_q = await db.execute(
                 select(TaskResult).where(
                     TaskResult.task_id == task_id,
@@ -722,93 +777,117 @@ async def _run_optimization_background(
             prev_optimized = prev_result_q.scalar_one_or_none()
             prev_estimation_status = "optimized" if prev_optimized else "estimated"
 
-            price_service = PriceService()
-            optimization_results = []
-            total = len(items)
-
-            for i, item in enumerate(items):
-                name = item["name"]
-                item_type = item["type"]
-                original_price = item["price_incl_vat"]
-
-                task.progress_message = f"Обработано {i}/{total}: {name[:40]}"
-                await db.commit()
-
-                found_price = None
-                source = "Не найдено"
-
-                try:
-                    if item_type == "work":
-                        price_data = await price_service.find_work_price(name, user_prompt=prompt)
-                    else:
-                        price_data = await price_service.find_material_price(name, user_prompt=prompt)
-
-                    if price_data and price_data.get("price"):
-                        found_price = float(price_data["price"])
-                        source = price_data.get("source", "Прайс-лист")
-                except Exception as e:
-                    _logger.warning("price_search_failed", name=name, error=str(e))
-
-                savings_abs = None
-                savings_pct = None
-                if found_price is not None and found_price < original_price:
-                    savings_abs = round(original_price - found_price, 4)
-                    savings_pct = round(savings_abs / original_price * 100, 2)
-                elif found_price is not None:
-                    found_price = None
-                    source = "Не найдено (цена не ниже)"
-
-                optimization_results.append({
-                    "row_index": item["row_index"],
-                    "name": name,
-                    "original_price": original_price,
-                    "new_price": found_price,
-                    "source": source,
-                    "savings_abs": savings_abs,
-                    "savings_pct": savings_pct,
-                    "has_vat": True,
-                })
-
-            optimized_bytes = generate_optimized_xlsx(estimate_bytes, optimization_results)
-
-            existing = await db.execute(
+            # Count existing versioned snapshots to determine the next archive slot name
+            version_rows_q = await db.execute(
                 select(TaskResult).where(
                     TaskResult.task_id == task_id,
-                    TaskResult.slot == "optimized",
+                    TaskResult.slot.like("optimized_v%"),
                 )
             )
-            existing_result = existing.scalar_one_or_none()
-            if existing_result:
-                existing_result.file_data = optimized_bytes
-                existing_result.file_name = "optimized.xlsx"
-            else:
-                new_result = TaskResult(
+            version_count = len(version_rows_q.scalars().all())
+
+            import asyncio as _asyncio
+            price_service = PriceService()
+            total = len(items)
+
+            # 6.3 — Возобновление после сбоя: читаем уже сохранённые результаты
+            already_done: dict[int, dict] = {}
+            if task.progress_data:
+                for r in task.progress_data.get("partial_results", []):
+                    already_done[r["row_index"]] = r
+
+            items_to_process = [i for i in items if i["row_index"] not in already_done]
+            optimization_results: list[dict] = list(already_done.values())
+
+            if already_done:
+                _logger.info(
+                    "optimization_resumed",
+                    task_id=task_id,
+                    already_done=len(already_done),
+                    remaining=len(items_to_process),
+                )
+
+            start_time = time.monotonic()
+            for batch_start in range(0, len(items_to_process), OPTIMIZATION_BATCH_SIZE):
+                batch = items_to_process[batch_start: batch_start + OPTIMIZATION_BATCH_SIZE]
+
+                batch_results = await _asyncio.gather(
+                    *[_process_single_item(item, price_service, prompt) for item in batch],
+                    return_exceptions=True,
+                )
+
+                for idx, r in enumerate(batch_results):
+                    if isinstance(r, Exception):
+                        failed_item = batch[idx]
+                        _logger.warning("batch_item_failed", name=failed_item["name"], error=str(r))
+                        optimization_results.append({
+                            "row_index": failed_item["row_index"],
+                            "name": failed_item["name"],
+                            "original_price": failed_item["price_incl_vat"],
+                            "new_price": None,
+                            "source": "Ошибка поиска",
+                            "savings_abs": None,
+                            "savings_pct": None,
+                            "has_vat": True,
+                        })
+                    else:
+                        optimization_results.append(r)
+
+                # 6.3 — Сохраняем чекпоинт после каждого батча
+                task.progress_data = {"partial_results": optimization_results}
+
+                # 7.1 + 7.2 — Детальный прогресс с ETA
+                processed_count = len(optimization_results)
+                found_count = sum(1 for r in optimization_results if r["new_price"] is not None)
+                current_name = batch[0]["name"][:35]
+                elapsed = time.monotonic() - start_time
+                eta_part = ""
+                if processed_count > 0:
+                    avg_per_item = elapsed / processed_count
+                    remaining_count = total - processed_count
+                    eta_sec = int(avg_per_item * remaining_count)
+                    if eta_sec > 30:
+                        eta_part = f" | осталось ~{eta_sec // 60} мин"
+                task.progress_message = (
+                    f"Ищем цены: {processed_count}/{total} позиций"
+                    f" | найдено {found_count}"
+                    f" | текущая: {current_name}..."
+                    f"{eta_part}"
+                )
+                await db.commit()
+
+            optimized_bytes = generate_optimized_xlsx(estimate_bytes, optimization_results)
+            found_count = sum(1 for r in optimization_results if r["new_price"] is not None)
+
+            # Archive the previous "optimized" slot by renaming it to a versioned snapshot.
+            # This avoids storing file bytes in the JSON history field.
+            if prev_optimized:
+                archive_slot = f"optimized_v{version_count + 1}"
+                prev_optimized.slot = archive_slot
+                previous_value: dict = {
+                    "result_slot": archive_slot,
+                    "file_name": prev_optimized.file_name,
+                    "estimation_status": "optimized",
+                }
+                # Create fresh "optimized" slot with new bytes
+                db.add(TaskResult(
                     task_id=task_id,
                     slot="optimized",
                     file_name="optimized.xlsx",
-                    mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    mime_type=XLSX_MIME,
                     file_data=optimized_bytes,
-                )
-                db.add(new_result)
-
-            # Write history entry
-            found_count = sum(1 for r in optimization_results if r["new_price"] is not None)
-            previous_value: dict = {}
-            if prev_optimized:
-                previous_value = {
-                    "file_name": prev_optimized.file_name,
-                    "file_data_b64": _b64.b64encode(prev_optimized.file_data).decode(),
-                    "estimation_status": prev_estimation_status,
-                }
+                ))
             else:
                 previous_value = {"estimation_status": prev_estimation_status}
+                db.add(TaskResult(
+                    task_id=task_id,
+                    slot="optimized",
+                    file_name="optimized.xlsx",
+                    mime_type=XLSX_MIME,
+                    file_data=optimized_bytes,
+                ))
 
-            new_value = {
-                "file_name": "optimized.xlsx",
-                "file_data_b64": _b64.b64encode(optimized_bytes).decode(),
-                "estimation_status": "optimized",
-            }
-
+            # History entry contains only metadata — no file bytes
             history = TaskHistory(
                 id=str(uuid.uuid4()),
                 task_id=task_id,
@@ -816,13 +895,14 @@ async def _run_optimization_background(
                 slot="optimized",
                 description=f"Поиск сниженных цен: найдено {found_count} из {total} позиций",
                 previous_value=previous_value,
-                new_value=new_value,
+                new_value={"estimation_status": "optimized"},
             )
             db.add(history)
 
             task.status = "completed"
             task.estimation_status = "optimized"
             task.progress_message = None
+            task.progress_data = None  # 6.4 — чекпоинт больше не нужен
             await db.commit()
             _logger.info("optimization_complete", task_id=task_id)
 
@@ -984,7 +1064,7 @@ async def revert_history(
     # Execute rollback
     prev = entry.previous_value or {}
 
-    # Delete current TaskResult for this slot and optionally restore previous
+    # Delete current TaskResult for this slot
     cur_result = await db.execute(
         select(TaskResult).where(
             TaskResult.task_id == task_id,
@@ -996,16 +1076,28 @@ async def revert_history(
         await db.delete(current_file)
         await db.flush()
 
-    if prev.get("file_data_b64"):
+    if prev.get("result_slot"):
+        # New format: restore by renaming the versioned snapshot back to the active slot
+        versioned_q = await db.execute(
+            select(TaskResult).where(
+                TaskResult.task_id == task_id,
+                TaskResult.slot == prev["result_slot"],
+            )
+        )
+        versioned = versioned_q.scalar_one_or_none()
+        if versioned:
+            versioned.slot = entry.slot
+    elif prev.get("file_data_b64"):
+        # Backward compat: old entries stored file bytes as base64 in JSON
         restored_bytes = _b64.b64decode(prev["file_data_b64"])
-        restored = TaskResult(
+        db.add(TaskResult(
             task_id=task_id,
             slot=entry.slot,
             file_name=prev.get("file_name", "restored.xlsx"),
             mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             file_data=restored_bytes,
-        )
-        db.add(restored)
+        ))
+    # else: no file to restore (e.g., reverting the very first optimization → back to "estimated")
 
     # Restore task estimation_status
     task.estimation_status = prev.get("estimation_status", "estimated")

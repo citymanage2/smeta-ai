@@ -34,8 +34,8 @@ _DT = datetime(2026, 3, 26, 12, 0, 0, tzinfo=timezone.utc)
 def _make_data():
     project = _FakeProject()
     tasks = [
-        _FakeTask("t1", "SMETA_FROM_LIST", "estimated", Decimal("1500000"), _DT),
-        _FakeTask("t2", "LIST_FROM_TZ", "not_applicable", None, _DT),
+        _FakeTask("t1", "LIST_FROM_GRAND", "estimated", Decimal("1500000"), _DT),
+        _FakeTask("t2", "LIST_FROM_GRAND", "not_applicable", None, _DT),
     ]
     result1 = _FakeResult("t1", "smeta.xlsx", "estimate")
     slot_results = {
@@ -77,7 +77,7 @@ def test_pdf_html_contains_project_name():
 def test_pdf_html_contains_task_type_label():
     project, tasks, slot_results = _make_data()
     html = _build_html(project, tasks, slot_results, "http://localhost:8000")
-    assert "Смета из ТЗ" in html  # SMETA_FROM_LIST label
+    assert "Перечень из Гранд-сметы" in html  # LIST_FROM_GRAND label
 
 
 def test_pdf_html_contains_download_link():

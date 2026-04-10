@@ -42,7 +42,7 @@ async def test_upload_source_slot(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "unestimated"
     await db_session.commit()
 
@@ -75,7 +75,7 @@ async def test_upload_estimate_slot_parses_cost(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "unestimated"
     task.cost = None
     await db_session.commit()
@@ -102,7 +102,7 @@ async def test_upload_estimate_slot_damaged_xlsx_returns_warning(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "unestimated"
     await db_session.commit()
 
@@ -128,7 +128,7 @@ async def test_upload_non_xlsx_to_estimate_returns_400(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "unestimated"
     await db_session.commit()
 
@@ -150,7 +150,7 @@ async def test_delete_estimate_slot_clears_cost(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "estimated"
     task.cost = 99000
     await db_session.commit()
@@ -185,7 +185,7 @@ async def test_confirm_optimized_estimation(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "estimated"
     await db_session.commit()
 
@@ -217,7 +217,7 @@ async def test_confirm_optimized_fails_without_file(
 ):
     result = await db_session.execute(select(Task).where(Task.id == SEEDED_TASK_ID))
     task = result.scalar_one()
-    task.task_type = "SMETA_FROM_LIST"
+    task.task_type = "LIST_FROM_GRAND"
     task.estimation_status = "estimated"
     await db_session.commit()
 
@@ -302,7 +302,7 @@ async def test_auto_fill_estimate_slot_sets_status_and_slot(
     """
     from app.services.task_processor import TaskProcessor
 
-    task = await _make_task(db_session, AUTO_TASK_ID, "SMETA_FROM_LIST")
+    task = await _make_task(db_session, AUTO_TASK_ID, "LIST_FROM_GRAND")
 
     xlsx_bytes = _make_xlsx_with_итого(99500.0)
     result_row = TaskResult(
@@ -378,27 +378,6 @@ async def test_auto_fill_skipped_for_non_estimate_task(
     assert res.scalar_one_or_none() is not None
 
 
-@pytest.mark.asyncio
-async def test_auto_fill_skipped_for_optimize_smeta(
-    seed_users,
-    db_session: AsyncSession,
-):
-    """OPTIMIZE_SMETA manages its own slots; _auto_fill_estimate_slot must not interfere."""
-    from app.services.task_processor import TaskProcessor
-
-    task_id = "c2000000-0000-0000-0000-000000000097"
-    task = await _make_task(db_session, task_id, "OPTIMIZE_SMETA")
-    task.estimation_status = "optimized"
-    await db_session.commit()
-
-    processor = TaskProcessor(task_id, db_session)
-    await processor._auto_fill_estimate_slot()
-
-    await db_session.refresh(task)
-    assert task.estimation_status == "optimized", (
-        "OPTIMIZE_SMETA estimation_status must not be changed by auto-fill"
-    )
-
 
 @pytest.mark.asyncio
 async def test_auto_fill_no_result_sets_unestimated(
@@ -409,7 +388,7 @@ async def test_auto_fill_no_result_sets_unestimated(
     from app.services.task_processor import TaskProcessor
 
     task_id = "c2000000-0000-0000-0000-000000000096"
-    task = await _make_task(db_session, task_id, "SMETA_FROM_LIST")
+    task = await _make_task(db_session, task_id, "LIST_FROM_GRAND")
     await db_session.commit()
 
     processor = TaskProcessor(task_id, db_session)

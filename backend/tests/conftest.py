@@ -166,7 +166,7 @@ async def seed_users(db_session: AsyncSession):
     task = Task(
         id=SEEDED_TASK_ID,
         user_role="user",
-        task_type="LIST_FROM_TZ",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         input_files=[
             {"name": "test.pdf", "mime_type": "application/pdf", "size_bytes": 100}

@@ -4,7 +4,7 @@ import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, Admin
 import {
   getAdminTasks, getAdminTask, deleteTask,
   getPriceListsInfo, uploadWorksPrice, uploadMaterialsPrice,
-  downloadInputFile,
+  downloadInputFile, generateEmbeddings,
   PriceListInfo,
 } from '../api/admin';
 import { getTaskResults, downloadResult } from '../api/tasks';
@@ -46,14 +46,30 @@ interface PriceUploadCardProps {
   selectedFile: File | null;
   uploading: boolean;
   message: { type: 'success' | 'error'; text: string } | null;
+  embeddingLoading: boolean;
   onPickFile: () => void;
   onUpload: () => void;
+  onGenerateEmbeddings: () => void;
 }
 
+const EMBEDDING_BADGE: Record<'pending' | 'ready' | 'failed', { label: string; color: string; bg: string; border: string }> = {
+  pending:  { label: '⚠ Векторы не созданы',  color: '#854d0e', bg: '#fef9c3', border: '#fde047' },
+  ready:    { label: '● Векторы готовы',       color: '#15803d', bg: '#f0fdf4', border: '#86efac' },
+  failed:   { label: '✕ Ошибка генерации',     color: '#dc2626', bg: '#fef2f2', border: '#fca5a5' },
+};
+
+const EMBEDDING_BTN_LABEL: Record<'pending' | 'ready' | 'failed', string> = {
+  pending: 'Сгенерировать векторы',
+  ready:   'Перегенерировать векторы',
+  failed:  'Повторить генерацию',
+};
+
 const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
-  title, info, selectedFile, uploading, message, onPickFile, onUpload,
+  title, info, selectedFile, uploading, message, embeddingLoading, onPickFile, onUpload, onGenerateEmbeddings,
 }) => {
   const hasFile = !!info?.filename;
+  const embStatus = info?.embedding_status ?? 'pending';
+  const badge = EMBEDDING_BADGE[embStatus];
 
   return (
     <div
@@ -78,7 +94,7 @@ const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
           backgroundColor: hasFile ? '#f0fdf4' : '#f8fafc',
           border: `1px solid ${hasFile ? '#86efac' : '#e2e8f0'}`,
           borderRadius: '8px',
-          marginBottom: '20px',
+          marginBottom: '16px',
         }}
       >
         {hasFile ? (
@@ -97,6 +113,64 @@ const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
           <div style={{ fontSize: '13px', color: '#94a3b8' }}>Не загружен</div>
         )}
       </div>
+
+      {/* Embedding status badge + button */}
+      {hasFile && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{
+            display: 'inline-block',
+            padding: '4px 10px',
+            backgroundColor: badge.bg,
+            border: `1px solid ${badge.border}`,
+            borderRadius: '20px',
+            fontSize: '12px',
+            fontWeight: 600,
+            color: badge.color,
+            marginBottom: '10px',
+          }}>
+            {badge.label}
+          </div>
+
+          {/* Indeterminate progress bar — shown only during loading */}
+          {embeddingLoading && (
+            <div style={{
+              width: '100%',
+              height: '4px',
+              backgroundColor: '#e2e8f0',
+              borderRadius: '2px',
+              overflow: 'hidden',
+              marginBottom: '10px',
+            }}>
+              <div style={{
+                height: '100%',
+                width: '40%',
+                backgroundColor: '#2563eb',
+                borderRadius: '2px',
+                animation: 'embProgressSlide 1.2s ease-in-out infinite',
+              }} />
+            </div>
+          )}
+
+          <button
+            onClick={onGenerateEmbeddings}
+            disabled={embeddingLoading}
+            style={{
+              width: '100%',
+              padding: '9px',
+              fontSize: '13px',
+              fontWeight: 600,
+              backgroundColor: embeddingLoading ? '#e2e8f0' : '#f1f5f9',
+              color: embeddingLoading ? '#94a3b8' : '#374151',
+              border: '1.5px solid #cbd5e1',
+              borderRadius: '7px',
+              cursor: embeddingLoading ? 'not-allowed' : 'pointer',
+              transition: 'background-color 0.15s',
+            }}
+          >
+            {embeddingLoading ? 'Генерация...' : EMBEDDING_BTN_LABEL[embStatus]}
+          </button>
+        </div>
+      )}
 
       {/* File picker button */}
       <button
@@ -207,6 +281,8 @@ const AdminPage: React.FC = () => {
   const [matsUploading, setMatsUploading] = useState(false);
   const [worksMsg, setWorksMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [matsMsg, setMatsMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [worksEmbeddingLoading, setWorksEmbeddingLoading] = useState(false);
+  const [matsEmbeddingLoading, setMatsEmbeddingLoading] = useState(false);
 
   const [downloadingFile, setDownloadingFile] = useState<number | null>(null);
 
@@ -340,6 +416,42 @@ const AdminPage: React.FC = () => {
     }
   };
 
+  const handleWorksGenerateEmbeddings = async () => {
+    setWorksEmbeddingLoading(true);
+    try {
+      const result = await generateEmbeddings('works');
+      setPriceListsInfo((prev) => prev ? {
+        ...prev,
+        works: { ...prev.works, embedding_status: result.status },
+      } : prev);
+    } catch {
+      setPriceListsInfo((prev) => prev ? {
+        ...prev,
+        works: { ...prev.works, embedding_status: 'failed' },
+      } : prev);
+    } finally {
+      setWorksEmbeddingLoading(false);
+    }
+  };
+
+  const handleMatsGenerateEmbeddings = async () => {
+    setMatsEmbeddingLoading(true);
+    try {
+      const result = await generateEmbeddings('materials');
+      setPriceListsInfo((prev) => prev ? {
+        ...prev,
+        materials: { ...prev.materials, embedding_status: result.status },
+      } : prev);
+    } catch {
+      setPriceListsInfo((prev) => prev ? {
+        ...prev,
+        materials: { ...prev.materials, embedding_status: 'failed' },
+      } : prev);
+    } finally {
+      setMatsEmbeddingLoading(false);
+    }
+  };
+
   const handleDownload = async (fileId: number, fileName: string) => {
     setDownloadingFile(fileId);
     try {
@@ -365,6 +477,12 @@ const AdminPage: React.FC = () => {
 
   return (
     <Layout>
+      <style>{`
+        @keyframes embProgressSlide {
+          0%   { transform: translateX(-150%); }
+          100% { transform: translateX(350%); }
+        }
+      `}</style>
       <div>
         {/* Page title */}
         <div style={{ marginBottom: '24px' }}>
@@ -785,8 +903,10 @@ const AdminPage: React.FC = () => {
               selectedFile={worksFile}
               uploading={worksUploading}
               message={worksMsg}
+              embeddingLoading={worksEmbeddingLoading}
               onPickFile={() => worksInputRef.current?.click()}
               onUpload={handleWorksUpload}
+              onGenerateEmbeddings={handleWorksGenerateEmbeddings}
             />
 
             {/* Materials card */}
@@ -796,8 +916,10 @@ const AdminPage: React.FC = () => {
               selectedFile={matsFile}
               uploading={matsUploading}
               message={matsMsg}
+              embeddingLoading={matsEmbeddingLoading}
               onPickFile={() => matsInputRef.current?.click()}
               onUpload={handleMatsUpload}
+              onGenerateEmbeddings={handleMatsGenerateEmbeddings}
             />
           </div>
         )}

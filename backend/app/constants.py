@@ -1,4 +1,4 @@
-ESTIMATE_TASK_TYPES: set[str] = set()
+ESTIMATE_TASK_TYPES: set[str] = {"LIST_FROM_GRAND"}
 
 TASK_TYPE_LABELS: dict[str, str] = {
     "LIST_FROM_GRAND": "Перечень из Гранд-сметы",

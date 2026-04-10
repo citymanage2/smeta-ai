@@ -13,6 +13,8 @@ class PriceList(Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # "pending" | "ready" | "failed"
+    embedding_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

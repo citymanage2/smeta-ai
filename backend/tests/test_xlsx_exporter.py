@@ -37,8 +37,8 @@ _DT = datetime(2026, 3, 26, 12, 0, 0, tzinfo=timezone.utc)
 def _make_data():
     project = _FakeProject()
     tasks = [
-        _FakeTask("t1", "SMETA_FROM_LIST", "estimated", Decimal("1500000"), _DT),
-        _FakeTask("t2", "LIST_FROM_TZ", "not_applicable", None, _DT),
+        _FakeTask("t1", "LIST_FROM_GRAND", "estimated", Decimal("1500000"), _DT),
+        _FakeTask("t2", "LIST_FROM_GRAND", "not_applicable", None, _DT),
     ]
     result1 = _FakeResult("t1", "smeta.xlsx", "estimate")
     slot_results = {
@@ -80,11 +80,11 @@ def test_xlsx_tasks_sheet_rows():
     wb = openpyxl.load_workbook(io.BytesIO(data))
     ws = wb["Задачи"]
     # Row 2 = first task
-    assert ws.cell(2, 1).value == "Смета из ТЗ"
+    assert ws.cell(2, 1).value == "Перечень из Гранд-сметы"
     assert ws.cell(2, 2).value == "Рассчитано"
     assert ws.cell(2, 3).value == 1500000.0
     # Row 3 = second task
-    assert ws.cell(3, 1).value == "Список из ТЗ"
+    assert ws.cell(3, 1).value == "Перечень из Гранд-сметы"
     assert ws.cell(3, 2).value == "—"
     assert ws.cell(3, 3).value is None
 

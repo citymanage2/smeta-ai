@@ -9,7 +9,7 @@ async def test_create_task(async_client, seed_users, user_token):
     """Authenticated POST /tasks creates a task and returns task_id + status=pending."""
     response = await async_client.post(
         "/tasks",
-        data={"task_type": "LIST_FROM_TZ"},
+        data={"task_type": "LIST_FROM_GRAND"},
         files={"files": ("test.pdf", b"%PDF-1.4 test", "application/pdf")},
         headers={"Authorization": user_token},
     )
@@ -24,7 +24,7 @@ async def test_create_task_no_auth(async_client, seed_users):
     """POST /tasks without auth header returns 401."""
     response = await async_client.post(
         "/tasks",
-        data={"task_type": "LIST_FROM_TZ"},
+        data={"task_type": "LIST_FROM_GRAND"},
         files={"files": ("test.pdf", b"%PDF-1.4 test", "application/pdf")},
     )
     assert response.status_code in (401, 403)
@@ -39,7 +39,7 @@ async def test_get_task_status(async_client, seed_users, user_token):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "completed"
-    assert data["task_type"] == "LIST_FROM_TZ"
+    assert data["task_type"] == "LIST_FROM_GRAND"
 
 
 async def test_get_task_status_not_found(async_client, seed_users, user_token):

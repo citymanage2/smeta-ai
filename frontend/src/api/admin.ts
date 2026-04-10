@@ -19,6 +19,13 @@ export interface PriceListInfo {
   type: string;
   filename: string | null;
   updated_at: string | null;
+  embedding_status: 'pending' | 'ready' | 'failed';
+}
+
+export interface GenerateEmbeddingsResponse {
+  status: 'ready' | 'failed';
+  updated?: number;
+  error?: string;
 }
 
 export interface PriceListsInfoResponse {
@@ -68,6 +75,13 @@ export async function downloadInputFile(taskId: string, fileIndex: number, fileN
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+}
+
+export async function generateEmbeddings(type: 'works' | 'materials'): Promise<GenerateEmbeddingsResponse> {
+  const response = await apiClient.post<GenerateEmbeddingsResponse>(
+    `/admin/price-lists/${type}/generate-embeddings`,
+  );
+  return response.data;
 }
 
 // Legacy combined upload kept for backward compatibility

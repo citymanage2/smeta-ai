@@ -6,7 +6,7 @@ import openpyxl
 from datetime import datetime, timezone, timedelta
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.models.task import Task
 from app.models.result import TaskResult
@@ -55,14 +55,16 @@ _ENTRY_ID_2_HEX = ENTRY_ID_2.replace("-", "")
 _NOW = datetime(2026, 3, 26, 10, 0, 0, tzinfo=timezone.utc)
 _LATER = _NOW + timedelta(hours=1)
 
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
 
 @pytest_asyncio.fixture
 async def seed_history_task(db_session: AsyncSession):
-    """Seed a task with one history entry."""
+    """Seed a task with one history entry (first optimization, new metadata-only format)."""
     task = Task(
         id=TASK_ID,
         user_role="user",
-        task_type="SMETA_FROM_LIST",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         estimation_status="optimized",
         input_files=[],
@@ -72,6 +74,17 @@ async def seed_history_task(db_session: AsyncSession):
     db_session.add(task)
     await db_session.flush()
 
+    # "optimized" slot — current active result
+    opt_result = TaskResult(
+        task_id=TASK_ID,
+        slot="optimized",
+        file_name="optimized.xlsx",
+        mime_type=XLSX_MIME,
+        file_data=b"opt1_bytes",
+    )
+    db_session.add(opt_result)
+
+    # History entry in new format: no file bytes, just metadata
     entry = TaskHistory(
         id=ENTRY_ID_1,
         task_id=TASK_ID,
@@ -79,11 +92,7 @@ async def seed_history_task(db_session: AsyncSession):
         slot="optimized",
         description="Оптимизация: найдено 1 из 1 аналогов",
         previous_value={"estimation_status": "estimated"},
-        new_value={
-            "file_name": "optimized.xlsx",
-            "file_data_b64": "dGVzdA==",
-            "estimation_status": "optimized",
-        },
+        new_value={"estimation_status": "optimized"},
         created_at=_NOW,
     )
     db_session.add(entry)
@@ -91,6 +100,9 @@ async def seed_history_task(db_session: AsyncSession):
     yield
     await db_session.execute(
         text("DELETE FROM task_history WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.execute(
+        text("DELETE FROM task_results WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
     )
     await db_session.execute(
         text("DELETE FROM tasks WHERE id = :tid"), {"tid": _TASK_ID_HEX}
@@ -140,11 +152,11 @@ async def test_get_history_task_not_found(async_client: AsyncClient, user_token:
 
 @pytest_asyncio.fixture
 async def seed_two_history_entries(db_session: AsyncSession):
-    """Seed a task with two sequential history entries (for cascade test)."""
+    """Seed a task with two sequential history entries using new versioned-slot format."""
     task = Task(
         id=TASK_ID,
         user_role="user",
-        task_type="SMETA_FROM_LIST",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         estimation_status="optimized",
         input_files=[],
@@ -154,6 +166,25 @@ async def seed_two_history_entries(db_session: AsyncSession):
     db_session.add(task)
     await db_session.flush()
 
+    # Versioned snapshot from first optimization (archived when second ran)
+    opt_v1 = TaskResult(
+        task_id=TASK_ID,
+        slot="optimized_v1",
+        file_name="opt1.xlsx",
+        mime_type=XLSX_MIME,
+        file_data=b"opt1_bytes",
+    )
+    # Current "optimized" = second optimization result
+    opt_current = TaskResult(
+        task_id=TASK_ID,
+        slot="optimized",
+        file_name="opt2.xlsx",
+        mime_type=XLSX_MIME,
+        file_data=b"opt2_bytes",
+    )
+    db_session.add(opt_v1)
+    db_session.add(opt_current)
+
     entry1 = TaskHistory(
         id=ENTRY_ID_1,
         task_id=TASK_ID,
@@ -161,7 +192,7 @@ async def seed_two_history_entries(db_session: AsyncSession):
         slot="optimized",
         description="Оптимизация первая",
         previous_value={"estimation_status": "estimated"},
-        new_value={"file_name": "opt1.xlsx", "file_data_b64": "dGVzdA==", "estimation_status": "optimized"},
+        new_value={"estimation_status": "optimized"},
         created_at=_NOW,
     )
     entry2 = TaskHistory(
@@ -170,8 +201,8 @@ async def seed_two_history_entries(db_session: AsyncSession):
         operation_type="optimization",
         slot="optimized",
         description="Оптимизация вторая",
-        previous_value={"file_name": "opt1.xlsx", "file_data_b64": "dGVzdA==", "estimation_status": "optimized"},
-        new_value={"file_name": "opt2.xlsx", "file_data_b64": "dGVzdDI=", "estimation_status": "optimized"},
+        previous_value={"result_slot": "optimized_v1", "file_name": "opt1.xlsx", "estimation_status": "optimized"},
+        new_value={"estimation_status": "optimized"},
         created_at=_LATER,
     )
     db_session.add(entry1)
@@ -180,6 +211,9 @@ async def seed_two_history_entries(db_session: AsyncSession):
     yield
     await db_session.execute(
         text("DELETE FROM task_history WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.execute(
+        text("DELETE FROM task_results WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
     )
     await db_session.execute(
         text("DELETE FROM tasks WHERE id = :tid"), {"tid": _TASK_ID_HEX}
@@ -251,6 +285,42 @@ async def test_revert_confirm_true_cascades(
 
 
 @pytest.mark.asyncio
+async def test_revert_restores_file_from_versioned_slot(
+    async_client: AsyncClient, user_token: str, db_session: AsyncSession,
+    seed_two_history_entries,
+):
+    """Reverting entry2 renames optimized_v1 back to 'optimized'."""
+    resp = await async_client.post(
+        f"/tasks/{TASK_ID}/history/{ENTRY_ID_2}/revert",
+        json={"confirm": False},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("reverted") is True
+
+    # The "optimized" slot should now have opt1's data (renamed from optimized_v1)
+    result_q = await db_session.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == TASK_ID,
+            TaskResult.slot == "optimized",
+        )
+    )
+    restored = result_q.scalar_one_or_none()
+    assert restored is not None
+    assert restored.file_name == "opt1.xlsx"
+    assert restored.file_data == b"opt1_bytes"
+
+    # optimized_v1 slot should no longer exist (it was renamed)
+    v1_q = await db_session.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == TASK_ID,
+            TaskResult.slot == "optimized_v1",
+        )
+    )
+    assert v1_q.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
 async def test_revert_entry_not_found(async_client: AsyncClient, user_token: str, seed_history_task):
     """Revert returns 404 for nonexistent history entry."""
     resp = await async_client.post(
@@ -259,3 +329,88 @@ async def test_revert_entry_not_found(async_client: AsyncClient, user_token: str
         headers={"Authorization": user_token},
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Backward compat: old entries with file_data_b64 in previous_value
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def seed_legacy_history_entry(db_session: AsyncSession):
+    """Seed a history entry in the old format (file_data_b64 in previous_value)."""
+    import base64
+    task = Task(
+        id=TASK_ID,
+        user_role="user",
+        task_type="LIST_FROM_GRAND",
+        status="completed",
+        estimation_status="optimized",
+        input_files=[],
+        input_file_data=[],
+        chat_history=[],
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    opt_current = TaskResult(
+        task_id=TASK_ID,
+        slot="optimized",
+        file_name="opt2.xlsx",
+        mime_type=XLSX_MIME,
+        file_data=b"opt2_bytes",
+    )
+    db_session.add(opt_current)
+
+    entry = TaskHistory(
+        id=ENTRY_ID_1,
+        task_id=TASK_ID,
+        operation_type="optimization",
+        slot="optimized",
+        description="Старая оптимизация (legacy)",
+        previous_value={
+            "file_name": "opt1.xlsx",
+            "file_data_b64": base64.b64encode(b"opt1_bytes_legacy").decode(),
+            "estimation_status": "optimized",
+        },
+        new_value={"file_name": "opt2.xlsx", "estimation_status": "optimized"},
+        created_at=_NOW,
+    )
+    db_session.add(entry)
+    await db_session.commit()
+    yield
+    await db_session.execute(
+        text("DELETE FROM task_history WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.execute(
+        text("DELETE FROM task_results WHERE task_id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.execute(
+        text("DELETE FROM tasks WHERE id = :tid"), {"tid": _TASK_ID_HEX}
+    )
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_revert_legacy_entry_restores_file(
+    async_client: AsyncClient, user_token: str, db_session: AsyncSession,
+    seed_legacy_history_entry,
+):
+    """Backward compat: revert reads file_data_b64 from old-format entries."""
+    resp = await async_client.post(
+        f"/tasks/{TASK_ID}/history/{ENTRY_ID_1}/revert",
+        json={"confirm": False},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("reverted") is True
+
+    result_q = await db_session.execute(
+        select(TaskResult).where(
+            TaskResult.task_id == TASK_ID,
+            TaskResult.slot == "optimized",
+        )
+    )
+    restored = result_q.scalar_one_or_none()
+    assert restored is not None
+    assert restored.file_name == "opt1.xlsx"
+    assert restored.file_data == b"opt1_bytes_legacy"

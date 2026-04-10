@@ -18,6 +18,11 @@ from app.models.price import PriceWork, PriceMaterial
 from app.models.price_list import PriceList
 from app.utils.auth import get_admin_user
 from app.services import price_service
+from app.services.embedding_service import (
+    normalize_name,
+    generate_embeddings_batch,
+    EmbeddingUnavailableError,
+)
 
 logger = structlog.get_logger()
 
@@ -71,6 +76,7 @@ class PriceListInfo(BaseModel):
     type: str
     filename: Optional[str]
     updated_at: Optional[str]
+    embedding_status: str = "pending"
 
 
 class PriceListsInfoResponse(BaseModel):
@@ -81,6 +87,12 @@ class PriceListsInfoResponse(BaseModel):
 class SinglePriceUploadResponse(BaseModel):
     loaded: int
     message: str
+
+
+class GenerateEmbeddingsResponse(BaseModel):
+    status: str
+    updated: int = 0
+    error: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -389,8 +401,9 @@ async def get_price_lists_info(
                 type=pl_type,
                 filename=row.filename,
                 updated_at=row.updated_at.isoformat(),
+                embedding_status=row.embedding_status,
             )
-        return PriceListInfo(type=pl_type, filename=None, updated_at=None)
+        return PriceListInfo(type=pl_type, filename=None, updated_at=None, embedding_status="pending")
 
     return PriceListsInfoResponse(
         works=await _get_info("works"),
@@ -435,35 +448,56 @@ async def _handle_price_upload(
 
     # Persist raw file (upsert: delete old, insert new)
     await db.execute(delete(PriceList).where(PriceList.type == pl_type))
-    db.add(PriceList(
+    pl_obj = PriceList(
         type=pl_type,
         filename=file.filename,
         mime_type=mime_type,
         content=data,
         updated_at=now,
-    ))
+        embedding_status="pending",
+    )
+    db.add(pl_obj)
 
-    # Update price tables if we got rows
+    # Update price tables if we got rows; keep object references for embedding update
+    price_objs: list = []
     if items:
         if is_works:
             await db.execute(delete(PriceWork))
             for item in items:
-                db.add(PriceWork(
+                w = PriceWork(
                     name=item["name"],
                     unit=item.get("unit", ""),
                     prices=item.get("prices", {}),
                     min_price=item.get("min_price"),
                     updated_at=now,
-                ))
+                )
+                db.add(w)
+                price_objs.append(w)
         else:
             await db.execute(delete(PriceMaterial))
             for item in items:
-                db.add(PriceMaterial(
+                m = PriceMaterial(
                     name=item["name"],
                     unit=item.get("unit", ""),
                     price=item.get("price"),
                     updated_at=now,
-                ))
+                )
+                db.add(m)
+                price_objs.append(m)
+
+    # Generate embeddings before commit (one batch API call for the whole price list)
+    if price_objs:
+        try:
+            normalized = [normalize_name(obj.name) for obj in price_objs]
+            embeddings = generate_embeddings_batch(normalized)
+            for obj, emb in zip(price_objs, embeddings):
+                obj.embedding = emb
+            pl_obj.embedding_status = "ready"
+            logger.info("Embeddings generated", type=pl_type, count=len(price_objs))
+        except EmbeddingUnavailableError as e:
+            pl_obj.embedding_status = "failed"
+            logger.warning("Embeddings generation failed, price list saved without vectors",
+                           type=pl_type, error=str(e))
 
     await db.commit()
     await price_service.load_cache(db)
@@ -499,6 +533,59 @@ async def upload_materials_price_list(
 ):
     """Upload price list for materials. Replaces existing materials prices."""
     return await _handle_price_upload(file, "materials", is_works=False, db=db)
+
+
+@router.post("/price-lists/{pl_type}/generate-embeddings", response_model=GenerateEmbeddingsResponse)
+async def generate_price_embeddings(
+    pl_type: str,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Generate (or regenerate) embedding vectors for all rows of a price list.
+    Returns HTTP 200 in both success and failure cases — check 'status' field.
+    """
+    if pl_type not in ("works", "materials"):
+        raise HTTPException(status_code=400, detail="Тип должен быть 'works' или 'materials'")
+
+    # Find the price list record
+    res = await db.execute(
+        select(PriceList)
+        .where(PriceList.type == pl_type)
+        .order_by(PriceList.updated_at.desc())
+        .limit(1)
+    )
+    price_list = res.scalar_one_or_none()
+    if not price_list:
+        raise HTTPException(status_code=404, detail="Прайс-лист не найден")
+
+    # Load all rows
+    if pl_type == "works":
+        rows_res = await db.execute(select(PriceWork))
+    else:
+        rows_res = await db.execute(select(PriceMaterial))
+    rows = rows_res.scalars().all()
+
+    if not rows:
+        price_list.embedding_status = "ready"
+        await db.commit()
+        return GenerateEmbeddingsResponse(status="ready", updated=0)
+
+    try:
+        normalized = [normalize_name(row.name) for row in rows]
+        embeddings = generate_embeddings_batch(normalized)
+        for row, emb in zip(rows, embeddings):
+            row.embedding = emb
+        price_list.embedding_status = "ready"
+        await db.commit()
+        await price_service.load_cache(db)
+        logger.info("Embeddings regenerated via endpoint", type=pl_type, count=len(rows))
+        return GenerateEmbeddingsResponse(status="ready", updated=len(rows))
+    except EmbeddingUnavailableError as e:
+        price_list.embedding_status = "failed"
+        await db.commit()
+        logger.warning("Embeddings generation failed via endpoint", type=pl_type, error=str(e))
+        return GenerateEmbeddingsResponse(status="failed", error=str(e))
 
 
 # ---------------------------------------------------------------------------

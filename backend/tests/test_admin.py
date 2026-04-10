@@ -49,7 +49,7 @@ async def test_admin_get_task_detail(async_client, seed_users, admin_token):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["task_type"] == "LIST_FROM_TZ"
+    assert data["task_type"] == "LIST_FROM_GRAND"
     assert isinstance(data["input_files"], list)
     assert isinstance(data["chat_history"], list)
 
@@ -90,7 +90,7 @@ async def test_admin_delete_task(async_client, seed_users, admin_token):
     # Create a new task via the API first
     create_resp = await async_client.post(
         "/tasks",
-        data={"task_type": "LIST_FROM_TZ"},
+        data={"task_type": "LIST_FROM_GRAND"},
         files={"files": ("del.pdf", b"%PDF-1.4 delete-me", "application/pdf")},
         headers={"Authorization": f"Bearer {_get_user_token()}"},
     )

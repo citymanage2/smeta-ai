@@ -1,4 +1,14 @@
-"""Tests for POST /tasks/{task_id}/optimize/analyze and /optimize/run endpoints."""
+"""Tests for POST /tasks/{task_id}/optimize/analyze and /optimize/run endpoints.
+
+Порядок поиска цен в _run_optimization_background (важно при мокировании):
+  1. Точное совпадение (_exact_match_work / _exact_match_material)
+  2. Embedding-поиск (_embedding_match_work / _embedding_match_material) — вызывается ПЕРВЫМ
+  3. Веб-поиск через Claude (_web_search_work_price / _web_search_material_price)
+
+При создании тестов, которые мокируют PriceService.find_work_price / find_material_price,
+учитывайте что embedding-поиск уже был выполнен внутри этих методов до веб-поиска.
+Для изоляции веб-поиска — мокируйте на уровне PriceService, не на уровне отдельных функций.
+"""
 import io
 import pytest
 import pytest_asyncio
@@ -53,7 +63,7 @@ async def seed_optimize_task(db_session: AsyncSession):
     task = Task(
         id=TASK_ID,
         user_role="user",
-        task_type="SMETA_FROM_LIST",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         estimation_status="estimated",
         input_files=[{"name": "s.pdf", "mime_type": "application/pdf", "size_bytes": 10}],
@@ -106,7 +116,7 @@ async def test_analyze_empty_slot_returns_404(async_client: AsyncClient, user_to
     task = Task(
         id=no_slot_id,
         user_role="user",
-        task_type="SMETA_FROM_LIST",
+        task_type="LIST_FROM_GRAND",
         status="completed",
         estimation_status="estimated",
         input_files=[],
