@@ -33,6 +33,9 @@ backend/alembic/versions/*.py
 !backend/alembic/versions/006_repair_missing_004.py
 !backend/alembic/versions/007_widen_estimation_status.py
 !backend/alembic/versions/008_task_name.py
+!backend/alembic/versions/009_widen_result_slot.py
+!backend/alembic/versions/010_add_embeddings.py
+!backend/alembic/versions/011_add_task_progress_data.py
 
 # IDE
 .vscode/
