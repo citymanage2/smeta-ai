@@ -77,6 +77,54 @@ smeta-ai/
 - Если меняется технический план — обнови соответствующий план в `plans/`.
 - Если появляется новая важная папка или документ — обнови этот `CLAUDE.md`.
 
+## ВАЖНО: изменения моделей базы данных
+
+**Любое изменение в `backend/app/models/*.py`** (новая колонка, изменение типа, новая таблица) **требует файла миграции**. Без миграции деплой на Render упадёт.
+
+### Обязательный порядок действий
+
+1. Изменил модель в `backend/app/models/*.py`
+2. Создал файл миграции в `backend/alembic/versions/` по шаблону:
+   - Имя файла: `0NN_краткое_описание.py` (следующий номер по порядку)
+   - `revision` и `down_revision` должны формировать непрерывную цепочку
+   - Использовать `op.execute("ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...")` — **обязательно с IF NOT EXISTS** для идемпотентности
+3. Только после создания миграции — коммит и пуш
+
+### Шаблон файла миграции
+
+```python
+"""Описание что делает миграция
+
+Revision ID: 0NN
+Revises: 0NN-1
+Create Date: YYYY-MM-DD
+"""
+from typing import Sequence, Union
+from alembic import op
+import sqlalchemy as sa
+
+revision: str = "0NN"
+down_revision: Union[str, None] = "0NN-1"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    op.execute("ALTER TABLE table_name ADD COLUMN IF NOT EXISTS col_name TYPE")
+
+
+def downgrade() -> None:
+    op.execute("ALTER TABLE table_name DROP COLUMN IF EXISTS col_name")
+```
+
+### Почему IF NOT EXISTS обязательно
+
+Render может оказаться в состоянии когда колонка уже есть в базе, но `alembic_version` показывает старую версию (рассинхрон). `IF NOT EXISTS` позволяет миграции отработать безопасно в любом случае.
+
+### Текущая последняя миграция
+
+`011_add_task_progress_data.py` — следующая должна быть `012_...`
+
 ## ВАЖНО: план для каждой новой функции
 
 Любая функция, которую мы создаём в любом чате, всегда оформляется планом в папке `plans/`.
