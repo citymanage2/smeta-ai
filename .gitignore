@@ -23,19 +23,7 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 
-# Alembic
-backend/alembic/versions/*.py
-!backend/alembic/versions/001_initial.py
-!backend/alembic/versions/002_price_lists.py
-!backend/alembic/versions/003_fix_user_role_column_type.py
-!backend/alembic/versions/004_projects.py
-!backend/alembic/versions/005_task_history.py
-!backend/alembic/versions/006_repair_missing_004.py
-!backend/alembic/versions/007_widen_estimation_status.py
-!backend/alembic/versions/008_task_name.py
-!backend/alembic/versions/009_widen_result_slot.py
-!backend/alembic/versions/010_add_embeddings.py
-!backend/alembic/versions/011_add_task_progress_data.py
+# Alembic (миграции отслеживаются — не игнорировать)
 
 # IDE
 .vscode/
