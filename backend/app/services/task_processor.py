@@ -413,7 +413,33 @@ class TaskProcessor:
                 )
 
             for i in range(start_chunk, total_chunks):
-                await self._check_cancelled()
+                try:
+                    await self._check_cancelled()
+                except TaskCancelledError:
+                    # Пользователь нажал «Стоп» — сохраняем накопленное если есть
+                    if accumulated_items:
+                        partial_count += 1
+                        partial_excel = generate_list(accumulated_items)
+                        await self.save_result(
+                            f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
+                            _XLSX_MIME,
+                            partial_excel,
+                            slot=f"partial_{partial_count}",
+                        )
+                        await self._save_progress_data({
+                            "chunks_done": i,
+                            "total_chunks": total_chunks,
+                            "items": accumulated_items,
+                            "partial_count": partial_count,
+                        })
+                        logger.info(
+                            "Task cancelled by user, partial result saved",
+                            task_id=self.task_id,
+                            chunks_done=i,
+                            total=total_chunks,
+                        )
+                    raise
+
                 await self.update_progress(f"Обрабатывается часть {i + 1} из {total_chunks}...")
 
                 chunk_text = rows_to_text(chunks[i])
@@ -437,8 +463,11 @@ class TaskProcessor:
                     })
                     logger.info("Chunk processed", task_id=self.task_id, chunk=i + 1, total=total_chunks, items=len(chunk_items))
 
+                except TaskCancelledError:
+                    raise
+
                 except Exception as chunk_error:
-                    # Сохраняем частичный Excel перед тем как пробросить ошибку
+                    # Ошибка Claude — сохраняем частичный Excel
                     if accumulated_items:
                         partial_count += 1
                         partial_excel = generate_list(accumulated_items)

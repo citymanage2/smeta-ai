@@ -213,7 +213,7 @@ const TaskStatusPage: React.FC = () => {
         stopTimers();
       } else if (data.status === 'failed' || data.status === 'cancelled') {
         stopTimers();
-        if (data.status === 'failed' && data.task_type === 'LIST_FROM_GRAND') {
+        if (data.task_type === 'LIST_FROM_GRAND') {
           try { const res = await getTaskResults(taskId); setResults(res); } catch { /* нет результатов */ }
         }
       }
@@ -590,6 +590,33 @@ const TaskStatusPage: React.FC = () => {
                   }}
                 >
                   Задача была остановлена пользователем.
+                  {task.task_type === 'LIST_FROM_GRAND' && results.some((r) => r.slot.startsWith('partial')) && (
+                    <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>
+                        Частичный результат ({String(task.progress_data?.chunks_done ?? '?')} из {String(task.progress_data?.total_chunks ?? '?')} частей):
+                      </div>
+                      {results.filter((r) => r.slot.startsWith('partial')).map((r) => (
+                        <button
+                          key={r.file_id}
+                          onClick={() => handleDownload(r.file_id, r.file_name)}
+                          disabled={downloading === r.file_id}
+                          style={{
+                            alignSelf: 'flex-start',
+                            padding: '8px 16px',
+                            backgroundColor: downloading === r.file_id ? '#e2e8f0' : '#ffffff',
+                            color: '#334155',
+                            border: '1.5px solid #cbd5e1',
+                            borderRadius: '8px',
+                            cursor: downloading === r.file_id ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
