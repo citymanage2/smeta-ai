@@ -312,7 +312,7 @@ async def get_task_status(
                 mime_type=f.get("mime_type", ""),
                 size_bytes=f.get("size_bytes", 0),
             )
-            for f in task.input_file_data or []
+            for f in (task.input_file_data or task.input_files or [])
         ],
     )
 
