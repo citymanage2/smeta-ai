@@ -95,6 +95,7 @@ const TaskStatusPage: React.FC = () => {
   const [checkTask, setCheckTask] = useState<TaskStatusResponse | null>(null);
   const [checkResults, setCheckResults] = useState<TaskResult[]>([]);
   const [checkStarting, setCheckStarting] = useState(false);
+  const [checkStartError, setCheckStartError] = useState('');
   const [checkCancelling, setCheckCancelling] = useState(false);
   const [checkResuming, setCheckResuming] = useState(false);
   const [checkProgressLog, setCheckProgressLog] = useState<string[]>([]);
@@ -109,6 +110,7 @@ const TaskStatusPage: React.FC = () => {
   const [checkProjectTask, setCheckProjectTask] = useState<TaskStatusResponse | null>(null);
   const [checkProjectResults, setCheckProjectResults] = useState<TaskResult[]>([]);
   const [checkProjectStarting, setCheckProjectStarting] = useState(false);
+  const [checkProjectStartError, setCheckProjectStartError] = useState('');
   const [checkProjectCancelling, setCheckProjectCancelling] = useState(false);
   const [checkProjectResuming, setCheckProjectResuming] = useState(false);
   const [checkProjectProgressLog, setCheckProjectProgressLog] = useState<string[]>([]);
@@ -201,6 +203,7 @@ const TaskStatusPage: React.FC = () => {
   const handleCheckCompleteness = async () => {
     if (!taskId || checkStarting) return;
     setCheckStarting(true);
+    setCheckStartError('');
     try {
       const res = await checkCompleteness(taskId);
       const cid = res.task_id;
@@ -211,7 +214,7 @@ const TaskStatusPage: React.FC = () => {
       fetchCheckStatus(cid);
       checkPollingRef.current = setInterval(() => fetchCheckStatus(cid), 3000);
     } catch {
-      setError('Не удалось запустить проверку полноты.');
+      setCheckStartError('Не удалось запустить проверку полноты.');
     } finally {
       setCheckStarting(false);
     }
@@ -266,6 +269,7 @@ const TaskStatusPage: React.FC = () => {
   const handleCheckProjectCompleteness = async () => {
     if (!taskId || checkProjectStarting) return;
     setCheckProjectStarting(true);
+    setCheckProjectStartError('');
     try {
       const res = await checkProjectCompleteness(taskId);
       const cid = res.task_id;
@@ -276,7 +280,7 @@ const TaskStatusPage: React.FC = () => {
       fetchCheckProjectStatus(cid);
       checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(cid), 3000);
     } catch {
-      setError('Не удалось запустить проверку полноты.');
+      setCheckProjectStartError('Не удалось запустить проверку полноты.');
     } finally {
       setCheckProjectStarting(false);
     }
@@ -1436,22 +1440,29 @@ const TaskStatusPage: React.FC = () => {
               Хотите проверить, все ли необходимые материалы учтены согласно нормативной базе?
             </div>
             {!checkTaskId ? (
-              <button
-                onClick={handleCheckCompleteness}
-                disabled={checkStarting}
-                style={{
-                  padding: '10px 22px',
-                  backgroundColor: checkStarting ? '#7dd3fc' : '#0284c7',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: checkStarting ? 'not-allowed' : 'pointer',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                }}
-              >
-                {checkStarting ? 'Запуск...' : 'Да, проверить'}
-              </button>
+              <>
+                <button
+                  onClick={handleCheckCompleteness}
+                  disabled={checkStarting}
+                  style={{
+                    padding: '10px 22px',
+                    backgroundColor: checkStarting ? '#7dd3fc' : '#0284c7',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: checkStarting ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                  }}
+                >
+                  {checkStarting ? 'Запуск...' : 'Да, проверить'}
+                </button>
+                {checkStartError && (
+                  <div style={{ marginTop: '10px', fontSize: '13px', color: '#dc2626' }}>
+                    {checkStartError}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 {/* Running: progress log + stop */}
@@ -1588,22 +1599,29 @@ const TaskStatusPage: React.FC = () => {
               Хотите проверить, все ли необходимые материалы учтены согласно нормативной базе?
             </div>
             {!checkProjectTaskId ? (
-              <button
-                onClick={handleCheckProjectCompleteness}
-                disabled={checkProjectStarting}
-                style={{
-                  padding: '10px 22px',
-                  backgroundColor: checkProjectStarting ? '#7dd3fc' : '#0284c7',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: checkProjectStarting ? 'not-allowed' : 'pointer',
-                  fontSize: '14px',
-                  fontWeight: 700,
-                }}
-              >
-                {checkProjectStarting ? 'Запуск...' : 'Да, проверить'}
-              </button>
+              <>
+                <button
+                  onClick={handleCheckProjectCompleteness}
+                  disabled={checkProjectStarting}
+                  style={{
+                    padding: '10px 22px',
+                    backgroundColor: checkProjectStarting ? '#7dd3fc' : '#0284c7',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: checkProjectStarting ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                  }}
+                >
+                  {checkProjectStarting ? 'Запуск...' : 'Да, проверить'}
+                </button>
+                {checkProjectStartError && (
+                  <div style={{ marginTop: '10px', fontSize: '13px', color: '#dc2626' }}>
+                    {checkProjectStartError}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 {/* Running: progress log + stop */}

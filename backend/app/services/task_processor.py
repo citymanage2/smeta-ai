@@ -157,6 +157,46 @@ PROMPT_LIST_FROM_PROJECT = """Ты — опытный инженер-сметч�
 
 ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
 
+PROMPT_LIST_FROM_PROJECT_PASS2 = """Ты — опытный инженер-сметчик. Из проектной документации уже составлен перечень, но для некоторых позиций объём остался незаполненным (quantity = null).
+
+Тебе снова предоставлен тот же PDF. Твоя ЕДИНСТВЕННАЯ задача — найти числа и посчитать.
+
+АЛГОРИТМ для каждой позиции:
+
+1. Прочитай поле notes — там уже указано, на каком листе / в какой таблице искать.
+2. Открой этот лист в PDF и выполни подсчёт:
+   - Если нужно посчитать количество элементов (гильзы, отверстия, опоры, колонны и т.п.) — пересчитай каждый элемент на чертеже вручную.
+   - Если нужно сложить площади или длины из таблицы — сложи все строки.
+   - Если нужно перемножить размеры — найди размеры и перемножь.
+3. Итоговое число запиши в quantity.
+4. В notes напиши: что нашёл, на каком листе, формулу и результат.
+   Пример: "Подсчитано по плану вентиляции лист 4: 12 проходов через стены + 6 через перегородки = 18 шт."
+
+АБСОЛЮТНЫЙ ЗАПРЕТ:
+- Если в notes написано на каком листе / плане смотреть — quantity НЕ МОЖЕТ быть null. Открой этот лист и посчитай.
+- Нельзя писать "требуется подсчёт по...", "необходимо посчитать по..." — ты должен сам это сделать прямо сейчас.
+- Нельзя писать "объём не определён" если ты знаешь где данные находятся.
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО придумывать, угадывать или приблизительно оценивать quantity. Число в quantity — только то, что явно следует из документа: подсчитано на чертеже, прочитано из таблицы, вычислено по размерам из документа. Любое "примерно", "ориентировочно", "типично для таких объектов" — это фальсификация сметы, недопустимо.
+
+Оставить quantity = null разрешено ТОЛЬКО если документ реально не содержит нужных данных (не тот раздел проекта, отсутствует лист). В notes — только что именно отсутствует.
+
+КРИТИЧЕСКИ ВАЖНО: верни РОВНО столько позиций, сколько получил, в том же порядке.
+
+Верни СТРОГО в формате JSON, без markdown, первый символ {, последний }:
+{
+  "items": [
+    {
+      "type": "Работа" | "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "notes": "Обоснование"
+    }
+  ]
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
 PROMPT_CHECK_PROJECT_COMPLETENESS = """Ты — опытный инженер-сметчик со знанием нормативной базы РФ (ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области, СП, ГОСТ).
 
 Задача: проверить полноту учтённых материалов для каждой работы в перечне.
@@ -815,12 +855,73 @@ class TaskProcessor:
         if not items:
             raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое PDF.")
 
+        await self.update_progress(f"Найдено {len(items)} позиций. Проверяю незаполненные объёмы...")
+
+        # --- Проход 2: уточнение объёмов для позиций с quantity=null ---
+        null_indices = [i for i, item in enumerate(items) if item.get("quantity") is None]
+
+        if null_indices:
+            await self.update_progress(
+                f"Уточняю объёмы для {len(null_indices)} позиций..."
+            )
+            _PASS2_CHUNK = 15
+            chunks_null = [null_indices[i:i + _PASS2_CHUNK] for i in range(0, len(null_indices), _PASS2_CHUNK)]
+
+            for chunk_num, chunk_idx in enumerate(chunks_null, 1):
+                if len(chunks_null) > 1:
+                    await self.update_progress(
+                        f"Уточняю объёмы: часть {chunk_num} из {len(chunks_null)}..."
+                    )
+
+                null_items_payload = [items[i] for i in chunk_idx]
+                null_json = json.dumps({"items": null_items_payload}, ensure_ascii=False, indent=2)
+                messages2 = [{"role": "user", "content": f"{null_json}\n\n{PROMPT_LIST_FROM_PROJECT_PASS2}"}]
+
+                try:
+                    data2 = await self._interruptible_claude_json(
+                        messages2,
+                        system_prompt=SYSTEM_BASE,
+                        image_data=[pdf_block],
+                        processing_timeout=900.0,
+                    )
+                    resolved = data2.get("items", [])
+
+                    if len(resolved) == len(chunk_idx):
+                        for orig_idx, resolved_item in zip(chunk_idx, resolved):
+                            if resolved_item.get("quantity") is not None:
+                                items[orig_idx] = resolved_item
+                    else:
+                        logger.warning(
+                            "Pass2 returned unexpected item count",
+                            task_id=self.task_id,
+                            expected=len(chunk_idx),
+                            got=len(resolved),
+                        )
+                except Exception as pass2_err:
+                    logger.warning(
+                        "Pass2 failed, keeping original null items",
+                        task_id=self.task_id,
+                        error=str(pass2_err),
+                    )
+
+        resolved_count = sum(1 for i in null_indices if items[i].get("quantity") is not None)
+        if null_indices:
+            await self.update_progress(
+                f"Объёмы уточнены: {resolved_count} из {len(null_indices)} заполнено. Формирование Excel..."
+            )
+        else:
+            await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
+
         await self._save_progress_data({"items": items})
-        await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
 
         excel_data = generate_list(items)
         await self.save_result(self._result_filename(task, "Перечень_из_проекта.xlsx"), _XLSX_MIME, excel_data)
-        logger.info("List from project task completed", task_id=self.task_id, items=len(items))
+        logger.info(
+            "List from project task completed",
+            task_id=self.task_id,
+            items=len(items),
+            null_resolved=resolved_count if null_indices else 0,
+        )
 
     async def _handle_check_project_completeness(self, task: Task) -> None:
         source_task_id = (task.user_prompt or "").strip()

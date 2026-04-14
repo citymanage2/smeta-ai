@@ -190,23 +190,6 @@ const TaskCreate: React.FC = () => {
           }}
         >
           <form onSubmit={handleSubmit} noValidate>
-            {/* Error */}
-            {error && (
-              <div
-                style={{
-                  padding: '10px 14px',
-                  backgroundColor: '#fef2f2',
-                  border: '1px solid #fecaca',
-                  borderRadius: '8px',
-                  marginBottom: '20px',
-                  fontSize: '14px',
-                  color: '#dc2626',
-                }}
-              >
-                {error}
-              </div>
-            )}
-
             {/* Task type */}
             <div style={{ marginBottom: '24px' }}>
               <TaskTypeSelector value={taskType} onChange={setTaskType} disabled={submitting} />
@@ -462,6 +445,23 @@ const TaskCreate: React.FC = () => {
                 />
               )}
             </div>
+
+            {/* Submit error */}
+            {error && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  backgroundColor: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: '8px',
+                  marginBottom: '16px',
+                  fontSize: '14px',
+                  color: '#dc2626',
+                }}
+              >
+                {error}
+              </div>
+            )}
 
             {/* Submit */}
             <button
