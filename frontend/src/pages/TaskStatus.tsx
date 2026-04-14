@@ -14,6 +14,7 @@ import {
   resumeTask,
   checkCompleteness,
   checkProjectCompleteness,
+  getRelatedChecks,
   TaskStatusResponse,
   ChatMessage,
 } from '../api/tasks';
@@ -413,9 +414,36 @@ const TaskStatusPage: React.FC = () => {
     return () => {
       stopTimers();
       stopCheckPolling();
+      stopCheckProjectPolling();
       document.head.removeChild(style);
     };
-  }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling]);
+  }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling, stopCheckProjectPolling]);
+
+  // Restore check task state after page refresh
+  useEffect(() => {
+    if (!taskId || taskId === 'undefined') return;
+    getRelatedChecks(taskId).then((checks) => {
+      for (const check of checks) {
+        if (check.task_type === 'CHECK_LIST_COMPLETENESS') {
+          setCheckTaskId(check.task_id);
+          fetchCheckStatus(check.task_id);
+          if (check.status === 'pending' || check.status === 'processing') {
+            if (!checkPollingRef.current) {
+              checkPollingRef.current = setInterval(() => fetchCheckStatus(check.task_id), 3000);
+            }
+          }
+        } else if (check.task_type === 'CHECK_PROJECT_COMPLETENESS') {
+          setCheckProjectTaskId(check.task_id);
+          fetchCheckProjectStatus(check.task_id);
+          if (check.status === 'pending' || check.status === 'processing') {
+            if (!checkProjectPollingRef.current) {
+              checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(check.task_id), 3000);
+            }
+          }
+        }
+      }
+    }).catch(() => {});
+  }, [taskId, fetchCheckStatus, fetchCheckProjectStatus]);
 
   const handleSendMessage = async () => {
     if (!taskId || !message.trim()) return;

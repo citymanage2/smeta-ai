@@ -78,6 +78,17 @@ export async function checkProjectCompleteness(sourceTaskId: string): Promise<Ta
   return response.data;
 }
 
+export interface RelatedCheck {
+  task_id: string;
+  task_type: string;
+  status: string;
+}
+
+export async function getRelatedChecks(taskId: string): Promise<RelatedCheck[]> {
+  const response = await apiClient.get<RelatedCheck[]>(`/tasks/${taskId}/related-checks`);
+  return response.data;
+}
+
 export async function sendMessage(taskId: string, message: string): Promise<TaskChatResponse> {
   const response = await apiClient.post<TaskChatResponse>(`/tasks/${taskId}/message`, { message });
   return response.data;

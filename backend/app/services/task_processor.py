@@ -366,6 +366,45 @@ class TaskProcessor:
             logger.error("Failed to parse JSON response", response=response[:500])
             raise ValueError("Не удалось распознать ответ Claude как JSON")
 
+    async def _interruptible_claude_json(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+        use_web_search: bool = False,
+        image_data: Optional[list] = None,
+        processing_timeout: Optional[float] = None,
+        cancel_check_interval: float = 30.0,
+    ) -> dict:
+        """Like _call_claude_json but checks for task cancellation every cancel_check_interval seconds.
+
+        Wraps _call_claude_json in an asyncio Task and polls for cancellation while it runs.
+        If the task is cancelled in the DB, the API call is cancelled and TaskCancelledError is raised.
+        """
+        api_task = asyncio.create_task(
+            self._call_claude_json(
+                messages,
+                system_prompt=system_prompt,
+                use_web_search=use_web_search,
+                image_data=image_data,
+                processing_timeout=processing_timeout,
+            )
+        )
+        try:
+            while True:
+                done, _ = await asyncio.wait({api_task}, timeout=cancel_check_interval)
+                if done:
+                    # Completed (success or exception) — re-raise any exception
+                    return api_task.result()
+                # Still running — check if cancelled in DB
+                await self._check_cancelled()
+        except TaskCancelledError:
+            api_task.cancel()
+            try:
+                await api_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            raise
+
     async def _call_claude_json(
         self,
         messages: list[dict],
@@ -645,7 +684,18 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
 
             try:
-                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+                data = await self._interruptible_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+            except TaskCancelledError:
+                if all_items:
+                    partial_excel = generate_list(all_items)
+                    await self.save_result(
+                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
+                        _XLSX_MIME,
+                        partial_excel,
+                        slot=f"partial_{i}",
+                    )
+                    await self.update_progress(f"Остановлено на части {i + 1} из {total_chunks}. Частичный результат сохранён.")
+                raise
             except Exception as chunk_error:
                 if all_items:
                     partial_excel = generate_list(all_items)
@@ -770,7 +820,18 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
 
             try:
-                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+                data = await self._interruptible_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+            except TaskCancelledError:
+                if all_items:
+                    partial_excel = generate_list(all_items)
+                    await self.save_result(
+                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
+                        _XLSX_MIME,
+                        partial_excel,
+                        slot=f"partial_{i}",
+                    )
+                    await self.update_progress(f"Остановлено на части {i + 1} из {total_chunks}. Частичный результат сохранён.")
+                raise
             except Exception as chunk_error:
                 if all_items:
                     partial_excel = generate_list(all_items)

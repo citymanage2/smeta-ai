@@ -398,6 +398,38 @@ async def check_project_completeness(
     return TaskCreateResponse(task_id=task_id, status="pending")
 
 
+@router.get("/{task_id}/related-checks")
+async def get_related_checks(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the most recent CHECK_LIST_COMPLETENESS and CHECK_PROJECT_COMPLETENESS tasks
+    that were created from this source task (identified by user_prompt == task_id)."""
+    from sqlalchemy import desc as sa_desc
+    check_types = ["CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"]
+    result = await db.execute(
+        select(Task)
+        .where(Task.user_prompt == task_id)
+        .where(Task.task_type.in_(check_types))
+        .order_by(sa_desc(Task.created_at))
+    )
+    tasks = result.scalars().all()
+
+    # Keep only the most recent of each type
+    seen: set = set()
+    related = []
+    for t in tasks:
+        if t.task_type not in seen:
+            seen.add(t.task_type)
+            related.append({
+                "task_id": str(t.id),
+                "task_type": t.task_type,
+                "status": t.status,
+            })
+    return related
+
+
 @router.post("/{task_id}/cancel")
 async def cancel_task(
     task_id: str,
