@@ -292,6 +292,18 @@ class TaskProcessor:
                 task.error_message = error
             await self.db.commit()
 
+    @staticmethod
+    def _result_filename(task: Task, fallback: str) -> str:
+        """Return sanitized task name + .xlsx, or fallback if name is empty."""
+        import re
+        name = (task.name or "").strip()
+        if not name:
+            return fallback
+        safe = re.sub(r'[\\/:*?"<>|]', "_", name)
+        safe = re.sub(r"\s+", "_", safe)
+        safe = safe[:100]
+        return f"{safe}.xlsx"
+
     async def save_result(self, file_name: str, mime_type: str, file_data: bytes, slot: str = "result") -> None:
         result_record = TaskResult(
             task_id=self.task_id,
@@ -685,7 +697,7 @@ class TaskProcessor:
         await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
         excel_data = generate_list(accumulated_items)
         await self.save_result(
-            "Перечень_из_Гранд-сметы.xlsx",
+            self._result_filename(task, "Перечень_из_Гранд-сметы.xlsx"),
             _XLSX_MIME,
             excel_data,
         )
@@ -763,7 +775,7 @@ class TaskProcessor:
 
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = generate_list(all_items, changes_summary=changes_summary)
-        await self.save_result("Проверка_полноты_ГЭСН.xlsx", _XLSX_MIME, excel_data)
+        await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
         logger.info(
             "Check completeness task completed",
             task_id=self.task_id,
@@ -807,7 +819,7 @@ class TaskProcessor:
         await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
 
         excel_data = generate_list(items)
-        await self.save_result("Перечень_из_проекта.xlsx", _XLSX_MIME, excel_data)
+        await self.save_result(self._result_filename(task, "Перечень_из_проекта.xlsx"), _XLSX_MIME, excel_data)
         logger.info("List from project task completed", task_id=self.task_id, items=len(items))
 
     async def _handle_check_project_completeness(self, task: Task) -> None:
@@ -882,7 +894,7 @@ class TaskProcessor:
 
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = generate_list(all_items, changes_summary=changes_summary)
-        await self.save_result("Проверка_полноты_по_проекту.xlsx", _XLSX_MIME, excel_data)
+        await self.save_result(self._result_filename(task, "Проверка_полноты_по_проекту.xlsx"), _XLSX_MIME, excel_data)
         logger.info(
             "Check project completeness task completed",
             task_id=self.task_id,
@@ -1117,7 +1129,7 @@ class TaskProcessor:
         excel_data, grand_total = generate_estimate_xlsx(final_items)
 
         # Save result file
-        await self.save_result("Смета_из_перечня.xlsx", _XLSX_MIME, excel_data)
+        await self.save_result(self._result_filename(task, "Смета_из_перечня.xlsx"), _XLSX_MIME, excel_data)
 
         # Save cost and estimation_status
         task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
