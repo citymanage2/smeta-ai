@@ -97,6 +97,7 @@ const TaskStatusPage: React.FC = () => {
   const checkPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const checkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const checkStartTimeRef = useRef<number | null>(null);
+  const checkFetchErrorCount = useRef(0);
 
   // Check project completeness state (LIST_FROM_PROJECT)
   const [checkProjectTaskId, setCheckProjectTaskId] = useState<string | null>(null);
@@ -110,6 +111,7 @@ const TaskStatusPage: React.FC = () => {
   const checkProjectPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const checkProjectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const checkProjectStartTimeRef = useRef<number | null>(null);
+  const checkProjectFetchErrorCount = useRef(0);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -144,6 +146,7 @@ const TaskStatusPage: React.FC = () => {
   const fetchCheckStatus = useCallback(async (cid: string) => {
     try {
       const data = await getTaskStatus(cid);
+      checkFetchErrorCount.current = 0;
       setCheckTask(data);
       if (data.status === 'pending' || data.status === 'processing') startCheckTimer();
       if (data.progress_message) {
@@ -162,10 +165,14 @@ const TaskStatusPage: React.FC = () => {
         stopCheckPolling();
       }
     } catch {
-      stopCheckPolling();
-      setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
+      checkFetchErrorCount.current += 1;
+      // Stop polling only after 5 consecutive failures (~15 seconds of no response)
+      if (checkFetchErrorCount.current >= 5) {
+        stopCheckPolling();
+        setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
+      }
     }
-  }, [stopCheckPolling]);
+  }, [stopCheckPolling, startCheckTimer]);
 
   const handleCheckCompleteness = async () => {
     if (!taskId || checkStarting) return;
@@ -203,6 +210,7 @@ const TaskStatusPage: React.FC = () => {
   const fetchCheckProjectStatus = useCallback(async (cid: string) => {
     try {
       const data = await getTaskStatus(cid);
+      checkProjectFetchErrorCount.current = 0;
       setCheckProjectTask(data);
       if (data.status === 'pending' || data.status === 'processing') startCheckProjectTimer();
       if (data.progress_message) {
@@ -221,8 +229,12 @@ const TaskStatusPage: React.FC = () => {
         stopCheckProjectPolling();
       }
     } catch {
-      stopCheckProjectPolling();
-      setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
+      checkProjectFetchErrorCount.current += 1;
+      // Stop polling only after 5 consecutive failures (~15 seconds of no response)
+      if (checkProjectFetchErrorCount.current >= 5) {
+        stopCheckProjectPolling();
+        setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
+      }
     }
   }, [stopCheckProjectPolling, startCheckProjectTimer]);
 
@@ -267,6 +279,7 @@ const TaskStatusPage: React.FC = () => {
       setCheckProgressLog([]);
       setCheckElapsed(0);
       checkStartTimeRef.current = null;
+      checkFetchErrorCount.current = 0;
       fetchCheckStatus(checkTaskId);
       checkPollingRef.current = setInterval(() => fetchCheckStatus(checkTaskId), 3000);
     } catch {
@@ -299,6 +312,7 @@ const TaskStatusPage: React.FC = () => {
       setCheckProjectProgressLog([]);
       setCheckProjectElapsed(0);
       checkProjectStartTimeRef.current = null;
+      checkProjectFetchErrorCount.current = 0;
       fetchCheckProjectStatus(checkProjectTaskId);
       checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(checkProjectTaskId), 3000);
     } catch {
