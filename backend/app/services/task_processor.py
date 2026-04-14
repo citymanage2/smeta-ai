@@ -618,7 +618,7 @@ class TaskProcessor:
         all_items: list = list(progress_data.get("items", []))
         changes_summary_parts: list = list(progress_data.get("summaries", []))
 
-        chunks = _chunk_by_work_boundaries(items, max_chunk_size=50)
+        chunks = _chunk_by_work_boundaries(items, max_chunk_size=25)
         total_chunks = len(chunks)
 
         for i in range(start_chunk, total_chunks):
@@ -645,7 +645,7 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
 
             try:
-                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=600.0)
+                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
             except Exception as chunk_error:
                 if all_items:
                     partial_excel = generate_list(all_items)
@@ -743,7 +743,7 @@ class TaskProcessor:
         all_items: list = list(progress_data.get("items", []))
         changes_summary_parts: list = list(progress_data.get("summaries", []))
 
-        chunks = _chunk_by_work_boundaries(items, max_chunk_size=50)
+        chunks = _chunk_by_work_boundaries(items, max_chunk_size=25)
         total_chunks = len(chunks)
 
         for i in range(start_chunk, total_chunks):
@@ -770,7 +770,7 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
 
             try:
-                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=600.0)
+                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
             except Exception as chunk_error:
                 if all_items:
                     partial_excel = generate_list(all_items)

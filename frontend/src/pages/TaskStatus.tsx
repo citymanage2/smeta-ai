@@ -92,7 +92,10 @@ const TaskStatusPage: React.FC = () => {
   const [checkCancelling, setCheckCancelling] = useState(false);
   const [checkResuming, setCheckResuming] = useState(false);
   const [checkProgressLog, setCheckProgressLog] = useState<string[]>([]);
+  const [checkElapsed, setCheckElapsed] = useState(0);
   const checkPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const checkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const checkStartTimeRef = useRef<number | null>(null);
 
   // Check project completeness state (LIST_FROM_PROJECT)
   const [checkProjectTaskId, setCheckProjectTaskId] = useState<string | null>(null);
@@ -102,7 +105,10 @@ const TaskStatusPage: React.FC = () => {
   const [checkProjectCancelling, setCheckProjectCancelling] = useState(false);
   const [checkProjectResuming, setCheckProjectResuming] = useState(false);
   const [checkProjectProgressLog, setCheckProjectProgressLog] = useState<string[]>([]);
+  const [checkProjectElapsed, setCheckProjectElapsed] = useState(0);
   const checkProjectPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const checkProjectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const checkProjectStartTimeRef = useRef<number | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -121,12 +127,24 @@ const TaskStatusPage: React.FC = () => {
 
   const stopCheckPolling = useCallback(() => {
     if (checkPollingRef.current) { clearInterval(checkPollingRef.current); checkPollingRef.current = null; }
+    if (checkTimerRef.current) { clearInterval(checkTimerRef.current); checkTimerRef.current = null; }
+  }, []);
+
+  const startCheckTimer = useCallback(() => {
+    if (checkTimerRef.current) return;
+    checkStartTimeRef.current = Date.now();
+    checkTimerRef.current = setInterval(() => {
+      if (checkStartTimeRef.current) {
+        setCheckElapsed(Math.floor((Date.now() - checkStartTimeRef.current) / 1000));
+      }
+    }, 1000);
   }, []);
 
   const fetchCheckStatus = useCallback(async (cid: string) => {
     try {
       const data = await getTaskStatus(cid);
       setCheckTask(data);
+      if (data.status === 'pending' || data.status === 'processing') startCheckTimer();
       if (data.progress_message) {
         setCheckProgressLog((prev) => {
           const last = prev[prev.length - 1];
@@ -168,12 +186,24 @@ const TaskStatusPage: React.FC = () => {
 
   const stopCheckProjectPolling = useCallback(() => {
     if (checkProjectPollingRef.current) { clearInterval(checkProjectPollingRef.current); checkProjectPollingRef.current = null; }
+    if (checkProjectTimerRef.current) { clearInterval(checkProjectTimerRef.current); checkProjectTimerRef.current = null; }
+  }, []);
+
+  const startCheckProjectTimer = useCallback(() => {
+    if (checkProjectTimerRef.current) return;
+    checkProjectStartTimeRef.current = Date.now();
+    checkProjectTimerRef.current = setInterval(() => {
+      if (checkProjectStartTimeRef.current) {
+        setCheckProjectElapsed(Math.floor((Date.now() - checkProjectStartTimeRef.current) / 1000));
+      }
+    }, 1000);
   }, []);
 
   const fetchCheckProjectStatus = useCallback(async (cid: string) => {
     try {
       const data = await getTaskStatus(cid);
       setCheckProjectTask(data);
+      if (data.status === 'pending' || data.status === 'processing') startCheckProjectTimer();
       if (data.progress_message) {
         setCheckProjectProgressLog((prev) => {
           const last = prev[prev.length - 1];
@@ -193,7 +223,7 @@ const TaskStatusPage: React.FC = () => {
       stopCheckProjectPolling();
       setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
     }
-  }, [stopCheckProjectPolling]);
+  }, [stopCheckProjectPolling, startCheckProjectTimer]);
 
   const handleCheckProjectCompleteness = async () => {
     if (!taskId || checkProjectStarting) return;
@@ -234,6 +264,8 @@ const TaskStatusPage: React.FC = () => {
       await resumeTask(checkTaskId);
       setCheckTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
       setCheckProgressLog([]);
+      setCheckElapsed(0);
+      checkStartTimeRef.current = null;
       fetchCheckStatus(checkTaskId);
       checkPollingRef.current = setInterval(() => fetchCheckStatus(checkTaskId), 3000);
     } catch {
@@ -264,6 +296,8 @@ const TaskStatusPage: React.FC = () => {
       await resumeTask(checkProjectTaskId);
       setCheckProjectTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
       setCheckProjectProgressLog([]);
+      setCheckProjectElapsed(0);
+      checkProjectStartTimeRef.current = null;
       fetchCheckProjectStatus(checkProjectTaskId);
       checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(checkProjectTaskId), 3000);
     } catch {
@@ -1039,6 +1073,11 @@ const TaskStatusPage: React.FC = () => {
                       <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500, flex: 1 }}>
                         {checkTask.progress_message || 'Проверка запущена...'}
                       </span>
+                      {checkElapsed > 0 && (
+                        <span style={{ fontSize: '13px', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                          {checkElapsed < 60 ? `${checkElapsed} сек.` : `${Math.floor(checkElapsed / 60)} мин. ${checkElapsed % 60} сек.`}
+                        </span>
+                      )}
                       <button
                         onClick={handleCheckCancel}
                         disabled={checkCancelling}
@@ -1047,6 +1086,11 @@ const TaskStatusPage: React.FC = () => {
                         {checkCancelling ? 'Остановка...' : '⏹ Стоп'}
                       </button>
                     </div>
+                    {checkElapsed > 900 && (
+                      <div style={{ marginBottom: '10px', padding: '8px 12px', backgroundColor: '#fef9c3', border: '1px solid #fde047', borderRadius: '8px', fontSize: '13px', color: '#854d0e' }}>
+                        Проверка идёт уже {Math.floor(checkElapsed / 60)} мин. — это нормально для большого перечня. Если задача зависла, нажмите Стоп и продолжите с прерванного места.
+                      </div>
+                    )}
                     {checkProgressLog.length > 0 && (
                       <div style={{ padding: '12px 14px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px' }}>
                         {checkProgressLog.map((msg, i) => {
@@ -1181,6 +1225,11 @@ const TaskStatusPage: React.FC = () => {
                       <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500, flex: 1 }}>
                         {checkProjectTask.progress_message || 'Проверка запущена...'}
                       </span>
+                      {checkProjectElapsed > 0 && (
+                        <span style={{ fontSize: '13px', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                          {checkProjectElapsed < 60 ? `${checkProjectElapsed} сек.` : `${Math.floor(checkProjectElapsed / 60)} мин. ${checkProjectElapsed % 60} сек.`}
+                        </span>
+                      )}
                       <button
                         onClick={handleCheckProjectCancel}
                         disabled={checkProjectCancelling}
@@ -1189,6 +1238,11 @@ const TaskStatusPage: React.FC = () => {
                         {checkProjectCancelling ? 'Остановка...' : '⏹ Стоп'}
                       </button>
                     </div>
+                    {checkProjectElapsed > 900 && (
+                      <div style={{ marginBottom: '10px', padding: '8px 12px', backgroundColor: '#fef9c3', border: '1px solid #fde047', borderRadius: '8px', fontSize: '13px', color: '#854d0e' }}>
+                        Проверка идёт уже {Math.floor(checkProjectElapsed / 60)} мин. — это нормально для большого перечня. Если задача зависла, нажмите Стоп и продолжите с прерванного места.
+                      </div>
+                    )}
                     {checkProjectProgressLog.length > 0 && (
                       <div style={{ padding: '12px 14px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px' }}>
                         {checkProjectProgressLog.map((msg, i) => {

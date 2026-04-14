@@ -114,11 +114,13 @@ async def call_claude(
                 use_web_search=use_web_search,
             )
 
-            # Wrap only the API call — rate-limit sleeps are intentionally outside.
+            # Pass timeout directly to SDK (sets httpx total request timeout).
+            # asyncio.wait_for alone cannot cancel httpx connections reliably.
             if processing_timeout is not None:
+                sdk_kwargs = {**kwargs, "timeout": processing_timeout}
                 response = await asyncio.wait_for(
-                    _client.messages.create(**kwargs),
-                    timeout=processing_timeout,
+                    _client.messages.create(**sdk_kwargs),
+                    timeout=processing_timeout + 30,  # asyncio belt-and-suspenders
                 )
             else:
                 response = await _client.messages.create(**kwargs)
