@@ -4,7 +4,7 @@ export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'ca
 
 export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'optimizing';
 
-export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set();
+export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set(['ESTIMATE_FROM_LIST']);
 
 export interface Task {
   id: string;
@@ -55,6 +55,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   CHECK_LIST_COMPLETENESS: 'Проверка полноты перечня',
   LIST_FROM_PROJECT: 'Перечень из проекта',
   CHECK_PROJECT_COMPLETENESS: 'Проверка полноты (по проекту)',
+  ESTIMATE_FROM_LIST: 'Смета из перечня',
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {

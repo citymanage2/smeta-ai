@@ -81,8 +81,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               Панель администратора
             </button>
           )}
-          {isAdmin && (
-            <button
+          <button
               onClick={() => navigate('/task/create')}
               style={{
                 padding: '7px 16px',
@@ -97,7 +96,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             >
               Создать задачу
             </button>
-          )}
           <button
             onClick={() => navigate('/projects')}
             style={{

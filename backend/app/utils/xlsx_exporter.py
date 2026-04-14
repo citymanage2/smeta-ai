@@ -111,3 +111,129 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def generate_estimate_xlsx(items: list[dict]) -> bytes:
+    """
+    Generate Excel estimate file for ESTIMATE_FROM_LIST task.
+
+    Each item dict must have:
+      type, name, unit, quantity,
+      work_price, material_price,   (float | None)
+      price_list_name,              (str | None — matched name from price list)
+      sources,                      (str | None — Claude sources)
+      notes                         (str | None)
+
+    Appends totals block at the end.
+    Returns raw xlsx bytes.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Смета"
+
+    HEADER_FILL_EST = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    WORK_ROW_FILL = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
+    TOTAL_FILL_EST = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+    GRAND_TOTAL_FILL = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+
+    headers = [
+        "№",
+        "Наименование",
+        "Ед. изм.",
+        "Кол-во",
+        "Цена работ",
+        "Стоимость работ",
+        "Цена матер.",
+        "Стоимость матер.",
+        "Из прайса",
+        "Источники",
+        "Примечания",
+    ]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = HEADER_FILL_EST
+
+    # Column widths
+    col_widths = [5, 50, 10, 10, 14, 18, 14, 18, 10, 45, 35]
+    for i, w in enumerate(col_widths, 1):
+        from openpyxl.utils import get_column_letter
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    total_works = 0.0
+    total_materials = 0.0
+    row_num = 2
+    idx = 0
+    for item in items:
+        idx += 1
+        qty = item.get("quantity") or 0
+        work_price = item.get("work_price")
+        mat_price = item.get("material_price")
+        work_cost = round(qty * work_price, 2) if work_price is not None and qty else None
+        mat_cost = round(qty * mat_price, 2) if mat_price is not None and qty else None
+
+        if work_cost is not None:
+            total_works += work_cost
+        if mat_cost is not None:
+            total_materials += mat_cost
+
+        from_price_list = bool(item.get("price_list_name"))
+        is_work = str(item.get("type", "")).strip() == "Работа"
+
+        row_fill = WORK_ROW_FILL if is_work else None
+
+        values = [
+            idx,
+            item.get("name", ""),
+            item.get("unit", ""),
+            item.get("quantity"),
+            work_price,
+            work_cost,
+            mat_price,
+            mat_cost,
+            "Да" if from_price_list else "Нет",
+            item.get("sources", "") or "",
+            item.get("notes", "") or "",
+        ]
+        for col, val in enumerate(values, 1):
+            cell = ws.cell(row=row_num, column=col, value=val)
+            cell.font = Font(bold=is_work)
+            if row_fill:
+                cell.fill = row_fill
+            if col in (5, 6, 7, 8) and isinstance(val, (int, float)):
+                cell.number_format = "#,##0.00"
+            if col == 4 and isinstance(val, (int, float)):
+                cell.number_format = "#,##0.##"
+        row_num += 1
+
+    # Totals block
+    overhead = round(total_works * 0.03, 2)
+    transport = round(total_materials * 0.03, 2)
+    grand_total = round(total_works + overhead + total_materials + transport, 2)
+
+    totals = [
+        ("Сумма по работам:", total_works),
+        ("Накладные расходы 3%:", overhead),
+        ("Сумма по материалам:", total_materials),
+        ("Транспортные расходы 3%:", transport),
+        ("ИТОГО ПО СМЕТЕ:", grand_total),
+    ]
+
+    row_num += 1  # blank separator
+    for label, value in totals:
+        is_grand = label.startswith("ИТОГО")
+        fill = GRAND_TOTAL_FILL if is_grand else TOTAL_FILL_EST
+        label_cell = ws.cell(row=row_num, column=1, value=label)
+        label_cell.font = Font(bold=True)
+        label_cell.fill = fill
+        # Merge label across cols 1-9
+        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=9)
+        val_cell = ws.cell(row=row_num, column=10, value=value)
+        val_cell.font = Font(bold=True)
+        val_cell.fill = fill
+        val_cell.number_format = "#,##0.00"
+        row_num += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue(), grand_total

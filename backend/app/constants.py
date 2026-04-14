@@ -1,10 +1,14 @@
-ESTIMATE_TASK_TYPES: set[str] = set()
+# Типы задач, результат которых — смета со стоимостью (estimation_status = "unestimated" при создании,
+# потом "estimated" после обработки). Сейчас пустой — текущие задачи дают перечни, не сметы.
+# При добавлении задачи, результат которой — Excel со стоимостью, добавить её тип сюда.
+ESTIMATE_TASK_TYPES: set[str] = {"ESTIMATE_FROM_LIST"}
 
 TASK_TYPE_LABELS: dict[str, str] = {
     "LIST_FROM_GRAND": "Перечень из Гранд-сметы",
     "CHECK_LIST_COMPLETENESS": "Проверка полноты перечня",
     "LIST_FROM_PROJECT": "Перечень из проекта",
     "CHECK_PROJECT_COMPLETENESS": "Проверка полноты (по проекту)",
+    "ESTIMATE_FROM_LIST": "Смета из перечня",
 }
 
 ESTIMATION_STATUS_LABELS: dict[str, str] = {
