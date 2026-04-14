@@ -122,6 +122,13 @@ const TaskStatusPage: React.FC = () => {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number | null>(null);
 
+  // Refs to latest fetch callbacks — used by visibilitychange handler to avoid stale closures
+  const fetchStatusRef = useRef<() => void>(() => {});
+  const fetchCheckStatusRef = useRef<(cid: string) => void>(() => {});
+  const fetchCheckProjectStatusRef = useRef<(cid: string) => void>(() => {});
+  const checkTaskIdRef = useRef<string | null>(null);
+  const checkProjectTaskIdRef = useRef<string | null>(null);
+
   // Estimate items editing state (ESTIMATE_FROM_LIST)
   const [estimateItems, setEstimateItems] = useState<EstimateItem[]>([]);
   const [savingEstimate, setSavingEstimate] = useState(false);
@@ -133,6 +140,12 @@ const TaskStatusPage: React.FC = () => {
       navigate('/task/create');
     }
   }, [taskId, navigate]);
+
+  // Keep refs in sync with latest callbacks and task IDs so the visibility handler
+  // always calls the current version without stale closures.
+  // (These refs are set after the callbacks are defined — effects run after render.)
+  useEffect(() => { checkTaskIdRef.current = checkTaskId; }, [checkTaskId]);
+  useEffect(() => { checkProjectTaskIdRef.current = checkProjectTaskId; }, [checkProjectTaskId]);
 
   const stopTimers = useCallback(() => {
     if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
@@ -194,6 +207,7 @@ const TaskStatusPage: React.FC = () => {
       setCheckTaskId(cid);
       setCheckTask(null);
       setCheckResults([]);
+      fetchCheckStatusRef.current = (id: string) => fetchCheckStatus(id);
       fetchCheckStatus(cid);
       checkPollingRef.current = setInterval(() => fetchCheckStatus(cid), 3000);
     } catch {
@@ -258,6 +272,7 @@ const TaskStatusPage: React.FC = () => {
       setCheckProjectTaskId(cid);
       setCheckProjectTask(null);
       setCheckProjectResults([]);
+      fetchCheckProjectStatusRef.current = (id: string) => fetchCheckProjectStatus(id);
       fetchCheckProjectStatus(cid);
       checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(cid), 3000);
     } catch {
@@ -291,6 +306,7 @@ const TaskStatusPage: React.FC = () => {
       setCheckElapsed(0);
       checkStartTimeRef.current = null;
       checkFetchErrorCount.current = 0;
+      fetchCheckStatusRef.current = (id: string) => fetchCheckStatus(id);
       fetchCheckStatus(checkTaskId);
       checkPollingRef.current = setInterval(() => fetchCheckStatus(checkTaskId), 3000);
     } catch {
@@ -324,6 +340,7 @@ const TaskStatusPage: React.FC = () => {
       setCheckProjectElapsed(0);
       checkProjectStartTimeRef.current = null;
       checkProjectFetchErrorCount.current = 0;
+      fetchCheckProjectStatusRef.current = (id: string) => fetchCheckProjectStatus(id);
       fetchCheckProjectStatus(checkProjectTaskId);
       checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(checkProjectTaskId), 3000);
     } catch {
@@ -436,11 +453,28 @@ const TaskStatusPage: React.FC = () => {
 
     pollingRef.current = setInterval(fetchStatus, 3000);
 
+    // Keep refs current so the visibilitychange handler always uses the latest callbacks
+    fetchStatusRef.current = fetchStatus;
+
+    // Re-fetch immediately when the user returns to the tab (browser throttles
+    // background setInterval down to ~1 req/min, so without this the progress
+    // messages freeze while the tab is hidden)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (pollingRef.current) fetchStatusRef.current();
+      const cid = checkTaskIdRef.current;
+      if (checkPollingRef.current && cid) fetchCheckStatusRef.current(cid);
+      const pcid = checkProjectTaskIdRef.current;
+      if (checkProjectPollingRef.current && pcid) fetchCheckProjectStatusRef.current(pcid);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       stopTimers();
       stopCheckPolling();
       stopCheckProjectPolling();
       document.head.removeChild(style);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling, stopCheckProjectPolling]);
 
@@ -461,6 +495,7 @@ const TaskStatusPage: React.FC = () => {
       for (const check of checks) {
         if (check.task_type === 'CHECK_LIST_COMPLETENESS') {
           setCheckTaskId(check.task_id);
+          fetchCheckStatusRef.current = (id: string) => fetchCheckStatus(id);
           fetchCheckStatus(check.task_id);
           if (check.status === 'pending' || check.status === 'processing') {
             if (!checkPollingRef.current) {
@@ -469,6 +504,7 @@ const TaskStatusPage: React.FC = () => {
           }
         } else if (check.task_type === 'CHECK_PROJECT_COMPLETENESS') {
           setCheckProjectTaskId(check.task_id);
+          fetchCheckProjectStatusRef.current = (id: string) => fetchCheckProjectStatus(id);
           fetchCheckProjectStatus(check.task_id);
           if (check.status === 'pending' || check.status === 'processing') {
             if (!checkProjectPollingRef.current) {
