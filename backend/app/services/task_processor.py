@@ -13,7 +13,7 @@ from app.services.claude_service import call_claude
 from app.services.excel_service import generate_list
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost
-from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
+from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text, pdf_to_content_block
 from app.utils.json_utils import extract_json
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -77,6 +77,79 @@ PROMPT_CHECK_COMPLETENESS = """Ты — опытный инженер-сметч
 Задача: проверить полноту учтённых материалов для каждой работы в перечне.
 
 Тебе передан готовый перечень работ и материалов. Для каждой работы:
+1. Проверь, все ли необходимые материалы учтены согласно нормативной базе ГЭСН/ФСНБ-2022.
+2. Если материал есть, но объём не указан или явно некорректен — рассчитай объём по нормам ГЭСН исходя из объёма работ.
+3. Если нормативно необходимый материал отсутствует — добавь его.
+4. Если материал и объём корректны — оставь без изменений.
+
+В поле notes для каждой изменённой или добавленной позиции указывай обоснование:
+- "Добавлено по ГЭСН XX-XX-XXX: [обоснование]"
+- "Объём скорректирован: в перечне [X] [ед], скорректировано на [Y] [ед] по норме ГЭСН [норма]"
+- "Соответствует норме" — если позиция корректна
+
+После проверки добавь поле "changes_summary" — краткий текст с перечнем всех добавленных и скорректированных позиций.
+
+Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
+{
+  "items": [
+    {
+      "type": "Работа" | "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "notes": "Обоснование"
+    }
+  ],
+  "changes_summary": "Краткое резюме всех изменений"
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
+
+PROMPT_LIST_FROM_PROJECT = """Ты — опытный инженер-сметчик и специалист по чтению проектной документации.
+
+Задача: составить перечень работ и материалов СТРОГО на основании проектной документации. Ничего не добавляй от себя по нормативам — только то, что следует из проекта.
+
+ЧТО ИЗВЛЕКАТЬ:
+1. Все виды работ — из спецификаций, ведомостей, пояснительной записки, а также логически следующие из состава проекта (демонтаж, подготовка основания, подключение и т.п.), если они явно подразумеваются.
+2. Все материалы к каждой работе — из спецификаций и ведомостей.
+
+ПОРЯДОК СТРОК — строго соблюдать:
+Работа 1
+  Материал 1 к Работе 1
+  Материал 2 к Работе 1
+  ...
+Работа 2
+  Материал 1 к Работе 2
+  ...
+
+РАЗДЕЛЫ: если есть явные разделы (АР, КР, ОВиК, ЭОМ, ВК и т.п.) — указывай раздел в поле notes каждой позиции.
+
+ОБЪЁМЫ — определяй по приоритету:
+  1. Явно указан в спецификации / ведомости → используй как есть
+  2. Не указан, но можно определить по чертежам / схемам / планам (площадь, длина, количество элементов и т.п.) → рассчитай и укажи в quantity, в notes добавь: "Объём определён по чертежу: [как]"
+  3. Определить невозможно → null
+
+Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
+{
+  "items": [
+    {
+      "type": "Работа" | "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм. или пустая строка",
+      "quantity": число или null,
+      "notes": "Раздел документа / обоснование объёма"
+    }
+  ]
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
+PROMPT_CHECK_PROJECT_COMPLETENESS = """Ты — опытный инженер-сметчик со знанием нормативной базы РФ (ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области, СП, ГОСТ).
+
+Задача: проверить полноту учтённых материалов для каждой работы в перечне.
+
+Тебе передан готовый перечень работ и материалов из проектной документации. Для каждой работы:
 1. Проверь, все ли необходимые материалы учтены согласно нормативной базе ГЭСН/ФСНБ-2022.
 2. Если материал есть, но объём не указан или явно некорректен — рассчитай объём по нормам ГЭСН исходя из объёма работ.
 3. Если нормативно необходимый материал отсутствует — добавь его.
@@ -357,6 +430,10 @@ class TaskProcessor:
                 await self._handle_list_from_grand(task)
             elif task_type == "CHECK_LIST_COMPLETENESS":
                 await self._handle_check_completeness(task)
+            elif task_type == "LIST_FROM_PROJECT":
+                await self._handle_list_from_project(task)
+            elif task_type == "CHECK_PROJECT_COMPLETENESS":
+                await self._handle_check_project_completeness(task)
             else:
                 raise NotImplementedError(f"Тип задачи {task.task_type!r} ещё не настроен")
 
@@ -558,6 +635,99 @@ class TaskProcessor:
         await self.save_result("Проверка_полноты_ГЭСН.xlsx", _XLSX_MIME, excel_data)
         logger.info(
             "Check completeness task completed",
+            task_id=self.task_id,
+            source_task_id=source_task_id,
+            items=len(all_items),
+            chunks=total_chunks,
+        )
+
+    async def _handle_list_from_project(self, task: Task) -> None:
+        await self.update_progress("Поиск PDF проектной документации...")
+
+        pdf_bytes: Optional[bytes] = None
+        for f in task.input_file_data or []:
+            if f.get("mime_type", "") == "application/pdf":
+                pdf_bytes = base64.b64decode(f["content_b64"])
+                break
+
+        if not pdf_bytes:
+            raise ValueError("PDF-файл не найден во вложениях задачи")
+
+        await self.update_progress("Анализ проектной документации...")
+
+        try:
+            pdf_block = pdf_to_content_block(pdf_bytes)
+        except ValueError as e:
+            raise ValueError(str(e))
+
+        messages = [{"role": "user", "content": PROMPT_LIST_FROM_PROJECT}]
+        data = await self._call_claude_json(
+            messages,
+            system_prompt=SYSTEM_BASE,
+            image_data=[pdf_block],
+        )
+
+        items = data.get("items", [])
+        if not items:
+            raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое PDF.")
+
+        await self._save_progress_data({"items": items})
+        await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
+
+        excel_data = generate_list(items)
+        await self.save_result("Перечень_из_проекта.xlsx", _XLSX_MIME, excel_data)
+        logger.info("List from project task completed", task_id=self.task_id, items=len(items))
+
+    async def _handle_check_project_completeness(self, task: Task) -> None:
+        source_task_id = (task.user_prompt or "").strip()
+        if not source_task_id:
+            raise ValueError("ID исходной задачи не указан")
+
+        res = await self.db.execute(select(Task).where(Task.id == source_task_id))
+        source_task = res.scalar_one_or_none()
+        if not source_task:
+            raise ValueError(f"Исходная задача {source_task_id!r} не найдена")
+        if source_task.task_type.upper() != "LIST_FROM_PROJECT":
+            raise ValueError("Исходная задача должна быть типа LIST_FROM_PROJECT")
+
+        items = (source_task.progress_data or {}).get("items", [])
+        if not items:
+            raise ValueError("В исходной задаче нет перечня позиций")
+
+        await self.update_progress(f"Загружено {len(items)} позиций. Начинаем проверку по ГЭСН...")
+
+        if len(items) <= 300:
+            chunks = [items]
+        else:
+            chunks = _chunk_by_work_boundaries(items)
+
+        total_chunks = len(chunks)
+        all_items: list = []
+        changes_summary_parts: list = []
+
+        for i, chunk in enumerate(chunks):
+            await self._check_cancelled()
+            if total_chunks > 1:
+                await self.update_progress(f"Проверка части {i + 1} из {total_chunks}...")
+            else:
+                await self.update_progress("Проверяем полноту материалов по ГЭСН...")
+
+            chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+            messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
+
+            data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE)
+            all_items.extend(data.get("items", []))
+            summary = data.get("changes_summary", "")
+            if summary:
+                changes_summary_parts.append(summary)
+
+        changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
+
+        await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
+        excel_data = generate_list(all_items, changes_summary=changes_summary)
+        await self.save_result("Проверка_полноты_по_проекту.xlsx", _XLSX_MIME, excel_data)
+        logger.info(
+            "Check project completeness task completed",
             task_id=self.task_id,
             source_task_id=source_task_id,
             items=len(all_items),

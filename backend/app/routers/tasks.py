@@ -342,6 +342,62 @@ async def check_completeness(
     return TaskCreateResponse(task_id=task_id, status="pending")
 
 
+@router.post("/check-project-completeness", response_model=TaskCreateResponse)
+async def check_project_completeness(
+    body: CheckCompletenessRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a CHECK_PROJECT_COMPLETENESS task for a completed LIST_FROM_PROJECT task."""
+    result = await db.execute(select(Task).where(Task.id == body.source_task_id))
+    source_task = result.scalar_one_or_none()
+
+    if not source_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Исходная задача не найдена",
+        )
+
+    if source_task.task_type.upper() != "LIST_FROM_PROJECT":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Проверка полноты доступна только для задач «Перечень из проекта»",
+        )
+
+    if source_task.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Исходная задача должна быть завершена (текущий статус: {source_task.status})",
+        )
+
+    task = Task(
+        id=str(uuid.uuid4()),
+        user_role=current_user.get("role", "user"),
+        task_type="CHECK_PROJECT_COMPLETENESS",
+        status="pending",
+        input_files=[],
+        input_file_data=[],
+        user_prompt=body.source_task_id,
+        chat_history=[],
+        estimation_status="not_applicable",
+        project_id=source_task.project_id,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+
+    task_id = str(task.id)
+    background_tasks.add_task(_run_task_in_background, task_id)
+
+    logger.info(
+        "CHECK_PROJECT_COMPLETENESS task created",
+        task_id=task_id,
+        source_task_id=body.source_task_id,
+    )
+    return TaskCreateResponse(task_id=task_id, status="pending")
+
+
 @router.post("/{task_id}/cancel")
 async def cancel_task(
     task_id: str,

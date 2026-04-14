@@ -71,6 +71,13 @@ export async function checkCompleteness(sourceTaskId: string): Promise<TaskCreat
   return response.data;
 }
 
+export async function checkProjectCompleteness(sourceTaskId: string): Promise<TaskCreateResponse> {
+  const response = await apiClient.post<TaskCreateResponse>('/tasks/check-project-completeness', {
+    source_task_id: sourceTaskId,
+  });
+  return response.data;
+}
+
 export async function sendMessage(taskId: string, message: string): Promise<TaskChatResponse> {
   const response = await apiClient.post<TaskChatResponse>(`/tasks/${taskId}/message`, { message });
   return response.data;

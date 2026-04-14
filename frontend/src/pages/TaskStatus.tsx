@@ -13,6 +13,7 @@ import {
   updateTask,
   resumeTask,
   checkCompleteness,
+  checkProjectCompleteness,
   TaskStatusResponse,
   ChatMessage,
 } from '../api/tasks';
@@ -82,12 +83,19 @@ const TaskStatusPage: React.FC = () => {
   // Resume state
   const [resuming, setResuming] = useState(false);
 
-  // Check completeness state
+  // Check completeness state (LIST_FROM_GRAND)
   const [checkTaskId, setCheckTaskId] = useState<string | null>(null);
   const [checkTask, setCheckTask] = useState<TaskStatusResponse | null>(null);
   const [checkResults, setCheckResults] = useState<TaskResult[]>([]);
   const [checkStarting, setCheckStarting] = useState(false);
   const checkPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Check project completeness state (LIST_FROM_PROJECT)
+  const [checkProjectTaskId, setCheckProjectTaskId] = useState<string | null>(null);
+  const [checkProjectTask, setCheckProjectTask] = useState<TaskStatusResponse | null>(null);
+  const [checkProjectResults, setCheckProjectResults] = useState<TaskResult[]>([]);
+  const [checkProjectStarting, setCheckProjectStarting] = useState(false);
+  const checkProjectPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -139,6 +147,44 @@ const TaskStatusPage: React.FC = () => {
       setError('Не удалось запустить проверку полноты.');
     } finally {
       setCheckStarting(false);
+    }
+  };
+
+  const stopCheckProjectPolling = useCallback(() => {
+    if (checkProjectPollingRef.current) { clearInterval(checkProjectPollingRef.current); checkProjectPollingRef.current = null; }
+  }, []);
+
+  const fetchCheckProjectStatus = useCallback(async (cid: string) => {
+    try {
+      const data = await getTaskStatus(cid);
+      setCheckProjectTask(data);
+      if (data.status === 'completed') {
+        const res = await getTaskResults(cid);
+        setCheckProjectResults(res);
+        stopCheckProjectPolling();
+      } else if (data.status === 'failed' || data.status === 'cancelled') {
+        stopCheckProjectPolling();
+      }
+    } catch {
+      stopCheckProjectPolling();
+    }
+  }, [stopCheckProjectPolling]);
+
+  const handleCheckProjectCompleteness = async () => {
+    if (!taskId || checkProjectStarting) return;
+    setCheckProjectStarting(true);
+    try {
+      const res = await checkProjectCompleteness(taskId);
+      const cid = res.task_id;
+      setCheckProjectTaskId(cid);
+      setCheckProjectTask(null);
+      setCheckProjectResults([]);
+      fetchCheckProjectStatus(cid);
+      checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(cid), 3000);
+    } catch {
+      setError('Не удалось запустить проверку полноты.');
+    } finally {
+      setCheckProjectStarting(false);
     }
   };
 
@@ -906,6 +952,106 @@ const TaskStatusPage: React.FC = () => {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {checkResults.map((r) => (
+                        <div
+                          key={r.file_id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '10px 14px',
+                            backgroundColor: '#f0fdf4',
+                            border: '1px solid #86efac',
+                            borderRadius: '8px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '18px' }}>📋</span>
+                            <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
+                              {r.file_name}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleDownload(r.file_id, r.file_name)}
+                            disabled={downloading === r.file_id}
+                            style={{
+                              padding: '7px 16px',
+                              backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a',
+                              color: '#ffffff',
+                              border: 'none',
+                              borderRadius: '6px',
+                              cursor: downloading === r.file_id ? 'not-allowed' : 'pointer',
+                              fontSize: '13px',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Check completeness card — shown after LIST_FROM_PROJECT completes */}
+        {task && task.status === 'completed' && task.task_type === 'LIST_FROM_PROJECT' && (
+          <div
+            style={{
+              backgroundColor: '#f0f9ff',
+              borderRadius: '12px',
+              border: '1px solid #bae6fd',
+              padding: '20px 24px',
+              marginBottom: '20px',
+            }}
+          >
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#0c4a6e', marginBottom: '6px' }}>
+              Проверка полноты материалов по ГЭСН
+            </div>
+            <div style={{ fontSize: '14px', color: '#0369a1', marginBottom: '14px' }}>
+              Хотите проверить, все ли необходимые материалы учтены согласно нормативной базе?
+            </div>
+            {!checkProjectTaskId ? (
+              <button
+                onClick={handleCheckProjectCompleteness}
+                disabled={checkProjectStarting}
+                style={{
+                  padding: '10px 22px',
+                  backgroundColor: checkProjectStarting ? '#7dd3fc' : '#0284c7',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: checkProjectStarting ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                }}
+              >
+                {checkProjectStarting ? 'Запуск...' : 'Да, проверить'}
+              </button>
+            ) : (
+              <>
+                {checkProjectTask && (checkProjectTask.status === 'pending' || checkProjectTask.status === 'processing') && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                    <Spinner />
+                    <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500 }}>
+                      {checkProjectTask.progress_message || 'Проверка запущена...'}
+                    </span>
+                  </div>
+                )}
+                {checkProjectTask && checkProjectTask.status === 'failed' && (
+                  <div style={{ fontSize: '14px', color: '#dc2626', marginBottom: '10px' }}>
+                    Проверка завершилась с ошибкой: {checkProjectTask.error_message}
+                  </div>
+                )}
+                {checkProjectResults.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#15803d', marginBottom: '10px' }}>
+                      Проверка завершена
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {checkProjectResults.map((r) => (
                         <div
                           key={r.file_id}
                           style={{
