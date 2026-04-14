@@ -64,8 +64,12 @@ const TaskCreate: React.FC = () => {
       }
       navigate(`/tasks/${task.task_id}/status`);
     } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { detail?: string } } };
-      setError(axiosError.response?.data?.detail ?? 'Ошибка при создании задачи. Попробуйте ещё раз.');
+      const axiosError = err as { response?: { data?: { detail?: string } }; request?: unknown };
+      if (axiosError.request && !axiosError.response) {
+        setError('Ошибка сети при загрузке, проверьте соединение и попробуйте ещё раз.');
+      } else {
+        setError(axiosError.response?.data?.detail ?? 'Ошибка при создании задачи. Попробуйте ещё раз.');
+      }
     } finally {
       setSubmitting(false);
       setSubmitStep(null);
