@@ -1,6 +1,12 @@
 import apiClient from './client';
 import { Task, TaskResult, HistoryEntry, RevertResponse } from '../types';
 
+export interface InputFileMeta {
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+}
+
 export interface TaskStatusResponse {
   id: string;
   status: Task['status'];
@@ -14,6 +20,7 @@ export interface TaskStatusResponse {
   updated_at: string;
   name?: string | null;
   progress_data?: Record<string, unknown>;
+  input_files?: InputFileMeta[];
 }
 
 export interface ChatMessage {
@@ -103,6 +110,20 @@ export async function renameSlotFile(taskId: string, slot: string, name: string)
   await apiClient.patch(`/tasks/${taskId}/files/${slot}`, { name });
 }
 
+export async function downloadInputFile(taskId: string, fileIndex: number, fileName: string): Promise<void> {
+  const response = await apiClient.get(`/tasks/${taskId}/input-file/${fileIndex}`, {
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 export async function downloadResult(fileId: number, fileName: string): Promise<void> {
   const response = await apiClient.get(`/results/${fileId}/download`, {
     responseType: 'blob',
@@ -184,6 +205,77 @@ export async function revertHistory(
   const res = await apiClient.post<RevertResponse>(
     `/tasks/${taskId}/history/${entryId}/revert`,
     { confirm },
+  );
+  return res.data;
+}
+
+// ---------------------------------------------------------------------------
+// ESTIMATE_FROM_LIST — источники, редактирование позиций, переопределение цен
+// ---------------------------------------------------------------------------
+
+export interface EstimateSourceStage {
+  stage: number;
+  label: string;
+  items_count: number;
+  check_task_id?: string;
+}
+
+export interface EstimateSource {
+  task_id: string;
+  task_type: string;
+  name: string | null;
+  created_at: string;
+  stages: EstimateSourceStage[];
+}
+
+export async function getEstimateSources(): Promise<EstimateSource[]> {
+  const res = await apiClient.get<EstimateSource[]>('/tasks/estimate-sources');
+  return res.data;
+}
+
+export interface EstimateItem {
+  type: string;
+  name: string;
+  unit: string;
+  quantity: number | null;
+  work_price: number | null;
+  material_price: number | null;
+  price_list_name: string | null;
+  sources: string | null;
+  notes: string | null;
+}
+
+export interface PatchEstimateItemsResponse {
+  task_id: string;
+  grand_total: number;
+  items_count: number;
+}
+
+export async function patchEstimateItems(
+  taskId: string,
+  items: EstimateItem[],
+): Promise<PatchEstimateItemsResponse> {
+  const res = await apiClient.patch<PatchEstimateItemsResponse>(
+    `/tasks/${taskId}/estimate-items`,
+    { items },
+  );
+  return res.data;
+}
+
+export interface RepriceItemResponse {
+  item_index: number;
+  work_price: number | null;
+  material_price: number | null;
+  sources: string;
+  notes: string;
+}
+
+export async function repriceEstimateItem(
+  taskId: string,
+  itemIndex: number,
+): Promise<RepriceItemResponse> {
+  const res = await apiClient.post<RepriceItemResponse>(
+    `/tasks/${taskId}/estimate-items/${itemIndex}/reprice`,
   );
   return res.data;
 }

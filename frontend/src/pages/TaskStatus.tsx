@@ -10,13 +10,17 @@ import {
   sendMessage,
   cancelTask,
   downloadResult,
+  downloadInputFile,
   updateTask,
   resumeTask,
   checkCompleteness,
   checkProjectCompleteness,
   getRelatedChecks,
+  patchEstimateItems,
+  repriceEstimateItem,
   TaskStatusResponse,
   ChatMessage,
+  EstimateItem,
 } from '../api/tasks';
 import {
   linkTaskToProject,
@@ -67,6 +71,7 @@ const TaskStatusPage: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [downloading, setDownloading] = useState<number | null>(null);
+  const [downloadingInputFile, setDownloadingInputFile] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [progressLog, setProgressLog] = useState<string[]>([]);
@@ -116,6 +121,12 @@ const TaskStatusPage: React.FC = () => {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number | null>(null);
+
+  // Estimate items editing state (ESTIMATE_FROM_LIST)
+  const [estimateItems, setEstimateItems] = useState<EstimateItem[]>([]);
+  const [savingEstimate, setSavingEstimate] = useState(false);
+  const [estimateSaveError, setEstimateSaveError] = useState('');
+  const [repricing, setRepricing] = useState<number | null>(null);
 
   useEffect(() => {
     if (!taskId || taskId === 'undefined') {
@@ -433,6 +444,16 @@ const TaskStatusPage: React.FC = () => {
     };
   }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling, stopCheckProjectPolling]);
 
+  // Load estimate items when ESTIMATE_FROM_LIST task completes
+  useEffect(() => {
+    if (task?.task_type === 'ESTIMATE_FROM_LIST' && task.status === 'completed') {
+      const items = (task.progress_data?.items as EstimateItem[] | undefined) ?? [];
+      if (items.length > 0 && estimateItems.length === 0) {
+        setEstimateItems(items);
+      }
+    }
+  }, [task, estimateItems.length]);
+
   // Restore check task state after page refresh
   useEffect(() => {
     if (!taskId || taskId === 'undefined') return;
@@ -515,6 +536,81 @@ const TaskStatusPage: React.FC = () => {
       setError('Ошибка при скачивании файла.');
     } finally {
       setDownloading(null);
+    }
+  };
+
+  const handleDownloadInputFile = async (fileIndex: number, fileName: string) => {
+    if (!taskId) return;
+    setDownloadingInputFile(fileIndex);
+    try {
+      await downloadInputFile(taskId, fileIndex, fileName);
+    } catch {
+      setError('Ошибка при скачивании исходного файла.');
+    } finally {
+      setDownloadingInputFile(null);
+    }
+  };
+
+  // Estimate helpers
+  const fmtRub = (v: number | null | undefined) =>
+    v != null ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(v) : '—';
+
+  const computedTotals = React.useMemo(() => {
+    let sumWork = 0;
+    let sumMat = 0;
+    for (const it of estimateItems) {
+      const qty = it.quantity ?? 0;
+      if (it.work_price != null) sumWork += qty * it.work_price;
+      if (it.material_price != null) sumMat += qty * it.material_price;
+    }
+    const overhead = sumWork * 0.03;
+    const transport = sumMat * 0.03;
+    return { sumWork, overhead, sumMat, transport, grand: sumWork + overhead + sumMat + transport };
+  }, [estimateItems]);
+
+  const updateItemField = (idx: number, field: keyof EstimateItem, value: unknown) => {
+    setEstimateItems((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: value };
+      return next;
+    });
+  };
+
+  const handleSaveEstimate = async () => {
+    if (!taskId) return;
+    setSavingEstimate(true);
+    setEstimateSaveError('');
+    try {
+      await patchEstimateItems(taskId, estimateItems);
+      setTaskCost(computedTotals.grand);
+    } catch {
+      setEstimateSaveError('Не удалось сохранить изменения. Попробуйте ещё раз.');
+    } finally {
+      setSavingEstimate(false);
+    }
+  };
+
+  const handleReprice = async (itemIdx: number) => {
+    if (!taskId) return;
+    setRepricing(itemIdx);
+    try {
+      const res = await repriceEstimateItem(taskId, itemIdx);
+      setEstimateItems((prev) => {
+        const next = [...prev];
+        next[itemIdx] = {
+          ...next[itemIdx],
+          work_price: res.work_price,
+          material_price: res.material_price,
+          sources: res.sources,
+          notes: res.notes,
+          price_list_name: null,
+        };
+        return next;
+      });
+    } catch {
+      setEstimateSaveError('Ошибка при переопределении цены. Попробуйте ещё раз.');
+    } finally {
+      setRepricing(null);
     }
   };
 
@@ -1014,6 +1110,70 @@ const TaskStatusPage: React.FC = () => {
           </div>
         )}
 
+        {/* Source files */}
+        {task && task.input_files && task.input_files.length > 0 && (
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+              padding: '20px 24px',
+              border: '1px solid #e2e8f0',
+              marginBottom: '16px',
+            }}
+          >
+            <h3 style={{ margin: '0 0 12px', fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
+              Исходный файл
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {task.input_files.map((file, idx) => {
+                const isXlsx = file.mime_type.includes('spreadsheet') || file.mime_type.includes('excel');
+                const isPdf = file.mime_type === 'application/pdf';
+                const isImage = file.mime_type.startsWith('image/');
+                const icon = isXlsx ? '📊' : isPdf ? '📄' : isImage ? '🖼️' : '📁';
+                const isLoading = downloadingInputFile === idx;
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '10px 14px',
+                      backgroundColor: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '18px' }}>{icon}</span>
+                      <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
+                        {file.name}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleDownloadInputFile(idx, file.name)}
+                      disabled={isLoading}
+                      style={{
+                        padding: '7px 16px',
+                        backgroundColor: isLoading ? '#cbd5e1' : '#2563eb',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: isLoading ? 'not-allowed' : 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {isLoading ? 'Скачивание...' : 'Скачать'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Results */}
         {results.length > 0 && (
           <div
@@ -1068,6 +1228,157 @@ const TaskStatusPage: React.FC = () => {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Estimate items table — shown after ESTIMATE_FROM_LIST completes */}
+        {task && task.status === 'completed' && task.task_type === 'ESTIMATE_FROM_LIST' && estimateItems.length > 0 && (
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+              padding: '24px 28px',
+              border: '1px solid #e2e8f0',
+              marginBottom: '20px',
+            }}
+          >
+            <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+              Позиции сметы
+            </h3>
+
+            {estimateSaveError && (
+              <div style={{ padding: '8px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '13px', color: '#dc2626', marginBottom: '12px' }}>
+                {estimateSaveError}
+              </div>
+            )}
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f1f5f9' }}>
+                    {['№', 'Наименование', 'Ед.', 'Кол-во', 'Цена работ', 'Ст-ть работ', 'Цена матер.', 'Ст-ть матер.', 'Из прайса', ''].map((h) => (
+                      <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, color: '#374151', borderBottom: '1.5px solid #e2e8f0', whiteSpace: 'nowrap' }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {estimateItems.map((item, idx) => {
+                    const qty = item.quantity ?? 0;
+                    const wCost = item.work_price != null ? qty * item.work_price : null;
+                    const mCost = item.material_price != null ? qty * item.material_price : null;
+                    const isWork = item.type === 'Работа';
+                    const isRepricing = repricing === idx;
+                    return (
+                      <tr key={idx} style={{ backgroundColor: isWork ? '#f0f9ff' : undefined }}>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: '#94a3b8' }}>{idx + 1}</td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontWeight: isWork ? 600 : 400, maxWidth: '260px' }}>
+                          {item.name}
+                          {item.sources && (
+                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }} title={item.sources}>
+                              {item.sources.slice(0, 60)}{item.sources.length > 60 ? '…' : ''}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap' }}>{item.unit}</td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <input
+                            type="number"
+                            value={item.quantity ?? ''}
+                            onChange={(e) => updateItemField(idx, 'quantity', parseFloat(e.target.value) || null)}
+                            style={{ width: '70px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
+                          />
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <input
+                            type="number"
+                            value={item.work_price ?? ''}
+                            onChange={(e) => updateItemField(idx, 'work_price', parseFloat(e.target.value) || null)}
+                            style={{ width: '90px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
+                          />
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap', color: wCost != null ? '#1e293b' : '#cbd5e1' }}>
+                          {fmtRub(wCost)}
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <input
+                            type="number"
+                            value={item.material_price ?? ''}
+                            onChange={(e) => updateItemField(idx, 'material_price', parseFloat(e.target.value) || null)}
+                            style={{ width: '90px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
+                          />
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap', color: mCost != null ? '#1e293b' : '#cbd5e1' }}>
+                          {fmtRub(mCost)}
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: item.price_list_name ? '#15803d' : '#94a3b8' }}>
+                          {item.price_list_name ? 'Да' : 'Нет'}
+                        </td>
+                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <button
+                            onClick={() => handleReprice(idx)}
+                            disabled={isRepricing || repricing != null}
+                            title="Переопределить цену через Claude"
+                            style={{
+                              padding: '4px 10px',
+                              fontSize: '12px',
+                              backgroundColor: isRepricing ? '#bfdbfe' : '#eff6ff',
+                              color: '#1d4ed8',
+                              border: '1px solid #bfdbfe',
+                              borderRadius: '6px',
+                              cursor: (isRepricing || repricing != null) ? 'not-allowed' : 'pointer',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {isRepricing ? '...' : '↺ Цена'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Totals block */}
+            <div style={{ marginTop: '20px', borderTop: '2px solid #e2e8f0', paddingTop: '16px' }}>
+              {[
+                { label: 'Сумма по работам:', value: computedTotals.sumWork },
+                { label: 'Накладные расходы 3%:', value: computedTotals.overhead },
+                { label: 'Сумма по материалам:', value: computedTotals.sumMat },
+                { label: 'Транспортные расходы 3%:', value: computedTotals.transport },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#475569', marginBottom: '6px' }}>
+                  <span>{label}</span>
+                  <span style={{ fontFamily: 'monospace' }}>{fmtRub(value)} ₽</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 700, color: '#0f172a', marginTop: '8px', padding: '10px 0', borderTop: '2px solid #0f172a' }}>
+                <span>ИТОГО ПО СМЕТЕ:</span>
+                <span style={{ fontFamily: 'monospace', color: '#15803d' }}>{fmtRub(computedTotals.grand)} ₽</span>
+              </div>
+            </div>
+
+            {/* Save button */}
+            <button
+              onClick={handleSaveEstimate}
+              disabled={savingEstimate}
+              style={{
+                marginTop: '16px',
+                padding: '10px 24px',
+                backgroundColor: savingEstimate ? '#6ee7b7' : '#16a34a',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: savingEstimate ? 'not-allowed' : 'pointer',
+                fontSize: '14px',
+                fontWeight: 600,
+              }}
+            >
+              {savingEstimate ? 'Сохранение...' : '💾 Сохранить изменения'}
+            </button>
           </div>
         )}
 

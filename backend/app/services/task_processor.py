@@ -12,9 +12,11 @@ from app.models.result import TaskResult
 from app.services.claude_service import call_claude
 from app.services.excel_service import generate_list
 from app.constants import ESTIMATE_TASK_TYPES
-from app.utils.xlsx_cost_parser import extract_total_cost
+from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text, pdf_to_content_block
 from app.utils.json_utils import extract_json
+from app.utils.xlsx_exporter import generate_estimate_xlsx
+from app.services import price_service as _price_svc
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -187,6 +189,49 @@ PROMPT_CHECK_PROJECT_COMPLETENESS = """Ты — опытный инженер-с
 }
 
 ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
+PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительному сметному делу в России.
+
+Тебе переданы позиции перечня работ и материалов, для которых НЕ
+найдено совпадений в корпоративном прайсе. Твоя задача — определить
+рыночную цену для каждой позиции.
+
+Текущая дата: {current_date}
+Регион: г. Екатеринбург, Свердловская область
+
+Для каждой позиции:
+1. Найди 3 актуальных рыночных цены (г. Екатеринбург)
+   - Для работ: квалифицированные подрядчики с лицензиями/допусками СРО
+   - Для материалов: известные поставщики, нормальное качество
+2. Поставь среднюю из трёх найденных цен
+3. Укажи все 3 источника с ценами в поле sources
+4. Цена работ → в поле work_price (если тип "Работа")
+5. Цена материалов → в поле material_price (если тип "Материал")
+
+НДС (22%): для каждой позиции укажи в notes:
+  "Цена без НДС: X / НДС: Y / Цена с НДС: Z"
+  Для работ на УСН: НДС = 0, указать "УСН, НДС не облагается"
+
+Позиции для оценки:
+{unmatched_items_json}
+
+Верни результат СТРОГО в формате JSON, без markdown, первый символ {{,
+последний }}:
+{{
+  "items": [
+    {{
+      "type": "Работа" | "Материал",
+      "name": "Наименование позиции",
+      "unit": "Ед. изм.",
+      "quantity": число,
+      "work_price": число или null,
+      "material_price": число или null,
+      "price_list_name": null,
+      "sources": "Источник 1: цена; Источник 2: цена; Источник 3: цена",
+      "notes": "Примечание по НДС"
+    }}
+  ]
+}}"""
 
 
 def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
@@ -483,6 +528,8 @@ class TaskProcessor:
                 await self._handle_list_from_project(task)
             elif task_type == "CHECK_PROJECT_COMPLETENESS":
                 await self._handle_check_project_completeness(task)
+            elif task_type == "ESTIMATE_FROM_LIST":
+                await self._handle_estimate_from_list(task)
             else:
                 raise NotImplementedError(f"Тип задачи {task.task_type!r} ещё не настроен")
 
@@ -497,6 +544,16 @@ class TaskProcessor:
         finally:
             stop_event.set()
             heartbeat_task.cancel()
+
+    async def _save_partial(self, items: list, chunk_idx: int, total: int, prefix: str = "Частичная_проверка") -> None:
+        """Save accumulated items as a partial Excel result."""
+        excel_data = generate_list(items)
+        await self.save_result(
+            f"{prefix}_{chunk_idx}_из_{total}.xlsx",
+            _XLSX_MIME,
+            excel_data,
+            slot=f"partial_{chunk_idx}",
+        )
 
     async def _handle_list_from_grand(self, task: Task) -> None:
         # --- Определяем, это resume или новый запуск ---
@@ -665,13 +722,7 @@ class TaskProcessor:
                 await self._check_cancelled()
             except TaskCancelledError:
                 if all_items:
-                    partial_excel = generate_list(all_items)
-                    await self.save_result(
-                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
-                        _XLSX_MIME,
-                        partial_excel,
-                        slot=f"partial_{i}",
-                    )
+                    await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Остановлено на части {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
@@ -687,24 +738,12 @@ class TaskProcessor:
                 data = await self._interruptible_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
             except TaskCancelledError:
                 if all_items:
-                    partial_excel = generate_list(all_items)
-                    await self.save_result(
-                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
-                        _XLSX_MIME,
-                        partial_excel,
-                        slot=f"partial_{i}",
-                    )
+                    await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Остановлено на части {i + 1} из {total_chunks}. Частичный результат сохранён.")
                 raise
             except Exception as chunk_error:
                 if all_items:
-                    partial_excel = generate_list(all_items)
-                    await self.save_result(
-                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
-                        _XLSX_MIME,
-                        partial_excel,
-                        slot=f"partial_{i}",
-                    )
+                    await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
@@ -753,10 +792,11 @@ class TaskProcessor:
             raise ValueError(str(e))
 
         messages = [{"role": "user", "content": PROMPT_LIST_FROM_PROJECT}]
-        data = await self._call_claude_json(
+        data = await self._interruptible_claude_json(
             messages,
             system_prompt=SYSTEM_BASE,
             image_data=[pdf_block],
+            processing_timeout=1200.0,
         )
 
         items = data.get("items", [])
@@ -801,13 +841,7 @@ class TaskProcessor:
                 await self._check_cancelled()
             except TaskCancelledError:
                 if all_items:
-                    partial_excel = generate_list(all_items)
-                    await self.save_result(
-                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
-                        _XLSX_MIME,
-                        partial_excel,
-                        slot=f"partial_{i}",
-                    )
+                    await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Остановлено на части {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
@@ -823,24 +857,12 @@ class TaskProcessor:
                 data = await self._interruptible_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
             except TaskCancelledError:
                 if all_items:
-                    partial_excel = generate_list(all_items)
-                    await self.save_result(
-                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
-                        _XLSX_MIME,
-                        partial_excel,
-                        slot=f"partial_{i}",
-                    )
+                    await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Остановлено на части {i + 1} из {total_chunks}. Частичный результат сохранён.")
                 raise
             except Exception as chunk_error:
                 if all_items:
-                    partial_excel = generate_list(all_items)
-                    await self.save_result(
-                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
-                        _XLSX_MIME,
-                        partial_excel,
-                        slot=f"partial_{i}",
-                    )
+                    await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
@@ -867,6 +889,256 @@ class TaskProcessor:
             source_task_id=source_task_id,
             items=len(all_items),
             chunks=total_chunks,
+        )
+
+    async def _handle_estimate_from_list(self, task: Task) -> None:
+        """
+        Шаг 0: Получаем items — либо из файла (Path A), либо из существующей задачи (Path B).
+        Шаг 1: Поиск цен по прайсу (exact + embedding, без web search).
+        Шаг 2: Claude для ненайденных позиций (чанки по границам «Работа»).
+        Шаг 3: Сборка Excel сметы, расчёт итогов, сохранение task.cost.
+        """
+        from datetime import date as _date
+
+        # ── Шаг 0: Получаем items ───────────────────────────────────────────
+        items: list[dict] = []
+        user_prompt = task.user_prompt or ""
+
+        if user_prompt.startswith("{"):
+            # Path B: items из существующей задачи
+            try:
+                prompt_data = json.loads(user_prompt)
+            except Exception:
+                prompt_data = {}
+
+            if prompt_data.get("path") == "B":
+                source_task_id = prompt_data.get("source_task_id")
+                source_stage = prompt_data.get("source_stage", 1)
+
+                await self.update_progress("Загрузка позиций из существующей задачи...")
+                source_task_res = await self.db.execute(
+                    select(Task).where(Task.id == source_task_id)
+                )
+                source_task = source_task_res.scalar_one_or_none()
+                if not source_task:
+                    raise ValueError(f"Исходная задача {source_task_id} не найдена")
+
+                if source_stage == 2:
+                    # Find related check task
+                    check_type = (
+                        "CHECK_LIST_COMPLETENESS"
+                        if source_task.task_type == "LIST_FROM_GRAND"
+                        else "CHECK_PROJECT_COMPLETENESS"
+                    )
+                    from sqlalchemy import desc as _desc
+                    check_res = await self.db.execute(
+                        select(Task)
+                        .where(Task.user_prompt == str(source_task.id))
+                        .where(Task.task_type == check_type)
+                        .where(Task.status == "completed")
+                        .order_by(_desc(Task.created_at))
+                        .limit(1)
+                    )
+                    check_task_obj = check_res.scalar_one_or_none()
+                    if not check_task_obj:
+                        raise ValueError("Задача проверки полноты не найдена или не завершена")
+                    items = (check_task_obj.progress_data or {}).get("items", [])
+                    if not items:
+                        raise ValueError("В задаче проверки полноты нет позиций")
+                else:
+                    # Stage 1: items from source task
+                    items = (source_task.progress_data or {}).get("items", [])
+                    if not items:
+                        raise ValueError("В исходной задаче нет сохранённых позиций")
+
+                logger.info("Loaded items from source task (Path B)", task_id=self.task_id, items=len(items))
+            else:
+                # Fallback: treat as Path A
+                user_prompt = ""
+
+        if not items:
+            # Path A: парсим лист «Перечень» из загруженного Excel
+            await self.update_progress("Поиск Excel-файла перечня...")
+            excel_bytes: Optional[bytes] = None
+            for f in task.input_file_data or []:
+                mime = f.get("mime_type", "")
+                if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
+                    excel_bytes = base64.b64decode(f["content_b64"])
+                    break
+
+            if not excel_bytes:
+                raise ValueError("Excel-файл (.xlsx) с перечнем не найден во вложениях задачи")
+
+            await self.update_progress("Парсинг листа «Перечень»...")
+            items = parse_list_sheet(excel_bytes)
+            logger.info("Parsed list sheet", task_id=self.task_id, items=len(items))
+
+        # ── Шаг 1: Поиск цен по прайсу ─────────────────────────────────────
+        await self.update_progress(f"Поиск цен для {len(items)} позиций по корпоративному прайсу...")
+
+        matched: list[dict] = []   # items with prices found in price list
+        unmatched: list[dict] = [] # items needing Claude
+
+        for item in items:
+            item_type = str(item.get("type", "")).strip()
+            name = str(item.get("name", "")).strip()
+            enriched = dict(item)
+            enriched.setdefault("work_price", None)
+            enriched.setdefault("material_price", None)
+            enriched.setdefault("price_list_name", None)
+            enriched.setdefault("sources", None)
+
+            found = False
+            if item_type == "Работа":
+                # Exact match
+                work_info = _price_svc._exact_match_work(name)
+                if work_info is None:
+                    work_info = await _price_svc._embedding_match_work(name)
+                if work_info is not None:
+                    enriched["work_price"] = work_info.get("min_price")
+                    enriched["price_list_name"] = work_info.get("name")
+                    found = True
+
+            elif item_type == "Материал":
+                mat_price = _price_svc._exact_match_material(name)
+                if mat_price is None:
+                    mat_price = await _price_svc._embedding_match_material(name)
+                if mat_price is not None:
+                    enriched["material_price"] = mat_price
+                    enriched["price_list_name"] = name
+                    found = True
+
+            if found:
+                matched.append(enriched)
+            else:
+                unmatched.append(enriched)
+
+        logger.info(
+            "Price lookup done",
+            task_id=self.task_id,
+            matched=len(matched),
+            unmatched=len(unmatched),
+        )
+
+        # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
+        claude_results: dict[str, dict] = {}  # name -> enriched item
+
+        if unmatched:
+            chunks = _chunk_by_work_boundaries(unmatched, max_chunk_size=25)
+            total_chunks = len(chunks)
+            current_date = _date.today().strftime("%d.%m.%Y")
+
+            await self.update_progress(
+                f"Прайс: {len(matched)} позиций найдено, {len(unmatched)} — нет. "
+                f"Отправляем {total_chunks} чанк(а) в Claude..."
+            )
+
+            for i, chunk in enumerate(chunks):
+                try:
+                    await self._check_cancelled()
+                except TaskCancelledError:
+                    raise
+
+                if total_chunks > 1:
+                    await self.update_progress(f"Claude: обработка части {i + 1} из {total_chunks}...")
+
+                unmatched_json = json.dumps(
+                    [{"type": it["type"], "name": it["name"], "unit": it["unit"], "quantity": it.get("quantity")}
+                     for it in chunk],
+                    ensure_ascii=False, indent=2,
+                )
+                prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
+                    current_date=current_date,
+                    unmatched_items_json=unmatched_json,
+                )
+                messages = [{"role": "user", "content": prompt_text}]
+
+                try:
+                    data = await self._interruptible_claude_json(
+                        messages,
+                        system_prompt=SYSTEM_BASE,
+                        use_web_search=True,
+                        processing_timeout=1200.0,
+                    )
+                except TaskCancelledError:
+                    raise
+                except Exception as chunk_error:
+                    logger.warning(
+                        "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
+                        task_id=self.task_id,
+                        chunk=i + 1,
+                        error=str(chunk_error),
+                    )
+                    # Keep unmatched items with null prices rather than failing entire task
+                    continue
+
+                for result_item in data.get("items", []):
+                    key = str(result_item.get("name", "")).strip()
+                    claude_results[key] = result_item
+
+        # ── Шаг 3: Сборка итогового результата в исходном порядке ───────────
+        final_items: list[dict] = []
+        for item in items:
+            name = str(item.get("name", "")).strip()
+            # Find in matched list first
+            enriched = next((m for m in matched if m.get("name") == name), None)
+            if enriched is None:
+                # Try claude result
+                cr = claude_results.get(name)
+                if cr:
+                    enriched = {
+                        "type": item.get("type", ""),
+                        "name": name,
+                        "unit": cr.get("unit") or item.get("unit", ""),
+                        "quantity": item.get("quantity"),
+                        "work_price": cr.get("work_price"),
+                        "material_price": cr.get("material_price"),
+                        "price_list_name": None,
+                        "sources": cr.get("sources", ""),
+                        "notes": cr.get("notes", ""),
+                    }
+                else:
+                    # Remained unmatched (e.g. Claude chunk failed)
+                    enriched = {
+                        "type": item.get("type", ""),
+                        "name": name,
+                        "unit": item.get("unit", ""),
+                        "quantity": item.get("quantity"),
+                        "work_price": None,
+                        "material_price": None,
+                        "price_list_name": None,
+                        "sources": "",
+                        "notes": "Цена не определена",
+                    }
+            final_items.append(enriched)
+
+        await self.update_progress(f"Собрано {len(final_items)} позиций. Формирование Excel сметы...")
+
+        excel_data, grand_total = generate_estimate_xlsx(final_items)
+
+        # Save result file
+        await self.save_result("Смета_из_перечня.xlsx", _XLSX_MIME, excel_data)
+
+        # Save cost and estimation_status
+        task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
+        upd_task = task_res.scalar_one_or_none()
+        if upd_task:
+            from decimal import Decimal as _Decimal
+            upd_task.cost = _Decimal(str(round(grand_total, 2)))
+            upd_task.estimation_status = "estimated"
+            upd_task.updated_at = datetime.now(timezone.utc)
+            await self.db.commit()
+
+        # Save items to progress_data for future use (Path B)
+        await self._save_progress_data({"items": final_items})
+
+        logger.info(
+            "Estimate from list completed",
+            task_id=self.task_id,
+            items=len(final_items),
+            matched=len(matched),
+            unmatched=len(unmatched),
+            grand_total=grand_total,
         )
 
     async def _heartbeat(self, stop_event: asyncio.Event) -> None:

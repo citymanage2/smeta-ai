@@ -1,16 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import TaskTypeSelector from '../components/TaskTypeSelector';
 import FileUpload from '../components/FileUpload';
-import { TaskType, ProjectCard } from '../types';
-import { createTask } from '../api/tasks';
+import { TaskType, ProjectCard, TASK_TYPE_LABELS } from '../types';
+import { createTask, getEstimateSources, EstimateSource } from '../api/tasks';
 import { listProjects } from '../api/projects';
 
 const TaskCreate: React.FC = () => {
   const navigate = useNavigate();
   const [taskType, setTaskType] = useState<TaskType>('LIST_FROM_GRAND');
   const [files, setFiles] = useState<File[]>([]);
+  const [name, setName] = useState('');
+  const [nameError, setNameError] = useState('');
+  const nameUserEditedRef = useRef(false);
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
@@ -21,16 +24,96 @@ const TaskCreate: React.FC = () => {
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
 
+  // Path B (ESTIMATE_FROM_LIST from existing task)
+  const [inputMode, setInputMode] = useState<'file' | 'task'>('file');
+  const [estimateSources, setEstimateSources] = useState<EstimateSource[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [selectedSourceTaskId, setSelectedSourceTaskId] = useState('');
+  const [selectedStage, setSelectedStage] = useState<number>(1);
+  const [availableStages, setAvailableStages] = useState<EstimateSource['stages']>([]);
+
   useEffect(() => {
     listProjects().then(setProjects).catch(() => {});
   }, []);
 
+  // Load estimate sources when Path B mode is selected
+  useEffect(() => {
+    if (taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task' && estimateSources.length === 0) {
+      setSourcesLoading(true);
+      getEstimateSources()
+        .then(setEstimateSources)
+        .catch(() => {})
+        .finally(() => setSourcesLoading(false));
+    }
+  }, [taskType, inputMode, estimateSources.length]);
+
+  // Reset input mode when task type changes
+  useEffect(() => {
+    if (taskType !== 'ESTIMATE_FROM_LIST') {
+      setInputMode('file');
+    }
+    setSelectedSourceTaskId('');
+    setAvailableStages([]);
+    setSelectedStage(1);
+  }, [taskType]);
+
+  // Update available stages when source task changes
+  useEffect(() => {
+    const src = estimateSources.find((s) => s.task_id === selectedSourceTaskId);
+    if (src) {
+      setAvailableStages(src.stages);
+      setSelectedStage(src.stages[0]?.stage ?? 1);
+      // Auto-fill task name from source task name
+      if (!nameUserEditedRef.current && src.name) {
+        setName(`Смета из перечня: ${src.name}`);
+      }
+    } else {
+      setAvailableStages([]);
+      setSelectedStage(1);
+    }
+  }, [selectedSourceTaskId, estimateSources]);
+
+  const buildAutoName = (type: TaskType, file: File): string => {
+    const label = TASK_TYPE_LABELS[type] ?? type;
+    const baseName = file.name.replace(/\.[^.]+$/, '');
+    return `${label}: ${baseName}`;
+  };
+
+  // Auto-fill name when files change (only if user hasn't manually edited the field)
+  useEffect(() => {
+    if (!nameUserEditedRef.current && files.length > 0) {
+      setName(buildAutoName(taskType, files[0]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
+
+  // Auto-fill name when task type changes (only if user hasn't manually edited)
+  useEffect(() => {
+    if (!nameUserEditedRef.current && files.length > 0) {
+      setName(buildAutoName(taskType, files[0]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskType]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setNameError('');
 
-    if (files.length === 0) {
+    if (!name.trim()) {
+      setNameError('Введите название задачи.');
+      return;
+    }
+
+    const isPathB = taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task';
+
+    if (!isPathB && files.length === 0) {
       setError('Добавьте хотя бы один файл для обработки.');
+      return;
+    }
+
+    if (isPathB && !selectedSourceTaskId) {
+      setError('Выберите задачу-источник.');
       return;
     }
 
@@ -41,12 +124,18 @@ const TaskCreate: React.FC = () => {
     try {
       const formData = new FormData();
       formData.append('task_type', taskType);
-      if (prompt.trim()) {
-        formData.append('prompt', prompt.trim());
+      formData.append('name', name.trim());
+      if (isPathB) {
+        formData.append('source_task_id', selectedSourceTaskId);
+        formData.append('source_stage', String(selectedStage));
+      } else {
+        if (prompt.trim()) {
+          formData.append('prompt', prompt.trim());
+        }
+        files.forEach((file) => {
+          formData.append('files', file);
+        });
       }
-      files.forEach((file) => {
-        formData.append('files', file);
-      });
 
       if (projectMode === 'existing' && selectedProjectId) {
         formData.append('project_id', selectedProjectId);
@@ -123,9 +212,152 @@ const TaskCreate: React.FC = () => {
               <TaskTypeSelector value={taskType} onChange={setTaskType} disabled={submitting} />
             </div>
 
-            {/* File upload */}
+            {/* Path B toggle — only for ESTIMATE_FROM_LIST */}
+            {taskType === 'ESTIMATE_FROM_LIST' && (
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '10px' }}>
+                  Источник перечня
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['file', 'task'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={submitting}
+                      onClick={() => setInputMode(mode)}
+                      style={{
+                        padding: '8px 18px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        border: `1.5px solid ${inputMode === mode ? '#2563eb' : '#e2e8f0'}`,
+                        borderRadius: '8px',
+                        backgroundColor: inputMode === mode ? '#eff6ff' : '#ffffff',
+                        color: inputMode === mode ? '#1d4ed8' : '#64748b',
+                        cursor: submitting ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {mode === 'file' ? '📎 Загрузить файл' : '🗂 Из существующей задачи'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Path B: source task selector */}
+            {taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task' ? (
+              <div style={{ marginBottom: '24px' }}>
+                {sourcesLoading ? (
+                  <div style={{ fontSize: '14px', color: '#64748b' }}>Загрузка задач...</div>
+                ) : estimateSources.length === 0 ? (
+                  <div style={{ padding: '12px 16px', backgroundColor: '#fef9c3', border: '1px solid #fde047', borderRadius: '8px', fontSize: '14px', color: '#854d0e' }}>
+                    Нет завершённых задач «Перечень из Гранд-сметы» или «Перечень из проекта».
+                  </div>
+                ) : (
+                  <>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>
+                      Задача-источник
+                    </label>
+                    <select
+                      value={selectedSourceTaskId}
+                      onChange={(e) => setSelectedSourceTaskId(e.target.value)}
+                      disabled={submitting}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        border: '1.5px solid #e2e8f0',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        backgroundColor: '#fff',
+                        marginBottom: '12px',
+                      }}
+                    >
+                      <option value="">— Выберите задачу —</option>
+                      {estimateSources.map((s) => (
+                        <option key={s.task_id} value={s.task_id}>
+                          {s.name || `[${s.task_type}]`} · {new Date(s.created_at).toLocaleDateString('ru-RU')}
+                        </option>
+                      ))}
+                    </select>
+
+                    {selectedSourceTaskId && availableStages.length > 0 && (
+                      <>
+                        <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>
+                          Стадия перечня
+                        </label>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {availableStages.map((st) => (
+                            <label key={st.stage} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                              <input
+                                type="radio"
+                                name="sourceStage"
+                                value={st.stage}
+                                checked={selectedStage === st.stage}
+                                onChange={() => setSelectedStage(st.stage)}
+                              />
+                              <span style={{ fontSize: '14px', color: '#374151' }}>
+                                {st.label} <span style={{ color: '#94a3b8' }}>({st.items_count} позиций)</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              /* File upload */
+              <div style={{ marginBottom: '24px' }}>
+                <FileUpload files={files} onChange={setFiles} />
+              </div>
+            )}
+
+            {/* Task name */}
             <div style={{ marginBottom: '24px' }}>
-              <FileUpload files={files} onChange={setFiles} />
+              <label
+                htmlFor="taskName"
+                style={{
+                  display: 'block',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: '#374151',
+                  marginBottom: '8px',
+                }}
+              >
+                Название задачи <span style={{ color: '#dc2626' }}>*</span>
+              </label>
+              <input
+                id="taskName"
+                type="text"
+                value={name}
+                onChange={(e) => {
+                  nameUserEditedRef.current = true;
+                  setName(e.target.value);
+                  if (e.target.value.trim()) setNameError('');
+                }}
+                placeholder="Заполняется автоматически после выбора файла"
+                disabled={submitting}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  fontSize: '14px',
+                  color: '#1e293b',
+                  border: `1.5px solid ${nameError ? '#fca5a5' : '#e2e8f0'}`,
+                  borderRadius: '8px',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  fontFamily: 'inherit',
+                  backgroundColor: submitting ? '#f1f5f9' : '#ffffff',
+                  transition: 'border-color 0.15s',
+                }}
+                onFocus={(e) => { if (!nameError) e.target.style.borderColor = '#2563eb'; }}
+                onBlur={(e) => { e.target.style.borderColor = nameError ? '#fca5a5' : '#e2e8f0'; }}
+              />
+              {nameError && (
+                <div style={{ marginTop: '4px', fontSize: '13px', color: '#dc2626' }}>
+                  {nameError}
+                </div>
+              )}
             </div>
 
             {/* Prompt */}

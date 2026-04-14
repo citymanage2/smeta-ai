@@ -79,6 +79,12 @@ def _get_mime_type(file: UploadFile) -> str:
     return file.content_type or "application/octet-stream"
 
 
+class InputFileMeta(BaseModel):
+    name: str
+    mime_type: str
+    size_bytes: int
+
+
 class TaskStatusResponse(BaseModel):
     id: str
     task_type: str
@@ -92,6 +98,7 @@ class TaskStatusResponse(BaseModel):
     updated_at: str
     name: Optional[str] = None
     progress_data: Optional[dict] = None
+    input_files: list[InputFileMeta] = []
 
 
 class TaskCreateResponse(BaseModel):
@@ -144,16 +151,24 @@ async def create_task(
     request: Request,
     background_tasks: BackgroundTasks,
     task_type: str = Form(...),
+    name: Optional[str] = Form(None),
     prompt: Optional[str] = Form(None),
     project_id: Optional[str] = Form(None),
     project_name: Optional[str] = Form(None),
+    source_task_id: Optional[str] = Form(None),
+    source_stage: Optional[int] = Form(None),
     files: list[UploadFile] = File(default=[]),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Create a new processing task with uploaded files."""
-    # Validate file count
-    if len(files) > settings.MAX_FILES_PER_REQUEST:
+    import json as _json
+
+    # Path B: ESTIMATE_FROM_LIST from existing task — skip file requirement
+    is_path_b = task_type == "ESTIMATE_FROM_LIST" and source_task_id
+
+    # Validate file count (skip for Path B)
+    if not is_path_b and len(files) > settings.MAX_FILES_PER_REQUEST:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Превышено максимальное количество файлов ({settings.MAX_FILES_PER_REQUEST})",
@@ -207,6 +222,17 @@ async def create_task(
     # Set estimation_status based on task type
     estimation_status = "unestimated" if task_type in ESTIMATE_TASK_TYPES else "not_applicable"
 
+    # For Path B: store source reference in user_prompt as JSON
+    resolved_prompt: Optional[str]
+    if is_path_b:
+        resolved_prompt = _json.dumps({
+            "path": "B",
+            "source_task_id": source_task_id,
+            "source_stage": source_stage or 1,
+        }, ensure_ascii=False)
+    else:
+        resolved_prompt = prompt
+
     # Create task record
     task = Task(
         id=str(uuid.uuid4()),
@@ -215,9 +241,10 @@ async def create_task(
         status="pending",
         input_files=input_files_meta,
         input_file_data=input_file_data,
-        user_prompt=prompt,
+        user_prompt=resolved_prompt,
         chat_history=[],
         estimation_status=estimation_status,
+        name=name.strip() if name and name.strip() else None,
     )
     db.add(task)
     await db.commit()
@@ -279,6 +306,14 @@ async def get_task_status(
         updated_at=task.updated_at.isoformat(),
         name=task.name,
         progress_data=task.progress_data,
+        input_files=[
+            InputFileMeta(
+                name=f.get("name", ""),
+                mime_type=f.get("mime_type", ""),
+                size_bytes=f.get("size_bytes", 0),
+            )
+            for f in task.input_file_data or []
+        ],
     )
 
 
@@ -340,6 +375,66 @@ async def check_completeness(
         source_task_id=body.source_task_id,
     )
     return TaskCreateResponse(task_id=task_id, status="pending")
+
+
+@router.get("/estimate-sources")
+async def get_estimate_sources(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return completed LIST_FROM_GRAND / LIST_FROM_PROJECT tasks with available stages for ESTIMATE_FROM_LIST."""
+    from sqlalchemy import desc as sa_desc
+
+    result = await db.execute(
+        select(Task)
+        .where(Task.task_type.in_(["LIST_FROM_GRAND", "LIST_FROM_PROJECT"]))
+        .where(Task.status == "completed")
+        .order_by(sa_desc(Task.created_at))
+        .limit(100)
+    )
+    source_tasks = result.scalars().all()
+
+    sources = []
+    for src in source_tasks:
+        items = (src.progress_data or {}).get("items", [])
+        if not items:
+            continue
+
+        check_type = (
+            "CHECK_LIST_COMPLETENESS"
+            if src.task_type == "LIST_FROM_GRAND"
+            else "CHECK_PROJECT_COMPLETENESS"
+        )
+        check_result = await db.execute(
+            select(Task)
+            .where(Task.user_prompt == str(src.id))
+            .where(Task.task_type == check_type)
+            .where(Task.status == "completed")
+            .order_by(sa_desc(Task.created_at))
+            .limit(1)
+        )
+        check_task = check_result.scalar_one_or_none()
+
+        stages = [{"stage": 1, "label": "Исходный перечень", "items_count": len(items)}]
+        if check_task:
+            check_items = (check_task.progress_data or {}).get("items", [])
+            if check_items:
+                stages.append({
+                    "stage": 2,
+                    "label": "После проверки полноты",
+                    "items_count": len(check_items),
+                    "check_task_id": str(check_task.id),
+                })
+
+        sources.append({
+            "task_id": str(src.id),
+            "task_type": src.task_type,
+            "name": src.name,
+            "created_at": src.created_at.isoformat(),
+            "stages": stages,
+        })
+
+    return sources
 
 
 @router.post("/check-project-completeness", response_model=TaskCreateResponse)
@@ -825,6 +920,34 @@ async def download_file_from_slot(
     )
 
 
+@router.get("/{task_id}/input-file/{file_index}")
+async def download_input_file(
+    task_id: str,
+    file_index: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Download one of the original uploaded files by zero-based index."""
+    task_row = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_row.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    file_data_list = task.input_file_data or []
+    if file_index < 0 or file_index >= len(file_data_list):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+
+    file_info = file_data_list[file_index]
+    raw = base64.b64decode(file_info.get("content_b64", ""))
+    return StreamingResponse(
+        io.BytesIO(raw),
+        media_type=file_info.get("mime_type", "application/octet-stream"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_info.get("name", "file")}"',
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Optimization endpoints
 # ---------------------------------------------------------------------------
@@ -1159,6 +1282,124 @@ async def optimize_run(
     )
 
     return {"task_id": task_id, "status": "optimization_started"}
+
+
+# ---------------------------------------------------------------------------
+# ESTIMATE_FROM_LIST — редактирование позиций и переопределение цен
+# ---------------------------------------------------------------------------
+
+class EstimateItemsUpdateRequest(BaseModel):
+    items: list[dict]
+
+
+@router.patch("/{task_id}/estimate-items")
+async def update_estimate_items(
+    task_id: str,
+    body: EstimateItemsUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Пересохранить позиции сметы: пересоздать Excel и обновить cost."""
+    from app.utils.xlsx_exporter import generate_estimate_xlsx
+    from decimal import Decimal as _Decimal
+
+    task_row = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_row.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.task_type != "ESTIMATE_FROM_LIST":
+        raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
+
+    excel_data, grand_total = generate_estimate_xlsx(body.items)
+
+    # Update or create the "estimate" slot result
+    existing_r = await db.execute(
+        select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
+    )
+    old_result = existing_r.scalar_one_or_none()
+    if old_result:
+        old_result.file_data = excel_data
+        old_result.file_name = "Смета_из_перечня.xlsx"
+    else:
+        db.add(TaskResult(
+            task_id=task_id,
+            file_name="Смета_из_перечня.xlsx",
+            mime_type=XLSX_MIME,
+            file_data=excel_data,
+            slot="estimate",
+        ))
+
+    task.cost = _Decimal(str(round(grand_total, 2)))
+    task.estimation_status = "estimated"
+    task.progress_data = {**(task.progress_data or {}), "items": body.items}
+    task.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {"task_id": task_id, "grand_total": round(grand_total, 2), "items_count": len(body.items)}
+
+
+@router.post("/{task_id}/estimate-items/{item_index}/reprice")
+async def reprice_estimate_item(
+    task_id: str,
+    item_index: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Переопределить цену одной позиции сметы через Claude (промпт 2)."""
+    from datetime import date as _date
+    from app.services.claude_service import call_claude
+    from app.utils.json_utils import extract_json
+
+    task_row = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_row.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.task_type != "ESTIMATE_FROM_LIST":
+        raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
+
+    items = (task.progress_data or {}).get("items", [])
+    if item_index < 0 or item_index >= len(items):
+        raise HTTPException(status_code=404, detail="Позиция не найдена")
+
+    item = items[item_index]
+    current_date = _date.today().strftime("%d.%m.%Y")
+
+    prompt_text = (
+        "Ты — эксперт по строительному сметному делу в России.\n\n"
+        "Найди актуальную рыночную цену для одной позиции.\n\n"
+        f"Текущая дата: {current_date}\n"
+        "Регион: г. Екатеринбург, Свердловская область\n\n"
+        "Позиция:\n"
+        f"- Тип: {item.get('type', '')}\n"
+        f"- Наименование: {item.get('name', '')}\n"
+        f"- Единица измерения: {item.get('unit', '')}\n\n"
+        "Инструкция:\n"
+        "1. Найди 3 актуальных цены в г. Екатеринбург\n"
+        "2. Поставь среднюю из трёх\n"
+        "3. Перечисли все 3 источника с ценами\n\n"
+        "Верни СТРОГО в формате JSON, без markdown:\n"
+        '{"work_price": число или null, "material_price": число или null, '
+        '"sources": "Источник 1: цена; Источник 2: цена; Источник 3: цена", '
+        '"notes": "Примечание по НДС"}'
+    )
+
+    try:
+        response_text = await call_claude(
+            messages=[{"role": "user", "content": prompt_text}],
+            use_web_search=True,
+            processing_timeout=120.0,
+        )
+        data = extract_json(response_text)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ошибка при обращении к Claude: {e}")
+
+    return {
+        "item_index": item_index,
+        "work_price": data.get("work_price"),
+        "material_price": data.get("material_price"),
+        "sources": data.get("sources", ""),
+        "notes": data.get("notes", ""),
+    }
 
 
 # ---------------------------------------------------------------------------
