@@ -7,6 +7,9 @@ import { updateTask } from '../api/tasks';
 
 const SIDEBAR_WIDTH = 260;
 
+// Tasks that are sub-tasks of other tasks — show only inside parent task page, not in sidebar
+const HIDDEN_TASK_TYPES = new Set(['CHECK_LIST_COMPLETENESS', 'CHECK_PROJECT_COMPLETENESS']);
+
 const STATUS_DOT_COLOR: Record<string, string> = {
   pending: '#f59e0b',
   processing: '#3b82f6',
@@ -57,7 +60,7 @@ const ProjectsSidebar: React.FC = () => {
         getUnassignedTasks(),
       ]);
       setProjects(projectsData);
-      setUnassignedTasks(unassigned);
+      setUnassignedTasks(unassigned.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)));
     } catch {
       setError('Ошибка загрузки');
     } finally {
@@ -89,7 +92,7 @@ const ProjectsSidebar: React.FC = () => {
       setLoadingTasks(prev => new Set(prev).add(id));
       try {
         const detail = await getProject(id);
-        setProjectTasks(prev => ({ ...prev, [id]: detail.tasks }));
+        setProjectTasks(prev => ({ ...prev, [id]: detail.tasks.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)) }));
       } catch {
         // ignore
       } finally {

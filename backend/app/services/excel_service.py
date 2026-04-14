@@ -13,12 +13,37 @@ BOLD_FONT = Font(bold=True, size=11)
 NORMAL_FONT = Font(size=11)
 TOTAL_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
 
+# Row highlight fills
+FILL_ADDED    = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # новая позиция
+FILL_ADJUSTED = PatternFill(start_color="CFE2F3", end_color="CFE2F3", fill_type="solid")  # скорректированный объём
+FILL_UNKNOWN  = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # объём неизвестен
+
 THIN_BORDER = Border(
     left=Side(style="thin"),
     right=Side(style="thin"),
     top=Side(style="thin"),
     bottom=Side(style="thin"),
 )
+
+
+def _row_fill(item: dict) -> Optional[PatternFill]:
+    """Return fill for a data row based on item status."""
+    notes = str(item.get("notes") or "").lower()
+    qty = item.get("quantity")
+    if qty is None:
+        return FILL_UNKNOWN
+    if "добавлено" in notes:
+        return FILL_ADDED
+    if "скорректирован" in notes:
+        return FILL_ADJUSTED
+    return None
+
+
+def _apply_row_fill(ws, row: int, col_count: int, fill: Optional[PatternFill]) -> None:
+    if fill is None:
+        return
+    for col in range(1, col_count + 1):
+        ws.cell(row=row, column=col).fill = fill
 
 
 def _style_header_row(ws, row: int, col_count: int) -> None:
@@ -78,6 +103,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_all.cell(row=row, column=5, value=qty)
         ws_all.cell(row=row, column=6, value=item.get("notes", "") or "")
         _style_data_row(ws_all, row, len(headers_all))
+        _apply_row_fill(ws_all, row, len(headers_all), _row_fill(item))
 
     _auto_fit_columns(ws_all)
     ws_all.freeze_panes = "A2"
@@ -98,6 +124,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_works.cell(row=row, column=3, value=item.get("unit", ""))
         ws_works.cell(row=row, column=4, value=item.get("quantity"))
         _style_data_row(ws_works, row, len(headers_works))
+        _apply_row_fill(ws_works, row, len(headers_works), _row_fill(item))
 
     _auto_fit_columns(ws_works)
     ws_works.freeze_panes = "A2"
@@ -118,6 +145,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_mats.cell(row=row, column=3, value=item.get("unit", ""))
         ws_mats.cell(row=row, column=4, value=item.get("quantity"))
         _style_data_row(ws_mats, row, len(headers_mats))
+        _apply_row_fill(ws_mats, row, len(headers_mats), _row_fill(item))
 
     _auto_fit_columns(ws_mats)
     ws_mats.freeze_panes = "A2"
@@ -176,6 +204,7 @@ def generate_list_project(items: list, changes_summary: Optional[str] = None) ->
         ws_all.cell(row=row, column=6, value=item.get("quantity"))
         ws_all.cell(row=row, column=7, value=item.get("notes", ""))
         _style_data_row(ws_all, row, len(headers_all))
+        _apply_row_fill(ws_all, row, len(headers_all), _row_fill(item))
 
     _auto_fit_columns(ws_all)
     ws_all.freeze_panes = "A2"
@@ -198,6 +227,7 @@ def generate_list_project(items: list, changes_summary: Optional[str] = None) ->
         ws_works.cell(row=row, column=5, value=item.get("quantity"))
         ws_works.cell(row=row, column=6, value=item.get("notes", ""))
         _style_data_row(ws_works, row, len(headers_works))
+        _apply_row_fill(ws_works, row, len(headers_works), _row_fill(item))
 
     _auto_fit_columns(ws_works)
     ws_works.freeze_panes = "A2"
@@ -220,6 +250,7 @@ def generate_list_project(items: list, changes_summary: Optional[str] = None) ->
         ws_mats.cell(row=row, column=5, value=item.get("quantity"))
         ws_mats.cell(row=row, column=6, value=item.get("notes", ""))
         _style_data_row(ws_mats, row, len(headers_mats))
+        _apply_row_fill(ws_mats, row, len(headers_mats), _row_fill(item))
 
     _auto_fit_columns(ws_mats)
     ws_mats.freeze_panes = "A2"
