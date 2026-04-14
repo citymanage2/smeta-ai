@@ -38,6 +38,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
   const [progressMessage, setProgressMessage] = useState('Начинаем оптимизацию...');
   const [runError, setRunError] = useState('');
   const [timedOut, setTimedOut] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
   const TIMEOUT_MS = 15 * 60 * 1000;
@@ -72,8 +73,8 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
       setTotalAnalyzed(data.total_analyzed);
       setCoveragePct(data.coverage_pct);
       setStep(2);
-    } catch (e: any) {
-      setAnalyzeError(e?.response?.data?.detail ?? 'Ошибка анализа');
+    } catch {
+      setAnalyzeError('Не удалось проанализировать позиции. Попробуйте ещё раз.');
     } finally {
       setAnalyzing(false);
     }
@@ -109,12 +110,13 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
           // keep polling
         }
       }, 2000);
-    } catch (e: any) {
-      setRunError(e?.response?.data?.detail ?? 'Ошибка запуска оптимизации');
+    } catch {
+      setRunError('Не удалось запустить оптимизацию. Попробуйте ещё раз.');
     }
   }
 
   async function handleDownload() {
+    setDownloadError('');
     try {
       const response = await apiClient.get(`/tasks/${taskId}/files/optimized/download`, {
         responseType: 'blob',
@@ -126,7 +128,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
       a.click();
       URL.revokeObjectURL(url);
     } catch {
-      // silently ignore download errors
+      setDownloadError('Не удалось скачать файл. Попробуйте ещё раз.');
     }
   }
 
@@ -362,6 +364,9 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
                 Закрыть
               </button>
             </div>
+            {downloadError && (
+              <p style={{ color: '#dc2626', fontSize: '13px', marginTop: '10px' }}>{downloadError}</p>
+            )}
           </div>
         )}
       </div>

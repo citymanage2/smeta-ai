@@ -34,7 +34,7 @@ const Projects: React.FC = () => {
       const data = await listProjects();
       setProjects(data);
     } catch {
-      setError('Ошибка при загрузке проектов');
+      setError('Не удалось загрузить проекты. Проверьте соединение и обновите страницу.');
     } finally {
       setLoading(false);
     }

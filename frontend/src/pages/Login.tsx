@@ -25,9 +25,11 @@ const Login: React.FC = () => {
         navigate('/task/create');
       }
     } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { detail?: string }; status?: number } };
+      const axiosError = err as { response?: { data?: { detail?: string }; status?: number }; request?: unknown };
       if (axiosError.response?.status === 401) {
         setError('Неверный пароль. Попробуйте ещё раз.');
+      } else if (axiosError.request && !axiosError.response) {
+        setError('Нет соединения с сервером. Проверьте интернет и попробуйте ещё раз.');
       } else {
         setError('Ошибка сервера. Попробуйте позже.');
       }

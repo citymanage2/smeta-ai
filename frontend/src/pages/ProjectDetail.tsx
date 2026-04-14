@@ -52,6 +52,7 @@ function InlineEditName({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const [saveError, setSaveError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -64,13 +65,21 @@ function InlineEditName({
   async function save() {
     const trimmed = draft.trim();
     if (trimmed && trimmed !== value) {
-      await onSave(trimmed);
+      try {
+        await onSave(trimmed);
+        setSaveError('');
+        setEditing(false);
+      } catch {
+        setSaveError('Не удалось сохранить имя. Попробуйте ещё раз.');
+      }
+    } else {
+      setEditing(false);
     }
-    setEditing(false);
   }
 
   function cancel() {
     setDraft(value);
+    setSaveError('');
     setEditing(false);
   }
 
@@ -81,27 +90,32 @@ function InlineEditName({
 
   if (editing) {
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-        <input
-          ref={inputRef}
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          style={{
-            border: '1px solid #93c5fd',
-            borderRadius: '6px',
-            padding: '4px 8px',
-            outline: 'none',
-            ...inputStyle,
-          }}
-        />
-        <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={save}>
-          <Check size={iconSize} />
-        </button>
-        <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={cancel}>
-          <X size={iconSize} />
-        </button>
-      </span>
+      <>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={handleKeyDown}
+            style={{
+              border: '1px solid #93c5fd',
+              borderRadius: '6px',
+              padding: '4px 8px',
+              outline: 'none',
+              ...inputStyle,
+            }}
+          />
+          <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={save}>
+            <Check size={iconSize} />
+          </button>
+          <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={cancel}>
+            <X size={iconSize} />
+          </button>
+        </span>
+        {saveError && (
+          <div style={{ fontSize: '12px', color: '#dc2626', marginTop: '4px' }}>{saveError}</div>
+        )}
+      </>
     );
   }
 
@@ -135,6 +149,7 @@ function SlotRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fileName ?? '');
+  const [renameError, setRenameError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -147,18 +162,27 @@ function SlotRow({
   async function saveRename() {
     const trimmed = draft.trim();
     if (trimmed && trimmed !== fileName && onRename) {
-      await onRename(trimmed);
+      try {
+        await onRename(trimmed);
+        setRenameError('');
+        setEditing(false);
+      } catch {
+        setRenameError('Не удалось переименовать файл. Попробуйте ещё раз.');
+      }
+    } else {
+      setEditing(false);
     }
-    setEditing(false);
   }
 
   function cancelRename() {
     setDraft(fileName ?? '');
+    setRenameError('');
     setEditing(false);
   }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
+    <div style={{ fontSize: '12px', color: '#64748b' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
       <span style={{ fontWeight: 500, color: '#94a3b8', minWidth: '100px' }}>{label}:</span>
       {fileName ? (
         <>
@@ -220,6 +244,10 @@ function SlotRow({
           )}
         </>
       )}
+      </div>
+      {renameError && (
+        <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '2px', paddingLeft: '106px' }}>{renameError}</div>
+      )}
     </div>
   );
 }
@@ -249,8 +277,15 @@ const ProjectDetailPage: React.FC = () => {
       const data = await getProject(projectId!);
       setProject(data);
       setEditDesc(data.description ?? '');
-    } catch {
-      setError('Проект не найден');
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { status?: number }; request?: unknown };
+      if (axiosErr.response?.status === 404) {
+        setError('Проект не найден. Возможно, он был удалён.');
+      } else if (axiosErr.request && !axiosErr.response) {
+        setError('Не удалось загрузить проект. Проверьте соединение и обновите страницу.');
+      } else {
+        setError('Не удалось загрузить проект. Попробуйте обновить страницу.');
+      }
     } finally {
       setLoading(false);
     }
@@ -271,7 +306,7 @@ const ProjectDetailPage: React.FC = () => {
       setProject(prev => prev ? { ...prev, description: updated.description } : prev);
       setEditingDesc(false);
     } catch {
-      setError('Ошибка при сохранении');
+      setError('Не удалось сохранить описание. Попробуйте ещё раз.');
     } finally {
       setSaving(false);
     }
