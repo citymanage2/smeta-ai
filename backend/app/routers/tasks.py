@@ -435,7 +435,7 @@ async def resume_task(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Resume a failed LIST_FROM_GRAND task from the last saved chunk."""
+    """Resume a failed resumable task from the last saved chunk."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
 
@@ -445,16 +445,17 @@ async def resume_task(
             detail="Задача не найдена",
         )
 
-    if task.status != "failed":
+    if task.status not in ("failed", "cancelled"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Возобновление невозможно: задача в статусе «{task.status}»",
         )
 
-    if task.task_type.upper() != "LIST_FROM_GRAND":
+    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"}
+    if task.task_type.upper() not in RESUMABLE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Возобновление поддерживается только для задач «Перечень из Гранд-сметы»",
+            detail="Возобновление не поддерживается для данного типа задачи",
         )
 
     progress_data = task.progress_data or {}

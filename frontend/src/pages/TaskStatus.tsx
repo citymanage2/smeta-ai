@@ -78,6 +78,7 @@ const TaskStatusPage: React.FC = () => {
   const [taskName, setTaskName] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [editNameDraft, setEditNameDraft] = useState('');
+  const [editNameError, setEditNameError] = useState('');
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   // Resume state
@@ -88,6 +89,9 @@ const TaskStatusPage: React.FC = () => {
   const [checkTask, setCheckTask] = useState<TaskStatusResponse | null>(null);
   const [checkResults, setCheckResults] = useState<TaskResult[]>([]);
   const [checkStarting, setCheckStarting] = useState(false);
+  const [checkCancelling, setCheckCancelling] = useState(false);
+  const [checkResuming, setCheckResuming] = useState(false);
+  const [checkProgressLog, setCheckProgressLog] = useState<string[]>([]);
   const checkPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Check project completeness state (LIST_FROM_PROJECT)
@@ -95,6 +99,9 @@ const TaskStatusPage: React.FC = () => {
   const [checkProjectTask, setCheckProjectTask] = useState<TaskStatusResponse | null>(null);
   const [checkProjectResults, setCheckProjectResults] = useState<TaskResult[]>([]);
   const [checkProjectStarting, setCheckProjectStarting] = useState(false);
+  const [checkProjectCancelling, setCheckProjectCancelling] = useState(false);
+  const [checkProjectResuming, setCheckProjectResuming] = useState(false);
+  const [checkProjectProgressLog, setCheckProjectProgressLog] = useState<string[]>([]);
   const checkProjectPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -120,15 +127,24 @@ const TaskStatusPage: React.FC = () => {
     try {
       const data = await getTaskStatus(cid);
       setCheckTask(data);
+      if (data.progress_message) {
+        setCheckProgressLog((prev) => {
+          const last = prev[prev.length - 1];
+          return last === data.progress_message ? prev : [...prev, data.progress_message!];
+        });
+      }
       if (data.status === 'completed') {
         const res = await getTaskResults(cid);
         setCheckResults(res);
         stopCheckPolling();
       } else if (data.status === 'failed' || data.status === 'cancelled') {
+        const res = await getTaskResults(cid);
+        setCheckResults(res);
         stopCheckPolling();
       }
     } catch {
       stopCheckPolling();
+      setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
     }
   }, [stopCheckPolling]);
 
@@ -158,15 +174,24 @@ const TaskStatusPage: React.FC = () => {
     try {
       const data = await getTaskStatus(cid);
       setCheckProjectTask(data);
+      if (data.progress_message) {
+        setCheckProjectProgressLog((prev) => {
+          const last = prev[prev.length - 1];
+          return last === data.progress_message ? prev : [...prev, data.progress_message!];
+        });
+      }
       if (data.status === 'completed') {
         const res = await getTaskResults(cid);
         setCheckProjectResults(res);
         stopCheckProjectPolling();
       } else if (data.status === 'failed' || data.status === 'cancelled') {
+        const res = await getTaskResults(cid);
+        setCheckProjectResults(res);
         stopCheckProjectPolling();
       }
     } catch {
       stopCheckProjectPolling();
+      setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
     }
   }, [stopCheckProjectPolling]);
 
@@ -185,6 +210,66 @@ const TaskStatusPage: React.FC = () => {
       setError('Не удалось запустить проверку полноты.');
     } finally {
       setCheckProjectStarting(false);
+    }
+  };
+
+  const handleCheckCancel = async () => {
+    if (!checkTaskId || checkCancelling) return;
+    setCheckCancelling(true);
+    try {
+      await cancelTask(checkTaskId);
+      setCheckTask((prev) => prev ? { ...prev, status: 'cancelled' } : prev);
+      stopCheckPolling();
+    } catch {
+      setError('Не удалось остановить проверку.');
+    } finally {
+      setCheckCancelling(false);
+    }
+  };
+
+  const handleCheckResume = async () => {
+    if (!checkTaskId || checkResuming) return;
+    setCheckResuming(true);
+    try {
+      await resumeTask(checkTaskId);
+      setCheckTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
+      setCheckProgressLog([]);
+      fetchCheckStatus(checkTaskId);
+      checkPollingRef.current = setInterval(() => fetchCheckStatus(checkTaskId), 3000);
+    } catch {
+      setError('Не удалось возобновить проверку.');
+    } finally {
+      setCheckResuming(false);
+    }
+  };
+
+  const handleCheckProjectCancel = async () => {
+    if (!checkProjectTaskId || checkProjectCancelling) return;
+    setCheckProjectCancelling(true);
+    try {
+      await cancelTask(checkProjectTaskId);
+      setCheckProjectTask((prev) => prev ? { ...prev, status: 'cancelled' } : prev);
+      stopCheckProjectPolling();
+    } catch {
+      setError('Не удалось остановить проверку.');
+    } finally {
+      setCheckProjectCancelling(false);
+    }
+  };
+
+  const handleCheckProjectResume = async () => {
+    if (!checkProjectTaskId || checkProjectResuming) return;
+    setCheckProjectResuming(true);
+    try {
+      await resumeTask(checkProjectTaskId);
+      setCheckProjectTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
+      setCheckProjectProgressLog([]);
+      fetchCheckProjectStatus(checkProjectTaskId);
+      checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(checkProjectTaskId), 3000);
+    } catch {
+      setError('Не удалось возобновить проверку.');
+    } finally {
+      setCheckProjectResuming(false);
     }
   };
 
@@ -264,16 +349,12 @@ const TaskStatusPage: React.FC = () => {
         }
       }
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { status?: number; data?: { detail?: string } } };
-      const status = axiosErr.response?.status;
-      const detail = axiosErr.response?.data?.detail;
-      if (status === 404) {
-        setError(`Задача не найдена (ID: ${taskId}). Возможно, она была удалена.`);
+      const axiosErr = err as { response?: { status?: number }; request?: unknown };
+      if (axiosErr.response?.status === 404) {
+        setError('Задача не найдена. Возможно, она была удалена.');
         stopTimers();
-      } else if (detail) {
-        setError(`Ошибка: ${detail}`);
       } else {
-        setError('Не удалось получить статус задачи. Проверьте подключение к серверу.');
+        setError('Не удалось обновить статус. Попробуйте обновить страницу.');
       }
     }
   }, [taskId, stopTimers]);
@@ -423,6 +504,7 @@ const TaskStatusPage: React.FC = () => {
                   Название задачи
                 </div>
                 {editingName ? (
+                  <>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                     <input
                       ref={nameInputRef}
@@ -433,12 +515,19 @@ const TaskStatusPage: React.FC = () => {
                           e.preventDefault();
                           const trimmed = editNameDraft.trim();
                           if (trimmed && taskId) {
-                            await updateTask(taskId, { name: trimmed });
-                            setTaskName(trimmed);
+                            try {
+                              await updateTask(taskId, { name: trimmed });
+                              setTaskName(trimmed);
+                              setEditNameError('');
+                              setEditingName(false);
+                            } catch {
+                              setEditNameError('Не удалось сохранить имя. Попробуйте ещё раз.');
+                            }
+                          } else {
+                            setEditingName(false);
                           }
-                          setEditingName(false);
                         }
-                        if (e.key === 'Escape') setEditingName(false);
+                        if (e.key === 'Escape') { setEditingName(false); setEditNameError(''); }
                       }}
                       autoFocus
                       style={{ border: '1px solid #93c5fd', borderRadius: '6px', padding: '5px 10px', outline: 'none', fontSize: '16px', fontWeight: 600, width: '280px' }}
@@ -447,22 +536,33 @@ const TaskStatusPage: React.FC = () => {
                       onClick={async () => {
                         const trimmed = editNameDraft.trim();
                         if (trimmed && taskId) {
-                          await updateTask(taskId, { name: trimmed });
-                          setTaskName(trimmed);
+                          try {
+                            await updateTask(taskId, { name: trimmed });
+                            setTaskName(trimmed);
+                            setEditNameError('');
+                            setEditingName(false);
+                          } catch {
+                            setEditNameError('Не удалось сохранить имя. Попробуйте ещё раз.');
+                          }
+                        } else {
+                          setEditingName(false);
                         }
-                        setEditingName(false);
                       }}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#16a34a', padding: '2px', display: 'inline-flex' }}
                     >
                       <Check size={18} />
                     </button>
                     <button
-                      onClick={() => setEditingName(false)}
+                      onClick={() => { setEditingName(false); setEditNameError(''); }}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', padding: '2px', display: 'inline-flex' }}
                     >
                       <X size={18} />
                     </button>
                   </div>
+                  {editNameError && (
+                    <div style={{ fontSize: '12px', color: '#dc2626', marginTop: '4px' }}>{editNameError}</div>
+                  )}
+                  </>
                 ) : (
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '18px', fontWeight: 700, color: '#1e293b' }}>
@@ -931,59 +1031,100 @@ const TaskStatusPage: React.FC = () => {
               </button>
             ) : (
               <>
-                {/* Check task inline progress */}
+                {/* Running: progress log + stop */}
                 {checkTask && (checkTask.status === 'pending' || checkTask.status === 'processing') && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                    <Spinner />
-                    <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500 }}>
-                      {checkTask.progress_message || 'Проверка запущена...'}
-                    </span>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+                      <Spinner />
+                      <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500, flex: 1 }}>
+                        {checkTask.progress_message || 'Проверка запущена...'}
+                      </span>
+                      <button
+                        onClick={handleCheckCancel}
+                        disabled={checkCancelling}
+                        style={{ padding: '5px 14px', backgroundColor: checkCancelling ? '#fca5a5' : '#dc2626', color: '#fff', border: 'none', borderRadius: '16px', cursor: checkCancelling ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}
+                      >
+                        {checkCancelling ? 'Остановка...' : '⏹ Стоп'}
+                      </button>
+                    </div>
+                    {checkProgressLog.length > 0 && (
+                      <div style={{ padding: '12px 14px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px' }}>
+                        {checkProgressLog.map((msg, i) => {
+                          const isLast = i === checkProgressLog.length - 1;
+                          return (
+                            <div key={i}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: i < checkProgressLog.length - 1 ? '6px' : 0, opacity: isLast ? 1 : 0.5 }}>
+                                <span style={{ fontSize: '13px', flexShrink: 0 }}>{isLast ? '⏳' : '✓'}</span>
+                                <span style={{ fontSize: '13px', color: isLast ? '#0c4a6e' : '#64748b', fontWeight: isLast ? 500 : 400 }}>{msg}</span>
+                              </div>
+                              {isLast && <BatchProgressBar message={msg} />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
+
+                {/* Cancelled: partial results + resume */}
+                {checkTask && checkTask.status === 'cancelled' && (
+                  <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '10px' }}>
+                      Проверка остановлена. Обработано {String(checkTask.progress_data?.chunks_done ?? '?')} из {String(checkTask.progress_data?.total_chunks ?? '?')} частей.
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {checkResults.filter((r) => r.slot.startsWith('partial')).map((r) => (
+                        <button key={r.file_id} onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                          style={{ alignSelf: 'flex-start', padding: '7px 14px', backgroundColor: '#fff', color: '#334155', border: '1.5px solid #cbd5e1', borderRadius: '8px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                          {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
+                        </button>
+                      ))}
+                      <button onClick={handleCheckResume} disabled={checkResuming}
+                        style={{ alignSelf: 'flex-start', padding: '7px 18px', backgroundColor: checkResuming ? '#fca5a5' : '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: checkResuming ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}>
+                        {checkResuming ? 'Запуск...' : '▶ Продолжить'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Failed: error + resume if has progress */}
                 {checkTask && checkTask.status === 'failed' && (
-                  <div style={{ fontSize: '14px', color: '#dc2626', marginBottom: '10px' }}>
-                    Проверка завершилась с ошибкой: {checkTask.error_message}
+                  <div style={{ padding: '12px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '13px', color: '#7f1d1d', marginBottom: '10px' }}>
+                      Ошибка: {checkTask.error_message}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {checkResults.filter((r) => r.slot.startsWith('partial')).map((r) => (
+                        <button key={r.file_id} onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                          style={{ alignSelf: 'flex-start', padding: '7px 14px', backgroundColor: '#fff', color: '#334155', border: '1.5px solid #fecaca', borderRadius: '8px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                          {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
+                        </button>
+                      ))}
+                      {checkTask.progress_data?.chunks_done != null && (
+                        <button onClick={handleCheckResume} disabled={checkResuming}
+                          style={{ alignSelf: 'flex-start', padding: '7px 18px', backgroundColor: checkResuming ? '#fca5a5' : '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: checkResuming ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}>
+                          {checkResuming ? 'Запуск...' : '▶ Продолжить'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
-                {checkResults.length > 0 && (
+
+                {/* Completed */}
+                {checkTask && checkTask.status === 'completed' && checkResults.length > 0 && (
                   <div>
                     <div style={{ fontSize: '14px', fontWeight: 600, color: '#15803d', marginBottom: '10px' }}>
                       Проверка завершена
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {checkResults.map((r) => (
-                        <div
-                          key={r.file_id}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '10px 14px',
-                            backgroundColor: '#f0fdf4',
-                            border: '1px solid #86efac',
-                            borderRadius: '8px',
-                          }}
-                        >
+                        <div key={r.file_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', backgroundColor: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span style={{ fontSize: '18px' }}>📋</span>
-                            <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
-                              {r.file_name}
-                            </span>
+                            <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>{r.file_name}</span>
                           </div>
-                          <button
-                            onClick={() => handleDownload(r.file_id, r.file_name)}
-                            disabled={downloading === r.file_id}
-                            style={{
-                              padding: '7px 16px',
-                              backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a',
-                              color: '#ffffff',
-                              border: 'none',
-                              borderRadius: '6px',
-                              cursor: downloading === r.file_id ? 'not-allowed' : 'pointer',
-                              fontSize: '13px',
-                              fontWeight: 600,
-                            }}
-                          >
+                          <button onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                            style={{ padding: '7px 16px', backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
                             {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
                           </button>
                         </div>
@@ -1032,58 +1173,100 @@ const TaskStatusPage: React.FC = () => {
               </button>
             ) : (
               <>
+                {/* Running: progress log + stop */}
                 {checkProjectTask && (checkProjectTask.status === 'pending' || checkProjectTask.status === 'processing') && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                    <Spinner />
-                    <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500 }}>
-                      {checkProjectTask.progress_message || 'Проверка запущена...'}
-                    </span>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+                      <Spinner />
+                      <span style={{ fontSize: '14px', color: '#0369a1', fontWeight: 500, flex: 1 }}>
+                        {checkProjectTask.progress_message || 'Проверка запущена...'}
+                      </span>
+                      <button
+                        onClick={handleCheckProjectCancel}
+                        disabled={checkProjectCancelling}
+                        style={{ padding: '5px 14px', backgroundColor: checkProjectCancelling ? '#fca5a5' : '#dc2626', color: '#fff', border: 'none', borderRadius: '16px', cursor: checkProjectCancelling ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}
+                      >
+                        {checkProjectCancelling ? 'Остановка...' : '⏹ Стоп'}
+                      </button>
+                    </div>
+                    {checkProjectProgressLog.length > 0 && (
+                      <div style={{ padding: '12px 14px', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px' }}>
+                        {checkProjectProgressLog.map((msg, i) => {
+                          const isLast = i === checkProjectProgressLog.length - 1;
+                          return (
+                            <div key={i}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: i < checkProjectProgressLog.length - 1 ? '6px' : 0, opacity: isLast ? 1 : 0.5 }}>
+                                <span style={{ fontSize: '13px', flexShrink: 0 }}>{isLast ? '⏳' : '✓'}</span>
+                                <span style={{ fontSize: '13px', color: isLast ? '#0c4a6e' : '#64748b', fontWeight: isLast ? 500 : 400 }}>{msg}</span>
+                              </div>
+                              {isLast && <BatchProgressBar message={msg} />}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
+
+                {/* Cancelled: partial results + resume */}
+                {checkProjectTask && checkProjectTask.status === 'cancelled' && (
+                  <div style={{ padding: '12px 14px', backgroundColor: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '10px' }}>
+                      Проверка остановлена. Обработано {String(checkProjectTask.progress_data?.chunks_done ?? '?')} из {String(checkProjectTask.progress_data?.total_chunks ?? '?')} частей.
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {checkProjectResults.filter((r) => r.slot.startsWith('partial')).map((r) => (
+                        <button key={r.file_id} onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                          style={{ alignSelf: 'flex-start', padding: '7px 14px', backgroundColor: '#fff', color: '#334155', border: '1.5px solid #cbd5e1', borderRadius: '8px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                          {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
+                        </button>
+                      ))}
+                      <button onClick={handleCheckProjectResume} disabled={checkProjectResuming}
+                        style={{ alignSelf: 'flex-start', padding: '7px 18px', backgroundColor: checkProjectResuming ? '#fca5a5' : '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: checkProjectResuming ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}>
+                        {checkProjectResuming ? 'Запуск...' : '▶ Продолжить'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Failed: error + resume if has progress */}
                 {checkProjectTask && checkProjectTask.status === 'failed' && (
-                  <div style={{ fontSize: '14px', color: '#dc2626', marginBottom: '10px' }}>
-                    Проверка завершилась с ошибкой: {checkProjectTask.error_message}
+                  <div style={{ padding: '12px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', marginBottom: '10px' }}>
+                    <div style={{ fontSize: '13px', color: '#7f1d1d', marginBottom: '10px' }}>
+                      Ошибка: {checkProjectTask.error_message}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {checkProjectResults.filter((r) => r.slot.startsWith('partial')).map((r) => (
+                        <button key={r.file_id} onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                          style={{ alignSelf: 'flex-start', padding: '7px 14px', backgroundColor: '#fff', color: '#334155', border: '1.5px solid #fecaca', borderRadius: '8px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                          {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
+                        </button>
+                      ))}
+                      {checkProjectTask.progress_data?.chunks_done != null && (
+                        <button onClick={handleCheckProjectResume} disabled={checkProjectResuming}
+                          style={{ alignSelf: 'flex-start', padding: '7px 18px', backgroundColor: checkProjectResuming ? '#fca5a5' : '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: checkProjectResuming ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700 }}>
+                          {checkProjectResuming ? 'Запуск...' : '▶ Продолжить'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
-                {checkProjectResults.length > 0 && (
+
+                {/* Completed */}
+                {checkProjectTask && checkProjectTask.status === 'completed' && checkProjectResults.length > 0 && (
                   <div>
                     <div style={{ fontSize: '14px', fontWeight: 600, color: '#15803d', marginBottom: '10px' }}>
                       Проверка завершена
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {checkProjectResults.map((r) => (
-                        <div
-                          key={r.file_id}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '10px 14px',
-                            backgroundColor: '#f0fdf4',
-                            border: '1px solid #86efac',
-                            borderRadius: '8px',
-                          }}
-                        >
+                        <div key={r.file_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', backgroundColor: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span style={{ fontSize: '18px' }}>📋</span>
-                            <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
-                              {r.file_name}
-                            </span>
+                            <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>{r.file_name}</span>
                           </div>
-                          <button
-                            onClick={() => handleDownload(r.file_id, r.file_name)}
-                            disabled={downloading === r.file_id}
-                            style={{
-                              padding: '7px 16px',
-                              backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a',
-                              color: '#ffffff',
-                              border: 'none',
-                              borderRadius: '6px',
-                              cursor: downloading === r.file_id ? 'not-allowed' : 'pointer',
-                              fontSize: '13px',
-                              fontWeight: 600,
-                            }}
-                          >
+                          <button onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                            style={{ padding: '7px 16px', backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
                             {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
                           </button>
                         </div>

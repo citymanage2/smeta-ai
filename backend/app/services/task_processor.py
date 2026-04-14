@@ -613,30 +613,62 @@ class TaskProcessor:
 
         await self.update_progress(f"Загружено {len(items)} позиций. Начинаем проверку по ГЭСН...")
 
-        if len(items) <= 300:
-            chunks = [items]
-        else:
-            chunks = _chunk_by_work_boundaries(items)
+        progress_data = task.progress_data or {}
+        start_chunk = progress_data.get("chunks_done", 0)
+        all_items: list = list(progress_data.get("items", []))
+        changes_summary_parts: list = list(progress_data.get("summaries", []))
 
+        chunks = _chunk_by_work_boundaries(items, max_chunk_size=50)
         total_chunks = len(chunks)
-        all_items: list = []
-        changes_summary_parts: list = []
 
-        for i, chunk in enumerate(chunks):
-            await self._check_cancelled()
+        for i in range(start_chunk, total_chunks):
+            try:
+                await self._check_cancelled()
+            except TaskCancelledError:
+                if all_items:
+                    partial_excel = generate_list(all_items)
+                    await self.save_result(
+                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
+                        _XLSX_MIME,
+                        partial_excel,
+                        slot=f"partial_{i}",
+                    )
+                    await self.update_progress(f"Остановлено на части {i} из {total_chunks}. Частичный результат сохранён.")
+                raise
+
             if total_chunks > 1:
                 await self.update_progress(f"Проверка части {i + 1} из {total_chunks}...")
             else:
                 await self.update_progress("Проверяем полноту материалов по ГЭСН...")
 
-            chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+            chunk_json = json.dumps({"items": chunks[i]}, ensure_ascii=False, indent=2)
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
 
-            data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE)
+            try:
+                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=600.0)
+            except Exception as chunk_error:
+                if all_items:
+                    partial_excel = generate_list(all_items)
+                    await self.save_result(
+                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
+                        _XLSX_MIME,
+                        partial_excel,
+                        slot=f"partial_{i}",
+                    )
+                    await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
+                raise
+
             all_items.extend(data.get("items", []))
             summary = data.get("changes_summary", "")
             if summary:
                 changes_summary_parts.append(summary)
+
+            await self._save_progress_data({
+                "chunks_done": i + 1,
+                "total_chunks": total_chunks,
+                "items": all_items,
+                "summaries": changes_summary_parts,
+            })
 
         changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
 
@@ -706,30 +738,62 @@ class TaskProcessor:
 
         await self.update_progress(f"Загружено {len(items)} позиций. Начинаем проверку по ГЭСН...")
 
-        if len(items) <= 300:
-            chunks = [items]
-        else:
-            chunks = _chunk_by_work_boundaries(items)
+        progress_data = task.progress_data or {}
+        start_chunk = progress_data.get("chunks_done", 0)
+        all_items: list = list(progress_data.get("items", []))
+        changes_summary_parts: list = list(progress_data.get("summaries", []))
 
+        chunks = _chunk_by_work_boundaries(items, max_chunk_size=50)
         total_chunks = len(chunks)
-        all_items: list = []
-        changes_summary_parts: list = []
 
-        for i, chunk in enumerate(chunks):
-            await self._check_cancelled()
+        for i in range(start_chunk, total_chunks):
+            try:
+                await self._check_cancelled()
+            except TaskCancelledError:
+                if all_items:
+                    partial_excel = generate_list(all_items)
+                    await self.save_result(
+                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
+                        _XLSX_MIME,
+                        partial_excel,
+                        slot=f"partial_{i}",
+                    )
+                    await self.update_progress(f"Остановлено на части {i} из {total_chunks}. Частичный результат сохранён.")
+                raise
+
             if total_chunks > 1:
                 await self.update_progress(f"Проверка части {i + 1} из {total_chunks}...")
             else:
                 await self.update_progress("Проверяем полноту материалов по ГЭСН...")
 
-            chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+            chunk_json = json.dumps({"items": chunks[i]}, ensure_ascii=False, indent=2)
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
 
-            data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE)
+            try:
+                data = await self._call_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=600.0)
+            except Exception as chunk_error:
+                if all_items:
+                    partial_excel = generate_list(all_items)
+                    await self.save_result(
+                        f"Частичная_проверка_{i}_из_{total_chunks}.xlsx",
+                        _XLSX_MIME,
+                        partial_excel,
+                        slot=f"partial_{i}",
+                    )
+                    await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
+                raise
+
             all_items.extend(data.get("items", []))
             summary = data.get("changes_summary", "")
             if summary:
                 changes_summary_parts.append(summary)
+
+            await self._save_progress_data({
+                "chunks_done": i + 1,
+                "total_chunks": total_chunks,
+                "items": all_items,
+                "summaries": changes_summary_parts,
+            })
 
         changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
 
