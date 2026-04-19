@@ -278,12 +278,37 @@ _works_row_norms = np.linalg.norm(_works_embeddings, axis=1)  # shape (N,)
 
 ---
 
+### ФАЗА 9 — Миграция с OpenAI на Cohere (2026-04-20)
+
+OpenAI стал недоступен. Провайдер заменён на Cohere `embed-multilingual-v3.0`.
+
+- [x] **9.1** Зависимость: `openai>=1.0.0` → `cohere>=5.0.0` в `requirements.txt`
+- [x] **9.2** Конфиг: добавить `COHERE_API_KEY` в `config.py` и `render.yaml`
+- [x] **9.3** Алembic-миграция `012_reset_embedding_status.py`: сброс `embedding_status='pending'` + обнуление `price_works.embedding` и `price_materials.embedding` (старые OpenAI-векторы несовместимы по размерности)
+- [x] **9.4** Переписать `embedding_service.py`: модель `embed-multilingual-v3.0`, размерность 1024, batch limit 96, добавлен параметр `input_type` (`search_document` при индексации, `search_query` при поиске)
+- [x] **9.5** `price_service.py`: передавать `input_type="search_query"` в оба вызова `generate_embedding`
+- [x] **9.6** `admin.py`: передавать `input_type="search_document"` явно в оба вызова `generate_embeddings_batch`
+- [x] **9.7** Обновить тесты: DIM 1536 → 1024, моки openai → cohere
+
+**Изменения технических решений после фазы 9:**
+
+| Параметр | Было (OpenAI) | Стало (Cohere) |
+|---|---|---|
+| Провайдер | `text-embedding-3-small` | `embed-multilingual-v3.0` |
+| Размерность | 1536 | 1024 |
+| Batch limit | 2048 | 96 |
+| input_type | нет | search_document / search_query |
+
+---
+
 ## Итоговый блок
 
-**Реализовано:** Фазы 1–8 (инфраструктура, хранение, генерация векторов, load_cache с numpy, embedding-поиск, UI бейдж/кнопка/прогресс в Admin, параллельная обработка x4, чекпоинты progress_data, детальный прогресс с ETA, полный тест-покрытие: 46 новых тестов, все зелёные 174/174)
+**Реализовано:** Фазы 1–9 (инфраструктура, хранение, генерация векторов, load_cache с numpy, embedding-поиск, UI бейдж/кнопка/прогресс в Admin, параллельная обработка x4, чекпоинты progress_data, детальный прогресс с ETA, миграция на Cohere. Тест-покрытие: 172 зелёных)
 
 **Исправленные баги в процессе:**
 - `app/models/price.py`, `app/models/task.py`: колонки `embedding` и `progress_data` использовали `JSONB` (PostgreSQL-only) — заменено на `JSON().with_variant(JSONB(), "postgresql")` для совместимости с SQLite в тестах
+- Фаза 9: миграция дополнена обнулением старых OpenAI-векторов, иначе numpy падал бы при несовпадении размерностей 1536 vs 1024
+
 **В работе:** —
 **Осталось:** —
 
@@ -291,7 +316,7 @@ _works_row_norms = np.linalg.norm(_works_embeddings, axis=1)  # shape (N,)
 - Поиск позиции в прайсе не вызывает Claude (проверяется по логам)
 - "M defi 100" из прайса находит "М100" из сметы (similarity ≥ 0.82)
 - "М100" и "М50" не путаются (similarity < 0.82)
-- При недоступном OpenAI прайс загружается, статус = "failed", поиск падает на веб-поиск
+- При недоступном Cohere прайс загружается, статус = "failed", поиск падает на веб-поиск
 - Кнопка "Перегенерировать" успешно создаёт векторы для всего прайса
 - 50 позиций обрабатываются за ~15 мин вместо ~50 мин (параллельность x4, фаза 5)
 - Повторный запуск после сбоя не повторяет уже найденные позиции (фаза 6)
