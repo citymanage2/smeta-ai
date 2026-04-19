@@ -59,7 +59,7 @@ def _exact_match_material(name: str) -> Optional[float]:
 
 
 async def _embedding_match_work(name: str) -> Optional[dict]:
-    """Find matching work via cosine similarity of OpenAI embeddings."""
+    """Find matching work via cosine similarity of Cohere embeddings."""
     if not _numpy_available or _works_embeddings is None or _works_row_norms is None:
         return None
 
@@ -87,7 +87,7 @@ async def _embedding_match_work(name: str) -> Optional[dict]:
 
 
 async def _embedding_match_material(name: str) -> Optional[float]:
-    """Find matching material via cosine similarity of OpenAI embeddings."""
+    """Find matching material via cosine similarity of Cohere embeddings."""
     if not _numpy_available or _materials_embeddings is None or _materials_row_norms is None:
         return None
 

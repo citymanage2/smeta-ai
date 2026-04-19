@@ -267,40 +267,51 @@ async def list_tasks(
     admin: dict = Depends(get_admin_user),
 ):
     """Get paginated list of all tasks with optional filters."""
-    query = select(Task)
-
+    # Build WHERE conditions separately so they apply to both count and data queries
+    conditions = []
     if date_from:
-        query = query.where(Task.created_at >= date_from)
+        conditions.append(Task.created_at >= date_from)
     if date_to:
-        query = query.where(Task.created_at <= date_to)
+        conditions.append(Task.created_at <= date_to)
     if status_filter:
-        query = query.where(Task.status == status_filter)
+        conditions.append(Task.status == status_filter)
     if task_type:
-        query = query.where(Task.task_type == task_type)
+        conditions.append(Task.task_type == task_type)
 
-    count_query = select(func.count()).select_from(query.subquery())
+    # COUNT: select only id — avoids loading input_file_data / chat_history
+    count_query = select(func.count(Task.id))
+    if conditions:
+        count_query = count_query.where(*conditions)
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    query = query.order_by(Task.created_at.desc())
-    query = query.offset((page - 1) * limit).limit(limit)
+    # DATA: select only the columns needed for TaskListItem
+    data_query = select(
+        Task.id, Task.user_role, Task.task_type, Task.status,
+        Task.progress_message, Task.error_message,
+        Task.created_at, Task.updated_at, Task.input_files,
+    )
+    if conditions:
+        data_query = data_query.where(*conditions)
+    data_query = data_query.order_by(Task.created_at.desc())
+    data_query = data_query.offset((page - 1) * limit).limit(limit)
 
-    result = await db.execute(query)
-    tasks = result.scalars().all()
+    result = await db.execute(data_query)
+    rows = result.all()
 
     items = [
         TaskListItem(
-            id=str(t.id),
-            user_role=t.user_role,
-            task_type=t.task_type,
-            status=t.status,
-            progress_message=t.progress_message,
-            error_message=t.error_message,
-            created_at=t.created_at,
-            updated_at=t.updated_at,
-            files_count=len(t.input_files or []),
+            id=str(row.id),
+            user_role=row.user_role,
+            task_type=row.task_type,
+            status=row.status,
+            progress_message=row.progress_message,
+            error_message=row.error_message,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            files_count=len(row.input_files or []),
         )
-        for t in tasks
+        for row in rows
     ]
     return TaskListResponse(items=items, total=total)
 
@@ -489,7 +500,7 @@ async def _handle_price_upload(
     if price_objs:
         try:
             normalized = [normalize_name(obj.name) for obj in price_objs]
-            embeddings = generate_embeddings_batch(normalized)
+            embeddings = generate_embeddings_batch(normalized, input_type="search_document")
             for obj, emb in zip(price_objs, embeddings):
                 obj.embedding = emb
             pl_obj.embedding_status = "ready"
@@ -573,7 +584,7 @@ async def generate_price_embeddings(
 
     try:
         normalized = [normalize_name(row.name) for row in rows]
-        embeddings = generate_embeddings_batch(normalized)
+        embeddings = generate_embeddings_batch(normalized, input_type="search_document")
         for row, emb in zip(rows, embeddings):
             row.embedding = emb
         price_list.embedding_status = "ready"
