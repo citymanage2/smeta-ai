@@ -10,7 +10,7 @@ import numpy as np
 from unittest.mock import patch
 import app.services.price_service as ps
 
-DIM = 1536
+DIM = 1024
 
 
 def _unit_vec(idx: int) -> list[float]:

@@ -68,7 +68,7 @@ async def _embedding_match_work(name: str) -> Optional[dict]:
         from app.services.embedding_service import normalize_name, generate_embedding
 
         normalized = normalize_name(name)
-        query_vec = await asyncio.to_thread(generate_embedding, normalized)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized, "search_query")
         query_arr = np.array(query_vec, dtype=np.float32)
         query_norm = float(np.linalg.norm(query_arr))
         if query_norm == 0:
@@ -96,7 +96,7 @@ async def _embedding_match_material(name: str) -> Optional[float]:
         from app.services.embedding_service import normalize_name, generate_embedding
 
         normalized = normalize_name(name)
-        query_vec = await asyncio.to_thread(generate_embedding, normalized)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized, "search_query")
         query_arr = np.array(query_vec, dtype=np.float32)
         query_norm = float(np.linalg.norm(query_arr))
         if query_norm == 0:
