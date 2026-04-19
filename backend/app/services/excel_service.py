@@ -14,9 +14,17 @@ NORMAL_FONT = Font(size=11)
 TOTAL_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
 
 # Row highlight fills
-FILL_ADDED    = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # новая позиция
-FILL_ADJUSTED = PatternFill(start_color="CFE2F3", end_color="CFE2F3", fill_type="solid")  # скорректированный объём
-FILL_UNKNOWN  = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # объём неизвестен
+FILL_ADDED      = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # новая позиция
+FILL_ADJUSTED   = PatternFill(start_color="CFE2F3", end_color="CFE2F3", fill_type="solid")  # скорректированный объём
+FILL_UNKNOWN    = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # объём неизвестен
+FILL_CALCULATED = PatternFill(start_color="D9D2E9", end_color="D9D2E9", fill_type="solid")  # объём рассчитан по чертежам
+
+_CALCULATED_NOTES_MARKERS = (
+    "определён по чертежу",
+    "определён по документу",
+    "подсчитано по",
+    "рассчитано по чертежам",
+)
 
 THIN_BORDER = Border(
     left=Side(style="thin"),
@@ -24,6 +32,14 @@ THIN_BORDER = Border(
     top=Side(style="thin"),
     bottom=Side(style="thin"),
 )
+
+
+def _is_calculated_from_drawing(item: dict) -> bool:
+    """True если объём рассчитан по чертежам/документу (не взят из спецификации напрямую)."""
+    if item.get("_calculated"):
+        return True
+    notes = str(item.get("notes") or "").lower()
+    return any(marker in notes for marker in _CALCULATED_NOTES_MARKERS)
 
 
 def _row_fill(item: dict) -> Optional[PatternFill]:
@@ -36,6 +52,8 @@ def _row_fill(item: dict) -> Optional[PatternFill]:
         return FILL_ADDED
     if "скорректирован" in notes:
         return FILL_ADJUSTED
+    if _is_calculated_from_drawing(item):
+        return FILL_CALCULATED
     return None
 
 
@@ -101,7 +119,10 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_all.cell(row=row, column=4, value=item.get("unit", ""))
         qty = item.get("quantity")
         ws_all.cell(row=row, column=5, value=qty)
-        ws_all.cell(row=row, column=6, value=item.get("notes", "") or "")
+        notes_text = item.get("notes", "") or ""
+        if _is_calculated_from_drawing(item) and qty is not None:
+            notes_text = f"рассчитано по чертежам | {notes_text}" if notes_text else "рассчитано по чертежам"
+        ws_all.cell(row=row, column=6, value=notes_text)
         _style_data_row(ws_all, row, len(headers_all))
         _apply_row_fill(ws_all, row, len(headers_all), _row_fill(item))
 

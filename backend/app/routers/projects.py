@@ -204,21 +204,24 @@ async def list_unassigned_tasks(
     current_user: dict = Depends(get_current_user),
 ):
     tasks_result = await db.execute(
-        select(Task).where(Task.project_id.is_(None)).order_by(Task.created_at.desc())
+        select(
+            Task.id, Task.task_type, Task.status, Task.estimation_status,
+            Task.cost, Task.created_at, Task.input_files, Task.name,
+        ).where(Task.project_id.is_(None)).order_by(Task.created_at.desc())
     )
-    tasks = tasks_result.scalars().all()
+    rows = tasks_result.all()
     return [
         TaskBrief(
-            id=str(t.id),
-            task_type=t.task_type,
-            status=t.status,
-            estimation_status=t.estimation_status,
-            cost=float(t.cost) if t.cost is not None else None,
-            created_at=t.created_at.isoformat(),
-            source_file_name=(t.input_files[0]["name"] if t.input_files else None),
-            name=t.name,
+            id=str(row.id),
+            task_type=row.task_type,
+            status=row.status,
+            estimation_status=row.estimation_status,
+            cost=float(row.cost) if row.cost is not None else None,
+            created_at=row.created_at.isoformat(),
+            source_file_name=(row.input_files[0]["name"] if row.input_files else None),
+            name=row.name,
         )
-        for t in tasks
+        for row in rows
     ]
 
 
@@ -232,9 +235,12 @@ async def get_project(
     agg = await _aggregate(project_id, db)
 
     tasks_result = await db.execute(
-        select(Task).where(Task.project_id == project_id).order_by(Task.created_at.desc())
+        select(
+            Task.id, Task.task_type, Task.status, Task.estimation_status,
+            Task.cost, Task.created_at, Task.input_files, Task.name,
+        ).where(Task.project_id == project_id).order_by(Task.created_at.desc())
     )
-    tasks = tasks_result.scalars().all()
+    tasks = tasks_result.all()
 
     # Fetch slot file names for all tasks in one query
     slot_files_by_task: dict[str, dict[str, str]] = {}

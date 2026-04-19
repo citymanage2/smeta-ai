@@ -19,7 +19,7 @@ async def call_claude(messages: list, system_prompt: str = "", use_web_search: b
 
 logger = structlog.get_logger()
 
-SIMILARITY_THRESHOLD = 0.82  # порог cosine similarity для embedding-поиска
+SIMILARITY_THRESHOLD = 0.88  # порог cosine similarity для embedding-поиска (Cohere embed-v3)
 
 # In-memory cache
 _works_cache: list[dict] = []

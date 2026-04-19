@@ -440,6 +440,28 @@ const TaskStatusPage: React.FC = () => {
     }
   }, [taskId, stopTimers]);
 
+  // Reset all task-specific state when navigating to a different task.
+  // Without this, stale values from the previous task (especially taskName)
+  // persist until the new task's data arrives from the server.
+  useEffect(() => {
+    setTask(null);
+    setTaskName(null);
+    setResults([]);
+    setProgressLog([]);
+    setError('');
+    setElapsedSeconds(0);
+    setEstimationStatus('not_applicable');
+    setTaskCost(null);
+    setTaskProjectId(null);
+    setCheckTaskId(null);
+    setCheckTask(null);
+    setCheckResults([]);
+    setCheckProjectTaskId(null);
+    setCheckProjectTask(null);
+    setCheckProjectResults([]);
+    startTimeRef.current = null;
+  }, [taskId]);
+
   useEffect(() => {
     if (!taskId || taskId === 'undefined') {
       navigate('/task/create');

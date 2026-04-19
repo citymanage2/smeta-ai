@@ -889,6 +889,7 @@ class TaskProcessor:
                     if len(resolved) == len(chunk_idx):
                         for orig_idx, resolved_item in zip(chunk_idx, resolved):
                             if resolved_item.get("quantity") is not None:
+                                resolved_item["_calculated"] = True
                                 items[orig_idx] = resolved_item
                     else:
                         logger.warning(
@@ -1107,7 +1108,7 @@ class TaskProcessor:
                 work_info = _price_svc._exact_match_work(name)
                 if work_info is None:
                     work_info = await _price_svc._embedding_match_work(name)
-                if work_info is not None:
+                if work_info is not None and work_info.get("min_price") is not None:
                     enriched["work_price"] = work_info.get("min_price")
                     enriched["price_list_name"] = work_info.get("name")
                     found = True
@@ -1131,6 +1132,9 @@ class TaskProcessor:
             task_id=self.task_id,
             matched=len(matched),
             unmatched=len(unmatched),
+        )
+        await self.update_progress(
+            f"Прайс: найдено {len(matched)}, не найдено {len(unmatched)} из {len(items)} позиций."
         )
 
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
