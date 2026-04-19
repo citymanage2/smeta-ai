@@ -1,7 +1,7 @@
 """
-Сервис для генерации embedding-векторов через OpenAI.
+Сервис для генерации embedding-векторов через Cohere.
 
-Используется для семантического поиска по прайс-листу без вызовов Claude.
+Используется для семантического поиска по прайс-листу.
 Векторы генерируются один раз при загрузке прайса и хранятся в БД.
 """
 import re
@@ -10,13 +10,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSION = 1536
-OPENAI_BATCH_LIMIT = 2048  # максимум текстов за один API-вызов
+EMBEDDING_MODEL = "embed-multilingual-v3.0"
+EMBEDDING_DIMENSION = 1024
+COHERE_BATCH_LIMIT = 96  # максимум текстов за один API-вызов для v3 моделей
 
 
 class EmbeddingUnavailableError(Exception):
-    """OpenAI недоступен или ключ не настроен."""
+    """Cohere недоступен или ключ не настроен."""
 
 
 def normalize_name(text: str) -> str:
@@ -34,10 +34,6 @@ def normalize_name(text: str) -> str:
     if not text:
         return ""
 
-    # Замена латинских букв, совпадающих с кириллическими
-    _lat_to_cyr = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-                                 "АВСDЕFGНIЈКLМNОРQRЅТUVWХYZавсdеfgнiјкlмnорqrѕтuvwхyz")
-    # Только те буквы, которые реально совпадают визуально
     _simple_lat_cyr = {
         'A': 'А', 'B': 'В', 'C': 'С', 'E': 'Е', 'H': 'Н', 'K': 'К',
         'M': 'М', 'O': 'О', 'P': 'Р', 'T': 'Т', 'X': 'Х',
@@ -45,50 +41,51 @@ def normalize_name(text: str) -> str:
     }
     result = "".join(_simple_lat_cyr.get(ch, ch) for ch in text)
 
-    # Нормализация марок: "М-100", "М 100", "М defi 100", "М_100" → "М100"
-    # Паттерн: буква (кир или лат), затем необязательный разделитель и слова, затем число
     result = re.sub(
         r'([А-ЯЁа-яёA-Za-z])\s*[-_]?\s*(?:[a-zA-Zа-яА-ЯёЁ]+\s+)*(\d+)',
         lambda m: m.group(1).upper() + m.group(2),
         result
     )
 
-    # Убираем лишние пробелы
     result = " ".join(result.split())
-
     return result.lower()
 
 
-def _get_openai_client():
-    """Создаёт OpenAI клиент. Бросает EmbeddingUnavailableError если ключ не задан."""
+def _get_cohere_client():
+    """Создаёт Cohere клиент. Бросает EmbeddingUnavailableError если ключ не задан."""
     try:
-        from openai import OpenAI, APIError, APIConnectionError
+        import cohere
         from app.config import settings
 
-        if not settings.OPENAI_API_KEY:
-            raise EmbeddingUnavailableError("OPENAI_API_KEY не настроен")
+        if not settings.COHERE_API_KEY:
+            raise EmbeddingUnavailableError("COHERE_API_KEY не настроен")
 
-        return OpenAI(api_key=settings.OPENAI_API_KEY)
+        return cohere.Client(api_key=settings.COHERE_API_KEY)
     except ImportError:
-        raise EmbeddingUnavailableError("Библиотека openai не установлена")
+        raise EmbeddingUnavailableError("Библиотека cohere не установлена")
 
 
-def generate_embedding(text: str) -> list[float]:
+def generate_embedding(text: str, input_type: str = "search_document") -> list[float]:
     """
     Генерирует embedding-вектор для одного текста.
 
-    Возвращает список из 1536 float.
+    input_type: "search_document" при индексации, "search_query" при поиске.
+    Возвращает список из 1024 float.
     Бросает EmbeddingUnavailableError при ошибке API.
     """
-    results = generate_embeddings_batch([text])
+    results = generate_embeddings_batch([text], input_type=input_type)
     return results[0]
 
 
-def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
+def generate_embeddings_batch(
+    texts: list[str],
+    input_type: str = "search_document",
+) -> list[list[float]]:
     """
     Генерирует embedding-векторы для списка текстов.
 
-    Автоматически разбивает на чанки по OPENAI_BATCH_LIMIT (2048).
+    input_type: "search_document" при индексации прайса, "search_query" при поиске запроса.
+    Автоматически разбивает на чанки по COHERE_BATCH_LIMIT (96).
     Возвращает список векторов в том же порядке что и входные тексты.
     Бросает EmbeddingUnavailableError при ошибке API.
     """
@@ -96,25 +93,23 @@ def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
         return []
 
     try:
-        from openai import APIError, APIConnectionError, AuthenticationError
-        client = _get_openai_client()
-
+        client = _get_cohere_client()
         all_embeddings: list[list[float]] = []
 
-        for chunk_start in range(0, len(texts), OPENAI_BATCH_LIMIT):
-            chunk = texts[chunk_start: chunk_start + OPENAI_BATCH_LIMIT]
-            response = client.embeddings.create(
+        for chunk_start in range(0, len(texts), COHERE_BATCH_LIMIT):
+            chunk = texts[chunk_start: chunk_start + COHERE_BATCH_LIMIT]
+            response = client.embed(
+                texts=chunk,
                 model=EMBEDDING_MODEL,
-                input=chunk,
+                input_type=input_type,
+                embedding_types=["float"],
             )
-            # Ответ содержит данные в том же порядке что входные тексты
-            chunk_embeddings = [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
-            all_embeddings.extend(chunk_embeddings)
+            all_embeddings.extend(response.embeddings.float_)
 
         return all_embeddings
 
     except EmbeddingUnavailableError:
         raise
     except Exception as e:
-        logger.error("Ошибка OpenAI embeddings API: %s", e)
-        raise EmbeddingUnavailableError(f"Ошибка OpenAI API: {e}") from e
+        logger.error("Ошибка Cohere embeddings API: %s", e)
+        raise EmbeddingUnavailableError(f"Ошибка Cohere API: {e}") from e
