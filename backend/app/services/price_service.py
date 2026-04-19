@@ -26,7 +26,7 @@ _works_cache: list[dict] = []
 _materials_cache: list[dict] = []
 _cache_loaded: bool = False
 
-# Embedding matrices (shape N×1536, float32). None if no vectors available.
+# Embedding matrices (shape N×1024, float32). None if no vectors available.
 _works_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 _materials_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 _works_row_norms: "Optional[np.ndarray]" = None  # type: ignore[type-arg]

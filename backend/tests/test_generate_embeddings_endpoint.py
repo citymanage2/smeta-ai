@@ -16,7 +16,7 @@ from app.models.price_list import PriceList
 from app.services.embedding_service import EmbeddingUnavailableError
 
 
-FAKE_VECTOR = [0.1] * 1536
+FAKE_VECTOR = [0.1] * 1024
 
 
 @pytest.fixture
