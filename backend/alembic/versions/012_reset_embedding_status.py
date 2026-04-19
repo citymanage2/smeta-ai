@@ -15,6 +15,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute("UPDATE price_lists SET embedding_status = 'pending'")
+    op.execute("UPDATE price_works SET embedding = NULL")
+    op.execute("UPDATE price_materials SET embedding = NULL")
 
 
 def downgrade() -> None:
