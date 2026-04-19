@@ -1104,23 +1104,34 @@ class TaskProcessor:
 
             found = False
             if item_type == "Работа":
-                # Exact match
                 work_info = _price_svc._exact_match_work(name)
+                match_method = "exact" if work_info is not None else None
                 if work_info is None:
                     work_info = await _price_svc._embedding_match_work(name)
+                    if work_info is not None:
+                        match_method = "embedding"
                 if work_info is not None and work_info.get("min_price") is not None:
                     enriched["work_price"] = work_info.get("min_price")
                     enriched["price_list_name"] = work_info.get("name")
                     found = True
+                    logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method=match_method, price_entry=work_info.get("name"))
+                else:
+                    logger.info("Item NOT matched in price list", task_id=self.task_id, name=name, work_info_found=(work_info is not None))
 
             elif item_type == "Материал":
                 mat_price = _price_svc._exact_match_material(name)
+                match_method = "exact" if mat_price is not None else None
                 if mat_price is None:
                     mat_price = await _price_svc._embedding_match_material(name)
+                    if mat_price is not None:
+                        match_method = "embedding"
                 if mat_price is not None:
                     enriched["material_price"] = mat_price
                     enriched["price_list_name"] = name
                     found = True
+                    logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method=match_method)
+                else:
+                    logger.info("Material NOT matched in price list", task_id=self.task_id, name=name)
 
             if found:
                 matched.append(enriched)

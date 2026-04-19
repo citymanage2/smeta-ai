@@ -19,7 +19,7 @@ async def call_claude(messages: list, system_prompt: str = "", use_web_search: b
 
 logger = structlog.get_logger()
 
-SIMILARITY_THRESHOLD = 0.88  # порог cosine similarity для embedding-поиска (Cohere embed-v3)
+SIMILARITY_THRESHOLD = 0.93  # порог cosine similarity для embedding-поиска (Cohere embed-v3)
 
 # In-memory cache
 _works_cache: list[dict] = []
@@ -77,9 +77,12 @@ async def _embedding_match_work(name: str) -> Optional[dict]:
         scores = np.dot(_works_embeddings, query_arr) / (_works_row_norms * query_norm)
         best_idx = int(np.argmax(scores))
 
-        if scores[best_idx] >= SIMILARITY_THRESHOLD:
-            logger.info("Embedding work match", name=name, score=float(scores[best_idx]))
+        best_score = float(scores[best_idx])
+        best_name = _works_cache[best_idx]["name"] if _works_cache else "?"
+        if best_score >= SIMILARITY_THRESHOLD:
+            logger.info("Embedding work match HIT", query=name, matched=best_name, score=best_score)
             return _works_cache[best_idx]
+        logger.debug("Embedding work match MISS", query=name, best=best_name, score=best_score, threshold=SIMILARITY_THRESHOLD)
         return None
     except Exception as e:
         logger.error("Embedding work match failed", error=str(e))
@@ -105,9 +108,12 @@ async def _embedding_match_material(name: str) -> Optional[float]:
         scores = np.dot(_materials_embeddings, query_arr) / (_materials_row_norms * query_norm)
         best_idx = int(np.argmax(scores))
 
-        if scores[best_idx] >= SIMILARITY_THRESHOLD:
-            logger.info("Embedding material match", name=name, score=float(scores[best_idx]))
+        best_score = float(scores[best_idx])
+        best_name = _materials_cache[best_idx]["name"] if _materials_cache else "?"
+        if best_score >= SIMILARITY_THRESHOLD:
+            logger.info("Embedding material match HIT", query=name, matched=best_name, score=best_score)
             return _materials_cache[best_idx].get("price")
+        logger.debug("Embedding material match MISS", query=name, best=best_name, score=best_score, threshold=SIMILARITY_THRESHOLD)
         return None
     except Exception as e:
         logger.error("Embedding material match failed", error=str(e))
