@@ -74,6 +74,26 @@ def test_generate_embeddings_batch_success():
     mock_client.embed.assert_called_once()
 
 
+def test_generate_embeddings_batch_returns_in_order():
+    """Векторы возвращаются в том же порядке, что входные тексты."""
+    texts = ["первый", "второй", "третий"]
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.embeddings.float_ = [
+        [0.0] * DIM,
+        [1.0] * DIM,
+        [2.0] * DIM,
+    ]
+    mock_client.embed.return_value = mock_response
+
+    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+        result = generate_embeddings_batch(texts)
+
+    assert result[0][0] == 0.0
+    assert result[1][0] == 1.0
+    assert result[2][0] == 2.0
+
+
 def test_generate_embeddings_batch_empty_input():
     """Пустой список → пустой результат без вызовов API."""
     result = generate_embeddings_batch([])

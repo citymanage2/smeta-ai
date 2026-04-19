@@ -61,6 +61,8 @@ def _get_cohere_client():
             raise EmbeddingUnavailableError("COHERE_API_KEY не настроен")
 
         return cohere.Client(api_key=settings.COHERE_API_KEY)
+    except EmbeddingUnavailableError:
+        raise
     except ImportError:
         raise EmbeddingUnavailableError("Библиотека cohere не установлена")
 
