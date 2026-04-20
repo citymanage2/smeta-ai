@@ -30,7 +30,6 @@ const TaskCreate: React.FC = () => {
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [selectedSourceTaskId, setSelectedSourceTaskId] = useState('');
   const [selectedStage, setSelectedStage] = useState<number>(1);
-  const [availableStages, setAvailableStages] = useState<EstimateSource['stages']>([]);
 
   useEffect(() => {
     listProjects().then(setProjects).catch(() => {});
@@ -53,25 +52,49 @@ const TaskCreate: React.FC = () => {
       setInputMode('file');
     }
     setSelectedSourceTaskId('');
-    setAvailableStages([]);
     setSelectedStage(1);
   }, [taskType]);
 
-  // Update available stages when source task changes
-  useEffect(() => {
-    const src = estimateSources.find((s) => s.task_id === selectedSourceTaskId);
-    if (src) {
-      setAvailableStages(src.stages);
-      setSelectedStage(src.stages[0]?.stage ?? 1);
-      // Auto-fill task name from source task name
-      if (!nameUserEditedRef.current && src.name) {
-        setName(`Смета из перечня: ${src.name}`);
-      }
-    } else {
-      setAvailableStages([]);
+  // Flat options: one entry per (task × stage) combination
+  const estimateOptions = estimateSources.flatMap((s) =>
+    s.stages.map((st) => ({
+      key: `${s.task_id}:${st.stage}`,
+      task_id: s.task_id,
+      stage: st.stage,
+      task_type: s.task_type,
+      name: s.name,
+      created_at: s.created_at,
+      label: st.label,
+      items_count: st.items_count,
+    }))
+  );
+
+  const selectedKey = selectedSourceTaskId ? `${selectedSourceTaskId}:${selectedStage}` : '';
+
+  const handleSourceKeyChange = (key: string) => {
+    if (!key) {
+      setSelectedSourceTaskId('');
       setSelectedStage(1);
+      return;
     }
-  }, [selectedSourceTaskId, estimateSources]);
+    const colonIdx = key.indexOf(':');
+    const taskId = key.slice(0, colonIdx);
+    const stage = Number(key.slice(colonIdx + 1));
+    setSelectedSourceTaskId(taskId);
+    setSelectedStage(stage);
+    const opt = estimateOptions.find((o) => o.key === key);
+    if (opt && !nameUserEditedRef.current && opt.name) {
+      setName(`Смета из перечня: ${opt.name}`);
+    }
+  };
+
+  // Auto-select when there is exactly one option
+  useEffect(() => {
+    if (estimateOptions.length === 1 && !selectedSourceTaskId) {
+      handleSourceKeyChange(estimateOptions[0].key);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estimateSources]);
 
   const buildAutoName = (type: TaskType, file: File): string => {
     const label = TASK_TYPE_LABELS[type] ?? type;
@@ -230,19 +253,19 @@ const TaskCreate: React.FC = () => {
             {taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task' ? (
               <div style={{ marginBottom: '24px' }}>
                 {sourcesLoading ? (
-                  <div style={{ fontSize: '14px', color: '#64748b' }}>Загрузка задач...</div>
-                ) : estimateSources.length === 0 ? (
+                  <div style={{ fontSize: '14px', color: '#64748b' }}>Загрузка перечней...</div>
+                ) : estimateOptions.length === 0 ? (
                   <div style={{ padding: '12px 16px', backgroundColor: '#fef9c3', border: '1px solid #fde047', borderRadius: '8px', fontSize: '14px', color: '#854d0e' }}>
                     Нет завершённых задач «Перечень из Гранд-сметы» или «Перечень из проекта».
                   </div>
                 ) : (
                   <>
                     <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>
-                      Задача-источник
+                      Перечень-источник
                     </label>
                     <select
-                      value={selectedSourceTaskId}
-                      onChange={(e) => setSelectedSourceTaskId(e.target.value)}
+                      value={selectedKey}
+                      onChange={(e) => handleSourceKeyChange(e.target.value)}
                       disabled={submitting}
                       style={{
                         width: '100%',
@@ -251,40 +274,24 @@ const TaskCreate: React.FC = () => {
                         borderRadius: '8px',
                         fontSize: '14px',
                         backgroundColor: '#fff',
-                        marginBottom: '12px',
                       }}
                     >
-                      <option value="">— Выберите задачу —</option>
-                      {estimateSources.map((s) => (
-                        <option key={s.task_id} value={s.task_id}>
-                          {s.name || `[${s.task_type}]`} · {new Date(s.created_at).toLocaleDateString('ru-RU')}
-                        </option>
-                      ))}
+                      <option value="">— Выберите перечень —</option>
+                      {(['LIST_FROM_GRAND', 'LIST_FROM_PROJECT'] as const).map((type) => {
+                        const opts = estimateOptions.filter((o) => o.task_type === type);
+                        if (opts.length === 0) return null;
+                        const groupLabel = type === 'LIST_FROM_GRAND' ? 'Перечень из Гранд-сметы' : 'Перечень из проекта';
+                        return (
+                          <optgroup key={type} label={groupLabel}>
+                            {opts.map((opt) => (
+                              <option key={opt.key} value={opt.key}>
+                                {opt.name || groupLabel} · {new Date(opt.created_at).toLocaleDateString('ru-RU')} · {opt.label} ({opt.items_count} поз.)
+                              </option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
                     </select>
-
-                    {selectedSourceTaskId && availableStages.length > 0 && (
-                      <>
-                        <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>
-                          Стадия перечня
-                        </label>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          {availableStages.map((st) => (
-                            <label key={st.stage} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                              <input
-                                type="radio"
-                                name="sourceStage"
-                                value={st.stage}
-                                checked={selectedStage === st.stage}
-                                onChange={() => setSelectedStage(st.stage)}
-                              />
-                              <span style={{ fontSize: '14px', color: '#374151' }}>
-                                {st.label} <span style={{ color: '#94a3b8' }}>({st.items_count} позиций)</span>
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      </>
-                    )}
                   </>
                 )}
               </div>
