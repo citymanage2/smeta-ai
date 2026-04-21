@@ -426,6 +426,9 @@ async def get_price_lists_info(
 # Separate upload endpoints
 # ---------------------------------------------------------------------------
 
+_INSERT_BATCH_SIZE = 200
+
+
 async def _handle_price_upload(
     file: UploadFile,
     pl_type: str,
@@ -457,7 +460,22 @@ async def _handle_price_upload(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка разбора файла: {e}")
 
-    # Persist raw file (upsert: delete old, insert new)
+    # Generate embeddings before touching the DB (one batch API call)
+    embeddings: list = []
+    embedding_status = "pending"
+    if items:
+        try:
+            normalized = [normalize_name(item["name"]) for item in items]
+            embeddings = generate_embeddings_batch(normalized, input_type="search_document")
+            embedding_status = "ready"
+            logger.info("Embeddings generated", type=pl_type, count=len(items))
+        except EmbeddingUnavailableError as e:
+            embeddings = [None] * len(items)
+            embedding_status = "failed"
+            logger.warning("Embeddings generation failed, price list saved without vectors",
+                           type=pl_type, error=str(e))
+
+    # Persist raw file + clear old price rows — small transaction
     await db.execute(delete(PriceList).where(PriceList.type == pl_type))
     pl_obj = PriceList(
         type=pl_type,
@@ -465,52 +483,42 @@ async def _handle_price_upload(
         mime_type=mime_type,
         content=data,
         updated_at=now,
-        embedding_status="pending",
+        embedding_status=embedding_status,
     )
     db.add(pl_obj)
-
-    # Update price tables if we got rows; keep object references for embedding update
-    price_objs: list = []
     if items:
         if is_works:
             await db.execute(delete(PriceWork))
-            for item in items:
-                w = PriceWork(
+        else:
+            await db.execute(delete(PriceMaterial))
+    await db.commit()
+
+    # Insert price rows in small batches to avoid dropping the DB connection
+    # on a single huge INSERT (embeddings add ~13 KB per row)
+    for batch_start in range(0, len(items), _INSERT_BATCH_SIZE):
+        batch_items = items[batch_start: batch_start + _INSERT_BATCH_SIZE]
+        batch_embs = embeddings[batch_start: batch_start + _INSERT_BATCH_SIZE]
+        for item, emb in zip(batch_items, batch_embs):
+            if is_works:
+                obj = PriceWork(
                     name=item["name"],
                     unit=item.get("unit", ""),
                     prices=item.get("prices", {}),
                     min_price=item.get("min_price"),
+                    embedding=emb,
                     updated_at=now,
                 )
-                db.add(w)
-                price_objs.append(w)
-        else:
-            await db.execute(delete(PriceMaterial))
-            for item in items:
-                m = PriceMaterial(
+            else:
+                obj = PriceMaterial(
                     name=item["name"],
                     unit=item.get("unit", ""),
                     price=item.get("price"),
+                    embedding=emb,
                     updated_at=now,
                 )
-                db.add(m)
-                price_objs.append(m)
+            db.add(obj)
+        await db.commit()
 
-    # Generate embeddings before commit (one batch API call for the whole price list)
-    if price_objs:
-        try:
-            normalized = [normalize_name(obj.name) for obj in price_objs]
-            embeddings = generate_embeddings_batch(normalized, input_type="search_document")
-            for obj, emb in zip(price_objs, embeddings):
-                obj.embedding = emb
-            pl_obj.embedding_status = "ready"
-            logger.info("Embeddings generated", type=pl_type, count=len(price_objs))
-        except EmbeddingUnavailableError as e:
-            pl_obj.embedding_status = "failed"
-            logger.warning("Embeddings generation failed, price list saved without vectors",
-                           type=pl_type, error=str(e))
-
-    await db.commit()
     await price_service.load_cache(db)
 
     loaded = len(items)
