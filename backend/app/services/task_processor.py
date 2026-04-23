@@ -9,6 +9,7 @@ import structlog
 
 from app.models.task import Task
 from app.models.result import TaskResult
+from app.models.task_input_file import TaskInputFile
 from app.models.estimate_version import EstimateVersion
 from app.services.claude_service import call_claude
 from app.services.excel_service import generate_list
@@ -301,6 +302,39 @@ class TaskProcessor:
     def __init__(self, task_id: str, db: AsyncSession):
         self.task_id = task_id
         self.db = db
+        self._input_files_cache: list[dict] | None = None
+
+    async def _load_input_files(self, task: Task) -> list[dict]:
+        """Return input files with content_b64, loading from task_input_files table.
+
+        Falls back to task.input_file_data for old tasks that still store content_b64 inline.
+        Result is cached so repeated calls within one processor run are cheap.
+        """
+        if self._input_files_cache is not None:
+            return self._input_files_cache
+
+        # New tasks: content stored in task_input_files, not in the JSON column
+        result = await self.db.execute(
+            select(TaskInputFile)
+            .where(TaskInputFile.task_id == self.task_id)
+            .order_by(TaskInputFile.file_index)
+        )
+        rows = result.scalars().all()
+        if rows:
+            self._input_files_cache = [
+                {
+                    "name": r.file_name,
+                    "mime_type": r.mime_type,
+                    "size_bytes": r.size_bytes,
+                    "content_b64": base64.b64encode(r.content).decode("utf-8"),
+                }
+                for r in rows
+            ]
+            return self._input_files_cache
+
+        # Old tasks: content_b64 stored directly in input_file_data JSON column
+        self._input_files_cache = task.input_file_data or []
+        return self._input_files_cache
 
     async def _check_cancelled(self) -> None:
         """Raise TaskCancelledError if the task status is 'cancelled' in the DB."""
@@ -409,10 +443,11 @@ class TaskProcessor:
         await self.db.commit()
         logger.info("Auto-filled estimate slot", task_id=self.task_id, cost=cost)
 
-    def _build_file_contents(self, task: Task) -> list:
+    async def _build_file_contents(self, task: Task) -> list:
         """Build list of file content blocks/strings for Claude."""
+        files = await self._load_input_files(task)
         content_blocks = []
-        for file_info in task.input_file_data or []:
+        for file_info in files:
             name = file_info.get("name", "")
             mime_type = file_info.get("mime_type", "")
             content_b64 = file_info.get("content_b64", "")
@@ -422,14 +457,14 @@ class TaskProcessor:
             content_blocks.append({"file_name": name, "content": parsed})
         return content_blocks
 
-    def _build_messages_with_files(
+    async def _build_messages_with_files(
         self, task: Task, prompt: str
     ) -> tuple[list[dict], list[dict]]:
         """
         Build Claude messages list and image blocks list.
         Returns (messages, image_blocks).
         """
-        file_contents = self._build_file_contents(task)
+        file_contents = await self._build_file_contents(task)
         image_blocks = []
         text_parts = []
 
@@ -701,7 +736,7 @@ class TaskProcessor:
         # --- Извлекаем Excel из вложений ---
         await self.update_progress("Анализ файла гранд-сметы...")
         excel_bytes: Optional[bytes] = None
-        for f in task.input_file_data or []:
+        for f in await self._load_input_files(task):
             mime = f.get("mime_type", "")
             if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
                 excel_bytes = base64.b64decode(f["content_b64"])
@@ -912,7 +947,7 @@ class TaskProcessor:
         await self.update_progress("Поиск PDF проектной документации...")
 
         pdf_bytes: Optional[bytes] = None
-        for f in task.input_file_data or []:
+        for f in await self._load_input_files(task):
             if f.get("mime_type", "") == "application/pdf":
                 pdf_bytes = base64.b64decode(f["content_b64"])
                 break
@@ -1158,7 +1193,7 @@ class TaskProcessor:
             # Path A: парсим лист «Перечень» из загруженного Excel
             await self.update_progress("Поиск Excel-файла перечня...")
             excel_bytes: Optional[bytes] = None
-            for f in task.input_file_data or []:
+            for f in await self._load_input_files(task):
                 mime = f.get("mime_type", "")
                 if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
                     excel_bytes = base64.b64decode(f["content_b64"])
@@ -1369,7 +1404,7 @@ class TaskProcessor:
 
         await self.update_progress("Парсинг файлов сметы...")
 
-        files = task.input_file_data or []
+        files = await self._load_input_files(task)
         if not files:
             raise ValueError("Файл сметы не найден во вложениях задачи")
 

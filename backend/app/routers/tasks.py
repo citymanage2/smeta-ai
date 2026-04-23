@@ -26,6 +26,7 @@ import structlog
 from app.database import get_db, AsyncSessionLocal
 from app.models.task import Task
 from app.models.result import TaskResult
+from app.models.task_input_file import TaskInputFile
 from app.models.history import TaskHistory
 from app.models.project import Project
 from app.utils.auth import get_current_user
@@ -205,6 +206,7 @@ async def create_task(
     max_size_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
     input_file_data = []
     input_files_meta = []
+    raw_file_bytes: list[bytes] = []  # kept in memory only until task_input_files are saved
 
     for file in files:
         # Check for .gsn files
@@ -234,12 +236,11 @@ async def create_task(
                 ),
             )
 
-        content_b64 = base64.b64encode(file_data).decode("utf-8")
+        raw_file_bytes.append(file_data)
         input_file_data.append({
             "name": file.filename or "file",
             "mime_type": mime_type,
             "size_bytes": len(file_data),
-            "content_b64": content_b64,
         })
         input_files_meta.append({
             "name": file.filename or "file",
@@ -277,6 +278,19 @@ async def create_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+
+    # Store file contents in task_input_files (separate from task JSON to avoid huge INSERT)
+    for i, (raw_bytes, meta) in enumerate(zip(raw_file_bytes, input_file_data)):
+        db.add(TaskInputFile(
+            task_id=task.id,
+            file_index=i,
+            file_name=meta["name"],
+            mime_type=meta["mime_type"],
+            size_bytes=meta["size_bytes"],
+            content=raw_bytes,
+        ))
+    if raw_file_bytes:
+        await db.commit()
 
     if project_name and not project_id:
         new_proj = Project(name=project_name)
@@ -909,21 +923,30 @@ async def download_file_from_slot(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
-    # Source slot: serve original uploaded file from task.input_file_data
+    # Source slot: serve original uploaded file from task_input_files
     if slot == "source":
-        if not task.input_file_data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Исходный файл не найден",
+        src_row = await db.execute(
+            select(TaskInputFile)
+            .where(TaskInputFile.task_id == task_id)
+            .order_by(TaskInputFile.file_index)
+            .limit(1)
+        )
+        src_file = src_row.scalar_one_or_none()
+        if src_file is None and task.input_file_data:
+            # backward compat: old task stored content_b64 inline
+            first_file = task.input_file_data[0]
+            file_bytes = base64.b64decode(first_file.get("content_b64", ""))
+            return StreamingResponse(
+                io.BytesIO(file_bytes),
+                media_type=first_file.get("mime_type", "application/octet-stream"),
+                headers={"Content-Disposition": f'attachment; filename="{first_file.get("name", "source")}"'},
             )
-        first_file = task.input_file_data[0]
-        file_data = base64.b64decode(first_file.get("content_b64", ""))
+        if src_file is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Исходный файл не найден")
         return StreamingResponse(
-            io.BytesIO(file_data),
-            media_type=first_file.get("mime_type", "application/octet-stream"),
-            headers={
-                "Content-Disposition": f'attachment; filename="{first_file.get("name", "source")}"',
-            },
+            io.BytesIO(src_file.content),
+            media_type=src_file.mime_type,
+            headers={"Content-Disposition": f'attachment; filename="{src_file.file_name}"'},
         )
 
     result_row = await db.execute(
@@ -961,6 +984,22 @@ async def download_input_file(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
+    # Try new storage first (task_input_files table)
+    input_file_row = await db.execute(
+        select(TaskInputFile).where(
+            TaskInputFile.task_id == task_id,
+            TaskInputFile.file_index == file_index,
+        )
+    )
+    input_file = input_file_row.scalar_one_or_none()
+    if input_file is not None:
+        return StreamingResponse(
+            io.BytesIO(input_file.content),
+            media_type=input_file.mime_type,
+            headers={"Content-Disposition": f'attachment; filename="{input_file.file_name}"'},
+        )
+
+    # Backward compat: old tasks stored content_b64 in input_file_data JSON
     file_data_list = task.input_file_data or []
     if file_index < 0 or file_index >= len(file_data_list):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
