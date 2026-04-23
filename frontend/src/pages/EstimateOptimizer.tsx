@@ -46,14 +46,35 @@ const EstimateOptimizer: React.FC = () => {
   const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [customRunning, setCustomRunning] = useState(false);
+  const pollingRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!taskId) return;
     reset();
     setLoading(true);
-    loadVersions(taskId)
-      .catch(() => setError('Не удалось загрузить версии сметы'))
-      .finally(() => setLoading(false));
+
+    const tryLoad = () => {
+      loadVersions(taskId)
+        .then(() => {
+          const { versions } = useEstimateEditorStore.getState();
+          if (versions.length > 0) {
+            if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+            setLoading(false);
+          }
+        })
+        .catch(() => {
+          setError('Не удалось загрузить версии сметы');
+          if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+          setLoading(false);
+        });
+    };
+
+    tryLoad();
+    pollingRef.current = setInterval(tryLoad, 2000);
+
+    return () => {
+      if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+    };
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reloadVersions = useCallback(async () => {
@@ -202,19 +223,15 @@ const EstimateOptimizer: React.FC = () => {
           </div>
         )}
 
-        {/* Empty state */}
-        {!loading && !error && versions.length === 0 && (
-          <div
-            style={{
-              padding: '20px',
-              background: '#fef9c3',
-              border: '1px solid #fde047',
-              borderRadius: '8px',
-              color: '#854d0e',
-              fontSize: '14px',
-            }}
-          >
-            Смета ещё обрабатывается. Обновите страницу через несколько секунд.
+        {/* Processing state — shown while polling for versions */}
+        {(loading || (!error && versions.length === 0)) && (
+          <div style={{ textAlign: 'center', padding: '48px 24px', color: '#64748b', fontSize: '15px' }}>
+            <div style={{
+              width: '32px', height: '32px', border: '3px solid #e2e8f0',
+              borderTopColor: '#3b82f6', borderRadius: '50%',
+              animation: 'spin 0.8s linear infinite', margin: '0 auto 16px',
+            }} />
+            Смета обрабатывается, подождите...
           </div>
         )}
 
