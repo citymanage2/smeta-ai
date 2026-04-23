@@ -881,3 +881,31 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 **Реализован:** ✅ Полностью (фазы 1–7 завершены)  
 **Текущий статус:** Фаза 7 завершена — generate_estimate_export() и generate_comparison_export() в excel_service.py; endpoints GET /export и POST /comparison/export в estimate_versions.py; кнопка «⬇ Скачать .xlsx» в контекстном меню VersionTabs; кнопка «⬇ Скачать сравнение .xlsx» в EstimateComparison с состоянием загрузки.  
 **Следующий шаг:** Нет. Все 7 фаз реализованы.
+
+---
+
+## Исправления после релиза (2026-04-24)
+
+### Парсер: корректное распознавание разделов и фильтрация комментариев
+
+**Проблема:** строки без цен определялись как `section` без исключений. Это приводило к тому, что:
+- комментарии типа «с сохранением» (с маленькой буквы) попадали в смету как разделы
+- строки с единицами/кол-вом, но без цен (например пропущены колонки) → ошибочно раздел
+
+**Решения в `estimate_parser.py`:**
+- Переключено с `values_only=True` на Cell-объекты для доступа к форматированию
+- Построен словарь `merged_spans` из `ws.merged_cells.ranges` (1-based row, col) → ширина span
+- `_is_comment_name()`: пропуск строк, начинающихся со строчной буквы
+- Если строка имеет unit или qty, но нет цен → тип `work` (не `section`)
+- Если name_cell в merged-диапазоне шириной ≥ 3 или ячейка bold + нет данных → `section`
+
+### Фронтенд: заголовки разделов как объединённые ячейки
+
+**Проблема:** разделы рендерились как обычные строки с бейджем «Раздел».
+
+**Решение в `EstimateGrid.tsx` + `EstimateGrid.css`:**
+- Используется `renderers={{ renderRow }}` (API react-data-grid v7)
+- Для `row.type === 'section'`: рендерится `div` с `display: contents` и CSS-переменной `--rdg-grid-row-start`
+- Внутри — один `div.section-header-cell` с `grid-column: 1/-1` (span всех колонок)
+- `react-data-grid v7` использует `display: contents` на Row → ячейки как прямые дети CSS-grid DataGrid → `grid-column: 1/-1` на section-header-cell перекрывает все колонки
+- Стиль: синий фон `#dbeafe`, жирный текст `#1e40af`, нижняя граница `#93c5fd`

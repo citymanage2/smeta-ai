@@ -158,11 +158,23 @@
   color: #475569;
 }
 
-/* Section row style */
-.rdg-row.row-section .rdg-cell {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #334155;
+/* Section header: full-width merged-cell appearance.
+   grid-row-start picks up --rdg-grid-row-start from the parent display:contents div.
+   grid-column:1/-1 spans all DataGrid columns. */
+.section-header-cell {
+  grid-row-start: var(--rdg-grid-row-start);
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: #dbeafe;
+  border-bottom: 2px solid #93c5fd;
+  border-inline-end: none;
+  font-weight: 700;
+  font-size: 13px;
+  color: #1e40af;
+  cursor: default;
+  user-select: none;
 }
 
 /* Unfilled row highlight */

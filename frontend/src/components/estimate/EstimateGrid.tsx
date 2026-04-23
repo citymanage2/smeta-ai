@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import DataGrid, { Column, SelectColumn, RenderEditCellProps, RenderCellProps, RowsChangeData, textEditor } from 'react-data-grid';
+import DataGrid, { Column, SelectColumn, RenderEditCellProps, RenderCellProps, RenderRowProps, RowsChangeData, Row, textEditor } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import './EstimateGrid.css';
 import { EstimateRow } from '../../types';
@@ -258,13 +258,37 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 
   const rowClass = useCallback(
     (row: EstimateRow) => {
-      if (row.type === 'section') return 'row-section';
       if (
+        row.type !== 'section' &&
         row.optimization_note != null &&
         (row.price_work == null || row.price_material == null)
       )
         return 'row-unfilled';
       return undefined;
+    },
+    [],
+  );
+
+  const renderRow = useCallback(
+    (key: React.Key, props: RenderRowProps<EstimateRow>) => {
+      if (props.row.type !== 'section') {
+        return <Row key={key} {...props} />;
+      }
+      // Section header: render as a single full-width cell spanning all columns.
+      // react-data-grid v7 uses display:contents on Row, so cells are direct
+      // children of the DataGrid CSS grid. grid-column:1/-1 spans them all.
+      return (
+        <div
+          key={key}
+          role="row"
+          aria-rowindex={props.rowIdx + 2}
+          style={{ display: 'contents', '--rdg-grid-row-start': props.gridRowStart } as React.CSSProperties}
+        >
+          <div className="section-header-cell">
+            {props.row.name}
+          </div>
+        </div>
+      );
     },
     [],
   );
@@ -334,6 +358,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
         selectedRows={selectedRowIds}
         onSelectedRowsChange={onSelectedRowIdsChange}
         rowClass={rowClass}
+        renderers={{ renderRow }}
         style={{ blockSize: 'auto', minHeight: 300, maxHeight: 600 }}
         enableVirtualization
       />

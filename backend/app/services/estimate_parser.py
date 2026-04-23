@@ -19,6 +19,13 @@ _PRICE_WORK_KW = ("цена работ", "труд", "labor", "работа", "�
 _PRICE_MAT_KW = ("цена матер", "матер", "material", "price_material", "цм", "стоим.матер")
 _SKIP_KW = ("стоимость", "сумма", "итого", "total", "cost", "всего")
 
+# Russian prepositions/conjunctions that mark comment rows (start with lowercase)
+_COMMENT_STARTS = ("с ", "без ", "при ", "в ", "на ", "из ", "по ", "за ",
+                   "до ", "от ", "со ", "не ", "и ", "или ")
+
+# Minimum merged-cell span to treat a row as a section header
+_SECTION_MERGE_SPAN = 3
+
 
 def _header_matches(cell_val: str, keywords: tuple) -> bool:
     v = cell_val.lower().strip()
@@ -75,6 +82,20 @@ def _infer_type(price_work: Optional[float], price_material: Optional[float]) ->
     return "section"
 
 
+def _is_comment_name(name: str) -> bool:
+    """Return True if name looks like a comment/continuation clause to skip."""
+    if not name:
+        return False
+    # Starts with lowercase → likely a note/continuation (e.g. "с сохранением")
+    if name[0].islower():
+        return True
+    # Very short text with no uppercase start (after stripping punctuation)
+    stripped = name.lstrip("- •·–—")
+    if stripped and stripped[0].islower():
+        return True
+    return False
+
+
 def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
     """Parse xlsx bytes into a list of EstimateRow dicts.
 
@@ -88,7 +109,17 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
 
     ws = wb.active
 
-    rows_raw = list(ws.iter_rows(values_only=True))
+    # Build merged-cell lookup: (1-based row, 1-based col) → span width
+    # Section headers in construction estimates are typically merged across all columns.
+    merged_spans: dict[tuple[int, int], int] = {}
+    for merged_range in ws.merged_cells.ranges:
+        span = merged_range.max_col - merged_range.min_col + 1
+        for r in range(merged_range.min_row, merged_range.max_row + 1):
+            for c in range(merged_range.min_col, merged_range.max_col + 1):
+                merged_spans[(r, c)] = span
+
+    # Iterate rows as Cell objects (not values_only) so we can inspect formatting
+    rows_raw = list(ws.iter_rows(values_only=False))
     if not rows_raw:
         return []
 
@@ -96,7 +127,7 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
     header_idx: Optional[int] = None
     cols: dict = {}
     for i, row in enumerate(rows_raw):
-        row_strs = [str(c) if c is not None else "" for c in row]
+        row_strs = [str(c.value) if c.value is not None else "" for c in row]
         combined = " ".join(row_strs).lower()
         if any(k in combined for k in ("наименование", "наименов", "name")):
             cols = _detect_columns(row_strs)
@@ -110,8 +141,13 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
     result = []
     num_counter = 0
 
-    for row in rows_raw[header_idx + 1:]:
-        name_val = row[cols["name"]] if "name" in cols and cols["name"] < len(row) else None
+    for row_offset, row in enumerate(rows_raw[header_idx + 1:]):
+        # Excel row number (1-based) for merged-cell lookup
+        excel_row = header_idx + 2 + row_offset
+
+        name_col_idx = cols["name"]
+        name_cell = row[name_col_idx] if name_col_idx < len(row) else None
+        name_val = name_cell.value if name_cell is not None else None
         if name_val is None or str(name_val).strip() == "":
             continue
 
@@ -122,7 +158,64 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
         if any(k in low for k in ("итого", "всего", "total", "grand total", "в том числе")):
             continue
 
-        num_val = row[cols["num"]] if "num" in cols and cols["num"] < len(row) else None
+        # Skip comment/continuation lines (e.g. "с сохранением")
+        if _is_comment_name(name):
+            continue
+
+        # Read quantitative fields
+        unit_val = row[cols["unit"]].value if "unit" in cols and cols["unit"] < len(row) else None
+        unit = str(unit_val).strip() if unit_val is not None else ""
+
+        qty_val = row[cols["qty"]].value if "qty" in cols and cols["qty"] < len(row) else None
+        qty = _to_float(qty_val)
+
+        pw_val = row[cols["price_work"]].value if "price_work" in cols and cols["price_work"] < len(row) else None
+        pm_val = row[cols["price_material"]].value if "price_material" in cols and cols["price_material"] < len(row) else None
+        price_work = _to_float(pw_val)
+        price_material = _to_float(pm_val)
+
+        has_prices = price_work is not None or price_material is not None
+        has_qty = qty is not None
+        has_unit = bool(unit)
+
+        # Determine section vs work/material
+        # Check Excel formatting: merged wide → definitive section header
+        name_col_1based = name_col_idx + 1
+        merge_span = merged_spans.get((excel_row, name_col_1based), 1)
+        is_merged_wide = merge_span >= _SECTION_MERGE_SPAN
+
+        is_bold = bool(
+            name_cell is not None
+            and hasattr(name_cell, "font")
+            and name_cell.font is not None
+            and name_cell.font.bold
+        )
+
+        if is_merged_wide or (is_bold and not has_prices and not has_qty and not has_unit):
+            # Explicit structural section header from Excel formatting
+            row_type = "section"
+        elif not has_prices and not has_qty and not has_unit:
+            # No data → section header (name-only row)
+            row_type = "section"
+        else:
+            # Has some quantitative data → determine work/material
+            if "type" in cols and cols["type"] < len(row):
+                raw_type = str(row[cols["type"]].value or "").lower().strip()
+                if "работ" in raw_type or raw_type in ("work", "w", "р"):
+                    row_type = "work"
+                elif "матер" in raw_type or raw_type in ("material", "m", "м"):
+                    row_type = "material"
+                else:
+                    row_type = _infer_type(price_work, price_material)
+            else:
+                row_type = _infer_type(price_work, price_material)
+
+            # If infer returned "section" but row has unit/qty, keep it as work
+            if row_type == "section" and (has_qty or has_unit):
+                row_type = "work"
+
+        # Row number
+        num_val = row[cols["num"]].value if "num" in cols and cols["num"] < len(row) else None
         num = None
         if num_val is not None:
             try:
@@ -132,28 +225,6 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
         if num is None:
             num_counter += 1
             num = num_counter
-
-        unit_val = row[cols["unit"]] if "unit" in cols and cols["unit"] < len(row) else None
-        unit = str(unit_val).strip() if unit_val is not None else ""
-
-        qty_val = row[cols["qty"]] if "qty" in cols and cols["qty"] < len(row) else None
-        qty = _to_float(qty_val)
-
-        pw_val = row[cols["price_work"]] if "price_work" in cols and cols["price_work"] < len(row) else None
-        pm_val = row[cols["price_material"]] if "price_material" in cols and cols["price_material"] < len(row) else None
-        price_work = _to_float(pw_val)
-        price_material = _to_float(pm_val)
-
-        if "type" in cols and cols["type"] < len(row):
-            raw_type = str(row[cols["type"]] or "").lower().strip()
-            if "работ" in raw_type or raw_type in ("work", "w", "р"):
-                row_type = "work"
-            elif "матер" in raw_type or raw_type in ("material", "m", "м"):
-                row_type = "material"
-            else:
-                row_type = _infer_type(price_work, price_material)
-        else:
-            row_type = _infer_type(price_work, price_material)
 
         cost: Optional[float] = None
         if qty is not None:
