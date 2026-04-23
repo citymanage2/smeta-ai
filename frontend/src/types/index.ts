@@ -4,7 +4,63 @@ export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'ca
 
 export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'optimizing';
 
-export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set(['ESTIMATE_FROM_LIST']);
+export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set(['ESTIMATE_FROM_LIST', 'ESTIMATE_OPTIMIZATION']);
+
+export type ClientFileType = 'Смета' | 'Проект' | 'ТЗ' | 'Другое';
+
+export interface ClientFileMeta {
+  index: number;
+  type: ClientFileType;
+}
+
+export interface EstimateRow {
+  id: string;
+  lineage_id: string;
+  num: number;
+  type: 'work' | 'material' | 'section';
+  name: string;
+  unit: string;
+  qty: number | null;
+  price_work: number | null;
+  price_material: number | null;
+  cost: number | null;
+  selected: boolean;
+  abc_group?: 'A' | 'B' | 'C';
+  optimization_note?: string;
+}
+
+export interface OptimizationProposal {
+  id: string;
+  row_id: string;
+  proposal_type: 'add' | 'remove' | 'replace_tech' | 'replace_material' | 'price_search';
+  description: string;
+  explanation: string;
+  economy_rub: number | null;
+  confidence: 'high' | 'medium' | 'low';
+  source?: string;
+  new_value?: Partial<EstimateRow>;
+}
+
+export interface EstimateVersionSummary {
+  id: string;
+  task_id: string;
+  version_number: number;
+  version_label: string;
+  version_display_name: string;
+  overhead_pct: number;
+  transport_pct: number;
+  contingency_pct: number;
+  expenses_overridden: boolean;
+  is_rolled_back: boolean;
+  created_at: string;
+}
+
+export interface EstimateVersionFull extends EstimateVersionSummary {
+  rows: EstimateRow[];
+  optimization_proposals: OptimizationProposal[] | null;
+}
+
+export type OptimizationStep = 'completeness' | 'redundancy' | 'technology' | 'materials';
 
 export interface Task {
   id: string;
@@ -56,6 +112,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   LIST_FROM_PROJECT: 'Перечень из проекта',
   CHECK_PROJECT_COMPLETENESS: 'Проверка полноты (по проекту)',
   ESTIMATE_FROM_LIST: 'Смета из перечня',
+  ESTIMATE_OPTIMIZATION: 'Оптимизация сметы',
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {

@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import TaskCreate from './pages/TaskCreate';
 import TaskStatus from './pages/TaskStatus';
+import EstimateOptimizer from './pages/EstimateOptimizer';
 import Admin from './pages/Admin';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
@@ -42,6 +43,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <TaskStatus />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tasks/:taskId/estimate"
+          element={
+            <ProtectedRoute>
+              <EstimateOptimizer />
             </ProtectedRoute>
           }
         />

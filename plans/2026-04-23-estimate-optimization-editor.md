@@ -343,9 +343,9 @@ task.progress_data = {
 
 ---
 
-### Фаза 3 — Frontend: загрузка файлов и роутинг [ ]
+### Фаза 3 — Frontend: загрузка файлов и роутинг [x]
 
-#### 3.1 Установка react-data-grid [ ]
+#### 3.1 Установка react-data-grid [x]
 
 ```bash
 npm install react-data-grid
@@ -359,7 +359,7 @@ npm install react-data-grid
 // import 'react-data-grid/lib/styles.css';
 ```
 
-#### 3.2 Новый тип задачи в UI [ ]
+#### 3.2 Новый тип задачи в UI [x]
 
 В `frontend/src/types/index.ts`:
 ```typescript
@@ -374,7 +374,7 @@ ESTIMATE_TASK_TYPES.add('ESTIMATE_OPTIMIZATION');
 - Добавить карточку для `ESTIMATE_OPTIMIZATION`
 - Описание: "Загрузите смету себестоимости для оптимизации тендерного предложения"
 
-#### 3.3 Обновление TaskCreate.tsx [ ]
+#### 3.3 Обновление TaskCreate.tsx [x]
 
 В `frontend/src/pages/TaskCreate.tsx` добавить ветку для `ESTIMATE_OPTIMIZATION`:
 
@@ -392,7 +392,7 @@ ESTIMATE_TASK_TYPES.add('ESTIMATE_OPTIMIZATION');
 
 **Отдельные `FileUpload`** компоненты для каждого поля с чёткими подписями.
 
-#### 3.4 Новый роут и страница [ ]
+#### 3.4 Новый роут и страница [x]
 
 В `frontend/src/App.tsx`:
 ```tsx
@@ -401,7 +401,7 @@ ESTIMATE_TASK_TYPES.add('ESTIMATE_OPTIMIZATION');
 
 После создания задачи типа `ESTIMATE_OPTIMIZATION` редирект на `/tasks/:taskId/estimate` вместо обычного статуса.
 
-#### 3.5 API-методы [ ]
+#### 3.5 API-методы [x]
 
 Создать или дополнить `frontend/src/api/estimateVersions.ts`:
 ```typescript
@@ -879,5 +879,5 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 ## Итоговый блок
 
 **Реализован:** 🔄 в работе  
-**Текущий статус:** Фаза 2 завершена — парсер Excel, ветка ESTIMATE_OPTIMIZATION, все API endpoints  
-**Следующий шаг:** Реализация Фазы 3 (frontend: загрузка файлов, роутинг, react-data-grid)
+**Текущий статус:** Фаза 3 завершена — react-data-grid установлен, форма создания задачи, API-модуль, роут /tasks/:taskId/estimate  
+**Следующий шаг:** Реализация Фазы 4 (EstimateGrid, AdditionalExpenses, EstimateSummary, Zustand store)

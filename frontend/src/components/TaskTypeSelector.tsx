@@ -11,6 +11,7 @@ const TASK_TYPES: TaskType[] = [
   'LIST_FROM_GRAND',
   'LIST_FROM_PROJECT',
   'ESTIMATE_FROM_LIST',
+  'ESTIMATE_OPTIMIZATION',
 ];
 
 const TaskTypeSelector: React.FC<TaskTypeSelectorProps> = ({ value, onChange, disabled }) => {

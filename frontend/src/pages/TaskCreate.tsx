@@ -3,9 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import TaskTypeSelector from '../components/TaskTypeSelector';
 import FileUpload from '../components/FileUpload';
-import { TaskType, ProjectCard, TASK_TYPE_LABELS } from '../types';
+import { TaskType, ProjectCard, TASK_TYPE_LABELS, ClientFileType, ClientFileMeta } from '../types';
 import { createTask, getEstimateSources, EstimateSource } from '../api/tasks';
 import { listProjects } from '../api/projects';
+
+const CLIENT_FILE_TYPES: ClientFileType[] = ['Смета', 'Проект', 'ТЗ', 'Другое'];
+
+interface ClientFileEntry {
+  file: File;
+  type: ClientFileType;
+}
 
 const TaskCreate: React.FC = () => {
   const navigate = useNavigate();
@@ -23,6 +30,12 @@ const TaskCreate: React.FC = () => {
   const [projectMode, setProjectMode] = useState<'none' | 'existing' | 'new'>('none');
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
+
+  // ESTIMATE_OPTIMIZATION fields
+  const [estimateFile, setEstimateFile] = useState<File[]>([]);
+  const [clientFileEntries, setClientFileEntries] = useState<ClientFileEntry[]>([]);
+  const [pendingClientFile, setPendingClientFile] = useState<File[]>([]);
+  const [pendingClientFileType, setPendingClientFileType] = useState<ClientFileType>('Смета');
 
   // Path B (ESTIMATE_FROM_LIST from existing task)
   const [inputMode, setInputMode] = useState<'file' | 'task'>('file');
@@ -50,6 +63,11 @@ const TaskCreate: React.FC = () => {
   useEffect(() => {
     if (taskType !== 'ESTIMATE_FROM_LIST') {
       setInputMode('file');
+    }
+    if (taskType !== 'ESTIMATE_OPTIMIZATION') {
+      setEstimateFile([]);
+      setClientFileEntries([]);
+      setPendingClientFile([]);
     }
     setSelectedSourceTaskId('');
     setSelectedStage(1);
@@ -118,6 +136,20 @@ const TaskCreate: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskType]);
 
+  const addClientFile = () => {
+    if (pendingClientFile.length === 0) return;
+    setClientFileEntries((prev) => [
+      ...prev,
+      { file: pendingClientFile[0], type: pendingClientFileType },
+    ]);
+    setPendingClientFile([]);
+    setPendingClientFileType('Смета');
+  };
+
+  const removeClientFileEntry = (idx: number) => {
+    setClientFileEntries((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -128,9 +160,15 @@ const TaskCreate: React.FC = () => {
       return;
     }
 
+    const isEstimateOpt = taskType === 'ESTIMATE_OPTIMIZATION';
     const isPathB = taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task';
 
-    if (!isPathB && files.length === 0) {
+    if (isEstimateOpt) {
+      if (estimateFile.length === 0) {
+        setError('Загрузите Excel-файл нашей сметы себестоимости.');
+        return;
+      }
+    } else if (!isPathB && files.length === 0) {
       setError('Добавьте хотя бы один файл для обработки.');
       return;
     }
@@ -148,7 +186,21 @@ const TaskCreate: React.FC = () => {
       const formData = new FormData();
       formData.append('task_type', taskType);
       formData.append('name', name.trim());
-      if (isPathB) {
+
+      if (isEstimateOpt) {
+        // Main estimate file goes first (index 0)
+        formData.append('files', estimateFile[0]);
+        // Client files follow — track their indices
+        const clientFilesMeta: ClientFileMeta[] = [];
+        clientFileEntries.forEach((entry, i) => {
+          formData.append('files', entry.file);
+          clientFilesMeta.push({ index: i + 1, type: entry.type });
+        });
+        // Encode metadata into prompt field as JSON
+        const meta: Record<string, unknown> = { client_files: clientFilesMeta };
+        if (prompt.trim()) meta.comment = prompt.trim();
+        formData.append('prompt', JSON.stringify(meta));
+      } else if (isPathB) {
         formData.append('source_task_id', selectedSourceTaskId);
         formData.append('source_stage', String(selectedStage));
       } else {
@@ -174,7 +226,11 @@ const TaskCreate: React.FC = () => {
         setError('Задача создана, но ID не получен. Попробуйте обновить страницу.');
         return;
       }
-      navigate(`/tasks/${task.task_id}/status`);
+      if (isEstimateOpt) {
+        navigate(`/tasks/${task.task_id}/estimate`);
+      } else {
+        navigate(`/tasks/${task.task_id}/status`);
+      }
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string } }; request?: unknown };
       if (axiosError.request && !axiosError.response) {
@@ -218,6 +274,122 @@ const TaskCreate: React.FC = () => {
               <TaskTypeSelector value={taskType} onChange={setTaskType} disabled={submitting} />
             </div>
 
+            {/* ESTIMATE_OPTIMIZATION: dual file upload */}
+            {taskType === 'ESTIMATE_OPTIMIZATION' && (
+              <div style={{ marginBottom: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {/* Field 1: main estimate */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
+                    Наша смета себестоимости <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <p style={{ margin: '0 0 8px', fontSize: '13px', color: '#64748b' }}>
+                    Excel-файл (.xlsx) — исходная смета для оптимизации
+                  </p>
+                  <FileUpload
+                    files={estimateFile}
+                    onChange={(f) => setEstimateFile(f.slice(0, 1))}
+                    maxFiles={1}
+                    accept=".xlsx"
+                  />
+                </div>
+
+                {/* Field 2: client files */}
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
+                    Файлы от заказчика{' '}
+                    <span style={{ color: '#94a3b8', fontWeight: 400 }}>(необязательно)</span>
+                  </label>
+                  <p style={{ margin: '0 0 10px', fontSize: '13px', color: '#64748b' }}>
+                    Смета заказчика, проект, ТЗ — для контекста AI-анализа
+                  </p>
+
+                  {/* Added client files list */}
+                  {clientFileEntries.length > 0 && (
+                    <ul style={{ listStyle: 'none', margin: '0 0 12px', padding: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {clientFileEntries.map((entry, idx) => (
+                        <li
+                          key={idx}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '8px 12px',
+                            backgroundColor: '#f8fafc',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: '8px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '13px', color: '#64748b', backgroundColor: '#e2e8f0', padding: '2px 8px', borderRadius: '4px' }}>
+                              {entry.type}
+                            </span>
+                            <span style={{ fontSize: '14px', color: '#1e293b' }}>{entry.file.name}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeClientFileEntry(idx)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', fontSize: '18px', lineHeight: 1, padding: '0 4px' }}
+                            title="Удалить"
+                          >
+                            ×
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {/* Add new client file */}
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                    {CLIENT_FILE_TYPES.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => setPendingClientFileType(t)}
+                        style={{
+                          padding: '6px 14px',
+                          fontSize: '13px',
+                          fontWeight: 500,
+                          border: `1.5px solid ${pendingClientFileType === t ? '#2563eb' : '#e2e8f0'}`,
+                          borderRadius: '6px',
+                          backgroundColor: pendingClientFileType === t ? '#eff6ff' : '#ffffff',
+                          color: pendingClientFileType === t ? '#1d4ed8' : '#64748b',
+                          cursor: submitting ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  <FileUpload
+                    files={pendingClientFile}
+                    onChange={setPendingClientFile}
+                    maxFiles={1}
+                  />
+                  {pendingClientFile.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={submitting}
+                      onClick={addClientFile}
+                      style={{
+                        marginTop: '8px',
+                        padding: '8px 18px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        backgroundColor: '#2563eb',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: submitting ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Добавить файл как «{pendingClientFileType}»
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Path B toggle — only for ESTIMATE_FROM_LIST */}
             {taskType === 'ESTIMATE_FROM_LIST' && (
               <div style={{ marginBottom: '24px' }}>
@@ -250,7 +422,7 @@ const TaskCreate: React.FC = () => {
             )}
 
             {/* Path B: source task selector */}
-            {taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task' ? (
+            {taskType !== 'ESTIMATE_OPTIMIZATION' && taskType === 'ESTIMATE_FROM_LIST' && inputMode === 'task' ? (
               <div style={{ marginBottom: '24px' }}>
                 {sourcesLoading ? (
                   <div style={{ fontSize: '14px', color: '#64748b' }}>Загрузка перечней...</div>
@@ -295,12 +467,12 @@ const TaskCreate: React.FC = () => {
                   </>
                 )}
               </div>
-            ) : (
-              /* File upload */
+            ) : taskType !== 'ESTIMATE_OPTIMIZATION' ? (
+              /* File upload — not shown for ESTIMATE_OPTIMIZATION (handled above) */
               <div style={{ marginBottom: '24px' }}>
                 <FileUpload files={files} onChange={setFiles} />
               </div>
-            )}
+            ) : null}
 
             {/* Task name */}
             <div style={{ marginBottom: '24px' }}>
@@ -350,8 +522,8 @@ const TaskCreate: React.FC = () => {
               )}
             </div>
 
-            {/* Prompt */}
-            <div style={{ marginBottom: '28px' }}>
+            {/* Prompt — hidden for ESTIMATE_OPTIMIZATION (metadata embedded in JSON) */}
+            {taskType !== 'ESTIMATE_OPTIMIZATION' && <div style={{ marginBottom: '28px' }}>
               <label
                 htmlFor="prompt"
                 style={{
@@ -389,7 +561,7 @@ const TaskCreate: React.FC = () => {
                 onFocus={(e) => { e.target.style.borderColor = '#2563eb'; }}
                 onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }}
               />
-            </div>
+            </div>}
 
             {/* Project selector */}
             <div style={{ marginBottom: '24px' }}>
