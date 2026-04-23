@@ -4,5 +4,6 @@ from app.models.result import TaskResult
 from app.models.price import PriceWork, PriceMaterial
 from app.models.project import Project
 from app.models.history import TaskHistory
+from app.models.estimate_version import EstimateVersion
 
-__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "Project", "TaskHistory"]
+__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "Project", "TaskHistory", "EstimateVersion"]

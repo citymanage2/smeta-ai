@@ -150,13 +150,13 @@ interface OptimizationProposal {
 
 ## Фазы реализации
 
-### Фаза 1 — Модель данных и миграция [ ]
+### Фаза 1 — Модель данных и миграция [x]
 
 **Задачи:**
-- [ ] Создать `backend/app/models/estimate_version.py` с моделью `EstimateVersion`
-- [ ] Создать `backend/alembic/versions/014_add_estimate_versions.py` (IF NOT EXISTS)
-- [ ] Добавить `EstimateVersion` в `backend/app/models/__init__.py`
-- [ ] Создать Pydantic-схемы в `backend/app/schemas/estimate_version.py`:
+- [x] Создать `backend/app/models/estimate_version.py` с моделью `EstimateVersion`
+- [x] Создать `backend/alembic/versions/014_add_estimate_versions.py` (IF NOT EXISTS)
+- [x] Добавить `EstimateVersion` в `backend/app/models/__init__.py`
+- [x] Создать Pydantic-схемы в `backend/app/schemas/estimate_version.py`:
   - `EstimateRowSchema` — включает поле:
     ```python
     lineage_id: str  # UUID; при создании = id, сохраняется через версии
@@ -878,6 +878,6 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 
 ## Итоговый блок
 
-**Реализован:** ❌ не начат  
-**Текущий статус:** Планирование завершено — методологии согласованы, план прошёл аудит  
-**Следующий шаг:** Реализация Фазы 1 (модель данных и миграция)
+**Реализован:** 🔄 в работе  
+**Текущий статус:** Фаза 1 завершена — модель, миграция, схемы, constants  
+**Следующий шаг:** Реализация Фазы 2 (парсинг Excel, task_type, API endpoints)
