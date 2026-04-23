@@ -6,9 +6,18 @@ import AdditionalExpenses from '../components/estimate/AdditionalExpenses';
 import EstimateSummary from '../components/estimate/EstimateSummary';
 import VersionTabs from '../components/estimate/VersionTabs';
 import EstimateComparison from '../components/estimate/EstimateComparison';
+import OptimizationToolbar, { AbcBreakdown } from '../components/estimate/OptimizationToolbar';
+import OptimizationProposalsPanel from '../components/estimate/OptimizationProposalsPanel';
 import { useEstimateEditorStore } from '../stores/estimateEditor';
-import { saveExpenses, getVersions } from '../api/estimateVersions';
-import { EstimateRow } from '../types';
+import { saveExpenses, getVersions, runCustomOptimization } from '../api/estimateVersions';
+import { EstimateRow, EstimateVersionFull, OptimizationProposal, OptimizationStep } from '../types';
+
+interface PanelState {
+  proposals: OptimizationProposal[];
+  step: OptimizationStep;
+  versionId: string;
+  abcBreakdown?: AbcBreakdown;
+}
 
 const EstimateOptimizer: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
@@ -28,12 +37,15 @@ const EstimateOptimizer: React.FC = () => {
     saveRows,
     setSelectedRowIds,
     setActiveTab,
+    setOptimizationStatus,
     reset,
   } = useEstimateEditorStore();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
+  const [panel, setPanel] = useState<PanelState | null>(null);
+  const [customRunning, setCustomRunning] = useState(false);
 
   useEffect(() => {
     if (!taskId) return;
@@ -44,12 +56,10 @@ const EstimateOptimizer: React.FC = () => {
       .finally(() => setLoading(false));
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleVersionsChange = useCallback(async () => {
+  const reloadVersions = useCallback(async () => {
     if (!taskId) return;
-    // Reload version list after rename / rollback
     const updated = await getVersions(taskId);
     useEstimateEditorStore.setState({ versions: updated });
-    // If active version was rolled back — switch to latest visible
     const still = updated.find((v) => v.id === activeVersionId && !v.is_rolled_back);
     if (!still) {
       const notRolled = updated.filter((v) => !v.is_rolled_back);
@@ -57,6 +67,46 @@ const EstimateOptimizer: React.FC = () => {
       if (latest) await setActiveVersion(latest.id);
     }
   }, [taskId, activeVersionId, setActiveVersion]);
+
+  const handleStepComplete = useCallback(
+    async (
+      newVersionId: string,
+      proposals: OptimizationProposal[],
+      step: OptimizationStep,
+      abcBreakdown?: AbcBreakdown,
+    ) => {
+      setOptimizationStatus('idle');
+      if (!taskId) return;
+
+      // Reload versions so toolbar can update unlock state
+      const updated = await getVersions(taskId);
+      useEstimateEditorStore.setState({ versions: updated });
+
+      // Switch to the new analysis version
+      await setActiveVersion(newVersionId);
+
+      // Show proposals panel
+      if (proposals.length > 0) {
+        setPanel({ proposals, step, versionId: newVersionId, abcBreakdown });
+      }
+    },
+    [taskId, setActiveVersion, setOptimizationStatus],
+  );
+
+  const handleProposalsApplied = useCallback(
+    async (newVersion: EstimateVersionFull) => {
+      setPanel(null);
+      if (!taskId) return;
+      const updated = await getVersions(taskId);
+      useEstimateEditorStore.setState({ versions: updated });
+      await setActiveVersion(newVersion.id);
+    },
+    [taskId, setActiveVersion],
+  );
+
+  const handleVersionsChange = useCallback(async () => {
+    await reloadVersions();
+  }, [reloadVersions]);
 
   const handleRowsChange = useCallback(
     (rows: EstimateRow[]) => {
@@ -78,6 +128,27 @@ const EstimateOptimizer: React.FC = () => {
     [taskId, activeVersionId, setActiveVersion],
   );
 
+  const handleCustomOptimize = useCallback(async () => {
+    if (!taskId || !activeVersionId || selectedRowIds.size === 0) return;
+    setCustomRunning(true);
+    try {
+      // Save any pending changes first
+      if (isDirty) await saveRows();
+      const result = await runCustomOptimization(taskId, activeVersionId, [...selectedRowIds]);
+      if (result.proposals.length > 0) {
+        setPanel({
+          proposals: result.proposals,
+          step: 'completeness', // custom — reuse panel component, step label not critical
+          versionId: activeVersionId,
+        });
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setCustomRunning(false);
+    }
+  }, [taskId, activeVersionId, selectedRowIds, isDirty, saveRows]);
+
   const isReadonly = optimizationStatus === 'running';
 
   const overhead = activeVersionMeta?.overhead_pct ?? 0;
@@ -94,33 +165,18 @@ const EstimateOptimizer: React.FC = () => {
     <Layout>
       <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
         {/* Page header */}
-        <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#0f172a' }}>
-              Оптимизация сметы
-            </h2>
-            <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
-              Задача: {taskId}
-              {isDirty && (
-                <span style={{ marginLeft: 10, color: '#f59e0b', fontWeight: 500 }}>
-                  • Несохранённые изменения
-                </span>
-              )}
-            </p>
-          </div>
-
-          {/* OptimizationToolbar placeholder — фаза 6 */}
-          <div
-            style={{
-              padding: '8px 14px',
-              background: '#f1f5f9',
-              borderRadius: '8px',
-              fontSize: '12px',
-              color: '#94a3b8',
-            }}
-          >
-            Инструменты оптимизации — Фаза 6
-          </div>
+        <div style={{ marginBottom: '16px' }}>
+          <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#0f172a' }}>
+            Оптимизация сметы
+          </h2>
+          <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
+            Задача: {taskId}
+            {isDirty && (
+              <span style={{ marginLeft: 10, color: '#f59e0b', fontWeight: 500 }}>
+                • Несохранённые изменения
+              </span>
+            )}
+          </p>
         </div>
 
         {/* Loading */}
@@ -162,27 +218,45 @@ const EstimateOptimizer: React.FC = () => {
           </div>
         )}
 
-        {!loading && visibleVersions.length > 0 && (
+        {!loading && visibleVersions.length > 0 && taskId && (
           <>
-            {/* VersionTabs */}
-            {taskId && (
-              <VersionTabs
+            {/* Optimization Toolbar */}
+            <OptimizationToolbar
+              taskId={taskId}
+              versions={visibleVersions}
+              onStepComplete={handleStepComplete}
+            />
+
+            {/* Proposals Panel */}
+            {panel && (
+              <OptimizationProposalsPanel
+                proposals={panel.proposals}
+                step={panel.step}
                 taskId={taskId}
-                versions={visibleVersions}
-                activeVersionId={activeVersionId}
-                activeView={activeView}
-                isOptimizationRunning={isReadonly}
-                onSelectVersion={(id) => {
-                  setActiveView('version');
-                  setActiveVersion(id);
-                }}
-                onSelectComparison={() => setActiveView('comparison')}
-                onVersionsChange={handleVersionsChange}
+                versionId={panel.versionId}
+                abcBreakdown={panel.abcBreakdown}
+                onProposalsApplied={handleProposalsApplied}
+                onDismiss={() => setPanel(null)}
               />
             )}
 
+            {/* VersionTabs */}
+            <VersionTabs
+              taskId={taskId}
+              versions={visibleVersions}
+              activeVersionId={activeVersionId}
+              activeView={activeView}
+              isOptimizationRunning={isReadonly}
+              onSelectVersion={(id) => {
+                setActiveView('version');
+                setActiveVersion(id);
+              }}
+              onSelectComparison={() => setActiveView('comparison')}
+              onVersionsChange={handleVersionsChange}
+            />
+
             {/* Comparison view */}
-            {activeView === 'comparison' && taskId && (
+            {activeView === 'comparison' && (
               <div
                 style={{
                   background: '#fff',
@@ -200,7 +274,7 @@ const EstimateOptimizer: React.FC = () => {
 
             {/* Version editor view */}
             {activeView === 'version' && (
-              <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
                 {/* Main column */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {activeVersionId && (
@@ -235,11 +309,11 @@ const EstimateOptimizer: React.FC = () => {
                   )}
                 </div>
 
-                {/* Right panel: selected rows action */}
+                {/* Right panel: custom optimization */}
                 {selectedRowIds.size > 0 && (
                   <div
                     style={{
-                      width: '220px',
+                      width: '230px',
                       flexShrink: 0,
                       padding: '16px',
                       background: '#fff',
@@ -252,25 +326,45 @@ const EstimateOptimizer: React.FC = () => {
                       Выбрано строк: {selectedRowIds.size}
                     </div>
                     <button
+                      disabled={customRunning}
                       style={{
                         width: '100%',
-                        padding: '8px 12px',
-                        background: '#f0fdf4',
+                        padding: '9px 12px',
+                        background: customRunning ? '#f0fdf4' : '#f0fdf4',
                         border: '1px solid #bbf7d0',
                         borderRadius: '6px',
                         color: '#166534',
                         fontSize: '12px',
                         fontWeight: 600,
-                        cursor: 'pointer',
+                        cursor: customRunning ? 'wait' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
                       }}
-                      onClick={() => {
-                        /* Phase 6.6 — custom optimization */
-                      }}
+                      onClick={handleCustomOptimize}
                     >
-                      Предложить варианты оптимизации ({selectedRowIds.size})
+                      {customRunning ? (
+                        <>
+                          <span
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: '50%',
+                              border: '2px solid #86efac',
+                              borderTopColor: '#166534',
+                              animation: 'opt-spin 0.8s linear infinite',
+                              display: 'inline-block',
+                            }}
+                          />
+                          Анализ...
+                        </>
+                      ) : (
+                        `☑ Предложить варианты (${selectedRowIds.size})`
+                      )}
                     </button>
-                    <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: 8 }}>
-                      Ручная оптимизация — Фаза 6
+                    <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: 8, lineHeight: 1.4 }}>
+                      Claude предложит замену технологии, материала и найдёт актуальные цены.
                     </p>
                   </div>
                 )}
@@ -278,6 +372,8 @@ const EstimateOptimizer: React.FC = () => {
             )}
           </>
         )}
+
+        <style>{`@keyframes opt-spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     </Layout>
   );

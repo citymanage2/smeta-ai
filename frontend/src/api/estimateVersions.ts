@@ -75,10 +75,27 @@ export async function applyProposals(
   taskId: string,
   versionId: string,
   acceptedIds: string[],
+  displayName?: string,
 ): Promise<EstimateVersionFull> {
   const res = await apiClient.post<EstimateVersionFull>(
     `/tasks/${taskId}/estimate/apply-proposals`,
-    { version_id: versionId, accepted_proposal_ids: acceptedIds },
+    {
+      version_id: versionId,
+      accepted_proposal_ids: acceptedIds,
+      ...(displayName ? { version_display_name: displayName } : {}),
+    },
+  );
+  return res.data;
+}
+
+export async function createManualVersion(
+  taskId: string,
+  sourceVersionId: string,
+  displayName?: string,
+): Promise<EstimateVersionFull> {
+  const res = await apiClient.post<EstimateVersionFull>(
+    `/tasks/${taskId}/estimate/versions`,
+    { source_version_id: sourceVersionId, ...(displayName ? { version_display_name: displayName } : {}) },
   );
   return res.data;
 }

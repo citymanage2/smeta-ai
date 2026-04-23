@@ -194,6 +194,48 @@ async def save_expenses(
 # Background optimization runner (shared by steps 1–4)
 # ---------------------------------------------------------------------------
 
+def _abc_analysis(rows: list[dict], row_type: str) -> tuple[list[dict], dict]:
+    """Compute ABC groups for rows of given type. Mutates rows in-place, returns (rows, breakdown)."""
+    import copy as _copy
+    rows = _copy.deepcopy(rows)
+
+    def _cost(r: dict) -> float:
+        qty = r.get("qty") or 0
+        pw = r.get("price_work") or 0
+        pm = r.get("price_material") or 0
+        return float(qty) * (float(pw) + float(pm))
+
+    typed_indices = [(i, r) for i, r in enumerate(rows) if r.get("type") == row_type]
+    total = sum(_cost(r) for _, r in typed_indices)
+
+    if total <= 0 or not typed_indices:
+        return rows, {"a_count": 0, "b_count": 0, "c_count": 0,
+                      "a_sum": 0.0, "b_sum": 0.0, "c_sum": 0.0, "total_sum": 0.0}
+
+    typed_sorted = sorted(typed_indices, key=lambda x: _cost(x[1]), reverse=True)
+    cumulative = 0.0
+    for idx, r in typed_sorted:
+        cumulative += _cost(r)
+        pct = cumulative / total
+        if pct <= 0.80:
+            rows[idx]["abc_group"] = "A"
+        elif pct <= 0.95:
+            rows[idx]["abc_group"] = "B"
+        else:
+            rows[idx]["abc_group"] = "C"
+
+    breakdown = {
+        "a_count": sum(1 for i, _ in typed_indices if rows[i].get("abc_group") == "A"),
+        "b_count": sum(1 for i, _ in typed_indices if rows[i].get("abc_group") == "B"),
+        "c_count": sum(1 for i, _ in typed_indices if rows[i].get("abc_group") == "C"),
+        "a_sum": sum(_cost(rows[i]) for i, _ in typed_indices if rows[i].get("abc_group") == "A"),
+        "b_sum": sum(_cost(rows[i]) for i, _ in typed_indices if rows[i].get("abc_group") == "B"),
+        "c_sum": sum(_cost(rows[i]) for i, _ in typed_indices if rows[i].get("abc_group") == "C"),
+        "total_sum": total,
+    }
+    return rows, breakdown
+
+
 async def _run_optimization_step(
     task_id: str,
     step: str,  # "completeness" | "redundancy" | "technology" | "materials"
@@ -211,54 +253,69 @@ async def _run_optimization_step(
     }
     next_label, display_name = step_labels[step]
 
+    RESPONSE_FORMAT = (
+        "\n\nВерни СТРОГО в формате JSON без markdown-блоков:\n"
+        '{"proposals": [{"id": "uuid4", "row_id": "id строки или null для add", '
+        '"proposal_type": "add|remove|replace_tech|replace_material", '
+        '"description": "краткое: что меняем", "explanation": "обоснование", '
+        '"economy_rub": число_или_null, "confidence": "high|medium|low", '
+        '"new_value": null_или_{name,price_work,price_material}}]}'
+    )
+
     step_prompts = {
         "completeness": (
-            "Ты — эксперт по строительному сметному делу (ГЭСН/ФСНБ-2022, ФЕР/ТЕР, Свердловская обл.).\n\n"
-            "Задача: проверить полноту сметы. Найди позиции, которые, вероятно, отсутствуют по нормативам ГЭСН.\n\n"
-            "Для каждого предложения:\n"
-            "- proposal_type: 'add'\n"
-            "- description: что добавить\n"
-            "- explanation: почему это нужно по нормативам\n"
-            "- economy_rub: null (это добавление, а не экономия)\n"
-            "- confidence: high/medium/low\n"
-            "- Если не уверен в коде ГЭСН — не называй его, напиши описание работы\n\n"
+            "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
+            "Для каждой работы в смете проверь:\n"
+            "1. Все ли нормативно необходимые материалы учтены (по ГЭСН/ФСНБ для данного вида работ).\n"
+            "2. Соответствуют ли объёмы материалов расходным нормам ГЭСН, исходя из объёма работы.\n\n"
+            "Добавляй в результат только реальные несоответствия. "
+            "Если не уверен в коде ГЭСН — не называй его, напиши описание работы.\n"
+            "Для каждого предложения: proposal_type='add', row_id=null (новая строка), "
+            "economy_rub=null (это добавление, а не экономия).\n"
         ),
         "redundancy": (
-            "Ты — эксперт по строительному сметному делу.\n\n"
-            "Задача: найти позиции, которые, вероятно, лишние или дублируются.\n\n"
-            "Для каждого предложения:\n"
-            "- proposal_type: 'remove'\n"
-            "- row_id: id строки для удаления\n"
-            "- description: что удалить\n"
-            "- explanation: почему позиция лишняя (дублирование, несоответствие объёму и т.п.)\n"
-            "- economy_rub: предполагаемая экономия в рублях\n"
-            "- confidence: high/medium/low\n"
-            "- Оцени уверенность своего предложения: high/medium/low\n\n"
+            "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
+            "Найди в смете ЛИШНИЕ позиции по четырём категориям:\n\n"
+            "1. ДУБЛИРОВАНИЕ — одна и та же работа/материал указаны дважды с одним назначением.\n"
+            "   Важно: материал для разных работ — НЕ дубль. Дубль — только если совпадают и материал/работа, И назначение.\n\n"
+            "2. НОРМАТИВНОЕ ВКЛЮЧЕНИЕ — позиция входит в состав другой расценки по ГЭСН (double-counting).\n"
+            "   Пример: «Очистка поверхности» входит в расценку грунтования (ГЭСН 15-04).\n\n"
+            "3. ВНЕ ПРОЕКТА — позиция явно не применима к данному типу работ/объекту.\n\n"
+            "4. Правило точности: не добавляй позиции, в которых не уверен.\n\n"
+            "Для каждого предложения: proposal_type='remove', row_id=id строки, economy_rub=стоимость позиции.\n"
         ),
         "technology": (
-            "Ты — эксперт по строительным технологиям.\n\n"
-            "Задача: найти позиции, где можно заменить технологию на более дешёвую без потери качества.\n\n"
-            "Для каждого предложения:\n"
-            "- proposal_type: 'replace_tech'\n"
-            "- row_id: id строки для замены\n"
-            "- description: текущая технология → предлагаемая замена\n"
-            "- explanation: почему замена безопасна и даёт экономию\n"
-            "- economy_rub: предполагаемая экономия в рублях\n"
-            "- confidence: high/medium/low\n"
-            "- new_value: {\"name\": \"новое название\", \"price_work\": новая_цена} (если известно)\n"
-            "- Если не уверен в коде ГЭСН — не называй его, напиши описание работы\n\n"
+            "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
+            "Тебе переданы позиции ГРУППЫ А из сметы — наиболее дорогостоящие виды работ (около 80% суммы).\n\n"
+            "Для каждой позиции найди возможности снизить НАШУ СЕБЕСТОИМОСТЬ при том же конечном результате.\n\n"
+            "Два направления:\n"
+            "1. Технологическая замена — та же работа, но производительнее/механизированнее.\n"
+            "   Примеры: Ручная штукатурка → Механизированная (от 900 м²), Мокрая стяжка → Полусухая (от 300 м²)\n"
+            "2. Оптимизация операций — меньше вспомогательных операций за счёт технологической синергии.\n\n"
+            "Для каждого предложения проверь 5 критериев перед тем как предлагать:\n"
+            "  1. Конечный результат для заказчика не изменится\n"
+            "  2. Расценка есть в ФСНБ/ГЭСН\n"
+            "  3. Экономия > 5% от стоимости позиции\n"
+            "  4. Технология реализуема\n"
+            "  5. Учти все доп. затраты (аренда оборудования)\n"
+            "Если не уверен в коде ГЭСН — не называй его, напиши описание.\n\n"
+            "proposal_type='replace_tech', new_value={name,price_work} если известно.\n"
         ),
         "materials": (
-            "Ты — эксперт по строительным материалам и закупкам.\n\n"
-            "Задача: найти позиции, где можно заменить материал на более дешёвый аналог.\n\n"
-            "Для каждого предложения:\n"
-            "- proposal_type: 'replace_material'\n"
-            "- row_id: id строки для замены\n"
-            "- description: текущий материал → предлагаемый аналог\n"
-            "- explanation: почему аналог приемлем (характеристики, ГОСТ)\n"
-            "- economy_rub: предполагаемая экономия в рублях\n"
-            "- confidence: high/medium/low\n"
-            "- new_value: {\"name\": \"новое название\", \"price_material\": новая_цена} (если известно)\n\n"
+            "Ты — опытный инженер-сметчик и снабженец.\n\n"
+            "Тебе переданы материальные позиции ГРУППЫ А — наиболее дорогостоящие материалы (около 80% суммы).\n\n"
+            "Найди возможности снизить стоимость материалов при том же конечном результате.\n\n"
+            "Два направления:\n"
+            "1. Замена материала — другой материал с теми же характеристиками и функцией.\n"
+            "   Примеры: Knauf Rotband → Волма Слой (ГОСТ Р 57957), Импортная арматура → Отечественная А500\n"
+            "2. Закупочная оптимизация — тот же материал, но дешевле за счёт условий закупки.\n"
+            "   (укажи в explanation, proposal_type='replace_material', economy_rub=null)\n\n"
+            "Для каждого предложения по замене проверь:\n"
+            "  1. Функциональный результат не изменится\n"
+            "  2. Соответствует ГОСТ/ТУ/СП\n"
+            "  3. Экономия > 5%\n"
+            "  4. Материал реально доступен\n\n"
+            "proposal_type='replace_material', new_value={name,price_material} если известно.\n"
         ),
     }
 
@@ -283,20 +340,38 @@ async def _run_optimization_step(
                 await db.commit()
                 return
 
-            rows_json = _json.dumps(source_version.rows or [], ensure_ascii=False)
-            prompt = (
-                step_prompts[step]
-                + "Строки сметы (JSON):\n"
-                + rows_json
-                + "\n\nВерни СТРОГО в формате JSON без markdown:\n"
-                '{"proposals": [{"id": "uuid", "row_id": "...", "proposal_type": "...", '
-                '"description": "...", "explanation": "...", "economy_rub": число_или_null, '
-                '"confidence": "high|medium|low", "new_value": null_или_объект}]}'
-            )
+            source_rows = source_version.rows or []
+            abc_breakdown: dict | None = None
+            rows_for_claude = source_rows
+
+            # ABC analysis for steps 3 and 4
+            if step == "technology":
+                updated_rows, abc_breakdown = _abc_analysis(source_rows, "work")
+                source_rows = updated_rows  # rows with abc_group populated
+                rows_for_claude = [r for r in updated_rows if r.get("abc_group") == "A"]
+                task.progress_message = f"ABC-анализ: группа А — {abc_breakdown['a_count']} работ"
+                task.progress_data = {"opt_step": step, "abc_breakdown": abc_breakdown, "chunks_done": 0, "chunks_total": 1}
+                await db.commit()
+
+            elif step == "materials":
+                updated_rows, abc_breakdown = _abc_analysis(source_rows, "material")
+                source_rows = updated_rows
+                rows_for_claude = [r for r in updated_rows if r.get("abc_group") == "A"]
+                task.progress_message = f"ABC-анализ: группа А — {abc_breakdown['a_count']} материалов"
+                task.progress_data = {"opt_step": step, "abc_breakdown": abc_breakdown, "chunks_done": 0, "chunks_total": 1}
+                await db.commit()
+
+            rows_json = _json.dumps(rows_for_claude, ensure_ascii=False)
+            prompt = step_prompts[step] + "\nСтроки сметы (JSON):\n" + rows_json + RESPONSE_FORMAT
 
             # Update progress: running
-            task.progress_message = f"Анализ: шаг '{step}' выполняется..."
-            task.progress_data = {"opt_step": step, "chunks_done": 0, "chunks_total": 1}
+            task.progress_message = f"Анализ '{step}' выполняется..."
+            task.progress_data = {
+                "opt_step": step,
+                "chunks_done": 0,
+                "chunks_total": 1,
+                **({"abc_breakdown": abc_breakdown} if abc_breakdown else {}),
+            }
             await db.commit()
 
             response_text = await call_claude(
@@ -326,7 +401,7 @@ async def _run_optimization_step(
                 version_number=next_num,
                 version_label=next_label,
                 version_display_name=display_name,
-                rows=source_version.rows or [],
+                rows=source_rows,  # rows with abc_group filled for steps 3/4
                 overhead_pct=source_version.overhead_pct,
                 transport_pct=source_version.transport_pct,
                 contingency_pct=source_version.contingency_pct,
@@ -341,6 +416,7 @@ async def _run_optimization_step(
                 "status": "done",
                 "proposals": proposals_raw,
                 "new_version_id": str(new_version.id),
+                **({"abc_breakdown": abc_breakdown} if abc_breakdown else {}),
             }
             await db.commit()
             logger.info("Optimization step done", task_id=task_id, step=step, proposals=len(proposals_raw))

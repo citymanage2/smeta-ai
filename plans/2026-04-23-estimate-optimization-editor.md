@@ -637,9 +637,9 @@ const [selectedVersionIds, setSelectedVersionIds] = useState<string[]>([]);
 
 ---
 
-### Фаза 6 — Модуль оптимизации [ ]
+### Фаза 6 — Модуль оптимизации [x]
 
-#### 6.1 OptimizationToolbar компонент [ ]
+#### 6.1 OptimizationToolbar компонент [x]
 
 Создать `frontend/src/components/estimate/OptimizationToolbar.tsx`:
 
@@ -657,7 +657,7 @@ const [selectedVersionIds, setSelectedVersionIds] = useState<string[]>([]);
 
 Состояние кнопки: `idle` | `running` (spinner) | `done` (галочка)
 
-#### 6.2 Шаг 1 — Проверка полноты и соответствия объёмов [ ]
+#### 6.2 Шаг 1 — Проверка полноты и соответствия объёмов [x]
 
 > Методология согласована: `smeta-ai/specs/2026-04-23-step1-completeness-methodology.md`
 
@@ -694,19 +694,19 @@ AI нашёл, что у нас есть позиция, которой нет �
 
 **Промпты, форматы ответов, UX-детали:** см. `specs/2026-04-23-step1-completeness-methodology.md`
 
-#### 6.3 Шаг 2 — Проверка на лишние позиции [ ]
+#### 6.3 Шаг 2 — Проверка на лишние позиции [x]
 
 > Методология согласована: `smeta-ai/specs/2026-04-23-step2-redundancy-methodology.md`
 
 **Промпты, форматы ответов, UX-детали:** см. `specs/2026-04-23-step2-redundancy-methodology.md`
 
-#### 6.4 Шаг 3 — Оптимизация по технологиям [ ]
+#### 6.4 Шаг 3 — Оптимизация по технологиям [x]
 
 > Методология согласована: `smeta-ai/specs/2026-04-23-step3-technology-methodology.md`
 
 **Промпты, форматы ответов, UX-детали:** см. `specs/2026-04-23-step3-technology-methodology.md`
 
-#### 6.5 Шаг 4 — Оптимизация по материалам [ ]
+#### 6.5 Шаг 4 — Оптимизация по материалам [x]
 
 > Методология согласована: `smeta-ai/specs/2026-04-23-step4-materials-methodology.md`
 
@@ -723,7 +723,7 @@ AI нашёл, что у нас есть позиция, которой нет �
 > 1. Для каждой строки без `lineage_id` — сгенерировать новый `uuid4()` и установить как `lineage_id`
 > 2. Создать новую `EstimateVersion` с обновлёнными строками
 
-#### 6.6 Ручной выбор позиций + "Предложить варианты" [ ]
+#### 6.6 Ручной выбор позиций + "Предложить варианты" [x]
 
 > Методология согласована: `smeta-ai/specs/2026-04-23-step-custom-optimization-methodology.md`
 
@@ -736,7 +736,7 @@ AI нашёл, что у нас есть позиция, которой нет �
 - Предложения `price_search` — информационные, смету не меняют, источники показываются явно
 - Доступно в любой момент независимо от шагов 1–4
 
-#### 6.7 OptimizationProposalsPanel компонент [ ]
+#### 6.7 OptimizationProposalsPanel компонент [x]
 
 Создать `frontend/src/components/estimate/OptimizationProposalsPanel.tsx`:
 
@@ -878,6 +878,6 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 
 ## Итоговый блок
 
-**Реализован:** 🔄 в работе  
-**Текущий статус:** Фаза 5 завершена — VersionTabs (вкладки, контекстное меню, откат с диалогом, overflow до 5 вкладок + «Ещё...»), EstimateComparison (итоги по версиям, построчное сравнение с выравниванием по lineage_id, цветовой кодировкой [+]/[−])  
-**Следующий шаг:** Реализация Фазы 6 (OptimizationToolbar, шаги оптимизации 1–4)
+**Реализован:** 🔄 в работе (фазы 1–6 завершены)  
+**Текущий статус:** Фаза 6 завершена — OptimizationToolbar (4 шага, unlock по version_label, polling, ABC-анализ в бэкенде для шагов 3–4), OptimizationProposalsPanel (карточки, Accept/Reject, bulk-accept, ABC-разбивка, секция low-confidence, «Зафиксировать»), ручная оптимизация выбранных строк (6.6).  
+**Следующий шаг:** Реализация Фазы 7 (экспорт в Excel)
