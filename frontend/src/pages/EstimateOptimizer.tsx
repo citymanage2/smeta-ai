@@ -9,7 +9,7 @@ import EstimateComparison from '../components/estimate/EstimateComparison';
 import OptimizationToolbar, { AbcBreakdown } from '../components/estimate/OptimizationToolbar';
 import OptimizationProposalsPanel from '../components/estimate/OptimizationProposalsPanel';
 import { useEstimateEditorStore } from '../stores/estimateEditor';
-import { saveExpenses, getVersions, runCustomOptimization } from '../api/estimateVersions';
+import { saveExpenses, getVersions, getVersion, runCustomOptimization } from '../api/estimateVersions';
 import { getTaskStatus } from '../api/tasks';
 import { EstimateRow, EstimateVersionFull, OptimizationProposal, OptimizationStep } from '../types';
 
@@ -32,7 +32,6 @@ const EstimateOptimizer: React.FC = () => {
     activeTab,
     optimizationStatus,
     isDirty,
-    loadVersions,
     setActiveVersion,
     updateRows,
     saveRows,
@@ -66,13 +65,26 @@ const EstimateOptimizer: React.FC = () => {
         }
         if (taskData.progress_message) setProcessingMsg(taskData.progress_message);
 
-        // Try to load versions
-        await loadVersions(taskId);
-        const { versions } = useEstimateEditorStore.getState();
-        if (versions.length > 0) {
-          setProcessingMsg(null);
-          if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-        }
+        // Try to load versions — use direct API calls + single setState to avoid double-set crash
+        const versionList = await getVersions(taskId);
+        if (versionList.length === 0) return;
+
+        const active = versionList.find((v) => !v.is_rolled_back) ?? versionList[0];
+        const full = await getVersion(taskId, active.id);
+
+        // Single atomic state update — no double render
+        useEstimateEditorStore.setState({
+          taskId,
+          versions: versionList,
+          activeVersionId: active.id,
+          activeVersionMeta: active,
+          activeRows: full.rows,
+          isDirty: false,
+          selectedRowIds: new Set<string>(),
+        });
+
+        setProcessingMsg(null);
+        if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
       } catch {
         // Keep polling — transient errors shouldn't stop us
       }
