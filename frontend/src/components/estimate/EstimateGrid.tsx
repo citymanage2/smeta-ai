@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DataGrid, Column, SelectColumn, RenderEditCellProps, RenderCellProps, RowsChangeData, renderTextEditor } from 'react-data-grid';
+import DataGrid, { Column, SelectColumn, RenderEditCellProps, RenderCellProps, RowsChangeData, textEditor } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import './EstimateGrid.css';
 import { EstimateRow } from '../../types';
@@ -94,14 +94,14 @@ const BASE_COLUMNS: Column<EstimateRow>[] = [
     key: 'name',
     name: 'Наименование',
     width: 340,
-    renderEditCell: renderTextEditor,
+    renderEditCell: textEditor,
     editable: (row) => row.type !== 'section',
   },
   {
     key: 'unit',
     name: 'Ед. изм.',
     width: 80,
-    renderEditCell: renderTextEditor,
+    renderEditCell: textEditor,
     editable: (row) => row.type !== 'section',
   },
   {
