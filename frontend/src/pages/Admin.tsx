@@ -3,6 +3,7 @@ import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
 import {
   getAdminTasks, getAdminTask, deleteTask,
+  getTrashTasks, restoreTask, permanentDeleteTask,
   getPriceListsInfo, uploadWorksPrice, uploadMaterialsPrice,
   downloadInputFile, generateEmbeddings,
   PriceListInfo,
@@ -241,7 +242,7 @@ const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
 
 
 const AdminPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'tasks' | 'prices'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'trash' | 'prices'>('tasks');
 
   // Tasks state
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -252,6 +253,16 @@ const AdminPage: React.FC = () => {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [taskError, setTaskError] = useState('');
+
+  // Trash state
+  const [trashTasks, setTrashTasks] = useState<AdminTask[]>([]);
+  const [trashTotal, setTrashTotal] = useState(0);
+  const [trashPage, setTrashPage] = useState(1);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [trashError, setTrashError] = useState('');
+  const [permanentDeleteConfirm, setPermanentDeleteConfirm] = useState<string | null>(null);
+  const [permanentDeleteLoading, setPermanentDeleteLoading] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState<string | null>(null);
 
   // Per-task detail cache for expanded rows
   interface ExpandedDetail {
@@ -362,10 +373,25 @@ const AdminPage: React.FC = () => {
     }
   }, []);
 
+  const fetchTrash = useCallback(async () => {
+    setTrashLoading(true);
+    setTrashError('');
+    try {
+      const data = await getTrashTasks({ page: trashPage, page_size: PAGE_SIZE });
+      setTrashTasks(data.items);
+      setTrashTotal(data.total);
+    } catch {
+      setTrashError('Не удалось загрузить корзину.');
+    } finally {
+      setTrashLoading(false);
+    }
+  }, [trashPage]);
+
   useEffect(() => {
     if (activeTab === 'tasks') fetchTasks();
+    if (activeTab === 'trash') fetchTrash();
     if (activeTab === 'prices') fetchPriceListsInfo();
-  }, [activeTab, fetchTasks, fetchPriceListsInfo]);
+  }, [activeTab, fetchTasks, fetchTrash, fetchPriceListsInfo]);
 
   const handleDeleteTask = async (taskId: string) => {
     setDeleteLoading(true);
@@ -374,9 +400,34 @@ const AdminPage: React.FC = () => {
       setDeleteConfirm(null);
       fetchTasks();
     } catch {
-      setTaskError('Не удалось удалить задачу.');
+      setTaskError('Не удалось переместить задачу в корзину.');
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  const handleRestoreTask = async (taskId: string) => {
+    setRestoreLoading(taskId);
+    try {
+      await restoreTask(taskId);
+      fetchTrash();
+    } catch {
+      setTrashError('Не удалось восстановить задачу.');
+    } finally {
+      setRestoreLoading(null);
+    }
+  };
+
+  const handlePermanentDelete = async (taskId: string) => {
+    setPermanentDeleteLoading(true);
+    try {
+      await permanentDeleteTask(taskId);
+      setPermanentDeleteConfirm(null);
+      fetchTrash();
+    } catch {
+      setTrashError('Не удалось удалить задачу.');
+    } finally {
+      setPermanentDeleteLoading(false);
     }
   };
 
@@ -500,7 +551,7 @@ const AdminPage: React.FC = () => {
             marginBottom: '28px',
           }}
         >
-          {(['tasks', 'prices'] as const).map((tab) => (
+          {(['tasks', 'trash', 'prices'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -509,15 +560,15 @@ const AdminPage: React.FC = () => {
                 fontSize: '15px',
                 fontWeight: 600,
                 backgroundColor: 'transparent',
-                color: activeTab === tab ? '#2563eb' : '#64748b',
+                color: activeTab === tab ? (tab === 'trash' ? '#dc2626' : '#2563eb') : '#64748b',
                 border: 'none',
-                borderBottom: activeTab === tab ? '2px solid #2563eb' : '2px solid transparent',
+                borderBottom: activeTab === tab ? `2px solid ${tab === 'trash' ? '#dc2626' : '#2563eb'}` : '2px solid transparent',
                 cursor: 'pointer',
                 marginBottom: '-2px',
                 transition: 'all 0.15s',
               }}
             >
-              {tab === 'tasks' ? 'Задачи' : 'Прайс-листы'}
+              {tab === 'tasks' ? 'Задачи' : tab === 'trash' ? `Корзина${trashTotal > 0 ? ` (${trashTotal})` : ''}` : 'Прайс-листы'}
             </button>
           ))}
         </div>
@@ -873,6 +924,117 @@ const AdminPage: React.FC = () => {
           </div>
         )}
 
+        {/* ---- TRASH TAB ---- */}
+        {activeTab === 'trash' && (
+          <div>
+            {trashError && (
+              <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', color: '#dc2626', marginBottom: '16px', fontSize: '14px' }}>
+                {trashError}
+              </div>
+            )}
+
+            {trashLoading ? (
+              <p style={{ fontSize: '14px', color: '#94a3b8' }}>Загрузка корзины...</p>
+            ) : trashTasks.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8' }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>🗑</div>
+                <p style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Корзина пуста</p>
+                <p style={{ margin: '4px 0 0', fontSize: '14px' }}>Удалённые задачи появятся здесь</p>
+              </div>
+            ) : (
+              <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>ID</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Тип</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Создана</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Удалена</th>
+                      <th style={{ padding: '12px 16px', textAlign: 'left', fontSize: '12px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trashTasks.map((task) => (
+                      <tr key={task.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontSize: '12px', color: '#475569', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {task.id}
+                        </td>
+                        <td style={{ padding: '12px 16px', color: '#1e293b', fontSize: '14px' }}>
+                          {TASK_TYPE_LABELS[task.task_type] || task.task_type}
+                        </td>
+                        <td style={{ padding: '12px 16px', color: '#475569', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                          {formatDate(task.created_at)}
+                        </td>
+                        <td style={{ padding: '12px 16px', color: '#dc2626', fontSize: '13px', whiteSpace: 'nowrap' }}>
+                          {task.deleted_at ? formatDate(task.deleted_at) : '—'}
+                        </td>
+                        <td style={{ padding: '12px 16px' }}>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              onClick={() => handleRestoreTask(task.id)}
+                              disabled={restoreLoading === task.id}
+                              style={{
+                                padding: '5px 12px',
+                                backgroundColor: '#f0fdf4',
+                                color: '#15803d',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: restoreLoading === task.id ? 'not-allowed' : 'pointer',
+                                fontSize: '13px',
+                                fontWeight: 600,
+                              }}
+                            >
+                              {restoreLoading === task.id ? '...' : 'Восстановить'}
+                            </button>
+                            <button
+                              onClick={() => setPermanentDeleteConfirm(task.id)}
+                              style={{
+                                padding: '5px 12px',
+                                backgroundColor: '#fee2e2',
+                                color: '#dc2626',
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontSize: '13px',
+                                fontWeight: 600,
+                              }}
+                            >
+                              Удалить навсегда
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Trash pagination */}
+            {Math.ceil(trashTotal / PAGE_SIZE) > 1 && (
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', marginTop: '20px' }}>
+                <button
+                  onClick={() => setTrashPage((p) => Math.max(1, p - 1))}
+                  disabled={trashPage === 1}
+                  style={{ padding: '7px 14px', backgroundColor: trashPage === 1 ? '#f1f5f9' : '#ffffff', color: trashPage === 1 ? '#94a3b8' : '#374151', border: '1px solid #e2e8f0', borderRadius: '7px', cursor: trashPage === 1 ? 'not-allowed' : 'pointer', fontSize: '14px' }}
+                >
+                  ← Назад
+                </button>
+                <span style={{ fontSize: '14px', color: '#475569' }}>
+                  Страница {trashPage} из {Math.ceil(trashTotal / PAGE_SIZE)} · Всего: {trashTotal}
+                </span>
+                <button
+                  onClick={() => setTrashPage((p) => Math.min(Math.ceil(trashTotal / PAGE_SIZE), p + 1))}
+                  disabled={trashPage === Math.ceil(trashTotal / PAGE_SIZE)}
+                  style={{ padding: '7px 14px', backgroundColor: trashPage === Math.ceil(trashTotal / PAGE_SIZE) ? '#f1f5f9' : '#ffffff', color: trashPage === Math.ceil(trashTotal / PAGE_SIZE) ? '#94a3b8' : '#374151', border: '1px solid #e2e8f0', borderRadius: '7px', cursor: trashPage === Math.ceil(trashTotal / PAGE_SIZE) ? 'not-allowed' : 'pointer', fontSize: '14px' }}
+                >
+                  Вперёд →
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ---- PRICES TAB ---- */}
         {activeTab === 'prices' && (
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', maxWidth: '900px' }}>
@@ -925,6 +1087,41 @@ const AdminPage: React.FC = () => {
         )}
       </div>
 
+      {/* Permanent delete confirmation modal */}
+      {permanentDeleteConfirm && (
+        <div
+          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setPermanentDeleteConfirm(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '28px 32px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)', maxWidth: '400px', width: '90%' }}
+          >
+            <h3 style={{ margin: '0 0 12px', fontSize: '18px', fontWeight: 700, color: '#dc2626' }}>
+              Удалить навсегда?
+            </h3>
+            <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#64748b' }}>
+              Это действие нельзя отменить. Задача и все связанные файлы будут уничтожены безвозвратно.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setPermanentDeleteConfirm(null)}
+                style={{ padding: '9px 20px', backgroundColor: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: 600 }}
+              >
+                Отмена
+              </button>
+              <button
+                onClick={() => handlePermanentDelete(permanentDeleteConfirm)}
+                disabled={permanentDeleteLoading}
+                style={{ padding: '9px 20px', backgroundColor: permanentDeleteLoading ? '#fca5a5' : '#dc2626', color: '#ffffff', border: 'none', borderRadius: '8px', cursor: permanentDeleteLoading ? 'not-allowed' : 'pointer', fontSize: '14px', fontWeight: 600 }}
+              >
+                {permanentDeleteLoading ? 'Удаление...' : 'Удалить навсегда'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete confirmation modal */}
       {deleteConfirm && (
         <div
@@ -951,10 +1148,10 @@ const AdminPage: React.FC = () => {
             }}
           >
             <h3 style={{ margin: '0 0 12px', fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
-              Удалить задачу?
+              Переместить в корзину?
             </h3>
             <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#64748b' }}>
-              Это действие нельзя отменить. Задача и все связанные файлы будут удалены.
+              Задача будет перемещена в корзину. Вы сможете восстановить её или удалить окончательно.
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button
@@ -986,7 +1183,7 @@ const AdminPage: React.FC = () => {
                   fontWeight: 600,
                 }}
               >
-                {deleteLoading ? 'Удаление...' : 'Удалить'}
+                {deleteLoading ? 'Перемещение...' : 'В корзину'}
               </button>
             </div>
           </div>

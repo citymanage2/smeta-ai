@@ -45,6 +45,7 @@ class TaskListItem(BaseModel):
     error_message: Optional[str]
     created_at: datetime
     updated_at: datetime
+    deleted_at: Optional[datetime]
     files_count: int
 
 
@@ -270,7 +271,7 @@ async def list_tasks(
 ):
     """Get paginated list of all tasks with optional filters."""
     # Build WHERE conditions separately so they apply to both count and data queries
-    conditions = []
+    conditions = [Task.deleted_at.is_(None)]
     if date_from:
         conditions.append(Task.created_at >= date_from)
     if date_to:
@@ -281,9 +282,7 @@ async def list_tasks(
         conditions.append(Task.task_type == task_type)
 
     # COUNT: select only id — avoids loading input_file_data / chat_history
-    count_query = select(func.count(Task.id))
-    if conditions:
-        count_query = count_query.where(*conditions)
+    count_query = select(func.count(Task.id)).where(*conditions)
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
@@ -291,12 +290,8 @@ async def list_tasks(
     data_query = select(
         Task.id, Task.user_role, Task.task_type, Task.status,
         Task.progress_message, Task.error_message,
-        Task.created_at, Task.updated_at, Task.input_files,
-    )
-    if conditions:
-        data_query = data_query.where(*conditions)
-    data_query = data_query.order_by(Task.created_at.desc())
-    data_query = data_query.offset((page - 1) * limit).limit(limit)
+        Task.created_at, Task.updated_at, Task.deleted_at, Task.input_files,
+    ).where(*conditions).order_by(Task.created_at.desc()).offset((page - 1) * limit).limit(limit)
 
     result = await db.execute(data_query)
     rows = result.all()
@@ -311,6 +306,48 @@ async def list_tasks(
             error_message=row.error_message,
             created_at=row.created_at,
             updated_at=row.updated_at,
+            deleted_at=row.deleted_at,
+            files_count=len(row.input_files or []),
+        )
+        for row in rows
+    ]
+    return TaskListResponse(items=items, total=total)
+
+
+@router.get("/tasks/trash", response_model=TaskListResponse)
+async def list_trash(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Список задач в корзине (deleted_at IS NOT NULL)."""
+    conditions = [Task.deleted_at.is_not(None)]
+
+    count_query = select(func.count(Task.id)).where(*conditions)
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    data_query = select(
+        Task.id, Task.user_role, Task.task_type, Task.status,
+        Task.progress_message, Task.error_message,
+        Task.created_at, Task.updated_at, Task.deleted_at, Task.input_files,
+    ).where(*conditions).order_by(Task.deleted_at.desc()).offset((page - 1) * limit).limit(limit)
+
+    result = await db.execute(data_query)
+    rows = result.all()
+
+    items = [
+        TaskListItem(
+            id=str(row.id),
+            user_role=row.user_role,
+            task_type=row.task_type,
+            status=row.status,
+            progress_message=row.progress_message,
+            error_message=row.error_message,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            deleted_at=row.deleted_at,
             files_count=len(row.input_files or []),
         )
         for row in rows
@@ -382,13 +419,46 @@ async def delete_task(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_admin_user),
 ):
+    """Мягкое удаление — перемещает задачу в корзину."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    task.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Task moved to trash by admin", task_id=task_id)
+
+
+@router.post("/tasks/{task_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
+async def restore_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Восстановить задачу из корзины."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    task.deleted_at = None
+    await db.commit()
+    logger.info("Task restored from trash by admin", task_id=task_id)
+
+
+@router.delete("/tasks/{task_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+async def permanent_delete_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Окончательное удаление задачи и всех связанных данных."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     await db.delete(task)
     await db.commit()
-    logger.info("Task deleted by admin", task_id=task_id)
+    logger.info("Task permanently deleted by admin", task_id=task_id)
 
 
 # ---------------------------------------------------------------------------

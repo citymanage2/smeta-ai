@@ -88,6 +88,8 @@ export interface AdminTask extends Task {
   input_files: Array<{ name: string; mime_type: string; size_bytes: number }>;
   chat_history: Array<{ role: string; content: string; timestamp: string }>;
   results?: TaskResult[];
+  deleted_at?: string | null;
+  files_count?: number;
 }
 
 export interface AdminTasksParams {

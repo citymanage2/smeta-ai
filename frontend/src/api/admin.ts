@@ -10,6 +10,19 @@ export async function deleteTask(taskId: string): Promise<void> {
   await apiClient.delete(`/admin/tasks/${taskId}`);
 }
 
+export async function getTrashTasks(params?: { page?: number; page_size?: number }): Promise<AdminTasksResponse> {
+  const response = await apiClient.get<AdminTasksResponse>('/admin/tasks/trash', { params });
+  return response.data;
+}
+
+export async function restoreTask(taskId: string): Promise<void> {
+  await apiClient.post(`/admin/tasks/${taskId}/restore`);
+}
+
+export async function permanentDeleteTask(taskId: string): Promise<void> {
+  await apiClient.delete(`/admin/tasks/${taskId}/permanent`);
+}
+
 export async function getAdminTask(taskId: string): Promise<AdminTask> {
   const response = await apiClient.get<AdminTask>(`/admin/tasks/${taskId}`);
   return response.data;
