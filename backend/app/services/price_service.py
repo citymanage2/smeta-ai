@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,13 @@ _works_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 _materials_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 _works_row_norms: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 _materials_row_norms: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
+
+# Маппинги: строка матрицы → индекс в кэше (для sparse матриц с частичными эмбеддингами)
+_works_index_map: list[int] = []      # matrix_row → _works_cache index
+_materials_index_map: list[int] = []  # matrix_row → _materials_cache index
+
+# Lock for atomic cache replacement — prevents readers from seeing partially replaced globals
+_cache_lock = asyncio.Lock()
 
 
 def normalize_text(text: str) -> str:
@@ -78,10 +86,12 @@ async def _embedding_match_work(name: str) -> Optional[dict]:
         best_idx = int(np.argmax(scores))
 
         best_score = float(scores[best_idx])
-        best_name = _works_cache[best_idx]["name"] if _works_cache else "?"
+        # Переводим индекс строки матрицы в индекс кэша через маппинг (sparse matrix)
+        cache_idx = _works_index_map[best_idx]
+        best_name = _works_cache[cache_idx]["name"] if _works_cache else "?"
         if best_score >= SIMILARITY_THRESHOLD:
             logger.info("Embedding work match HIT", query=name, matched=best_name, score=best_score)
-            return _works_cache[best_idx]
+            return _works_cache[cache_idx]
         logger.debug("Embedding work match MISS", query=name, best=best_name, score=best_score, threshold=SIMILARITY_THRESHOLD)
         return None
     except Exception as e:
@@ -109,10 +119,12 @@ async def _embedding_match_material(name: str) -> Optional[float]:
         best_idx = int(np.argmax(scores))
 
         best_score = float(scores[best_idx])
-        best_name = _materials_cache[best_idx]["name"] if _materials_cache else "?"
+        # Переводим индекс строки матрицы в индекс кэша через маппинг (sparse matrix)
+        cache_idx = _materials_index_map[best_idx]
+        best_name = _materials_cache[cache_idx]["name"] if _materials_cache else "?"
         if best_score >= SIMILARITY_THRESHOLD:
             logger.info("Embedding material match HIT", query=name, matched=best_name, score=best_score)
-            return _materials_cache[best_idx].get("price")
+            return _materials_cache[cache_idx].get("price")
         logger.debug("Embedding material match MISS", query=name, best=best_name, score=best_score, threshold=SIMILARITY_THRESHOLD)
         return None
     except Exception as e:
@@ -199,10 +211,14 @@ async def load_cache(db: AsyncSession) -> None:
     """Load price data from DB into in-memory cache, including embedding matrices."""
     global _works_cache, _materials_cache, _cache_loaded
     global _works_embeddings, _materials_embeddings, _works_row_norms, _materials_row_norms
+    global _works_index_map, _materials_index_map
 
+    # 1. Read from DB without lock — reads are safe to interleave
     works_result = await db.execute(select(PriceWork))
     works = works_result.scalars().all()
-    _works_cache = [
+
+    # 2. Build works structures locally
+    new_works_cache = [
         {
             "id": w.id,
             "name": w.name,
@@ -213,18 +229,23 @@ async def load_cache(db: AsyncSession) -> None:
         for w in works
     ]
 
-    # Build works embedding matrix — only if ALL rows have embeddings
-    if _numpy_available and works and all(w.embedding for w in works):
-        emb_matrix = np.array([w.embedding for w in works], dtype=np.float32)
-        _works_embeddings = emb_matrix
-        _works_row_norms = np.linalg.norm(emb_matrix, axis=1)
+    # Строим sparse матрицу только из записей с эмбеддингами (частичные данные не блокируют поиск)
+    works_with_emb = [(i, w) for i, w in enumerate(works) if w.embedding]
+    if _numpy_available and works_with_emb:
+        new_works_index_map = [i for i, _ in works_with_emb]
+        emb_matrix = np.array([w.embedding for _, w in works_with_emb], dtype=np.float32)
+        new_works_embeddings = emb_matrix
+        new_works_row_norms = np.linalg.norm(emb_matrix, axis=1)
     else:
-        _works_embeddings = None
-        _works_row_norms = None
+        new_works_index_map = []
+        new_works_embeddings = None
+        new_works_row_norms = None
 
     materials_result = await db.execute(select(PriceMaterial))
     materials = materials_result.scalars().all()
-    _materials_cache = [
+
+    # 3. Build materials structures locally
+    new_materials_cache = [
         {
             "id": m.id,
             "name": m.name,
@@ -234,22 +255,36 @@ async def load_cache(db: AsyncSession) -> None:
         for m in materials
     ]
 
-    # Build materials embedding matrix — only if ALL rows have embeddings
-    if _numpy_available and materials and all(m.embedding for m in materials):
-        emb_matrix = np.array([m.embedding for m in materials], dtype=np.float32)
-        _materials_embeddings = emb_matrix
-        _materials_row_norms = np.linalg.norm(emb_matrix, axis=1)
+    # Строим sparse матрицу только из записей с эмбеддингами (частичные данные не блокируют поиск)
+    materials_with_emb = [(i, m) for i, m in enumerate(materials) if m.embedding]
+    if _numpy_available and materials_with_emb:
+        new_materials_index_map = [i for i, _ in materials_with_emb]
+        emb_matrix = np.array([m.embedding for _, m in materials_with_emb], dtype=np.float32)
+        new_materials_embeddings = emb_matrix
+        new_materials_row_norms = np.linalg.norm(emb_matrix, axis=1)
     else:
-        _materials_embeddings = None
-        _materials_row_norms = None
+        new_materials_index_map = []
+        new_materials_embeddings = None
+        new_materials_row_norms = None
 
-    _cache_loaded = True
+    # 4. Atomically replace globals — readers see either old or new consistent state
+    async with _cache_lock:
+        _works_cache = new_works_cache
+        _works_embeddings = new_works_embeddings
+        _works_row_norms = new_works_row_norms
+        _works_index_map = new_works_index_map
+        _materials_cache = new_materials_cache
+        _materials_embeddings = new_materials_embeddings
+        _materials_row_norms = new_materials_row_norms
+        _materials_index_map = new_materials_index_map
+        _cache_loaded = True
+
     logger.info(
         "Price cache loaded",
-        works=len(_works_cache),
-        materials=len(_materials_cache),
-        works_embeddings=_works_embeddings is not None,
-        materials_embeddings=_materials_embeddings is not None,
+        works=len(new_works_cache),
+        materials=len(new_materials_cache),
+        works_embeddings=new_works_embeddings is not None,
+        materials_embeddings=new_materials_embeddings is not None,
     )
 
 

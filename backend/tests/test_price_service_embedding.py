@@ -29,6 +29,8 @@ def restore_price_service_state():
     mrn = ps._materials_row_norms
     wc = ps._works_cache[:]
     mc = ps._materials_cache[:]
+    wim = ps._works_index_map[:]
+    mim = ps._materials_index_map[:]
     yield
     ps._works_embeddings = we
     ps._materials_embeddings = me
@@ -36,20 +38,28 @@ def restore_price_service_state():
     ps._materials_row_norms = mrn
     ps._works_cache[:] = wc
     ps._materials_cache[:] = mc
+    ps._works_index_map[:] = wim
+    ps._materials_index_map[:] = mim
 
 
 def _inject_works(vectors: list[list[float]], items: list[dict]) -> None:
+    """Вставить тестовые данные в кэш работ вместе с маппингом строк матрицы → индексов кэша."""
     matrix = np.array(vectors, dtype=np.float32)
     ps._works_embeddings = matrix
     ps._works_row_norms = np.linalg.norm(matrix, axis=1)
     ps._works_cache[:] = items
+    # Маппинг: каждая строка матрицы соответствует элементу кэша с тем же индексом
+    ps._works_index_map[:] = list(range(len(items)))
 
 
 def _inject_materials(vectors: list[list[float]], items: list[dict]) -> None:
+    """Вставить тестовые данные в кэш материалов вместе с маппингом строк матрицы → индексов кэша."""
     matrix = np.array(vectors, dtype=np.float32)
     ps._materials_embeddings = matrix
     ps._materials_row_norms = np.linalg.norm(matrix, axis=1)
     ps._materials_cache[:] = items
+    # Маппинг: каждая строка матрицы соответствует элементу кэша с тем же индексом
+    ps._materials_index_map[:] = list(range(len(items)))
 
 
 # ---------------------------------------------------------------------------

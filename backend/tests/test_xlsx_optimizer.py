@@ -1,8 +1,6 @@
 """Tests for xlsx_optimizer utility."""
 import io
-import pytest
 import openpyxl
-from openpyxl.styles import PatternFill
 
 from app.utils.xlsx_optimizer import (
     parse_estimate_xlsx,
@@ -24,12 +22,12 @@ def _make_smeta_xlsx(items: list[dict]) -> bytes:
         "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
         "Цена работы (за ед.)", "Цена материала (за ед.)",
         "Стоимость работ", "Стоимость материалов",
-        "Итого без НДС", "НДС (20%)", "Итого с НДС",
+        "Итого без НДС", "НДС (22%)", "Итого с НДС",
         "Наименование в прайсе", "Источники", "Примечание",
     ]
     for col, h in enumerate(headers, start=1):
         ws.cell(row=1, column=col, value=h)
-    VAT = 0.20
+    VAT = 0.22
     for i, item in enumerate(items, start=1):
         row = i + 1
         qty = item.get("quantity", 1)
@@ -93,7 +91,6 @@ def test_parse_estimate_xlsx_returns_items():
 
 def test_parse_estimate_xlsx_skips_empty_rows():
     """Rows with no name value are skipped."""
-    items = _make_smeta_items()[:2]
     wb = openpyxl.Workbook()
     ws = wb.active
     headers = ["№", "Тип", "Наименование", "Ед. изм.", "Кол-во", "Цена работы (за ед.)", "Цена материала (за ед.)",

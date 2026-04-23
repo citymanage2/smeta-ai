@@ -36,6 +36,8 @@ export interface PriceListsInfoResponse {
 export interface SinglePriceUploadResponse {
   loaded: number;
   message: string;
+  added?: number;
+  updated?: number;
 }
 
 export async function getPriceListsInfo(): Promise<PriceListsInfoResponse> {

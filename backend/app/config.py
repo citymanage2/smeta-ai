@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
     CORS_ORIGINS: str = "*"
+    VAT_RATE: float = 0.22
 
     def get_cors_origins(self) -> List[str]:
         try:

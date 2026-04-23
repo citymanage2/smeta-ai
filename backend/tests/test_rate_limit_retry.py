@@ -273,8 +273,12 @@ async def test_slow_api_call_triggers_processing_timeout(monkeypatch):
         )
 
 
-async def test_rate_limit_sleep_not_counted_against_processing_timeout(monkeypatch):
-    """Rate-limit sleep is outside the processing_timeout wrapper and does not consume it."""
+async def test_rate_limit_sleep_counted_in_cumulative_timeout(monkeypatch):
+    """Rate-limit sleep вычитается из cumulative processing_timeout.
+
+    При замоканном sleep (= мгновенный, elapsed ≈ 0) и достаточном бюджете
+    второй attempt проходит успешно — оставшийся бюджет почти равен исходному.
+    """
     call_count = 0
 
     async def fake_create(**kwargs):
@@ -284,15 +288,14 @@ async def test_rate_limit_sleep_not_counted_against_processing_timeout(monkeypat
             raise _make_rate_limit_error(retry_after=0.01)
         return _make_success_response()
 
-    # Make the rate-limit sleep instant so the test is fast
+    # Мокаем sleep — мгновенный, elapsed остаётся близким к 0
     monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
-    # With processing_timeout=0.001 (1 ms), a rate-limit sleep of any duration
-    # must NOT cause TimeoutError because it is outside wait_for.
+    # При большом бюджете (30 с) и мгновенном sleep — second attempt успешен
     result = await call_claude(
         [{"role": "user", "content": "hi"}],
-        processing_timeout=0.001,
+        processing_timeout=30.0,
     )
     assert result == "ok"
     assert call_count == 2

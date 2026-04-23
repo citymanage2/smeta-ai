@@ -1,7 +1,7 @@
 import uuid as _uuid
 from typing import Optional
 from decimal import Decimal
-from sqlalchemy import Integer, String, Text, DateTime, JSON, Numeric, ForeignKey
+from sqlalchemy import Index, Integer, String, Text, DateTime, JSON, Numeric, ForeignKey
 from sqlalchemy import JSON as _JSON
 from sqlalchemy.dialects.postgresql import JSONB as _JSONB
 # Используем JSONB на PostgreSQL, JSON на SQLite (тесты)
@@ -14,6 +14,10 @@ from app.database import Base
 
 class Task(Base):
     __tablename__ = "tasks"
+    __table_args__ = (
+        # Составной индекс для фильтрации задач по проекту и статусу сметы
+        Index("ix_tasks_project_estimation", "project_id", "estimation_status"),
+    )
 
     id: Mapped[str] = mapped_column(
         PG_UUID(as_uuid=False),

@@ -3,7 +3,7 @@ import io
 from typing import Optional
 import openpyxl
 from openpyxl.styles import PatternFill
-from openpyxl.utils import get_column_letter
+from app.config import settings
 
 # Heuristic keywords for "work" type detection
 _WORK_KEYWORDS = ("монтаж", "устройство", "разборка", "прокладка", "установка",
@@ -15,9 +15,6 @@ _EXTRA_KEYWORDS = ("накладные", "прибыль", "ндс", "итого
 
 _GREEN_FILL = PatternFill("solid", fgColor="E2EFDA")
 _YELLOW_FILL = PatternFill("solid", fgColor="FFEB9C")
-
-VAT_RATE = 0.20
-
 
 def _detect_type(type_cell_value: Optional[str], name: str) -> str:
     """Determine item type from explicit column or heuristic."""
@@ -160,7 +157,7 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
             if tv:
                 price_excl_vat = _to_float(tv) / quantity
 
-        price_incl_vat = price_excl_vat * (1 + VAT_RATE)
+        price_incl_vat = price_excl_vat * (1 + settings.VAT_RATE)
 
         # Total (incl VAT)
         total = 0.0

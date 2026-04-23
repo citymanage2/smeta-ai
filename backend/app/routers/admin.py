@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, 
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, update, func
 import openpyxl
 import structlog
 
@@ -87,6 +87,8 @@ class PriceListsInfoResponse(BaseModel):
 class SinglePriceUploadResponse(BaseModel):
     loaded: int
     message: str
+    added: Optional[int] = None
+    updated: Optional[int] = None
 
 
 class GenerateEmbeddingsResponse(BaseModel):
@@ -475,30 +477,70 @@ async def _handle_price_upload(
             logger.warning("Embeddings generation failed, price list saved without vectors",
                            type=pl_type, error=str(e))
 
-    # Persist raw file + clear old price rows — small transaction
-    await db.execute(delete(PriceList).where(PriceList.type == pl_type))
-    pl_obj = PriceList(
-        type=pl_type,
-        filename=file.filename,
-        mime_type=mime_type,
-        content=data,
-        updated_at=now,
-        embedding_status=embedding_status,
+    # Load existing price rows into memory by normalised name for merge
+    if is_works:
+        res = await db.execute(select(PriceWork.id, PriceWork.name, PriceWork.unit, PriceWork.prices))
+        existing_by_norm: dict = {
+            normalize_name(row.name): {"id": row.id, "unit": row.unit, "prices": row.prices or {}}
+            for row in res
+        }
+    else:
+        res = await db.execute(select(PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit))
+        existing_by_norm = {
+            normalize_name(row.name): {"id": row.id, "unit": row.unit}
+            for row in res
+        }
+
+    # Upsert PriceList metadata (keep one record per type, update on re-upload)
+    pl_res = await db.execute(
+        select(PriceList).where(PriceList.type == pl_type).limit(1)
     )
-    db.add(pl_obj)
-    if items:
-        if is_works:
-            await db.execute(delete(PriceWork))
-        else:
-            await db.execute(delete(PriceMaterial))
+    pl_obj = pl_res.scalar_one_or_none()
+    if pl_obj:
+        pl_obj.filename = file.filename
+        pl_obj.mime_type = mime_type
+        pl_obj.content = data
+        pl_obj.updated_at = now
+        pl_obj.embedding_status = embedding_status
+    else:
+        db.add(PriceList(
+            type=pl_type,
+            filename=file.filename,
+            mime_type=mime_type,
+            content=data,
+            updated_at=now,
+            embedding_status=embedding_status,
+        ))
     await db.commit()
 
-    # Insert price rows in small batches to avoid dropping the DB connection
-    # on a single huge INSERT (embeddings add ~13 KB per row)
-    for batch_start in range(0, len(items), _INSERT_BATCH_SIZE):
-        batch_items = items[batch_start: batch_start + _INSERT_BATCH_SIZE]
-        batch_embs = embeddings[batch_start: batch_start + _INSERT_BATCH_SIZE]
-        for item, emb in zip(batch_items, batch_embs):
+    # Separate new items into updates (existing name match) and inserts (new)
+    model_cls = PriceWork if is_works else PriceMaterial
+    update_ops: list = []   # (id, values_dict)
+    insert_objs: list = []  # new ORM objects
+
+    for item, emb in zip(items, embeddings):
+        key = normalize_name(item["name"])
+        if key in existing_by_norm:
+            existing = existing_by_norm[key]
+            if is_works:
+                merged = {**existing["prices"], **item.get("prices", {})}
+                positive = [v for v in merged.values() if v and v > 0]
+                values: dict = {
+                    "prices": merged,
+                    "min_price": min(positive) if positive else None,
+                    "unit": item.get("unit") or existing["unit"],
+                    "embedding": emb,
+                    "updated_at": now,
+                }
+            else:
+                values = {
+                    "price": item.get("price"),
+                    "unit": item.get("unit") or existing["unit"],
+                    "embedding": emb,
+                    "updated_at": now,
+                }
+            update_ops.append((existing["id"], values))
+        else:
             if is_works:
                 obj = PriceWork(
                     name=item["name"],
@@ -516,7 +558,24 @@ async def _handle_price_upload(
                     embedding=emb,
                     updated_at=now,
                 )
-            db.add(obj)
+            insert_objs.append(obj)
+
+    added = len(insert_objs)
+    updated_count = len(update_ops)
+
+    # Process updates and inserts in small batches to avoid dropping the DB
+    # connection on a single huge transaction (embeddings add ~13 KB per row)
+    all_ops = [("update", op) for op in update_ops] + [("insert", obj) for obj in insert_objs]
+    for batch_start in range(0, len(all_ops), _INSERT_BATCH_SIZE):
+        batch = all_ops[batch_start: batch_start + _INSERT_BATCH_SIZE]
+        for kind, payload in batch:
+            if kind == "update":
+                row_id, values = payload
+                await db.execute(
+                    update(model_cls).where(model_cls.id == row_id).values(**values)
+                )
+            else:
+                db.add(payload)
         await db.commit()
 
     await price_service.load_cache(db)
@@ -528,10 +587,10 @@ async def _handle_price_upload(
         msg = "Файл сохранён, но позиции не найдены. Проверьте структуру файла (нужны колонки Наименование, Цена)."
     else:
         kind = "работ" if is_works else "материалов"
-        msg = f"Прайс {kind} успешно загружен: {loaded} позиций."
+        msg = f"Прайс {kind} обновлён: добавлено {added}, обновлено {updated_count} позиций."
 
-    logger.info("Price list uploaded", type=pl_type, filename=file.filename, loaded=loaded)
-    return SinglePriceUploadResponse(loaded=loaded, message=msg)
+    logger.info("Price list merged", type=pl_type, filename=file.filename, added=added, updated=updated_count)
+    return SinglePriceUploadResponse(loaded=loaded, message=msg, added=added, updated=updated_count)
 
 
 @router.post("/price-lists/works", response_model=SinglePriceUploadResponse)
@@ -540,7 +599,7 @@ async def upload_works_price_list(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_admin_user),
 ):
-    """Upload price list for works. Replaces existing works prices."""
+    """Upload price list for works. Merges with existing works prices (new names added, matching names updated)."""
     return await _handle_price_upload(file, "works", is_works=True, db=db)
 
 
@@ -550,7 +609,7 @@ async def upload_materials_price_list(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_admin_user),
 ):
-    """Upload price list for materials. Replaces existing materials prices."""
+    """Upload price list for materials. Merges with existing materials prices (new names added, matching names updated)."""
     return await _handle_price_upload(file, "materials", is_works=False, db=db)
 
 

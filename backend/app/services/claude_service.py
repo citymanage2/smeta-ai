@@ -51,6 +51,14 @@ def _build_messages(
     if not image_data:
         return messages
 
+    # Mark the last image block for prompt caching so PDF pages are cached
+    # across chunk calls within the same 5-minute TTL window.
+    cached_image_data = list(image_data)
+    if cached_image_data:
+        last = dict(cached_image_data[-1])
+        last["cache_control"] = {"type": "ephemeral"}
+        cached_image_data[-1] = last
+
     result = list(messages)
     if result and result[0]["role"] == "user":
         first_content = result[0]["content"]
@@ -58,10 +66,10 @@ def _build_messages(
             first_content = [{"type": "text", "text": first_content}]
         result[0] = {
             "role": "user",
-            "content": image_data + first_content,
+            "content": cached_image_data + first_content,
         }
     else:
-        result.insert(0, {"role": "user", "content": image_data})
+        result.insert(0, {"role": "user", "content": cached_image_data})
     return result
 
 
@@ -94,7 +102,13 @@ async def call_claude(
         "messages": built_messages,
     }
     if system_prompt:
-        kwargs["system"] = system_prompt
+        kwargs["system"] = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
     if tools:
         kwargs["tools"] = tools
 
@@ -105,6 +119,10 @@ async def call_claude(
     # Count consecutive 429 responses to apply escalating backoff minimums.
     rate_limit_count = 0
 
+    # Фиксируем момент начала всего вызова, чтобы учитывать время sleep при rate-limit.
+    # Для каждого attempt используем оставшийся бюджет, а не исходный processing_timeout.
+    call_start: float = asyncio.get_event_loop().time() if processing_timeout is not None else 0.0
+
     for attempt, delay in enumerate(delays, start=1):
         try:
             logger.info(
@@ -114,13 +132,25 @@ async def call_claude(
                 use_web_search=use_web_search,
             )
 
-            # Pass timeout directly to SDK (sets httpx total request timeout).
-            # asyncio.wait_for alone cannot cancel httpx connections reliably.
+            # Вычисляем оставшийся временной бюджет с учётом всего прошедшего времени
+            # (включая sleep при rate-limit предыдущих попыток).
             if processing_timeout is not None:
-                sdk_kwargs = {**kwargs, "timeout": processing_timeout}
+                elapsed = asyncio.get_event_loop().time() - call_start
+                remaining = processing_timeout - elapsed
+                if remaining <= 0:
+                    raise asyncio.TimeoutError(
+                        f"processing_timeout exceeded after {elapsed:.1f}s (budget: {processing_timeout}s)"
+                    )
+            else:
+                remaining = None
+
+            # Pass timeout directly to SDK (sets httpx total request timeout).
+            # asyncio.wait_for обеспечивает отмену корутины по оставшемуся бюджету.
+            if remaining is not None:
+                sdk_kwargs = {**kwargs, "timeout": remaining}
                 response = await asyncio.wait_for(
                     _client.messages.create(**sdk_kwargs),
-                    timeout=processing_timeout + 30,  # asyncio belt-and-suspenders
+                    timeout=remaining,
                 )
             else:
                 response = await _client.messages.create(**kwargs)
@@ -145,7 +175,13 @@ async def call_claude(
                 if hasattr(block, "text") and isinstance(block.text, str)
             ]
             result = "".join(text_parts)
-            logger.info("Claude API call successful", chars=len(result), attempt=attempt)
+            logger.info(
+                "Claude API call successful",
+                chars=len(result),
+                attempt=attempt,
+                cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0),
+                cache_creation_tokens=getattr(response.usage, "cache_creation_input_tokens", 0),
+            )
             return result
 
         except asyncio.TimeoutError:
