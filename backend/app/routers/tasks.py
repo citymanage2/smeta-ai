@@ -279,7 +279,8 @@ async def create_task(
     await db.commit()
     await db.refresh(task)
 
-    # Store file contents in task_input_files (separate from task JSON to avoid huge INSERT)
+    # Store each file separately — one INSERT per file so a large PDF
+    # never joins a multi-row batch that would overflow the connection buffer.
     for i, (raw_bytes, meta) in enumerate(zip(raw_file_bytes, input_file_data)):
         db.add(TaskInputFile(
             task_id=task.id,
@@ -289,7 +290,6 @@ async def create_task(
             size_bytes=meta["size_bytes"],
             content=raw_bytes,
         ))
-    if raw_file_bytes:
         await db.commit()
 
     if project_name and not project_id:
