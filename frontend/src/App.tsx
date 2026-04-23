@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import TaskCreate from './pages/TaskCreate';
 import TaskStatus from './pages/TaskStatus';
@@ -50,7 +51,9 @@ const App: React.FC = () => {
           path="/tasks/:taskId/estimate"
           element={
             <ProtectedRoute>
-              <EstimateOptimizer />
+              <ErrorBoundary>
+                <EstimateOptimizer />
+              </ErrorBoundary>
             </ProtectedRoute>
           }
         />
