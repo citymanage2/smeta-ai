@@ -541,9 +541,9 @@ PUT /tasks/{task_id}/estimate/versions/{id}/expenses  ← только в это
 
 ---
 
-### Фаза 5 — Версионность и сравнение [ ]
+### Фаза 5 — Версионность и сравнение [x]
 
-#### 5.1 VersionTabs компонент [ ]
+#### 5.1 VersionTabs компонент [x]
 
 Создать `frontend/src/components/estimate/VersionTabs.tsx`:
 
@@ -587,7 +587,7 @@ TaskHistory(
 
 Откат = удаление версии из `estimate_versions` по `version_id` из `new_value`. Версии не физически удаляются из estimate_versions до отката — только помечаются `is_rolled_back: bool` (добавить поле в модель). Это позволяет сохранить историю даже после отката.
 
-#### 5.2 EstimateComparison компонент [ ]
+#### 5.2 EstimateComparison компонент [x]
 
 Создать `frontend/src/components/estimate/EstimateComparison.tsx`:
 
@@ -879,5 +879,5 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 ## Итоговый блок
 
 **Реализован:** 🔄 в работе  
-**Текущий статус:** Фаза 4 завершена — EstimateGrid (react-data-grid, 3 вкладки, inline-редактирование, debounce-сохранение), AdditionalExpenses, EstimateSummary (НДС 22%), Zustand store, интеграция в EstimateOptimizer  
-**Следующий шаг:** Реализация Фазы 5 (VersionTabs, EstimateComparison)
+**Текущий статус:** Фаза 5 завершена — VersionTabs (вкладки, контекстное меню, откат с диалогом, overflow до 5 вкладок + «Ещё...»), EstimateComparison (итоги по версиям, построчное сравнение с выравниванием по lineage_id, цветовой кодировкой [+]/[−])  
+**Следующий шаг:** Реализация Фазы 6 (OptimizationToolbar, шаги оптимизации 1–4)

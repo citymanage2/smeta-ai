@@ -4,8 +4,10 @@ import Layout from '../components/Layout';
 import EstimateGrid from '../components/estimate/EstimateGrid';
 import AdditionalExpenses from '../components/estimate/AdditionalExpenses';
 import EstimateSummary from '../components/estimate/EstimateSummary';
+import VersionTabs from '../components/estimate/VersionTabs';
+import EstimateComparison from '../components/estimate/EstimateComparison';
 import { useEstimateEditorStore } from '../stores/estimateEditor';
-import { saveExpenses } from '../api/estimateVersions';
+import { saveExpenses, getVersions } from '../api/estimateVersions';
 import { EstimateRow } from '../types';
 
 const EstimateOptimizer: React.FC = () => {
@@ -31,6 +33,7 @@ const EstimateOptimizer: React.FC = () => {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
 
   useEffect(() => {
     if (!taskId) return;
@@ -40,6 +43,20 @@ const EstimateOptimizer: React.FC = () => {
       .catch(() => setError('Не удалось загрузить версии сметы'))
       .finally(() => setLoading(false));
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleVersionsChange = useCallback(async () => {
+    if (!taskId) return;
+    // Reload version list after rename / rollback
+    const updated = await getVersions(taskId);
+    useEstimateEditorStore.setState({ versions: updated });
+    // If active version was rolled back — switch to latest visible
+    const still = updated.find((v) => v.id === activeVersionId && !v.is_rolled_back);
+    if (!still) {
+      const notRolled = updated.filter((v) => !v.is_rolled_back);
+      const latest = notRolled[notRolled.length - 1];
+      if (latest) await setActiveVersion(latest.id);
+    }
+  }, [taskId, activeVersionId, setActiveVersion]);
 
   const handleRowsChange = useCallback(
     (rows: EstimateRow[]) => {
@@ -56,7 +73,6 @@ const EstimateOptimizer: React.FC = () => {
     async (expenses: { overhead_pct: number; transport_pct: number; contingency_pct: number }) => {
       if (!taskId || !activeVersionId) return;
       await saveExpenses(taskId, activeVersionId, expenses);
-      // Reload version to get updated meta
       await setActiveVersion(activeVersionId);
     },
     [taskId, activeVersionId, setActiveVersion],
@@ -147,113 +163,120 @@ const EstimateOptimizer: React.FC = () => {
         )}
 
         {!loading && visibleVersions.length > 0 && (
-          <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
-            {/* Main column */}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {/* VersionTabs placeholder — фаза 5 */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '4px',
-                  marginBottom: '16px',
-                  flexWrap: 'wrap',
+          <>
+            {/* VersionTabs */}
+            {taskId && (
+              <VersionTabs
+                taskId={taskId}
+                versions={visibleVersions}
+                activeVersionId={activeVersionId}
+                activeView={activeView}
+                isOptimizationRunning={isReadonly}
+                onSelectVersion={(id) => {
+                  setActiveView('version');
+                  setActiveVersion(id);
                 }}
-              >
-                {visibleVersions.map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={() => setActiveVersion(v.id)}
-                    style={{
-                      padding: '6px 14px',
-                      fontSize: '13px',
-                      fontWeight: activeVersionId === v.id ? 600 : 400,
-                      borderRadius: '6px',
-                      border: activeVersionId === v.id ? '2px solid #2563eb' : '1px solid #e2e8f0',
-                      background: activeVersionId === v.id ? '#eff6ff' : '#fff',
-                      color: activeVersionId === v.id ? '#2563eb' : '#374151',
-                      cursor: 'pointer',
-                      transition: 'all 0.1s',
-                    }}
-                  >
-                    {v.version_display_name}
-                  </button>
-                ))}
-              </div>
+                onSelectComparison={() => setActiveView('comparison')}
+                onVersionsChange={handleVersionsChange}
+              />
+            )}
 
-              {/* Grid */}
-              {activeVersionId && (
-                <EstimateGrid
-                  rows={activeRows}
-                  selectedRowIds={selectedRowIds}
-                  activeTab={activeTab}
-                  isReadonly={isReadonly}
-                  onRowsChange={handleRowsChange}
-                  onSelectedRowIdsChange={setSelectedRowIds}
-                  onTabChange={setActiveTab}
-                  onSave={handleSave}
-                />
-              )}
-
-              {/* Expenses & summary */}
-              {activeVersionId && activeVersionMeta && (
-                <>
-                  <AdditionalExpenses
-                    overhead_pct={overhead}
-                    transport_pct={transport}
-                    contingency_pct={contingency}
-                    baseTotal={baseTotal}
-                    onSave={handleExpensesSave}
-                  />
-                  <EstimateSummary
-                    rows={activeRows}
-                    overhead_pct={overhead}
-                    transport_pct={transport}
-                    contingency_pct={contingency}
-                  />
-                </>
-              )}
-            </div>
-
-            {/* Right panel: selected rows action */}
-            {selectedRowIds.size > 0 && (
+            {/* Comparison view */}
+            {activeView === 'comparison' && taskId && (
               <div
                 style={{
-                  width: '220px',
-                  flexShrink: 0,
-                  padding: '16px',
                   background: '#fff',
                   border: '1px solid #e2e8f0',
-                  borderRadius: '8px',
-                  fontSize: '13px',
+                  borderRadius: '10px',
+                  padding: '20px',
                 }}
               >
-                <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: '10px' }}>
-                  Выбрано строк: {selectedRowIds.size}
-                </div>
-                <button
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    background: '#f0fdf4',
-                    border: '1px solid #bbf7d0',
-                    borderRadius: '6px',
-                    color: '#166534',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => {
-                    /* Phase 6.6 — custom optimization */
-                  }}
-                >
-                  Предложить варианты оптимизации ({selectedRowIds.size})
-                </button>
-                <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: 8 }}>
-                  Ручная оптимизация — Фаза 6
-                </p>
+                <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#0f172a' }}>
+                  Сравнение версий сметы
+                </h3>
+                <EstimateComparison taskId={taskId} versions={visibleVersions} />
               </div>
             )}
-          </div>
+
+            {/* Version editor view */}
+            {activeView === 'version' && (
+              <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+                {/* Main column */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {activeVersionId && (
+                    <EstimateGrid
+                      rows={activeRows}
+                      selectedRowIds={selectedRowIds}
+                      activeTab={activeTab}
+                      isReadonly={isReadonly}
+                      onRowsChange={handleRowsChange}
+                      onSelectedRowIdsChange={setSelectedRowIds}
+                      onTabChange={setActiveTab}
+                      onSave={handleSave}
+                    />
+                  )}
+
+                  {activeVersionId && activeVersionMeta && (
+                    <>
+                      <AdditionalExpenses
+                        overhead_pct={overhead}
+                        transport_pct={transport}
+                        contingency_pct={contingency}
+                        baseTotal={baseTotal}
+                        onSave={handleExpensesSave}
+                      />
+                      <EstimateSummary
+                        rows={activeRows}
+                        overhead_pct={overhead}
+                        transport_pct={transport}
+                        contingency_pct={contingency}
+                      />
+                    </>
+                  )}
+                </div>
+
+                {/* Right panel: selected rows action */}
+                {selectedRowIds.size > 0 && (
+                  <div
+                    style={{
+                      width: '220px',
+                      flexShrink: 0,
+                      padding: '16px',
+                      background: '#fff',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '8px',
+                      fontSize: '13px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: '10px' }}>
+                      Выбрано строк: {selectedRowIds.size}
+                    </div>
+                    <button
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        background: '#f0fdf4',
+                        border: '1px solid #bbf7d0',
+                        borderRadius: '6px',
+                        color: '#166534',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => {
+                        /* Phase 6.6 — custom optimization */
+                      }}
+                    >
+                      Предложить варианты оптимизации ({selectedRowIds.size})
+                    </button>
+                    <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: 8 }}>
+                      Ручная оптимизация — Фаза 6
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </Layout>
