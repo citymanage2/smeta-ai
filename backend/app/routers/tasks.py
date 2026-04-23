@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 import time
@@ -137,13 +138,40 @@ class ProjectLinkResponse(BaseModel):
     project_id: Optional[str]
 
 
+_CONN_ERROR_KEYWORDS = (
+    "ConnectionDoesNotExistError",
+    "connection was closed",
+    "Can't reconnect",
+    "SSL SYSCALL",
+    "server closed the connection",
+    "asyncpg.exceptions",
+)
+
+
 async def _run_task_in_background(task_id: str) -> None:
-    """Run task processor with its own DB session."""
-    async with AsyncSessionLocal() as db:
+    """Run task processor with its own DB session, retrying on transient connection errors."""
+    last_exc: Exception | None = None
+    for attempt in range(3):
         try:
-            await process_task(task_id, db)
+            async with AsyncSessionLocal() as db:
+                await process_task(task_id, db)
+            return
         except Exception as e:
-            logger.error("Background task failed", task_id=task_id, error=str(e))
+            last_exc = e
+            err_repr = repr(e)
+            is_conn_err = any(kw in err_repr for kw in _CONN_ERROR_KEYWORDS)
+            if is_conn_err and attempt < 2:
+                delay = 2 ** attempt  # 1s, 2s
+                logger.warning(
+                    "DB connection lost, retrying task",
+                    task_id=task_id,
+                    attempt=attempt + 1,
+                    delay=delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            break
+    logger.error("Background task failed", task_id=task_id, error=str(last_exc))
 
 
 @router.post("", response_model=TaskCreateResponse)
