@@ -9,8 +9,10 @@ import structlog
 
 from app.models.task import Task
 from app.models.result import TaskResult
+from app.models.estimate_version import EstimateVersion
 from app.services.claude_service import call_claude
 from app.services.excel_service import generate_list
+from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text, pdf_to_content_block
@@ -547,6 +549,86 @@ class TaskProcessor:
             )
             return self._parse_json_response(retry_response)
 
+    async def _call_claude_json_with_retry(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+        use_web_search: bool = False,
+        image_data: Optional[list] = None,
+        processing_timeout: Optional[float] = None,
+        max_chunk_retries: int = 3,
+        chunk_retry_delays: tuple = (5.0, 15.0, 30.0),
+    ) -> dict:
+        """_call_claude_json с retry для transient ошибок уровня чанка."""
+        last_error: Optional[Exception] = None
+        for attempt in range(max_chunk_retries):
+            try:
+                return await self._call_claude_json(
+                    messages,
+                    system_prompt=system_prompt,
+                    use_web_search=use_web_search,
+                    image_data=image_data,
+                    processing_timeout=processing_timeout,
+                )
+            except TaskCancelledError:
+                raise
+            except asyncio.TimeoutError:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < max_chunk_retries - 1:
+                    wait = chunk_retry_delays[attempt]
+                    logger.warning(
+                        "Chunk Claude call failed, retrying",
+                        task_id=self.task_id,
+                        attempt=attempt + 1,
+                        max_retries=max_chunk_retries,
+                        wait=wait,
+                        error=str(e),
+                    )
+                    await asyncio.sleep(wait)
+        raise last_error  # type: ignore[misc]
+
+    async def _interruptible_claude_json_with_retry(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+        use_web_search: bool = False,
+        image_data: Optional[list] = None,
+        processing_timeout: Optional[float] = None,
+        max_chunk_retries: int = 3,
+        chunk_retry_delays: tuple = (5.0, 15.0, 30.0),
+    ) -> dict:
+        """_interruptible_claude_json с retry для transient ошибок уровня чанка."""
+        last_error: Optional[Exception] = None
+        for attempt in range(max_chunk_retries):
+            try:
+                return await self._interruptible_claude_json(
+                    messages,
+                    system_prompt=system_prompt,
+                    use_web_search=use_web_search,
+                    image_data=image_data,
+                    processing_timeout=processing_timeout,
+                )
+            except TaskCancelledError:
+                raise
+            except asyncio.TimeoutError:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < max_chunk_retries - 1:
+                    wait = chunk_retry_delays[attempt]
+                    logger.warning(
+                        "Chunk interruptible Claude call failed, retrying",
+                        task_id=self.task_id,
+                        attempt=attempt + 1,
+                        max_retries=max_chunk_retries,
+                        wait=wait,
+                        error=str(e),
+                    )
+                    await asyncio.sleep(wait)
+        raise last_error  # type: ignore[misc]
+
     async def process(self) -> None:
         """Main processing method."""
         stop_event = asyncio.Event()
@@ -582,6 +664,8 @@ class TaskProcessor:
                 await self._handle_check_project_completeness(task)
             elif task_type == "ESTIMATE_FROM_LIST":
                 await self._handle_estimate_from_list(task)
+            elif task_type == "ESTIMATE_OPTIMIZATION":
+                await self._handle_estimate_optimization(task)
             else:
                 raise NotImplementedError(f"Тип задачи {task.task_type!r} ещё не настроен")
 
@@ -681,7 +765,7 @@ class TaskProcessor:
                 messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND}"}]
 
                 try:
-                    data = await self._call_claude_json(
+                    data = await self._call_claude_json_with_retry(
                         messages,
                         system_prompt=SYSTEM_BASE,
                         use_web_search=False,
@@ -787,13 +871,13 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
 
             try:
-                data = await self._interruptible_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+                data = await self._interruptible_claude_json_with_retry(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
             except TaskCancelledError:
                 if all_items:
                     await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Остановлено на части {i + 1} из {total_chunks}. Частичный результат сохранён.")
                 raise
-            except Exception as chunk_error:
+            except Exception:
                 if all_items:
                     await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
@@ -844,7 +928,7 @@ class TaskProcessor:
             raise ValueError(str(e))
 
         messages = [{"role": "user", "content": PROMPT_LIST_FROM_PROJECT}]
-        data = await self._interruptible_claude_json(
+        data = await self._interruptible_claude_json_with_retry(
             messages,
             system_prompt=SYSTEM_BASE,
             image_data=[pdf_block],
@@ -878,7 +962,7 @@ class TaskProcessor:
                 messages2 = [{"role": "user", "content": f"{null_json}\n\n{PROMPT_LIST_FROM_PROJECT_PASS2}"}]
 
                 try:
-                    data2 = await self._interruptible_claude_json(
+                    data2 = await self._interruptible_claude_json_with_retry(
                         messages2,
                         system_prompt=SYSTEM_BASE,
                         image_data=[pdf_block],
@@ -968,13 +1052,13 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
 
             try:
-                data = await self._interruptible_claude_json(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+                data = await self._interruptible_claude_json_with_retry(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
             except TaskCancelledError:
                 if all_items:
                     await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Остановлено на части {i + 1} из {total_chunks}. Частичный результат сохранён.")
                 raise
-            except Exception as chunk_error:
+            except Exception:
                 if all_items:
                     await self._save_partial(all_items, i, total_chunks)
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
@@ -1182,7 +1266,7 @@ class TaskProcessor:
                 messages = [{"role": "user", "content": prompt_text}]
 
                 try:
-                    data = await self._interruptible_claude_json(
+                    data = await self._interruptible_claude_json_with_retry(
                         messages,
                         system_prompt=SYSTEM_BASE,
                         use_web_search=True,
@@ -1278,6 +1362,103 @@ class TaskProcessor:
                 break
             elapsed += 30
             logger.info("Task still running", task_id=self.task_id, elapsed_seconds=elapsed)
+
+    async def _handle_estimate_optimization(self, task: Task) -> None:
+        """Parse uploaded Excel files and create initial EstimateVersion records."""
+        import uuid as _uuid
+
+        await self.update_progress("Парсинг файлов сметы...")
+
+        files = task.input_file_data or []
+        if not files:
+            raise ValueError("Файл сметы не найден во вложениях задачи")
+
+        # Determine which files are estimate vs client from user_prompt JSON
+        client_file_indices: set[int] = set()
+        user_prompt_meta: dict = {}
+        if task.user_prompt:
+            try:
+                user_prompt_meta = json.loads(task.user_prompt)
+            except (ValueError, TypeError):
+                pass
+
+        for cf in user_prompt_meta.get("client_files", []):
+            idx = cf.get("index")
+            if isinstance(idx, int):
+                client_file_indices.add(idx)
+
+        # Find the first non-client xlsx as the main estimate
+        main_xlsx_bytes: Optional[bytes] = None
+        main_idx: int = -1
+        for i, f in enumerate(files):
+            if i in client_file_indices:
+                continue
+            mime = f.get("mime_type", "")
+            if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
+                main_xlsx_bytes = base64.b64decode(f["content_b64"])
+                main_idx = i
+                break
+
+        if main_xlsx_bytes is None:
+            raise ValueError("Excel-файл (.xlsx) сметы не найден во вложениях задачи")
+
+        rows = parse_estimate_excel(main_xlsx_bytes)
+        if not rows:
+            raise ValueError(
+                "Не удалось извлечь строки из Excel-сметы. "
+                "Проверьте формат файла (должен быть .xlsx с заголовком Наименование)."
+            )
+
+        # Create "original" version
+        original = EstimateVersion(
+            id=str(_uuid.uuid4()),
+            task_id=str(task.id),
+            version_number=0,
+            version_label="original",
+            version_display_name="Исходная смета",
+            rows=rows,
+        )
+        self.db.add(original)
+        await self.db.flush()
+        logger.info("EstimateVersion original created", task_id=str(task.id), rows=len(rows))
+
+        # Process client files if any
+        version_number = 1
+        for i, f in enumerate(files):
+            if i == main_idx:
+                continue
+            cf_meta = next(
+                (c for c in user_prompt_meta.get("client_files", []) if c.get("index") == i),
+                None,
+            )
+            file_type = (cf_meta or {}).get("type", "")
+            mime = f.get("mime_type", "")
+            is_xlsx = "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME
+
+            if file_type == "Смета" and is_xlsx:
+                await self.update_progress("Парсинг сметы заказчика...")
+                client_bytes = base64.b64decode(f["content_b64"])
+                client_rows = parse_estimate_excel(client_bytes)
+                if client_rows:
+                    client_version = EstimateVersion(
+                        id=str(_uuid.uuid4()),
+                        task_id=str(task.id),
+                        version_number=version_number,
+                        version_label="client",
+                        version_display_name="Смета заказчика",
+                        rows=client_rows,
+                    )
+                    self.db.add(client_version)
+                    await self.db.flush()
+                    version_number += 1
+                    logger.info(
+                        "EstimateVersion client created",
+                        task_id=str(task.id),
+                        rows=len(client_rows),
+                    )
+
+        await self.db.commit()
+        await self.update_progress("Смета загружена. Редактор готов к работе.")
 
 
 async def process_task(task_id: str, db: AsyncSession) -> None:

@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import uuid as _uuid
 from decimal import Decimal
+from typing import List, Optional
 from sqlalchemy import String, DateTime, JSON, ForeignKey, Integer, Numeric, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -39,7 +42,7 @@ class EstimateVersion(Base):
     expenses_overridden: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
-    optimization_proposals: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    optimization_proposals: Mapped[Optional[List]] = mapped_column(JSON, nullable=True)
     # True = версия откатана, скрыта в UI, но не удалена из БД
     is_rolled_back: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False

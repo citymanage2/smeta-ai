@@ -207,9 +207,9 @@ def upgrade():
 
 ---
 
-### Фаза 2 — Backend: парсинг Excel и API [ ]
+### Фаза 2 — Backend: парсинг Excel и API [x]
 
-#### 2.1 Парсинг Excel сметы [ ]
+#### 2.1 Парсинг Excel сметы [x]
 
 Создать `backend/app/services/estimate_parser.py`:
 
@@ -237,7 +237,7 @@ def upgrade():
 - Если оба > 0 → `work` (труд + свой материал)
 - Если оба == 0 или null → `section`
 
-#### 2.2 Новый task_type [ ]
+#### 2.2 Новый task_type [x]
 
 В `backend/app/constants.py`:
 ```python
@@ -249,7 +249,7 @@ ESTIMATE_TASK_TYPES: set[str] = {"ESTIMATE_FROM_LIST", "ESTIMATE_OPTIMIZATION"}
 - При создании задачи: парсим загруженный Excel → создаём `EstimateVersion` с `version_label="original"`
 - Если загружен файл заказчика → парсим → создаём `EstimateVersion` с `version_label="client"`
 
-#### 2.3 API endpoints [ ]
+#### 2.3 API endpoints [x]
 
 Создать `backend/app/routers/estimate_versions.py`:
 
@@ -879,5 +879,5 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 ## Итоговый блок
 
 **Реализован:** 🔄 в работе  
-**Текущий статус:** Фаза 1 завершена — модель, миграция, схемы, constants  
-**Следующий шаг:** Реализация Фазы 2 (парсинг Excel, task_type, API endpoints)
+**Текущий статус:** Фаза 2 завершена — парсер Excel, ветка ESTIMATE_OPTIMIZATION, все API endpoints  
+**Следующий шаг:** Реализация Фазы 3 (frontend: загрузка файлов, роутинг, react-data-grid)
