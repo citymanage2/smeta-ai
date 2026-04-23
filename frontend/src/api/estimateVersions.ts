@@ -135,3 +135,22 @@ export async function exportVersion(
   link.remove();
   window.URL.revokeObjectURL(url);
 }
+
+export async function exportComparison(
+  taskId: string,
+  versionIds: string[],
+): Promise<void> {
+  const response = await apiClient.post(
+    `/tasks/${taskId}/estimate/comparison/export`,
+    { version_ids: versionIds },
+    { responseType: 'blob' },
+  );
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', 'sravnenie_smety.xlsx');
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}

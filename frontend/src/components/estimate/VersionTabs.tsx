@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { EstimateVersionSummary } from '../../types';
-import { rollbackVersion, renameVersion } from '../../api/estimateVersions';
+import { rollbackVersion, renameVersion, exportVersion } from '../../api/estimateVersions';
 
 interface VersionTabsProps {
   taskId: string;
@@ -162,7 +162,7 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
               border: '1px solid #e2e8f0',
               borderRadius: '8px',
               boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              minWidth: '190px',
+              minWidth: '210px',
               padding: '4px 0',
               marginTop: '2px',
             }}
@@ -172,6 +172,15 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
               style={menuItemStyle}
             >
               Переименовать версию
+            </button>
+            <button
+              onClick={() => {
+                setMenuOpenId(null);
+                exportVersion(taskId, v.id, v.version_display_name);
+              }}
+              style={menuItemStyle}
+            >
+              ⬇ Скачать .xlsx
             </button>
             {!isLast && (
               <button

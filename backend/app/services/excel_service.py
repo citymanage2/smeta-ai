@@ -1,9 +1,10 @@
 import io
-from typing import Any, Optional
+from typing import Optional
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import structlog
+from app.config import settings
 
 logger = structlog.get_logger()
 
@@ -349,7 +350,6 @@ def generate_smeta_from_project(
     Sheet 4 "Перечень материалов"         — materials from Stage 2
     Sheet 5 "Пояснительная записка"       — research_result + changes_summary
     """
-    VAT_RATE = 0.20
     wb = openpyxl.Workbook()
 
     # ── Sheet 1: Смета ─────────────────────────────────────────────────────
@@ -360,7 +360,7 @@ def generate_smeta_from_project(
         "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
         "Цена работы (за ед.)", "Цена материала (за ед.)",
         "Стоимость работ", "Стоимость материалов",
-        "Итого без НДС", "НДС (20%)", "Итого с НДС",
+        "Итого без НДС", f"НДС ({int(settings.VAT_RATE * 100)}%)", "Итого с НДС",
         "Наименование в прайсе", "Источники", "Примечание",
     ]
     for col, h in enumerate(smeta_headers, start=1):
@@ -376,7 +376,7 @@ def generate_smeta_from_project(
         work_total = qty * wp
         mat_total = qty * mp
         subtotal = work_total + mat_total
-        vat = subtotal * VAT_RATE
+        vat = subtotal * settings.VAT_RATE
         total = subtotal + vat
 
         ws_smeta.cell(row=row, column=1, value=i)
@@ -491,7 +491,6 @@ def generate_smeta_from_tz_project(
     Sheet 4 "Перечень материалов"         — materials from Stage 1
     Sheet 5 "Пояснительная записка"       — changes_summary (two sections)
     """
-    VAT_RATE = 0.20
     wb = openpyxl.Workbook()
 
     # ── Sheet 1: Смета (priced estimate, Stage 2 items) ────────────────────
@@ -502,7 +501,7 @@ def generate_smeta_from_tz_project(
         "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
         "Цена работы (за ед.)", "Цена материала (за ед.)",
         "Стоимость работ", "Стоимость материалов",
-        "Итого без НДС", "НДС (20%)", "Итого с НДС",
+        "Итого без НДС", f"НДС ({int(settings.VAT_RATE * 100)}%)", "Итого с НДС",
         "Наименование в прайсе", "Источники", "Примечание",
     ]
     for col, h in enumerate(smeta_headers, start=1):
@@ -518,7 +517,7 @@ def generate_smeta_from_tz_project(
         work_total = qty * wp
         mat_total = qty * mp
         subtotal = work_total + mat_total
-        vat = subtotal * VAT_RATE
+        vat = subtotal * settings.VAT_RATE
         total = subtotal + vat
 
         ws_smeta.cell(row=row, column=1, value=i)
@@ -651,7 +650,6 @@ def generate_smeta(items: list) -> bytes:
            work_price (per unit), material_price (per unit), notes
     """
     wb = openpyxl.Workbook()
-    VAT_RATE = 0.20
 
     # Sheet 1: Смета
     ws = wb.active
@@ -668,7 +666,7 @@ def generate_smeta(items: list) -> bytes:
         "Стоимость работ",
         "Стоимость материалов",
         "Итого без НДС",
-        "НДС (20%)",
+        f"НДС ({int(settings.VAT_RATE * 100)}%)",
         "Итого с НДС",
         "Наименование в прайсе",
         "Источники",
@@ -696,7 +694,7 @@ def generate_smeta(items: list) -> bytes:
         work_total = qty * wp
         mat_total = qty * mp
         subtotal = work_total + mat_total
-        vat = subtotal * VAT_RATE
+        vat = subtotal * settings.VAT_RATE
         total = subtotal + vat
 
         ws.cell(row=row, column=8, value=work_total if work_total else None)
@@ -836,14 +834,13 @@ def generate_smeta_detailed(items: list) -> bytes:
         work_price (ex. VAT), mat_price (ex. VAT),
         usn (bool: if True, VAT=0), price_list_name, notes
     """
-    VAT_RATE = 0.22
     wb = openpyxl.Workbook()
 
     def _vat_triple(price, usn: bool):
         """Return (ex_vat, vat, inc_vat) for a given price."""
         if not price:
             return None, None, None
-        vat = 0.0 if usn else price * VAT_RATE
+        vat = 0.0 if usn else price * settings.VAT_RATE
         return price, vat, price + vat
 
     def _write_sheet1(ws, rows):
@@ -1170,7 +1167,7 @@ def generate_scan_result(data: dict) -> bytes:
     summary_rows = [
         ("Итого работ", summary.get("total_works", "")),
         ("Итого материалов", summary.get("total_materials", "")),
-        ("НДС (20%)", summary.get("total_vat", "")),
+        (f"НДС ({int(settings.VAT_RATE * 100)}%)", summary.get("total_vat", "")),
         ("Итого с НДС", summary.get("grand_total", "")),
     ]
 
@@ -1186,6 +1183,380 @@ def generate_scan_result(data: dict) -> bytes:
             cell_val.number_format = '#,##0.00'
 
     _auto_fit_columns(ws_summary)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Estimate Optimization export helpers
+# ---------------------------------------------------------------------------
+
+_SECTION_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+_SUBTOTAL_FILL = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+_GRAND_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+_CHEAPER_FILL = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+_DEARER_FILL = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+
+_NUMBER_FMT = '#,##0.00'
+_VAT_RATE = 0.22
+
+
+def _row_cost_dict(row: dict) -> float:
+    qty = row.get("qty") or 0
+    pw = row.get("price_work") or 0
+    pm = row.get("price_material") or 0
+    return qty * (pw + pm)
+
+
+def generate_estimate_export(
+    rows: list,
+    overhead_pct: float,
+    transport_pct: float,
+    contingency_pct: float,
+    version_display_name: str,
+) -> bytes:
+    """Export a single EstimateVersion to xlsx."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Смета"
+
+    COLS = ["№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
+            "Цена работы, руб", "Цена материала, руб", "Стоимость, руб"]
+
+    for ci, h in enumerate(COLS, start=1):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.alignment = Alignment(horizontal="center", wrap_text=True)
+        c.border = THIN_BORDER
+    ws.row_dimensions[1].height = 30
+    ws.freeze_panes = "A2"
+
+    col_widths = [6, 10, 50, 10, 10, 20, 22, 20]
+    for ci, w in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    TYPE_LABELS = {"work": "Работа", "material": "Материал", "section": "—"}
+
+    total_works = 0.0
+    total_materials = 0.0
+    row_idx = 2
+
+    for r in rows:
+        rtype = r.get("type", "")
+        is_section = rtype == "section"
+        cost = _row_cost_dict(r)
+
+        if rtype == "work":
+            total_works += cost
+        elif rtype == "material":
+            total_materials += cost
+
+        ws.cell(row=row_idx, column=1, value=r.get("num") if not is_section else None)
+        ws.cell(row=row_idx, column=2, value=TYPE_LABELS.get(rtype, rtype))
+        ws.cell(row=row_idx, column=3, value=r.get("name", ""))
+        ws.cell(row=row_idx, column=4, value=r.get("unit", "") if not is_section else None)
+        ws.cell(row=row_idx, column=5, value=r.get("qty") if not is_section else None)
+        ws.cell(row=row_idx, column=6, value=r.get("price_work") if not is_section else None)
+        ws.cell(row=row_idx, column=7, value=r.get("price_material") if not is_section else None)
+        ws.cell(row=row_idx, column=8, value=cost if not is_section else None)
+
+        for ci in range(1, len(COLS) + 1):
+            cell = ws.cell(row=row_idx, column=ci)
+            cell.border = THIN_BORDER
+            if is_section:
+                cell.font = BOLD_FONT
+                cell.fill = _SECTION_FILL
+            else:
+                cell.font = NORMAL_FONT
+        for ci in (6, 7, 8):
+            ws.cell(row=row_idx, column=ci).number_format = _NUMBER_FMT
+        row_idx += 1
+
+    row_idx += 1
+
+    base = total_works + total_materials
+    overhead = base * overhead_pct / 100
+    transport = base * transport_pct / 100
+    contingency = base * contingency_pct / 100
+    total = base + overhead + transport + contingency
+    vat = total * _VAT_RATE
+    grand_total = total + vat
+
+    def _write_total(label: str, value: float, fill: PatternFill, bold: bool = False):
+        nonlocal row_idx
+        c_label = ws.cell(row=row_idx, column=3, value=label)
+        c_value = ws.cell(row=row_idx, column=8, value=value)
+        c_value.number_format = _NUMBER_FMT
+        for ci in range(1, len(COLS) + 1):
+            cell = ws.cell(row=row_idx, column=ci)
+            cell.fill = fill
+            cell.border = THIN_BORDER
+            cell.font = BOLD_FONT if bold else NORMAL_FONT
+        row_idx += 1
+
+    _grand_blue = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+
+    _write_total("Работы (итого)", total_works, _SUBTOTAL_FILL)
+    _write_total("Материалы (итого)", total_materials, _SUBTOTAL_FILL)
+    _write_total("Итого (базис)", base, _SUBTOTAL_FILL, bold=True)
+    _write_total(f"Накладные расходы ({overhead_pct}%)", overhead, _GRAND_FILL)
+    _write_total(f"Транспортные расходы ({transport_pct}%)", transport, _GRAND_FILL)
+    _write_total(f"Непредвиденные расходы ({contingency_pct}%)", contingency, _GRAND_FILL)
+    _write_total("Итого", total, _GRAND_FILL, bold=True)
+    _write_total(f"НДС {int(_VAT_RATE * 100)}%", vat, _GRAND_FILL)
+    _write_total("ИТОГО с НДС", grand_total, _grand_blue, bold=True)
+
+    # White font for last (blue) row
+    for ci in range(1, len(COLS) + 1):
+        ws.cell(row=row_idx - 1, column=ci).font = Font(bold=True, color="FFFFFF", size=11)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def generate_comparison_export(versions: list) -> bytes:
+    """
+    Export multi-version comparison to xlsx.
+
+    versions: list of dicts:
+        { id, version_display_name, rows: list[dict], overhead_pct, transport_pct, contingency_pct }
+    Rows aligned by lineage_id. Cells cheaper than original are green, dearer — red.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Сравнение"
+
+    if not versions:
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    # Align rows by lineage_id
+    original_rows = versions[0]["rows"]
+    lineage_order: list[str] = []
+    seen: set[str] = set()
+    for r in original_rows:
+        lid = r.get("lineage_id") or r.get("id", "")
+        if lid and lid not in seen:
+            lineage_order.append(lid)
+            seen.add(lid)
+    for v in versions[1:]:
+        for r in v["rows"]:
+            lid = r.get("lineage_id") or r.get("id", "")
+            if lid and lid not in seen:
+                lineage_order.append(lid)
+                seen.add(lid)
+
+    lookup: dict[str, dict[str, dict]] = {}
+    for v in versions:
+        for r in v["rows"]:
+            lid = r.get("lineage_id") or r.get("id", "")
+            if lid:
+                lookup.setdefault(lid, {})[v["id"]] = r
+
+    FIXED = 4
+    vcols = 4  # qty, price_work, price_material, cost per version
+
+    VERSION_FILLS = [
+        PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid"),
+        PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid"),
+        PatternFill(start_color="ED7D31", end_color="ED7D31", fill_type="solid"),
+        PatternFill(start_color="A9D18E", end_color="A9D18E", fill_type="solid"),
+        PatternFill(start_color="F4B942", end_color="F4B942", fill_type="solid"),
+    ]
+
+    # Row 1: merged version name headers
+    for ci, label in enumerate(["№", "Тип", "Наименование", "Ед. изм."], start=1):
+        c = ws.cell(row=1, column=ci, value=label)
+        c.font = Font(bold=True, color="FFFFFF", size=11)
+        c.fill = HEADER_FILL
+        c.border = THIN_BORDER
+        c.alignment = Alignment(horizontal="center")
+
+    for vi, v in enumerate(versions):
+        start_col = FIXED + 1 + vi * vcols
+        end_col = start_col + vcols - 1
+        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
+        hc = ws.cell(row=1, column=start_col, value=v["version_display_name"])
+        vfill = VERSION_FILLS[vi % len(VERSION_FILLS)]
+        hc.fill = vfill
+        hc.font = Font(bold=True, color="FFFFFF", size=11)
+        hc.alignment = Alignment(horizontal="center")
+        hc.border = THIN_BORDER
+
+    # Row 2: sub-headers
+    for ci, label in enumerate(["№", "Тип", "Наименование", "Ед. изм."], start=1):
+        c = ws.cell(row=2, column=ci, value=label)
+        c.font = Font(bold=True, color="FFFFFF", size=11)
+        c.fill = HEADER_FILL
+        c.border = THIN_BORDER
+
+    sub_headers = ["Кол-во", "Цена работы", "Цена матер.", "Стоимость"]
+    for vi in range(len(versions)):
+        vfill = VERSION_FILLS[vi % len(VERSION_FILLS)]
+        for si, sh in enumerate(sub_headers):
+            ci = FIXED + 1 + vi * vcols + si
+            cell = ws.cell(row=2, column=ci, value=sh)
+            cell.fill = PatternFill(
+                start_color=vfill.start_color.rgb,
+                end_color=vfill.end_color.rgb,
+                fill_type="solid",
+            )
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.border = THIN_BORDER
+
+    ws.row_dimensions[1].height = 28
+    ws.row_dimensions[2].height = 35
+    ws.freeze_panes = "A3"
+
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 10
+    ws.column_dimensions["C"].width = 48
+    ws.column_dimensions["D"].width = 10
+    for vi in range(len(versions)):
+        for si in range(vcols):
+            ws.column_dimensions[get_column_letter(FIXED + 1 + vi * vcols + si)].width = 15
+
+    TYPE_LABELS = {"work": "Работа", "material": "Материал", "section": "—"}
+
+    orig_cost_by_lineage: dict[str, float] = {
+        (r.get("lineage_id") or r.get("id", "")): _row_cost_dict(r) for r in original_rows
+    }
+
+    # Data rows
+    row_idx = 3
+    _absent_fill = PatternFill(start_color="FCE4EC", end_color="FCE4EC", fill_type="solid")
+
+    for lid in lineage_order:
+        any_row = lookup.get(lid, {})
+        rep = next(iter(any_row.values()), None)
+        if rep is None:
+            continue
+
+        rtype = rep.get("type", "")
+        is_section = rtype == "section"
+        is_added = lid not in {(r.get("lineage_id") or r.get("id", "")) for r in original_rows}
+
+        ws.cell(row=row_idx, column=1, value=rep.get("num") if not is_section else None)
+        ws.cell(row=row_idx, column=2, value=TYPE_LABELS.get(rtype, rtype))
+        ws.cell(row=row_idx, column=3, value=rep.get("name", ""))
+        ws.cell(row=row_idx, column=4, value=rep.get("unit", "") if not is_section else None)
+
+        _added_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+        for ci in range(1, FIXED + 1):
+            cell = ws.cell(row=row_idx, column=ci)
+            cell.border = THIN_BORDER
+            if is_section:
+                cell.font = BOLD_FONT
+                cell.fill = _SECTION_FILL
+            elif is_added:
+                cell.fill = _added_fill
+
+        orig_cost = orig_cost_by_lineage.get(lid, 0.0)
+
+        for vi, v in enumerate(versions):
+            r = lookup.get(lid, {}).get(v["id"])
+            start_ci = FIXED + 1 + vi * vcols
+
+            if r is None:
+                for si in range(vcols):
+                    cell = ws.cell(row=row_idx, column=start_ci + si, value="—")
+                    cell.border = THIN_BORDER
+                    cell.alignment = Alignment(horizontal="center")
+                    cell.fill = _absent_fill
+            else:
+                cost = _row_cost_dict(r)
+                values = [r.get("qty"), r.get("price_work"), r.get("price_material"),
+                          cost if not is_section else None]
+                for si, val in enumerate(values):
+                    cell = ws.cell(row=row_idx, column=start_ci + si, value=val)
+                    cell.border = THIN_BORDER
+                    if val is not None and isinstance(val, (int, float)):
+                        cell.number_format = _NUMBER_FMT
+                    if is_section:
+                        cell.font = BOLD_FONT
+                        cell.fill = _SECTION_FILL
+                    elif vi > 0 and si == vcols - 1 and not is_section:
+                        if cost < orig_cost - 0.01:
+                            cell.fill = _CHEAPER_FILL
+                        elif cost > orig_cost + 0.01:
+                            cell.fill = _DEARER_FILL
+
+        row_idx += 1
+
+    # Totals block
+    row_idx += 1
+
+    def _calc_totals(v: dict) -> dict:
+        v_rows = v["rows"]
+        works = sum(_row_cost_dict(r) for r in v_rows if r.get("type") == "work")
+        materials = sum(_row_cost_dict(r) for r in v_rows if r.get("type") == "material")
+        base = works + materials
+        ovh = base * v["overhead_pct"] / 100
+        trp = base * v["transport_pct"] / 100
+        cng = base * v["contingency_pct"] / 100
+        total = base + ovh + trp + cng
+        vat = total * _VAT_RATE
+        return {
+            "Работы": works, "Материалы": materials,
+            "Итого (базис)": base,
+            f"Накладные ({v['overhead_pct']}%)": ovh,
+            f"Транспорт ({v['transport_pct']}%)": trp,
+            f"Непредвиден. ({v['contingency_pct']}%)": cng,
+            "Итого": total,
+            f"НДС {int(_VAT_RATE * 100)}%": vat,
+            "ИТОГО с НДС": total + vat,
+        }
+
+    all_totals = [_calc_totals(v) for v in versions]
+    total_keys = list(all_totals[0].keys())
+    _grand_blue = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+
+    for key in total_keys:
+        is_grand = key == "ИТОГО с НДС"
+        row_fill = _grand_blue if is_grand else _GRAND_FILL
+
+        label_cell = ws.cell(row=row_idx, column=3, value=key)
+        label_cell.font = Font(bold=True, color="FFFFFF" if is_grand else "000000", size=11)
+        label_cell.fill = row_fill
+        label_cell.border = THIN_BORDER
+
+        for ci in [1, 2, 4]:
+            cell = ws.cell(row=row_idx, column=ci)
+            cell.fill = row_fill
+            cell.border = THIN_BORDER
+
+        orig_val = all_totals[0].get(key, 0)
+        for vi, vt in enumerate(all_totals):
+            val = vt.get(key, 0)
+            cost_col = FIXED + vi * vcols + vcols
+            cell = ws.cell(row=row_idx, column=cost_col, value=val)
+            cell.number_format = _NUMBER_FMT
+            cell.border = THIN_BORDER
+            if is_grand:
+                cell.fill = _grand_blue
+                cell.font = Font(bold=True, color="FFFFFF", size=11)
+            elif vi > 0 and val < orig_val - 0.01:
+                cell.fill = _CHEAPER_FILL
+                cell.font = BOLD_FONT
+            elif vi > 0 and val > orig_val + 0.01:
+                cell.fill = _DEARER_FILL
+                cell.font = BOLD_FONT
+            else:
+                cell.fill = _GRAND_FILL
+                cell.font = BOLD_FONT
+
+            for si in range(vcols - 1):
+                c = ws.cell(row=row_idx, column=FIXED + 1 + vi * vcols + si)
+                c.fill = _grand_blue if is_grand else _GRAND_FILL
+                c.border = THIN_BORDER
+
+        row_idx += 1
 
     buf = io.BytesIO()
     wb.save(buf)

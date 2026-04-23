@@ -18,6 +18,7 @@ from app.schemas.estimate_version import (
     EstimateVersionSummary,
     OptimizationProposalSchema,
 )
+from fastapi.responses import StreamingResponse
 from app.utils.auth import get_current_user
 
 logger = structlog.get_logger()
@@ -630,6 +631,91 @@ async def apply_proposals(
     await db.refresh(new_version)
 
     return _version_to_response(new_version)
+
+
+# ---------------------------------------------------------------------------
+# Export endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/estimate/versions/{version_id}/export")
+async def export_version(
+    task_id: str,
+    version_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Download a single EstimateVersion as xlsx."""
+    import io as _io
+    from app.services.excel_service import generate_estimate_export
+
+    version = await _get_version_or_404(task_id, version_id, db)
+
+    xlsx_bytes = generate_estimate_export(
+        rows=version.rows or [],
+        overhead_pct=float(version.overhead_pct or 0),
+        transport_pct=float(version.transport_pct or 0),
+        contingency_pct=float(version.contingency_pct or 0),
+        version_display_name=version.version_display_name,
+    )
+
+    safe_name = version.version_display_name.replace(" ", "_").replace("/", "-")
+    filename = f"smeta_{safe_name}.xlsx"
+
+    return StreamingResponse(
+        _io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class ComparisonExportBody(BaseModel):
+    version_ids: list[str]
+
+
+@router.post("/{task_id}/estimate/comparison/export")
+async def export_comparison(
+    task_id: str,
+    body: ComparisonExportBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Download a multi-version comparison as xlsx."""
+    import io as _io
+    from app.services.excel_service import generate_comparison_export
+
+    await _get_task_or_404(task_id, db)
+
+    result = await db.execute(
+        select(EstimateVersion).where(
+            EstimateVersion.task_id == task_id,
+            EstimateVersion.id.in_(body.version_ids),
+        )
+    )
+    versions_map = {str(v.id): v for v in result.scalars().all()}
+
+    versions_data = []
+    for vid in body.version_ids:
+        v = versions_map.get(vid)
+        if v:
+            versions_data.append({
+                "id": str(v.id),
+                "version_display_name": v.version_display_name,
+                "rows": v.rows or [],
+                "overhead_pct": float(v.overhead_pct or 0),
+                "transport_pct": float(v.transport_pct or 0),
+                "contingency_pct": float(v.contingency_pct or 0),
+            })
+
+    if not versions_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Версии не найдены")
+
+    xlsx_bytes = generate_comparison_export(versions_data)
+
+    return StreamingResponse(
+        _io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="sravnenie_smety.xlsx"'},
+    )
 
 
 # ---------------------------------------------------------------------------

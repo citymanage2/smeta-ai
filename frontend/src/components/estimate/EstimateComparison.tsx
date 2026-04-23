@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { EstimateVersionSummary, EstimateVersionFull, EstimateRow } from '../../types';
-import { getVersion } from '../../api/estimateVersions';
+import { getVersion, exportComparison } from '../../api/estimateVersions';
 
 interface EstimateComparisonProps {
   taskId: string;
@@ -167,10 +167,22 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
   const deltaStr = (delta: number) =>
     delta === 0 ? '—' : `${delta < 0 ? '↓' : '↑'} ${delta < 0 ? '' : '+'}${fmt(delta)} руб`;
 
+  const [exporting, setExporting] = useState(false);
+
+  const handleExportComparison = async () => {
+    if (selectedVersions.length === 0) return;
+    setExporting(true);
+    try {
+      await exportComparison(taskId, selectedVersions.map((v) => v.id));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div>
-      {/* Version selector */}
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px' }}>
+      {/* Version selector + export button */}
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px', alignItems: 'center' }}>
         <span style={{ fontSize: '13px', color: '#64748b', paddingTop: '4px' }}>Показать версии:</span>
         {visibleVersions.map((v) => (
           <label
@@ -197,6 +209,25 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
             {v.version_display_name}
           </label>
         ))}
+        <button
+          onClick={handleExportComparison}
+          disabled={exporting || selectedVersions.length === 0}
+          style={{
+            marginLeft: 'auto',
+            padding: '6px 14px',
+            fontSize: '13px',
+            borderRadius: '6px',
+            border: '1px solid #16a34a',
+            background: exporting || selectedVersions.length === 0 ? '#f0fdf4' : '#dcfce7',
+            color: exporting || selectedVersions.length === 0 ? '#86efac' : '#16a34a',
+            cursor: exporting || selectedVersions.length === 0 ? 'not-allowed' : 'pointer',
+            fontWeight: 500,
+            whiteSpace: 'nowrap',
+          }}
+          title="Скачать выбранные версии как многоколоночный Excel"
+        >
+          {exporting ? 'Формируем...' : '⬇ Скачать сравнение .xlsx'}
+        </button>
       </div>
 
       {loading && (
