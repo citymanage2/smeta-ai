@@ -417,9 +417,9 @@ applyProposals(taskId: string, versionId: string, acceptedIds: string[]): Promis
 
 ---
 
-### Фаза 4 — Редактор сметы (EstimateGrid) [ ]
+### Фаза 4 — Редактор сметы (EstimateGrid) [x]
 
-#### 4.1 Страница EstimateOptimizer [ ]
+#### 4.1 Страница EstimateOptimizer [x]
 
 Создать `frontend/src/pages/EstimateOptimizer.tsx`:
 
@@ -442,7 +442,7 @@ applyProposals(taskId: string, versionId: string, acceptedIds: string[]): Promis
 └─────────────────────────────────────────────────────┘
 ```
 
-#### 4.2 EstimateGrid компонент [ ]
+#### 4.2 EstimateGrid компонент [x]
 
 Создать `frontend/src/components/estimate/EstimateGrid.tsx`:
 
@@ -493,7 +493,7 @@ const cost = (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0)
 
 **Ручная фиксация версии:** В заголовке грида (над таблицей) — кнопка «Сохранить как версию». Доступна всегда, независимо от AI-шагов. Создаёт новую версию с `version_label="custom"` и `version_display_name="Ручная правка [время]"`. Используется опытным сметчиком для фиксации промежуточного состояния без оптимизации.
 
-#### 4.3 AdditionalExpenses компонент [ ]
+#### 4.3 AdditionalExpenses компонент [x]
 
 Создать `frontend/src/components/estimate/AdditionalExpenses.tsx`:
 
@@ -516,7 +516,7 @@ const cost = (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0)
 PUT /tasks/{task_id}/estimate/versions/{id}/expenses  ← только в этой версии
 ```
 
-#### 4.4 EstimateSummary компонент [ ]
+#### 4.4 EstimateSummary компонент [x]
 
 Создать `frontend/src/components/estimate/EstimateSummary.tsx`:
 
@@ -879,5 +879,5 @@ frontend/src/pages/TaskCreate.tsx          ← +двойной upload для EST
 ## Итоговый блок
 
 **Реализован:** 🔄 в работе  
-**Текущий статус:** Фаза 3 завершена — react-data-grid установлен, форма создания задачи, API-модуль, роут /tasks/:taskId/estimate  
-**Следующий шаг:** Реализация Фазы 4 (EstimateGrid, AdditionalExpenses, EstimateSummary, Zustand store)
+**Текущий статус:** Фаза 4 завершена — EstimateGrid (react-data-grid, 3 вкладки, inline-редактирование, debounce-сохранение), AdditionalExpenses, EstimateSummary (НДС 22%), Zustand store, интеграция в EstimateOptimizer  
+**Следующий шаг:** Реализация Фазы 5 (VersionTabs, EstimateComparison)

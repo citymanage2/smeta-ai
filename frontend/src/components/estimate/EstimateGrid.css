@@ -1,0 +1,185 @@
+.estimate-grid-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Tabs */
+.estimate-grid-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #e2e8f0;
+  margin-bottom: 0;
+}
+
+.estimate-grid-tab {
+  padding: 8px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.estimate-grid-tab:hover {
+  color: #2563eb;
+}
+
+.estimate-grid-tab.active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+  font-weight: 600;
+}
+
+/* Warning banner for unfilled prices */
+.estimate-grid-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #92400e;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.estimate-grid-warning:hover {
+  background: #fef3c7;
+}
+
+/* Optimization running banner */
+.estimate-grid-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #1e40af;
+}
+
+.estimate-grid-banner-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Header toolbar */
+.estimate-grid-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 8px;
+  gap: 12px;
+}
+
+.estimate-grid-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Save status */
+.estimate-grid-save-status {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.estimate-grid-save-status.saving {
+  color: #f59e0b;
+}
+
+.estimate-grid-save-status.saved {
+  color: #22c55e;
+}
+
+/* DataGrid overrides */
+.rdg {
+  border-radius: 6px;
+  border: 1px solid #e2e8f0 !important;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.rdg-header-row {
+  background: #f8fafc !important;
+  font-weight: 600;
+  font-size: 12px;
+  color: #475569;
+}
+
+.rdg-row {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.rdg-row:hover {
+  background: #f8fafc !important;
+}
+
+.rdg-row.rdg-row-selected {
+  background: #eff6ff !important;
+}
+
+/* Type badge colours */
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.type-badge-work {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.type-badge-material {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.type-badge-section {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+/* Section row style */
+.rdg-row.row-section .rdg-cell {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+}
+
+/* Unfilled row highlight */
+.rdg-row.row-unfilled .rdg-cell {
+  background: #fffbeb;
+}
+
+/* Number cell alignment */
+.cell-number {
+  text-align: right;
+  padding-right: 8px;
+}
+
+/* Cost cell */
+.cell-cost {
+  text-align: right;
+  padding-right: 8px;
+  font-weight: 500;
+  color: #1e293b;
+}
