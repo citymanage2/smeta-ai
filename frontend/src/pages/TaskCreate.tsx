@@ -226,7 +226,11 @@ const TaskCreate: React.FC = () => {
         setError('Задача создана, но ID не получен. Попробуйте обновить страницу.');
         return;
       }
-      navigate(`/tasks/${task.task_id}/status`);
+      if (isEstimateOpt) {
+        navigate(`/tasks/${task.task_id}/estimate`);
+      } else {
+        navigate(`/tasks/${task.task_id}/status`);
+      }
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string } }; request?: unknown };
       if (axiosError.request && !axiosError.response) {

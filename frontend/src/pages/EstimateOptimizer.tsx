@@ -10,6 +10,7 @@ import OptimizationToolbar, { AbcBreakdown } from '../components/estimate/Optimi
 import OptimizationProposalsPanel from '../components/estimate/OptimizationProposalsPanel';
 import { useEstimateEditorStore } from '../stores/estimateEditor';
 import { saveExpenses, getVersions, runCustomOptimization } from '../api/estimateVersions';
+import { getTaskStatus } from '../api/tasks';
 import { EstimateRow, EstimateVersionFull, OptimizationProposal, OptimizationStep } from '../types';
 
 interface PanelState {
@@ -41,32 +42,40 @@ const EstimateOptimizer: React.FC = () => {
     reset,
   } = useEstimateEditorStore();
 
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [customRunning, setCustomRunning] = useState(false);
+  const [processingMsg, setProcessingMsg] = useState<string | null>('Загрузка сметы...');
   const pollingRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!taskId) return;
     reset();
-    setLoading(true);
+    setProcessingMsg('Загрузка сметы...');
 
-    const tryLoad = () => {
-      loadVersions(taskId)
-        .then(() => {
-          const { versions } = useEstimateEditorStore.getState();
-          if (versions.length > 0) {
-            if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-            setLoading(false);
-          }
-        })
-        .catch(() => {
-          setError('Не удалось загрузить версии сметы');
+    const tryLoad = async () => {
+      try {
+        // Fetch task status for progress message
+        const taskData = await getTaskStatus(taskId);
+        if (taskData.status === 'failed') {
+          setProcessingMsg(null);
+          setError(taskData.error_message ?? 'Ошибка обработки задачи');
           if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-          setLoading(false);
-        });
+          return;
+        }
+        if (taskData.progress_message) setProcessingMsg(taskData.progress_message);
+
+        // Try to load versions
+        await loadVersions(taskId);
+        const { versions } = useEstimateEditorStore.getState();
+        if (versions.length > 0) {
+          setProcessingMsg(null);
+          if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+        }
+      } catch {
+        // Keep polling — transient errors shouldn't stop us
+      }
     };
 
     tryLoad();
@@ -200,42 +209,35 @@ const EstimateOptimizer: React.FC = () => {
           </p>
         </div>
 
-        {/* Loading */}
-        {loading && (
-          <div style={{ color: '#64748b', fontSize: '15px', padding: '24px 0' }}>
-            Загрузка сметы...
+        {/* Processing banner — floats above editor while task is running */}
+        {processingMsg && !error && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '12px',
+            padding: '12px 18px', marginBottom: '16px',
+            backgroundColor: '#eff6ff', border: '1px solid #bfdbfe',
+            borderRadius: '10px', fontSize: '14px', color: '#1e40af',
+          }}>
+            <div style={{
+              flexShrink: 0, width: '18px', height: '18px',
+              border: '2px solid #bfdbfe', borderTopColor: '#3b82f6',
+              borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+            }} />
+            {processingMsg}
           </div>
         )}
 
         {/* Error */}
         {error && (
-          <div
-            style={{
-              padding: '12px 16px',
-              backgroundColor: '#fef2f2',
-              border: '1px solid #fecaca',
-              borderRadius: '8px',
-              color: '#dc2626',
-              fontSize: '14px',
-            }}
-          >
+          <div style={{
+            padding: '12px 16px', marginBottom: '16px',
+            backgroundColor: '#fef2f2', border: '1px solid #fecaca',
+            borderRadius: '8px', color: '#dc2626', fontSize: '14px',
+          }}>
             {error}
           </div>
         )}
 
-        {/* Processing state — shown while polling for versions */}
-        {(loading || (!error && versions.length === 0)) && (
-          <div style={{ textAlign: 'center', padding: '48px 24px', color: '#64748b', fontSize: '15px' }}>
-            <div style={{
-              width: '32px', height: '32px', border: '3px solid #e2e8f0',
-              borderTopColor: '#3b82f6', borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite', margin: '0 auto 16px',
-            }} />
-            Смета обрабатывается, подождите...
-          </div>
-        )}
-
-        {!loading && visibleVersions.length > 0 && taskId && (
+        {visibleVersions.length > 0 && taskId && (
           <>
             {/* Optimization Toolbar */}
             <OptimizationToolbar
