@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Pencil, Check, X } from 'lucide-react';
+import { Pencil, Check, X, Trash2 } from 'lucide-react';
 import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
 import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
 import { updateTask } from '../api/tasks';
+import { deleteTask } from '../api/admin';
 
 const SIDEBAR_WIDTH = 260;
 
@@ -185,6 +186,23 @@ const ProjectsSidebar: React.FC = () => {
     if (e.key === 'Escape') cancelEdit();
   }
 
+  async function handleDeleteTask(taskId: string, isUnassigned: boolean, projectId?: string) {
+    if (!window.confirm('Переместить задачу в корзину?')) return;
+    try {
+      await deleteTask(taskId);
+      if (isUnassigned) {
+        setUnassignedTasks(prev => prev.filter(t => t.id !== taskId));
+      } else if (projectId) {
+        setProjectTasks(prev => ({
+          ...prev,
+          [projectId]: (prev[projectId] ?? []).filter(t => t.id !== taskId),
+        }));
+      }
+    } catch {
+      setError('Не удалось переместить задачу в корзину');
+    }
+  }
+
   function renderTaskItem(task: TaskBrief, isUnassigned: boolean, projectId?: string) {
     const label = TASK_TYPE_LABELS[task.task_type as TaskType] ?? task.task_type;
     const displayName = task.name || label;
@@ -270,6 +288,11 @@ const ProjectsSidebar: React.FC = () => {
                 size={11}
                 style={iconStyle}
                 onClick={e => startTaskEdit(task.id, displayName, e)}
+              />
+              <Trash2
+                size={11}
+                style={{ ...iconStyle, color: '#ef4444' }}
+                onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId); }}
               />
             </div>
           )}
