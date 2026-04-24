@@ -67,17 +67,10 @@ function CostCell({ row }: RenderCellProps<EstimateRow>) {
   return <span className="cell-cost">{cost > 0 ? fmt(cost) : '—'}</span>;
 }
 
-const CONFIDENCE_MAP: Record<string, { label: string; cls: string }> = {
-  high:   { label: '●●● высокая', cls: 'confidence-badge-high' },
-  medium: { label: '●●○ средняя', cls: 'confidence-badge-medium' },
-  low:    { label: '●○○ низкая',  cls: 'confidence-badge-low' },
-};
-
-function ConfidenceBadgeCell({ row }: RenderCellProps<EstimateRow>) {
-  const conf = row.optimization_confidence;
-  if (!conf) return null;
-  const m = CONFIDENCE_MAP[conf];
-  return <span className={`confidence-badge ${m.cls}`}>{m.label}</span>;
+function CommentCell({ row }: RenderCellProps<EstimateRow>) {
+  const note = row.optimization_note;
+  if (!note) return null;
+  return <span className="cell-comment" title={note}>{note}</span>;
 }
 
 function TypeBadgeCell({ row }: RenderCellProps<EstimateRow>) {
@@ -152,11 +145,11 @@ const COST_COL: Column<EstimateRow> = {
   renderCell: CostCell,
 };
 
-const CONFIDENCE_COL: Column<EstimateRow> = {
-  key: 'optimization_confidence',
-  name: 'Уровень',
-  width: 130,
-  renderCell: ConfidenceBadgeCell,
+const COMMENT_COL: Column<EstimateRow> = {
+  key: 'optimization_note',
+  name: 'Комментарий',
+  width: 260,
+  renderCell: CommentCell,
 };
 
 const ALL_COLUMNS: Column<EstimateRow>[] = [
@@ -165,7 +158,7 @@ const ALL_COLUMNS: Column<EstimateRow>[] = [
   WORK_PRICE_COL,
   MATERIAL_PRICE_COL,
   COST_COL,
-  CONFIDENCE_COL,
+  COMMENT_COL,
 ];
 
 const WORKS_COLUMNS: Column<EstimateRow>[] = [
@@ -173,7 +166,7 @@ const WORKS_COLUMNS: Column<EstimateRow>[] = [
   ...BASE_COLUMNS,
   WORK_PRICE_COL,
   COST_COL,
-  CONFIDENCE_COL,
+  COMMENT_COL,
 ];
 
 const MATERIALS_COLUMNS: Column<EstimateRow>[] = [
@@ -181,7 +174,7 @@ const MATERIALS_COLUMNS: Column<EstimateRow>[] = [
   ...BASE_COLUMNS,
   MATERIAL_PRICE_COL,
   COST_COL,
-  CONFIDENCE_COL,
+  COMMENT_COL,
 ];
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -200,12 +193,15 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 }) => {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [showOnlyAdded, setShowOnlyAdded] = useState(false);
 
   const displayedRows = useMemo(() => {
-    if (activeTab === 'works') return rows.filter((r) => r.type === 'work');
-    if (activeTab === 'materials') return rows.filter((r) => r.type === 'material');
-    return rows;
-  }, [rows, activeTab]);
+    let filtered = rows;
+    if (showOnlyAdded) filtered = filtered.filter((r) => r.optimization_note != null);
+    if (activeTab === 'works') return filtered.filter((r) => r.type === 'work');
+    if (activeTab === 'materials') return filtered.filter((r) => r.type === 'material');
+    return filtered;
+  }, [rows, activeTab, showOnlyAdded]);
 
   const unfilledCount = useMemo(
     () =>
@@ -265,17 +261,9 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     [rows, onRowsChange, triggerSave],
   );
 
-  const scrollToFirstUnfilled = useCallback(() => {
-    const first = rows.find(
-      (r) =>
-        (r.type === 'work' || r.type === 'material') &&
-        r.optimization_note != null &&
-        (r.price_work == null || r.price_material == null),
-    );
-    if (!first) return;
-    const el = document.querySelector(`[data-row-key="${first.id}"]`);
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [rows]);
+  const handleUnfilledClick = useCallback(() => {
+    setShowOnlyAdded(true);
+  }, []);
 
   const rowKeyGetter = useCallback((row: EstimateRow) => row.id, []);
 
@@ -357,9 +345,19 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
       </div>
 
       {/* Unfilled warning */}
-      {unfilledCount > 0 && (
-        <div className="estimate-grid-warning" onClick={scrollToFirstUnfilled}>
+      {unfilledCount > 0 && !showOnlyAdded && (
+        <div className="estimate-grid-warning" onClick={handleUnfilledClick}>
           ⚠ {unfilledCount} {unfilledCount === 1 ? 'позиция требует' : 'позиции требуют'} заполнения цены — нажмите, чтобы перейти
+        </div>
+      )}
+
+      {/* Added-only filter active */}
+      {showOnlyAdded && (
+        <div className="estimate-grid-filter-active">
+          <span>Показаны только добавленные позиции ({displayedRows.length})</span>
+          <button className="estimate-grid-filter-reset" onClick={() => setShowOnlyAdded(false)}>
+            Показать всю смету
+          </button>
         </div>
       )}
 
