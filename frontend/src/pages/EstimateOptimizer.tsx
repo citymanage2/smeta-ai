@@ -127,10 +127,7 @@ const EstimateOptimizer: React.FC = () => {
       // Switch to the new analysis version
       await setActiveVersion(newVersionId);
 
-      // Show proposals panel
-      if (proposals.length > 0) {
-        setPanel({ proposals, step, versionId: newVersionId, abcBreakdown });
-      }
+      setPanel({ proposals, step, versionId: newVersionId, abcBreakdown });
     },
     [taskId, setActiveVersion, setOptimizationStatus],
   );
@@ -142,9 +139,7 @@ const EstimateOptimizer: React.FC = () => {
       try {
         await setActiveVersion(versionId);
         const full = await getVersion(taskId, versionId);
-        if (full.optimization_proposals && full.optimization_proposals.length > 0) {
-          setPanel({ proposals: full.optimization_proposals, step, versionId });
-        }
+        setPanel({ proposals: full.optimization_proposals ?? [], step, versionId });
       } catch {
         // silently ignore
       }

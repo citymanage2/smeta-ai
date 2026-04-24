@@ -24,7 +24,7 @@ class EstimateRowSchema(BaseModel):
 
 class OptimizationProposalSchema(BaseModel):
     id: str = Field(default_factory=lambda: str(_uuid.uuid4()))
-    row_id: str
+    row_id: Optional[str] = None
     proposal_type: Literal["add", "remove", "replace_tech", "replace_material", "price_search"]
     description: str
     explanation: str

@@ -31,7 +31,7 @@ export interface EstimateRow {
 
 export interface OptimizationProposal {
   id: string;
-  row_id: string;
+  row_id: string | null;
   proposal_type: 'add' | 'remove' | 'replace_tech' | 'replace_material' | 'price_search';
   description: string;
   explanation: string;
