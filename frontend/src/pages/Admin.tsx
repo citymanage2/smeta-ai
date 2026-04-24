@@ -3,7 +3,7 @@ import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
 import {
   getAdminTasks, getAdminTask, deleteTask,
-  getTrashTasks, restoreTask, permanentDeleteTask,
+  getTrashTasks, restoreTask, permanentDeleteTask, clearTrash,
   getPriceListsInfo, uploadWorksPrice, uploadMaterialsPrice,
   downloadInputFile, generateEmbeddings,
   PriceListInfo,
@@ -425,11 +425,26 @@ const AdminPage: React.FC = () => {
     try {
       await permanentDeleteTask(taskId);
       setPermanentDeleteConfirm(null);
-      fetchTrash();
+      bumpTaskSync();
     } catch {
       setTrashError('Не удалось удалить задачу.');
     } finally {
       setPermanentDeleteLoading(false);
+    }
+  };
+
+  const [clearTrashLoading, setClearTrashLoading] = useState(false);
+
+  const handleClearTrash = async () => {
+    if (!window.confirm(`Удалить все ${trashTotal} задач из корзины навсегда? Это действие нельзя отменить.`)) return;
+    setClearTrashLoading(true);
+    try {
+      await clearTrash();
+      bumpTaskSync();
+    } catch {
+      setTrashError('Не удалось очистить корзину.');
+    } finally {
+      setClearTrashLoading(false);
     }
   };
 
@@ -929,6 +944,26 @@ const AdminPage: React.FC = () => {
         {/* ---- TRASH TAB ---- */}
         {activeTab === 'trash' && (
           <div>
+            {trashTotal > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+                <button
+                  onClick={handleClearTrash}
+                  disabled={clearTrashLoading}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: clearTrashLoading ? '#fca5a5' : '#dc2626',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: clearTrashLoading ? 'not-allowed' : 'pointer',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                  }}
+                >
+                  {clearTrashLoading ? 'Очистка...' : `Очистить корзину (${trashTotal})`}
+                </button>
+              </div>
+            )}
             {trashError && (
               <div style={{ padding: '12px 16px', backgroundColor: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', color: '#dc2626', marginBottom: '16px', fontSize: '14px' }}>
                 {trashError}

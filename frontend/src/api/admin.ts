@@ -23,6 +23,10 @@ export async function permanentDeleteTask(taskId: string): Promise<void> {
   await apiClient.delete(`/admin/tasks/${taskId}/permanent`);
 }
 
+export async function clearTrash(): Promise<void> {
+  await apiClient.delete('/admin/tasks/trash');
+}
+
 export async function getAdminTask(taskId: string): Promise<AdminTask> {
   const response = await apiClient.get<AdminTask>(`/admin/tasks/${taskId}`);
   return response.data;
