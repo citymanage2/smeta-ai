@@ -208,7 +208,7 @@ async def list_unassigned_tasks(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
             Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
-        ).where(Task.project_id.is_(None)).order_by(Task.created_at.desc())
+        ).where(Task.project_id.is_(None), Task.deleted_at.is_(None)).order_by(Task.created_at.desc())
     )
     rows = tasks_result.all()
     return [
@@ -240,7 +240,7 @@ async def get_project(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
             Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
-        ).where(Task.project_id == project_id).order_by(Task.created_at.desc())
+        ).where(Task.project_id == project_id, Task.deleted_at.is_(None)).order_by(Task.created_at.desc())
     )
     tasks = tasks_result.all()
 
