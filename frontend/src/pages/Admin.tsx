@@ -9,6 +9,7 @@ import {
   PriceListInfo,
 } from '../api/admin';
 import { getTaskResults, downloadResult } from '../api/tasks';
+import { useTaskSync } from '../stores/taskSync';
 
 const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -242,6 +243,7 @@ const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
 
 
 const AdminPage: React.FC = () => {
+  const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
   const [activeTab, setActiveTab] = useState<'tasks' | 'trash' | 'prices'>('tasks');
 
   // Tasks state
@@ -359,7 +361,7 @@ const AdminPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, filterStatus, filterType, filterDateFrom, filterDateTo]);
+  }, [page, filterStatus, filterType, filterDateFrom, filterDateTo, taskSyncVersion]);
 
   const fetchPriceListsInfo = useCallback(async () => {
     setPriceInfoLoading(true);
@@ -385,7 +387,7 @@ const AdminPage: React.FC = () => {
     } finally {
       setTrashLoading(false);
     }
-  }, [trashPage]);
+  }, [trashPage, taskSyncVersion]);
 
   useEffect(() => {
     if (activeTab === 'tasks') fetchTasks();
@@ -398,7 +400,7 @@ const AdminPage: React.FC = () => {
     try {
       await deleteTask(taskId);
       setDeleteConfirm(null);
-      fetchTasks();
+      bumpTaskSync();
     } catch {
       setTaskError('Не удалось переместить задачу в корзину.');
     } finally {
@@ -410,7 +412,7 @@ const AdminPage: React.FC = () => {
     setRestoreLoading(taskId);
     try {
       await restoreTask(taskId);
-      fetchTrash();
+      bumpTaskSync();
     } catch {
       setTrashError('Не удалось восстановить задачу.');
     } finally {

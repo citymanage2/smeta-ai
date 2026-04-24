@@ -5,6 +5,7 @@ import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } fro
 import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
 import { updateTask } from '../api/tasks';
 import { deleteTask } from '../api/admin';
+import { useTaskSync } from '../stores/taskSync';
 
 const SIDEBAR_WIDTH = 260;
 
@@ -32,6 +33,7 @@ const iconStyle: React.CSSProperties = {
 const ProjectsSidebar: React.FC = () => {
   const navigate = useNavigate();
 
+  const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [unassignedTasks, setUnassignedTasks] = useState<TaskBrief[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,12 +64,14 @@ const ProjectsSidebar: React.FC = () => {
       ]);
       setProjects(projectsData);
       setUnassignedTasks(unassigned.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)));
+      // сбрасываем кэш задач по проектам — они будут перезагружены при раскрытии
+      setProjectTasks({});
     } catch {
       setError('Ошибка загрузки');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [taskSyncVersion]);
 
   useEffect(() => {
     loadData();
@@ -186,18 +190,11 @@ const ProjectsSidebar: React.FC = () => {
     if (e.key === 'Escape') cancelEdit();
   }
 
-  async function handleDeleteTask(taskId: string, isUnassigned: boolean, projectId?: string) {
+  async function handleDeleteTask(taskId: string, _isUnassigned: boolean, _projectId?: string) {
     if (!window.confirm('Переместить задачу в корзину?')) return;
     try {
       await deleteTask(taskId);
-      if (isUnassigned) {
-        setUnassignedTasks(prev => prev.filter(t => t.id !== taskId));
-      } else if (projectId) {
-        setProjectTasks(prev => ({
-          ...prev,
-          [projectId]: (prev[projectId] ?? []).filter(t => t.id !== taskId),
-        }));
-      }
+      bumpTaskSync();
     } catch {
       setError('Не удалось переместить задачу в корзину');
     }
@@ -292,7 +289,7 @@ const ProjectsSidebar: React.FC = () => {
               <Trash2
                 size={11}
                 style={{ ...iconStyle, color: '#ef4444' }}
-                onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId); }}
+                onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId ?? undefined); }}
               />
             </div>
           )}
