@@ -15,9 +15,11 @@ _TYPE_KW = ("тип", "вид", "type")
 _NAME_KW = ("наименование", "наименов", "name", "описание")
 _UNIT_KW = ("ед", "unit", "ед.изм", "единица")
 _QTY_KW = ("кол", "qty", "количество", "объем", "объём")
-_PRICE_WORK_KW = ("цена работ", "труд", "labor", "работа", "стоим.работ", "price_work", "цр")
-_PRICE_MAT_KW = ("цена матер", "матер", "material", "price_material", "цм", "стоим.матер")
-_SKIP_KW = ("стоимость", "сумма", "итого", "total", "cost", "всего")
+_PRICE_WORK_KW = ("цена работ", "стоимость работ", "стоим. работ", "стоим работ", "стоим.работ",
+                  "труд", "labor", "работа", "price_work", "цр")
+_PRICE_MAT_KW = ("цена матер", "стоимость матер", "стоим. матер", "стоим матер", "стоим.матер",
+                 "матер", "material", "price_material", "цм")
+_SKIP_KW = ("сумма", "итого", "total", "cost", "всего")
 
 # Russian prepositions/conjunctions that mark comment rows (start with lowercase)
 _COMMENT_STARTS = ("с ", "без ", "при ", "в ", "на ", "из ", "по ", "за ",
@@ -46,6 +48,9 @@ def _to_float(val) -> Optional[float]:
         return None
 
 
+_BARE_PRICE_KW = ("цена", "price", "стоимость", "цена (руб", "цена руб")
+
+
 def _detect_columns(header_row: list) -> dict:
     """Return {role: col_index} mapping from a header row (0-based)."""
     cols: dict = {}
@@ -67,6 +72,32 @@ def _detect_columns(header_row: list) -> dict:
             cols["price_work"] = idx
         elif "price_material" not in cols and _header_matches(v, _PRICE_MAT_KW):
             cols["price_material"] = idx
+
+    # Fallback: bare "цена" / "стоимость" column → assign to whichever price slot is missing.
+    # In estimates where work and materials sit on separate rows the single unqualified
+    # "цена" header is always the unit-price column for the row type (work or material).
+    # We map it to price_work first; if price_work is already taken, to price_material.
+    if "price_work" not in cols or "price_material" not in cols:
+        assigned = set(cols.values())
+        for idx, cell in enumerate(header_row):
+            if cell is None or idx in assigned:
+                continue
+            v = str(cell).lower().strip()
+            # Match bare price keywords but NOT qualified ones (already handled above)
+            is_bare = any(v == k or v.startswith(k + " ") or v.startswith(k + "(")
+                          for k in _BARE_PRICE_KW)
+            if not is_bare:
+                continue
+            # Skip if it already looks like a work/material qualified header
+            if _header_matches(v, _PRICE_WORK_KW) or _header_matches(v, _PRICE_MAT_KW):
+                continue
+            if "price_work" not in cols:
+                cols["price_work"] = idx
+                assigned.add(idx)
+            elif "price_material" not in cols:
+                cols["price_material"] = idx
+                assigned.add(idx)
+
     return cols
 
 
