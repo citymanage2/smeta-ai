@@ -26,6 +26,7 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
   onVersionsChange,
 }) => {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -83,7 +84,6 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
           display: 'inline-flex',
           alignItems: 'center',
         }}
-        ref={menuOpenId === v.id ? menuRef : undefined}
       >
         {renamingId === v.id ? (
           <input
@@ -131,7 +131,15 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
               {v.version_display_name}
             </button>
             <button
-              onClick={() => setMenuOpenId(menuOpenId === v.id ? null : v.id)}
+              onClick={(e) => {
+                if (menuOpenId === v.id) {
+                  setMenuOpenId(null);
+                } else {
+                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                  setMenuPos({ top: rect.bottom + 2, left: rect.left });
+                  setMenuOpenId(v.id);
+                }
+              }}
               style={{
                 padding: '6px 6px',
                 fontSize: '12px',
@@ -153,18 +161,18 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
         {/* Context menu */}
         {menuOpenId === v.id && (
           <div
+            ref={menuRef}
             style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              zIndex: 200,
+              position: 'fixed',
+              top: menuPos.top,
+              left: menuPos.left,
+              zIndex: 1000,
               background: '#fff',
               border: '1px solid #e2e8f0',
               borderRadius: '8px',
               boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
               minWidth: '210px',
               padding: '4px 0',
-              marginTop: '2px',
             }}
           >
             <button
