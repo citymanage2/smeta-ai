@@ -413,6 +413,17 @@ async def download_input_file(
     )
 
 
+@router.delete("/tasks/trash", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_trash(
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Очистить корзину — окончательно удалить все задачи с deleted_at IS NOT NULL."""
+    await db.execute(delete(Task).where(Task.deleted_at.is_not(None)))
+    await db.commit()
+    logger.info("Trash cleared by admin")
+
+
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
     task_id: str,
@@ -443,17 +454,6 @@ async def restore_task(
     task.deleted_at = None
     await db.commit()
     logger.info("Task restored from trash by admin", task_id=task_id)
-
-
-@router.delete("/tasks/trash", status_code=status.HTTP_204_NO_CONTENT)
-async def clear_trash(
-    db: AsyncSession = Depends(get_db),
-    admin: dict = Depends(get_admin_user),
-):
-    """Очистить корзину — окончательно удалить все задачи с deleted_at IS NOT NULL."""
-    await db.execute(delete(Task).where(Task.deleted_at.is_not(None)))
-    await db.commit()
-    logger.info("Trash cleared by admin")
 
 
 @router.delete("/tasks/{task_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
