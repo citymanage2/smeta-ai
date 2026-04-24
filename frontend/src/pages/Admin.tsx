@@ -669,14 +669,14 @@ const AdminPage: React.FC = () => {
             )}
 
             {/* Table */}
-            <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+            <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px', overflowX: 'auto' }}>
               {loading ? (
                 <div style={{ padding: '48px', textAlign: 'center', color: '#94a3b8' }}>Загрузка...</div>
               ) : tasks.length === 0 ? (
                 <div style={{ padding: '48px', textAlign: 'center', color: '#94a3b8' }}>Задачи не найдены</div>
               ) : (
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                <div>
+                  <table style={{ width: '100%', minWidth: '700px', borderCollapse: 'collapse', fontSize: '14px' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                         {['ID', 'Тип', 'Статус', 'Дата создания', 'Действия'].map((col) => (
@@ -701,7 +701,7 @@ const AdminPage: React.FC = () => {
                     <tbody>
                       {tasks.map((task) => {
                         const isExpanded = expandedTask === task.id;
-                        const s = STATUS_COLORS[task.status];
+                        const s = STATUS_COLORS[task.status] ?? { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' };
                         return (
                           <React.Fragment key={task.id}>
                             <tr
@@ -736,7 +736,7 @@ const AdminPage: React.FC = () => {
                               <td style={{ padding: '12px 16px', color: '#475569', whiteSpace: 'nowrap' }}>
                                 {formatDate(task.created_at)}
                               </td>
-                              <td style={{ padding: '12px 16px' }}>
+                              <td style={{ padding: '12px 16px', whiteSpace: 'nowrap', width: '1%' }}>
                                 <div style={{ display: 'flex', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
                                   <button
                                     onClick={() => setDeleteConfirm(task.id)}
