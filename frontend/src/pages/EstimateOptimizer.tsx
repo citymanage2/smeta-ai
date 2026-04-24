@@ -21,6 +21,11 @@ interface PanelState {
   autoApplied?: boolean;
 }
 
+interface StepResultBanner {
+  step: OptimizationStep;
+  count: number;
+}
+
 const EstimateOptimizer: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
 
@@ -45,6 +50,7 @@ const EstimateOptimizer: React.FC = () => {
   const [error, setError] = useState('');
   const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
   const [panel, setPanel] = useState<PanelState | null>(null);
+  const [stepResultBanner, setStepResultBanner] = useState<StepResultBanner | null>(null);
   const [customRunning, setCustomRunning] = useState(false);
   const [processingMsg, setProcessingMsg] = useState<string | null>('Загрузка сметы...');
   const pollingRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
@@ -116,7 +122,7 @@ const EstimateOptimizer: React.FC = () => {
       newVersionId: string,
       proposals: OptimizationProposal[],
       step: OptimizationStep,
-      abcBreakdown?: AbcBreakdown,
+      _abcBreakdown?: AbcBreakdown,
     ) => {
       setOptimizationStatus('idle');
       if (!taskId) return;
@@ -125,10 +131,12 @@ const EstimateOptimizer: React.FC = () => {
       const updated = await getVersions(taskId);
       useEstimateEditorStore.setState({ versions: updated });
 
-      // Switch to the new analysis version
+      // Switch to the new version — rows with optimization_confidence will be highlighted in grid
       await setActiveVersion(newVersionId);
 
-      setPanel({ proposals, step, versionId: newVersionId, abcBreakdown, autoApplied: true });
+      // Show compact banner instead of full proposals panel
+      setStepResultBanner({ step, count: proposals.length });
+      setPanel(null);
     },
     [taskId, setActiveVersion, setOptimizationStatus],
   );
@@ -272,7 +280,29 @@ const EstimateOptimizer: React.FC = () => {
               onViewStep={handleViewStep}
             />
 
-            {/* Proposals Panel */}
+            {/* Step result banner — compact notification after auto-apply */}
+            {stepResultBanner && (
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 16px', marginBottom: '12px',
+                background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px',
+                fontSize: '13px', color: '#166534',
+              }}>
+                <span>
+                  <strong>✓ Шаг завершён</strong> — {stepResultBanner.count > 0
+                    ? `${stepResultBanner.count} предложений применено автоматически. Добавленные позиции выделены цветом в смете.`
+                    : 'Смета соответствует нормативам, предложений нет.'}
+                </span>
+                <button
+                  onClick={() => setStepResultBanner(null)}
+                  style={{ background: 'none', border: 'none', color: '#166534', cursor: 'pointer', fontSize: '16px', padding: '0 4px', marginLeft: 12 }}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Proposals Panel (auto-applied summary — shown when user clicks completed step) */}
             {panel && (
               <OptimizationProposalsPanel
                 proposals={panel.proposals}

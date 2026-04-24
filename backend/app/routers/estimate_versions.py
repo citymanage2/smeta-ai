@@ -266,8 +266,8 @@ def _auto_apply_proposals(source_rows: list[dict], proposals: list[dict]) -> lis
                 target["optimization_note"] = description
                 target["optimization_confidence"] = confidence
 
-        elif ptype == "add" and p.get("new_value"):
-            nv = p["new_value"]
+        elif ptype == "add":
+            nv = p.get("new_value") or {}
             new_id = str(uuid.uuid4())
             new_row: dict = {
                 "id": new_id,
@@ -285,7 +285,17 @@ def _auto_apply_proposals(source_rows: list[dict], proposals: list[dict]) -> lis
                 "optimization_note": description,
                 "optimization_confidence": confidence,
             }
-            rows.append(new_row)
+            after_row_id = p.get("after_row_id")
+            if after_row_id and after_row_id in rows_by_id:
+                insert_idx = next((i for i, r in enumerate(rows) if r["id"] == after_row_id), None)
+                if insert_idx is not None:
+                    rows.insert(insert_idx + 1, new_row)
+                    for i, r in enumerate(rows):
+                        r["num"] = i + 1
+                else:
+                    rows.append(new_row)
+            else:
+                rows.append(new_row)
             rows_by_id[new_id] = new_row
 
     return rows
@@ -311,10 +321,11 @@ async def _run_optimization_step(
     RESPONSE_FORMAT = (
         "\n\nВерни СТРОГО в формате JSON без markdown-блоков:\n"
         '{"proposals": [{"id": "uuid4", "row_id": "id строки или null для add", '
+        '"after_row_id": "id строки после которой вставить новую (только для add, иначе null)", '
         '"proposal_type": "add|remove|replace_tech|replace_material", '
         '"description": "краткое: что меняем", "explanation": "обоснование", '
         '"economy_rub": число_или_null, "confidence": "high|medium|low", '
-        '"new_value": null_или_{name,type,unit,qty,price_work,price_material}}]}'
+        '"new_value": {name,type,unit,qty,price_work,price_material}_или_null}]}'
     )
 
     step_prompts = {
@@ -325,8 +336,12 @@ async def _run_optimization_step(
             "2. Соответствуют ли объёмы материалов расходным нормам ГЭСН, исходя из объёма работы.\n\n"
             "Добавляй в результат только реальные несоответствия. "
             "Если не уверен в коде ГЭСН — не называй его, напиши описание работы.\n"
-            "Для каждого предложения: proposal_type='add', row_id=null (новая строка), "
-            "economy_rub=null (это добавление, а не экономия).\n"
+            "Для каждого предложения:\n"
+            "- proposal_type='add', row_id=null (новая строка), economy_rub=null\n"
+            "- after_row_id = id работы, К КОТОРОЙ относится этот материал (чтобы вставить сразу после неё)\n"
+            "- new_value ОБЯЗАТЕЛЕН: {\"name\": название, \"type\": \"material\", \"unit\": ед.изм., "
+            "\"qty\": количество_число_или_null, \"price_work\": null, \"price_material\": цена_или_null}\n"
+            "Если количество или цена неизвестны — ставь null, но поле name и unit обязательны.\n"
         ),
         "redundancy": (
             "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
