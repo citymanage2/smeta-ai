@@ -438,11 +438,15 @@ const AdminPage: React.FC = () => {
   const handleClearTrash = async () => {
     if (!window.confirm(`Удалить все ${trashTotal} задач из корзины навсегда? Это действие нельзя отменить.`)) return;
     setClearTrashLoading(true);
+    setTrashError('');
     try {
       await clearTrash();
+      setTrashTasks([]);
+      setTrashTotal(0);
       bumpTaskSync();
-    } catch {
-      setTrashError('Не удалось очистить корзину.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setTrashError(`Не удалось очистить корзину: ${msg}`);
     } finally {
       setClearTrashLoading(false);
     }
