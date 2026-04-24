@@ -153,6 +153,7 @@ export interface TaskBrief {
   source_file_name?: string | null;
   slot_files?: Record<string, string>;
   name?: string | null;
+  deleted_at?: string | null;
 }
 
 export interface ProjectDetail extends ProjectCard {

@@ -33,7 +33,7 @@ const iconStyle: React.CSSProperties = {
 const ProjectsSidebar: React.FC = () => {
   const navigate = useNavigate();
 
-  const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
+  const { version: taskSyncVersion } = useTaskSync();
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [unassignedTasks, setUnassignedTasks] = useState<TaskBrief[]>([]);
   const [loading, setLoading] = useState(true);
@@ -190,11 +190,18 @@ const ProjectsSidebar: React.FC = () => {
     if (e.key === 'Escape') cancelEdit();
   }
 
-  async function handleDeleteTask(taskId: string, _isUnassigned: boolean, _projectId?: string) {
+  async function handleDeleteTask(taskId: string, isUnassigned: boolean, projectId?: string) {
     if (!window.confirm('Переместить задачу в корзину?')) return;
     try {
       await deleteTask(taskId);
-      bumpTaskSync();
+      const now = new Date().toISOString();
+      const markDeleted = (tasks: TaskBrief[]) =>
+        tasks.map(t => t.id === taskId ? { ...t, deleted_at: now } : t);
+      if (isUnassigned) {
+        setUnassignedTasks(markDeleted);
+      } else if (projectId) {
+        setProjectTasks(prev => ({ ...prev, [projectId]: markDeleted(prev[projectId] ?? []) }));
+      }
     } catch {
       setError('Не удалось переместить задачу в корзину');
     }
@@ -203,15 +210,16 @@ const ProjectsSidebar: React.FC = () => {
   function renderTaskItem(task: TaskBrief, isUnassigned: boolean, projectId?: string) {
     const label = TASK_TYPE_LABELS[task.task_type as TaskType] ?? task.task_type;
     const displayName = task.name || label;
-    const dotColor = STATUS_DOT_COLOR[task.status] ?? '#94a3b8';
+    const isInTrash = !!task.deleted_at;
+    const dotColor = isInTrash ? '#cbd5e1' : (STATUS_DOT_COLOR[task.status] ?? '#94a3b8');
     const subtitle = task.source_file_name ?? formatDate(task.created_at);
     const statusLabel = STATUS_LABELS[task.status as keyof typeof STATUS_LABELS] ?? task.status;
-    const isEditing = editingTaskId === task.id;
+    const isEditing = !isInTrash && editingTaskId === task.id;
 
     return (
       <div
         key={task.id}
-        title={isEditing ? undefined : `${displayName}\n${statusLabel}`}
+        title={isEditing ? undefined : isInTrash ? `${displayName}\nВ корзине` : `${displayName}\n${statusLabel}`}
         style={{
           display: 'flex',
           alignItems: 'flex-start',
@@ -219,6 +227,7 @@ const ProjectsSidebar: React.FC = () => {
           padding: '6px 8px 6px 28px',
           margin: '1px 4px',
           borderRadius: '5px',
+          opacity: isInTrash ? 0.55 : 1,
         }}
         onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
         onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -269,7 +278,7 @@ const ProjectsSidebar: React.FC = () => {
                 onClick={() => navigate(`/tasks/${task.id}/status`)}
                 style={{
                   fontSize: '12px',
-                  color: '#1e293b',
+                  color: isInTrash ? '#94a3b8' : '#1e293b',
                   lineHeight: '1.3',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -277,20 +286,25 @@ const ProjectsSidebar: React.FC = () => {
                   cursor: 'pointer',
                   flex: 1,
                   minWidth: 0,
+                  textDecoration: isInTrash ? 'line-through' : 'none',
                 }}
               >
                 {displayName}
               </div>
-              <Pencil
-                size={11}
-                style={iconStyle}
-                onClick={e => startTaskEdit(task.id, displayName, e)}
-              />
-              <Trash2
-                size={11}
-                style={{ ...iconStyle, color: '#ef4444' }}
-                onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId ?? undefined); }}
-              />
+              {!isInTrash && (
+                <>
+                  <Pencil
+                    size={11}
+                    style={iconStyle}
+                    onClick={e => startTaskEdit(task.id, displayName, e)}
+                  />
+                  <Trash2
+                    size={11}
+                    style={{ ...iconStyle, color: '#ef4444' }}
+                    onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId ?? undefined); }}
+                  />
+                </>
+              )}
             </div>
           )}
           {!isEditing && (
@@ -304,7 +318,7 @@ const ProjectsSidebar: React.FC = () => {
                 whiteSpace: 'nowrap',
               }}
             >
-              {subtitle}
+              {isInTrash ? 'В корзине' : subtitle}
             </div>
           )}
         </div>

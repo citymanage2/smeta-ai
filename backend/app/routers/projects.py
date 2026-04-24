@@ -62,6 +62,7 @@ class TaskBrief(BaseModel):
     source_file_name: Optional[str] = None
     slot_files: dict[str, str] = {}
     name: Optional[str] = None
+    deleted_at: Optional[str] = None
 
 
 class ProjectDetailResponse(BaseModel):
@@ -115,7 +116,7 @@ async def _aggregate(project_id: str, db: AsyncSession) -> dict:
                 else_=None,
             )
         ).label("optimized_cost"),
-    ).where(Task.project_id == project_id)
+    ).where(Task.project_id == project_id, Task.deleted_at.is_(None))
     row = (await db.execute(stmt)).one()
     return {
         "unestimated": row.unestimated or 0,
@@ -169,7 +170,7 @@ async def list_projects(
                 )
             ).label("optimized_cost"),
         )
-        .outerjoin(Task, Task.project_id == Project.id)
+        .outerjoin(Task, (Task.project_id == Project.id) & Task.deleted_at.is_(None))
         .group_by(
             Project.id,
             Project.name,
@@ -206,7 +207,7 @@ async def list_unassigned_tasks(
     tasks_result = await db.execute(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
-            Task.cost, Task.created_at, Task.input_files, Task.name,
+            Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
         ).where(Task.project_id.is_(None)).order_by(Task.created_at.desc())
     )
     rows = tasks_result.all()
@@ -220,6 +221,7 @@ async def list_unassigned_tasks(
             created_at=row.created_at.isoformat(),
             source_file_name=(row.input_files[0]["name"] if row.input_files else None),
             name=row.name,
+            deleted_at=row.deleted_at.isoformat() if row.deleted_at else None,
         )
         for row in rows
     ]
@@ -237,7 +239,7 @@ async def get_project(
     tasks_result = await db.execute(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
-            Task.cost, Task.created_at, Task.input_files, Task.name,
+            Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
         ).where(Task.project_id == project_id).order_by(Task.created_at.desc())
     )
     tasks = tasks_result.all()
@@ -273,6 +275,7 @@ async def get_project(
                 source_file_name=(t.input_files[0]["name"] if t.input_files else None),
                 slot_files=slot_files_by_task.get(str(t.id), {}),
                 name=t.name,
+                deleted_at=t.deleted_at.isoformat() if t.deleted_at else None,
             )
             for t in tasks
         ],
