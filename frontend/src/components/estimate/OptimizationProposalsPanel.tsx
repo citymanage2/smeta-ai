@@ -9,6 +9,7 @@ interface Props {
   taskId: string;
   versionId: string;
   abcBreakdown?: AbcBreakdown;
+  autoApplied?: boolean;
   onProposalsApplied: (newVersion: EstimateVersionFull) => void;
   onDismiss: () => void;
 }
@@ -44,6 +45,7 @@ const OptimizationProposalsPanel: React.FC<Props> = ({
   taskId,
   versionId,
   abcBreakdown,
+  autoApplied = false,
   onProposalsApplied,
   onDismiss,
 }) => {
@@ -220,6 +222,114 @@ const OptimizationProposalsPanel: React.FC<Props> = ({
     materials: 'Шаг 4 — Материалы',
   };
 
+  // ---------- AUTO-APPLIED summary mode ----------
+  if (autoApplied) {
+    const highCount = proposals.filter((p) => p.confidence === 'high').length;
+    const medCount  = proposals.filter((p) => p.confidence === 'medium').length;
+    const lowCount  = proposals.filter((p) => p.confidence === 'low').length;
+    const addCount  = proposals.filter((p) => p.proposal_type === 'add').length;
+    const removeCount = proposals.filter((p) => p.proposal_type === 'remove').length;
+    const replaceCount = proposals.filter((p) => p.proposal_type === 'replace_tech' || p.proposal_type === 'replace_material').length;
+    const totalEco = proposals.reduce((s, p) => s + (p.economy_rub ?? 0), 0);
+
+    return (
+      <div
+        style={{
+          background: '#fff',
+          border: '1px solid #e2e8f0',
+          borderRadius: '10px',
+          padding: '18px 20px',
+          marginBottom: '16px',
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>
+              {stepName[step]} — изменения применены автоматически
+            </div>
+            <div style={{ fontSize: '12px', color: '#64748b', marginTop: 4 }}>
+              {proposals.length === 0
+                ? 'Предложений не найдено — смета без изменений.'
+                : `Применено предложений: ${proposals.length}${totalEco > 0 ? ` • Потенциальная экономия: −${fmtK(totalEco)}` : ''}`}
+            </div>
+          </div>
+          <button
+            onClick={onDismiss}
+            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '16px', padding: '0 4px' }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* ABC breakdown */}
+        {abcBreakdown && abcBreakdown.total_sum > 0 && (
+          <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px 14px', marginBottom: '14px', fontSize: '12px', color: '#475569' }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>ABC-анализ</div>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <span><strong style={{ color: '#166534' }}>Группа А</strong>: {abcBreakdown.a_count} поз. — {fmtK(abcBreakdown.a_sum)} ({Math.round((abcBreakdown.a_sum / abcBreakdown.total_sum) * 100)}%) → <em>анализировались</em></span>
+              <span><strong style={{ color: '#92400e' }}>Группа Б</strong>: {abcBreakdown.b_count} поз.</span>
+              <span><strong style={{ color: '#64748b' }}>Группа В</strong>: {abcBreakdown.c_count} поз.</span>
+            </div>
+          </div>
+        )}
+
+        {proposals.length > 0 && (
+          <>
+            {/* Stats */}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+              {addCount > 0 && <span style={{ padding: '4px 10px', borderRadius: '5px', background: '#f0fdf4', color: '#166534', fontSize: '12px', fontWeight: 600 }}>+ {addCount} добавлено</span>}
+              {removeCount > 0 && <span style={{ padding: '4px 10px', borderRadius: '5px', background: '#fef2f2', color: '#991b1b', fontSize: '12px', fontWeight: 600 }}>− {removeCount} удалено</span>}
+              {replaceCount > 0 && <span style={{ padding: '4px 10px', borderRadius: '5px', background: '#eff6ff', color: '#1d4ed8', fontSize: '12px', fontWeight: 600 }}>⇄ {replaceCount} заменено</span>}
+            </div>
+
+            {/* Legend */}
+            <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '10px 14px', marginBottom: 14, fontSize: '12px', color: '#475569' }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Обозначения в смете</div>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                {highCount > 0 && <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#22c55e', marginRight: 5 }} />●●● высокая уверенность — {highCount} поз.</span>}
+                {medCount > 0  && <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#eab308', marginRight: 5 }} />●●○ средняя уверенность — {medCount} поз.</span>}
+                {lowCount > 0  && <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#f97316', marginRight: 5 }} />●○○ низкая уверенность — {lowCount} поз.</span>}
+              </div>
+              <div style={{ marginTop: 8, color: '#94a3b8' }}>
+                Удалите из сметы позиции с низкой уверенностью, если они не подходят.
+              </div>
+            </div>
+
+            {/* Readonly list */}
+            <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+              {sorted.map((p) => {
+                const conf = CONFIDENCE_COLORS[p.confidence] ?? CONFIDENCE_COLORS.medium;
+                const typeLabel = PROPOSAL_TYPE_LABELS[p.proposal_type] ?? p.proposal_type;
+                return (
+                  <div key={p.id} style={{ padding: '10px 12px', background: '#fafafa', border: '1px solid #f1f5f9', borderRadius: '7px', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 6px', borderRadius: '4px', background: '#f1f5f9', color: '#475569' }}>{typeLabel}</span>
+                      <span style={{ fontSize: '11px', padding: '2px 6px', borderRadius: '4px', background: conf.bg, color: conf.color }}>{conf.label}</span>
+                      {p.economy_rub != null && p.economy_rub > 0 && <span style={{ fontSize: '12px', fontWeight: 700, color: '#166534' }}>−{fmt(p.economy_rub)}</span>}
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: '12px', color: '#1e293b', marginBottom: 2 }}>{p.description}</div>
+                    <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4 }}>{p.explanation}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            onClick={onDismiss}
+            style={{ padding: '8px 18px', borderRadius: '6px', border: '1px solid #e2e8f0', background: '#fff', color: '#475569', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}
+          >
+            Закрыть
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- MANUAL accept/reject mode (custom optimization) ----------
   return (
     <div
       style={{

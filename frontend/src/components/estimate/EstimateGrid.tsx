@@ -67,6 +67,19 @@ function CostCell({ row }: RenderCellProps<EstimateRow>) {
   return <span className="cell-cost">{cost > 0 ? fmt(cost) : '—'}</span>;
 }
 
+const CONFIDENCE_MAP: Record<string, { label: string; cls: string }> = {
+  high:   { label: '●●● высокая', cls: 'confidence-badge-high' },
+  medium: { label: '●●○ средняя', cls: 'confidence-badge-medium' },
+  low:    { label: '●○○ низкая',  cls: 'confidence-badge-low' },
+};
+
+function ConfidenceBadgeCell({ row }: RenderCellProps<EstimateRow>) {
+  const conf = row.optimization_confidence;
+  if (!conf) return null;
+  const m = CONFIDENCE_MAP[conf];
+  return <span className={`confidence-badge ${m.cls}`}>{m.label}</span>;
+}
+
 function TypeBadgeCell({ row }: RenderCellProps<EstimateRow>) {
   const map: Record<string, string> = {
     work: 'Работа',
@@ -139,12 +152,20 @@ const COST_COL: Column<EstimateRow> = {
   renderCell: CostCell,
 };
 
+const CONFIDENCE_COL: Column<EstimateRow> = {
+  key: 'optimization_confidence',
+  name: 'Уровень',
+  width: 130,
+  renderCell: ConfidenceBadgeCell,
+};
+
 const ALL_COLUMNS: Column<EstimateRow>[] = [
   SelectColumn,
   ...BASE_COLUMNS,
   WORK_PRICE_COL,
   MATERIAL_PRICE_COL,
   COST_COL,
+  CONFIDENCE_COL,
 ];
 
 const WORKS_COLUMNS: Column<EstimateRow>[] = [
@@ -152,6 +173,7 @@ const WORKS_COLUMNS: Column<EstimateRow>[] = [
   ...BASE_COLUMNS,
   WORK_PRICE_COL,
   COST_COL,
+  CONFIDENCE_COL,
 ];
 
 const MATERIALS_COLUMNS: Column<EstimateRow>[] = [
@@ -159,6 +181,7 @@ const MATERIALS_COLUMNS: Column<EstimateRow>[] = [
   ...BASE_COLUMNS,
   MATERIAL_PRICE_COL,
   COST_COL,
+  CONFIDENCE_COL,
 ];
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -258,6 +281,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 
   const rowClass = useCallback(
     (row: EstimateRow) => {
+      if (row.optimization_confidence) return `row-proposal-${row.optimization_confidence}`;
       if (
         row.type !== 'section' &&
         row.optimization_note != null &&

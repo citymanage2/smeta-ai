@@ -237,6 +237,60 @@ def _abc_analysis(rows: list[dict], row_type: str) -> tuple[list[dict], dict]:
     return rows, breakdown
 
 
+def _auto_apply_proposals(source_rows: list[dict], proposals: list[dict]) -> list[dict]:
+    """Apply all proposals to source_rows in-place. Returns modified rows list."""
+    import copy as _copy
+    rows = _copy.deepcopy(source_rows)
+    rows_by_id = {r["id"]: r for r in rows}
+
+    for p in proposals:
+        ptype = p.get("proposal_type")
+        row_id = p.get("row_id")
+        confidence = p.get("confidence", "low")
+        description = p.get("description", "")
+
+        if ptype == "remove" and row_id:
+            rows = [r for r in rows if r.get("id") != row_id]
+            rows_by_id = {r["id"]: r for r in rows}
+
+        elif ptype in ("replace_tech", "replace_material") and row_id:
+            target = rows_by_id.get(row_id)
+            if target and p.get("new_value"):
+                nv = p["new_value"]
+                if nv.get("name"):
+                    target["name"] = nv["name"]
+                if ptype == "replace_tech" and nv.get("price_work") is not None:
+                    target["price_work"] = nv["price_work"]
+                elif ptype == "replace_material" and nv.get("price_material") is not None:
+                    target["price_material"] = nv["price_material"]
+                target["optimization_note"] = description
+                target["optimization_confidence"] = confidence
+
+        elif ptype == "add" and p.get("new_value"):
+            nv = p["new_value"]
+            new_id = str(uuid.uuid4())
+            new_row: dict = {
+                "id": new_id,
+                "lineage_id": new_id,
+                "num": len(rows) + 1,
+                "type": nv.get("type", "material"),
+                "name": nv.get("name") or description or "Новая позиция",
+                "unit": nv.get("unit", ""),
+                "qty": nv.get("qty"),
+                "price_work": nv.get("price_work"),
+                "price_material": nv.get("price_material"),
+                "cost": None,
+                "selected": False,
+                "abc_group": None,
+                "optimization_note": description,
+                "optimization_confidence": confidence,
+            }
+            rows.append(new_row)
+            rows_by_id[new_id] = new_row
+
+    return rows
+
+
 async def _run_optimization_step(
     task_id: str,
     step: str,  # "completeness" | "redundancy" | "technology" | "materials"
@@ -260,7 +314,7 @@ async def _run_optimization_step(
         '"proposal_type": "add|remove|replace_tech|replace_material", '
         '"description": "краткое: что меняем", "explanation": "обоснование", '
         '"economy_rub": число_или_null, "confidence": "high|medium|low", '
-        '"new_value": null_или_{name,price_work,price_material}}]}'
+        '"new_value": null_или_{name,type,unit,qty,price_work,price_material}}]}'
     )
 
     step_prompts = {
@@ -389,6 +443,9 @@ async def _run_optimization_step(
                 if not p.get("id"):
                     p["id"] = str(uuid.uuid4())
 
+            # Auto-apply all proposals — rows already have confidence markers
+            applied_rows = _auto_apply_proposals(source_rows, proposals_raw)
+
             # Count versions to get next number
             count_result = await db.execute(
                 select(EstimateVersion).where(EstimateVersion.task_id == task_id)
@@ -402,7 +459,7 @@ async def _run_optimization_step(
                 version_number=next_num,
                 version_label=next_label,
                 version_display_name=display_name,
-                rows=source_rows,  # rows with abc_group filled for steps 3/4
+                rows=applied_rows,  # proposals auto-applied, rows marked with confidence
                 overhead_pct=source_version.overhead_pct,
                 transport_pct=source_version.transport_pct,
                 contingency_pct=source_version.contingency_pct,

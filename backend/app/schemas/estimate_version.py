@@ -20,6 +20,7 @@ class EstimateRowSchema(BaseModel):
     selected: bool = False
     abc_group: Optional[Literal["A", "B", "C"]] = None
     optimization_note: Optional[str] = None
+    optimization_confidence: Optional[Literal["high", "medium", "low"]] = None
 
 
 class OptimizationProposalSchema(BaseModel):

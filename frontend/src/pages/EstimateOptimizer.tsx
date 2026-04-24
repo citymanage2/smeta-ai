@@ -18,6 +18,7 @@ interface PanelState {
   step: OptimizationStep;
   versionId: string;
   abcBreakdown?: AbcBreakdown;
+  autoApplied?: boolean;
 }
 
 const EstimateOptimizer: React.FC = () => {
@@ -127,7 +128,7 @@ const EstimateOptimizer: React.FC = () => {
       // Switch to the new analysis version
       await setActiveVersion(newVersionId);
 
-      setPanel({ proposals, step, versionId: newVersionId, abcBreakdown });
+      setPanel({ proposals, step, versionId: newVersionId, abcBreakdown, autoApplied: true });
     },
     [taskId, setActiveVersion, setOptimizationStatus],
   );
@@ -139,7 +140,7 @@ const EstimateOptimizer: React.FC = () => {
       try {
         await setActiveVersion(versionId);
         const full = await getVersion(taskId, versionId);
-        setPanel({ proposals: full.optimization_proposals ?? [], step, versionId });
+        setPanel({ proposals: full.optimization_proposals ?? [], step, versionId, autoApplied: true });
       } catch {
         // silently ignore
       }
@@ -279,6 +280,7 @@ const EstimateOptimizer: React.FC = () => {
                 taskId={taskId}
                 versionId={panel.versionId}
                 abcBreakdown={panel.abcBreakdown}
+                autoApplied={panel.autoApplied}
                 onProposalsApplied={handleProposalsApplied}
                 onDismiss={() => setPanel(null)}
               />
