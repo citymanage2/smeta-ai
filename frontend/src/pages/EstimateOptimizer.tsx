@@ -135,6 +135,23 @@ const EstimateOptimizer: React.FC = () => {
     [taskId, setActiveVersion, setOptimizationStatus],
   );
 
+  const handleViewStep = useCallback(
+    async (versionId: string, step: OptimizationStep) => {
+      if (!taskId) return;
+      setActiveView('version');
+      try {
+        await setActiveVersion(versionId);
+        const full = await getVersion(taskId, versionId);
+        if (full.optimization_proposals && full.optimization_proposals.length > 0) {
+          setPanel({ proposals: full.optimization_proposals, step, versionId });
+        }
+      } catch {
+        // silently ignore
+      }
+    },
+    [taskId, setActiveVersion],
+  );
+
   const handleProposalsApplied = useCallback(
     async (newVersion: EstimateVersionFull) => {
       setPanel(null);
@@ -256,6 +273,7 @@ const EstimateOptimizer: React.FC = () => {
               taskId={taskId}
               versions={visibleVersions}
               onStepComplete={handleStepComplete}
+              onViewStep={handleViewStep}
             />
 
             {/* Proposals Panel */}

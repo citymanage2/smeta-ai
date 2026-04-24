@@ -36,9 +36,10 @@ interface Props {
     step: OptimizationStep,
     abcBreakdown?: AbcBreakdown,
   ) => void;
+  onViewStep?: (versionId: string, step: OptimizationStep) => void;
 }
 
-const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete }) => {
+const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete, onViewStep }) => {
   const [runningStep, setRunningStep] = useState<OptimizationStep | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,6 +90,15 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
 
   const handleClick = useCallback(
     async (step: OptimizationStep) => {
+      const stepConfig = STEPS.find((s) => s.step === step)!;
+      const isDone = versions.some((v) => v.version_label === stepConfig.producedLabel);
+
+      if (isDone) {
+        const resultVer = versions.find((v) => v.version_label === stepConfig.producedLabel);
+        if (resultVer) onViewStep?.(resultVer.id, step);
+        return;
+      }
+
       if (runningStep) return;
       setErrorMsg('');
       setRunningStep(step);
@@ -100,7 +110,7 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
         setErrorMsg('Не удалось запустить анализ');
       }
     },
-    [runningStep, taskId, schedulePoll],
+    [runningStep, taskId, schedulePoll, versions, onViewStep],
   );
 
   const latestVersion = [...versions].reverse().find((v) => !v.is_rolled_back);
@@ -125,7 +135,7 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
           const isUnlocked = requiredLabel === null || versionLabels.has(requiredLabel);
           const isRunning = runningStep === step;
           const isBlocked = runningStep !== null && !isRunning;
-          const disabled = !isUnlocked || isBlocked || (isDone && !isRunning);
+          const disabled = !isUnlocked || (isBlocked && !isDone);
 
           let bg = '#fff';
           let border = '#e2e8f0';
@@ -143,7 +153,7 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
               <button
                 onClick={() => !disabled && handleClick(step)}
                 disabled={disabled}
-                title={!isUnlocked ? 'Завершите предыдущий шаг' : isDone ? 'Шаг выполнен' : ''}
+                title={!isUnlocked ? 'Завершите предыдущий шаг' : isDone ? 'Открыть результаты шага' : ''}
                 style={{
                   padding: '8px 13px',
                   borderRadius: '7px',
