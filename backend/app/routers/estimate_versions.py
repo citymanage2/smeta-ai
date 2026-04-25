@@ -311,10 +311,10 @@ async def _run_optimization_step(
     import json as _json
 
     step_labels = {
-        "completeness": ("completeness_checked", "Оптимизация 1 — Полнота"),
-        "redundancy": ("no_redundant", "Оптимизация 2 — Лишние позиции"),
-        "technology": ("tech_optimized", "Оптимизация 3 — Технологии"),
-        "materials": ("material_optimized", "Оптимизация 4 — Материалы"),
+        "completeness": ("completeness_checked", "V1 - Полнота"),
+        "redundancy": ("no_redundant", "V2 - Лишнее"),
+        "technology": ("tech_optimized", "V3 - Технологии"),
+        "materials": ("material_optimized", "V4 - Материалы"),
     }
     next_label, display_name = step_labels[step]
 
