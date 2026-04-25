@@ -333,8 +333,8 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
             <thead>
               <tr>
                 <th style={{ ...thStyle, width: 40 }}>#</th>
-                <th style={{ ...thStyle, textAlign: 'left', minWidth: 280 }}>Наименование</th>
                 <th style={{ ...thStyle, width: 80 }}>Тип</th>
+                <th style={{ ...thStyle, textAlign: 'left', minWidth: 280 }}>Наименование</th>
                 <th style={{ ...thStyle, width: 70 }}>Ед.</th>
                 <th style={{ ...thStyle, width: 70 }}>Кол-во</th>
                 {selectedVersions.map((v) => (
@@ -382,11 +382,11 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
                       )}
                       {!isAdded && !isRemoved && idx + 1}
                     </td>
-                    <td style={{ ...tdStyle, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {ar.name}
-                    </td>
                     <td style={{ ...tdStyle, textAlign: 'center', fontSize: '12px', color: ar.type === 'work' ? '#2563eb' : ar.type === 'material' ? '#16a34a' : '#94a3b8' }}>
                       {ar.type === 'work' ? 'Работа' : ar.type === 'material' ? 'Материал' : '—'}
+                    </td>
+                    <td style={{ ...tdStyle, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {ar.name}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
                       {ar.unit}
