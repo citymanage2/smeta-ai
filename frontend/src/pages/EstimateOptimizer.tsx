@@ -219,7 +219,7 @@ const EstimateOptimizer: React.FC = () => {
   const contingency = activeVersionMeta?.contingency_pct ?? 0;
 
   const baseTotal = activeRows
-    .filter((r) => r.type === 'work' || r.type === 'material')
+    .filter((r) => (r.type === 'work' || r.type === 'material') && !r.is_excluded)
     .reduce((acc, r) => acc + (r.qty ?? 0) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
 
   const visibleVersions = versions.filter((v) => !v.is_rolled_back);

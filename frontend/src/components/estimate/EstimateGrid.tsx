@@ -269,6 +269,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 
   const rowClass = useCallback(
     (row: EstimateRow) => {
+      if (row.is_excluded) return 'row-excluded';
       if (row.optimization_confidence) return `row-proposal-${row.optimization_confidence}`;
       if (
         row.type !== 'section' &&

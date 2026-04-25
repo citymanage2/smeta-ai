@@ -182,6 +182,13 @@
   background: #fffbeb;
 }
 
+/* Excluded (removed by optimization) row */
+.rdg-row.row-excluded .rdg-cell {
+  background: #fef2f2;
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
 /* Number cell alignment */
 .cell-number {
   text-align: right;

@@ -28,6 +28,7 @@ export interface EstimateRow {
   abc_group?: 'A' | 'B' | 'C';
   optimization_note?: string;
   optimization_confidence?: 'high' | 'medium' | 'low';
+  is_excluded?: boolean;
 }
 
 export interface OptimizationProposal {

@@ -34,6 +34,7 @@ function fmt(n: number): string {
 }
 
 function rowCost(row: EstimateRow): number {
+  if (row.is_excluded) return 0;
   return (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
 }
 
@@ -41,7 +42,7 @@ function calcTotals(rows: EstimateRow[], meta: EstimateVersionSummary): VersionT
   let works = 0;
   let materials = 0;
   for (const r of rows) {
-    if (r.type === 'work' || r.type === 'material') {
+    if ((r.type === 'work' || r.type === 'material') && !r.is_excluded) {
       works += (r.qty ?? 0) * (r.price_work ?? 0);
       materials += (r.qty ?? 0) * (r.price_material ?? 0);
     }
@@ -400,6 +401,22 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
                         return (
                           <td key={v.id} style={{ ...tdStyle, textAlign: 'right', color: '#94a3b8' }}>
                             —
+                          </td>
+                        );
+                      }
+                      if (row.is_excluded) {
+                        const excludedCost = (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
+                        return (
+                          <td key={v.id} style={{ ...tdStyle, textAlign: 'right', background: 'rgba(254,202,202,0.35)' }}>
+                            <span style={{ textDecoration: 'line-through', color: '#94a3b8' }}>
+                              {fmt(excludedCost)}
+                            </span>
+                            <div style={{ fontSize: '11px', color: '#dc2626', fontWeight: 600 }}>исключено</div>
+                            {row.optimization_note && (
+                              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 400, fontStyle: 'italic', marginTop: 2 }} title={row.optimization_note}>
+                                {row.optimization_note.length > 60 ? row.optimization_note.slice(0, 60) + '…' : row.optimization_note}
+                              </div>
+                            )}
                           </td>
                         );
                       }

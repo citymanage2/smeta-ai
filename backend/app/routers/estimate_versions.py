@@ -250,8 +250,10 @@ def _auto_apply_proposals(source_rows: list[dict], proposals: list[dict]) -> lis
         description = p.get("description", "")
 
         if ptype == "remove" and row_id:
-            rows = [r for r in rows if r.get("id") != row_id]
-            rows_by_id = {r["id"]: r for r in rows}
+            target = rows_by_id.get(row_id)
+            if target:
+                target["is_excluded"] = True
+                target["optimization_note"] = p.get("explanation") or p.get("description") or ""
 
         elif ptype in ("replace_tech", "replace_material") and row_id:
             target = rows_by_id.get(row_id)
@@ -645,8 +647,10 @@ async def apply_proposals(
         row_id = proposal.get("row_id")
 
         if ptype == "remove":
-            rows = [r for r in rows if r.get("id") != row_id]
-            rows_by_id = {r["id"]: r for r in rows}
+            target = rows_by_id.get(row_id)
+            if target:
+                target["is_excluded"] = True
+                target["optimization_note"] = proposal.get("explanation") or proposal.get("description") or ""
 
         elif ptype in ("replace_tech", "replace_material"):
             target = rows_by_id.get(row_id)
