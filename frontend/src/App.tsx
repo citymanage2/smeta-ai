@@ -9,6 +9,7 @@ import EstimateOptimizer from './pages/EstimateOptimizer';
 import Admin from './pages/Admin';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
+import UnassignedTasks from './pages/UnassignedTasks';
 import Calculator from './pages/Calculator';
 import { useAuthStore } from './stores/auth';
 
@@ -62,6 +63,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <Projects />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects/unassigned"
+          element={
+            <ProtectedRoute>
+              <UnassignedTasks />
             </ProtectedRoute>
           }
         />

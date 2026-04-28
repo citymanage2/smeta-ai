@@ -352,7 +352,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         <div style={{ flex: 1, overflowY: 'auto', width: '100%', padding: '6px 0' }}>
           {/* Без проекта */}
           <button
-            onClick={() => onToggle()}
+            onClick={() => navigate('/projects/unassigned')}
             title="Без проекта"
             style={collapsedProjectBtn}
           >
