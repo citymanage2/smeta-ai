@@ -1245,6 +1245,8 @@ def generate_estimate_export(
     row_idx = 2
 
     for r in rows:
+        if r.get("is_excluded"):
+            continue
         rtype = r.get("type", "")
         is_section = rtype == "section"
         cost = _row_cost_dict(r)

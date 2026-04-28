@@ -184,7 +184,9 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
             <button
               onClick={() => {
                 setMenuOpenId(null);
-                exportVersion(taskId, v.id, v.version_display_name);
+                exportVersion(taskId, v.id, v.version_display_name).catch(() => {
+                  alert('Не удалось скачать файл. Попробуйте ещё раз.');
+                });
               }}
               style={menuItemStyle}
             >
