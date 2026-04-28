@@ -615,12 +615,12 @@ const AdminPage: React.FC = () => {
             >
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>Статус</div>
-                <Select value={filterStatus} onValueChange={v => { setFilterStatus(v as TaskStatus | ''); setPage(1); }} size="sm">
+                <Select value={filterStatus || '__all__'} onValueChange={v => { setFilterStatus(v === '__all__' ? '' : v as TaskStatus); setPage(1); }} size="sm">
                   <SelectTrigger style={inputStyle}>
-                    <SelectValue placeholder="Все статусы" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Все статусы</SelectItem>
+                    <SelectItem value="__all__">Все статусы</SelectItem>
                     {STATUSES.map((s) => (
                       <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>
                     ))}
@@ -630,12 +630,12 @@ const AdminPage: React.FC = () => {
 
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>Тип задачи</div>
-                <Select value={filterType} onValueChange={v => { setFilterType(v as TaskType | ''); setPage(1); }} size="sm">
+                <Select value={filterType || '__all__'} onValueChange={v => { setFilterType(v === '__all__' ? '' : v as TaskType); setPage(1); }} size="sm">
                   <SelectTrigger style={inputStyle}>
-                    <SelectValue placeholder="Все типы" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Все типы</SelectItem>
+                    <SelectItem value="__all__">Все типы</SelectItem>
                     {TASK_TYPES.map((t) => (
                       <SelectItem key={t} value={t}>{TASK_TYPE_LABELS[t]}</SelectItem>
                     ))}
