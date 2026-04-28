@@ -235,10 +235,10 @@ const EstimateOptimizer: React.FC = () => {
             {taskName || 'Оптимизация сметы'}
           </h2>
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
-            Оптимизация сметы
+            {taskName && 'Оптимизация сметы'}
             {isDirty && (
-              <span style={{ marginLeft: 10, color: '#f59e0b', fontWeight: 500 }}>
-                • Несохранённые изменения
+              <span style={{ marginLeft: taskName ? 10 : 0, color: '#f59e0b', fontWeight: 500 }}>
+                {taskName ? '• Несохранённые изменения' : 'Несохранённые изменения'}
               </span>
             )}
           </p>
