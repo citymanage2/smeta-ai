@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import Layout from '../components/Layout';
 import {
   getCatalog,
   createWork,
@@ -49,6 +50,46 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Column definitions per tab
+// ---------------------------------------------------------------------------
+
+interface ColDef {
+  id: string;
+  label: string;
+  defaultWidth?: number;
+  noResize?: boolean;
+}
+
+const COL_DEFS: Record<Tab, ColDef[]> = {
+  all: [
+    { id: 'num', label: '№', defaultWidth: 50, noResize: true },
+    { id: 'type', label: 'Тип', defaultWidth: 90 },
+    { id: 'name', label: 'Наименование', defaultWidth: 320 },
+    { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
+    { id: 'price', label: 'Цена, руб', defaultWidth: 120 },
+    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'actions', label: '', defaultWidth: 90, noResize: true },
+  ],
+  works: [
+    { id: 'num', label: '№', defaultWidth: 50, noResize: true },
+    { id: 'name', label: 'Наименование', defaultWidth: 280 },
+    { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
+    { id: 'contractors', label: 'Подрядчики', defaultWidth: 220 },
+    { id: 'minprice', label: 'Мин. цена, руб', defaultWidth: 130 },
+    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'actions', label: '', defaultWidth: 90, noResize: true },
+  ],
+  materials: [
+    { id: 'num', label: '№', defaultWidth: 50, noResize: true },
+    { id: 'name', label: 'Наименование', defaultWidth: 380 },
+    { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
+    { id: 'price', label: 'Цена, руб', defaultWidth: 120 },
+    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'actions', label: '', defaultWidth: 90, noResize: true },
+  ],
+};
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -88,8 +129,7 @@ function contractorsFromPrices(prices: Record<string, number> | null): { name: s
 
 const s = {
   page: {
-    padding: '28px 32px',
-    maxWidth: 1200,
+    maxWidth: 1300,
     margin: '0 auto',
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif",
   } as React.CSSProperties,
@@ -195,14 +235,18 @@ const s = {
     transition: 'color 0.12s',
   }),
 
+  tableWrap: {
+    overflowX: 'auto' as const,
+    borderRadius: 8,
+    boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+  } as React.CSSProperties,
+
   table: {
     width: '100%',
     borderCollapse: 'collapse' as const,
+    tableLayout: 'fixed' as const,
     fontSize: 13,
     background: '#fff',
-    borderRadius: 8,
-    overflow: 'hidden',
-    boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
   } as React.CSSProperties,
 
   th: {
@@ -213,14 +257,19 @@ const s = {
     color: '#64748b',
     background: '#f8fafc',
     borderBottom: '1px solid #e2e8f0',
+    position: 'relative' as const,
+    userSelect: 'none' as const,
     whiteSpace: 'nowrap' as const,
+    overflow: 'hidden' as const,
   } as React.CSSProperties,
 
   td: {
     padding: '9px 12px',
     color: '#1e293b',
     borderBottom: '1px solid #f1f5f9',
-    verticalAlign: 'middle' as const,
+    verticalAlign: 'top' as const,
+    wordBreak: 'break-word' as const,
+    overflowWrap: 'break-word' as const,
   } as React.CSSProperties,
 
   kindBadge: (kind: 'work' | 'material'): React.CSSProperties => ({
@@ -231,6 +280,7 @@ const s = {
     fontWeight: 500,
     background: kind === 'work' ? '#dbeafe' : '#dcfce7',
     color: kind === 'work' ? '#1d4ed8' : '#15803d',
+    whiteSpace: 'nowrap',
   }),
 
   pagination: {
@@ -339,7 +389,103 @@ const s = {
     fontSize: 13,
     marginBottom: 14,
   } as React.CSSProperties,
+
+  resizeHandle: {
+    position: 'absolute' as const,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 5,
+    cursor: 'col-resize',
+    zIndex: 1,
+    background: 'transparent',
+  } as React.CSSProperties,
+
+  resizeHandleHover: {
+    background: 'rgba(37,99,235,0.25)',
+  } as React.CSSProperties,
 };
+
+// ---------------------------------------------------------------------------
+// Tooltip button (instant tooltip, no browser delay)
+// ---------------------------------------------------------------------------
+
+interface TooltipBtnProps {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  icon: string;
+}
+
+function TooltipBtn({ label, onClick, danger, icon }: TooltipBtnProps) {
+  const [show, setShow] = useState(false);
+  return (
+    <span style={{ position: 'relative', display: 'inline-block' }}>
+      <button
+        style={{
+          ...s.btn,
+          padding: '4px 10px',
+          fontSize: 12,
+          ...(danger ? s.btnDanger : {}),
+        }}
+        onClick={onClick}
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+        type="button"
+      >
+        {icon}
+      </button>
+      {show && (
+        <span
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 4px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: '#1e293b',
+            color: '#fff',
+            fontSize: 11,
+            padding: '3px 8px',
+            borderRadius: 4,
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            zIndex: 200,
+          }}
+        >
+          {label}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ResizableTh
+// ---------------------------------------------------------------------------
+
+interface ResizableThProps {
+  col: ColDef;
+  width: number;
+  onResizeStart: (e: React.MouseEvent, colId: string) => void;
+  children: React.ReactNode;
+}
+
+function ResizableTh({ col, width, onResizeStart, children }: ResizableThProps) {
+  const [hoverHandle, setHoverHandle] = useState(false);
+  return (
+    <th style={{ ...s.th, width, minWidth: width }}>
+      {children}
+      {!col.noResize && (
+        <div
+          style={{ ...s.resizeHandle, ...(hoverHandle ? s.resizeHandleHover : {}) }}
+          onMouseEnter={() => setHoverHandle(true)}
+          onMouseLeave={() => setHoverHandle(false)}
+          onMouseDown={e => onResizeStart(e, col.id)}
+        />
+      )}
+    </th>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // ItemFormModal — add / edit
@@ -534,7 +680,7 @@ function ConfirmModal({ message, onCancel, onConfirm }: ConfirmModalProps) {
 }
 
 // ---------------------------------------------------------------------------
-// ImportButton — использует существующий /admin/price-lists/{type}
+// ImportButton
 // ---------------------------------------------------------------------------
 
 interface ImportButtonProps {
@@ -607,6 +753,43 @@ export default function PriceCatalog() {
   const [showAdd, setShowAdd] = useState(false);
   const [editItem, setEditItem] = useState<CatalogItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<CatalogItem | null>(null);
+
+  // Column widths: keyed by `${tab}_${colId}`
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {};
+    for (const [t, cols] of Object.entries(COL_DEFS)) {
+      for (const col of cols) {
+        if (col.defaultWidth) init[`${t}_${col.id}`] = col.defaultWidth;
+      }
+    }
+    return init;
+  });
+
+  const resizingRef = useRef<{ colKey: string; startX: number; startW: number } | null>(null);
+
+  const handleResizeStart = (e: React.MouseEvent, colId: string) => {
+    const colKey = `${tab}_${colId}`;
+    const th = (e.currentTarget as HTMLElement).closest('th');
+    if (!th) return;
+    resizingRef.current = { colKey, startX: e.clientX, startW: th.offsetWidth };
+
+    const onMove = (evt: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const delta = evt.clientX - resizingRef.current.startX;
+      const newW = Math.max(50, resizingRef.current.startW + delta);
+      setColWidths(prev => ({ ...prev, [resizingRef.current!.colKey]: newW }));
+    };
+    const onUp = () => {
+      resizingRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    e.preventDefault();
+  };
+
+  const getWidth = (colId: string) => colWidths[`${tab}_${colId}`] ?? 100;
 
   // Debounce search
   useEffect(() => {
@@ -699,110 +882,88 @@ export default function PriceCatalog() {
   });
 
   // ---------------------------------------------------------------------------
-  // Table columns
+  // Table rendering
   // ---------------------------------------------------------------------------
 
-  const renderHead = () => {
-    if (tab === 'works') {
-      return (
-        <tr>
-          <th style={s.th}>#</th>
-          <th style={s.th}>Наименование</th>
-          <th style={s.th}>Ед. изм.</th>
-          <th style={s.th}>Подрядчики</th>
-          <th style={s.th}>Мин. цена</th>
-          <th style={s.th}>Обновлено</th>
-          <th style={{ ...s.th, width: 90 }}></th>
-        </tr>
-      );
-    }
-    if (tab === 'materials') {
-      return (
-        <tr>
-          <th style={s.th}>#</th>
-          <th style={s.th}>Наименование</th>
-          <th style={s.th}>Ед. изм.</th>
-          <th style={s.th}>Цена</th>
-          <th style={s.th}>Обновлено</th>
-          <th style={{ ...s.th, width: 90 }}></th>
-        </tr>
-      );
-    }
-    return (
-      <tr>
-        <th style={s.th}>#</th>
-        <th style={s.th}>Наименование</th>
-        <th style={s.th}>Тип</th>
-        <th style={s.th}>Ед. изм.</th>
-        <th style={s.th}>Цена</th>
-        <th style={s.th}>Обновлено</th>
-        <th style={{ ...s.th, width: 90 }}></th>
-      </tr>
-    );
-  };
+  const actionsTd = (item: CatalogItem) => (
+    <td style={{ ...s.td, whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
+      <TooltipBtn label="Редактировать" icon="✎" onClick={() => setEditItem(item)} />
+      {' '}
+      <TooltipBtn label="Удалить" icon="✕" onClick={() => setDeleteItem(item)} danger />
+    </td>
+  );
+
+  const renderColgroup = () => (
+    <colgroup>
+      {COL_DEFS[tab].map(col => (
+        <col key={col.id} style={{ width: getWidth(col.id) }} />
+      ))}
+    </colgroup>
+  );
+
+  const renderHead = () => (
+    <tr>
+      {COL_DEFS[tab].map(col => (
+        <ResizableTh
+          key={col.id}
+          col={col}
+          width={getWidth(col.id)}
+          onResizeStart={handleResizeStart}
+        >
+          {col.label}
+        </ResizableTh>
+      ))}
+    </tr>
+  );
 
   const renderRow = (item: CatalogItem, idx: number) => {
     const rowNum = startIdx + idx;
-    const actions = (
-      <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
-        <button
-          style={{ ...s.btn, padding: '4px 10px', fontSize: 12 }}
-          onClick={() => setEditItem(item)}
-          title="Редактировать"
-        >
-          ✎
-        </button>
-        <button
-          style={{ ...s.btn, ...s.btnDanger, padding: '4px 10px', fontSize: 12, marginLeft: 4 }}
-          onClick={() => setDeleteItem(item)}
-          title="Удалить"
-        >
-          ✕
-        </button>
-      </td>
-    );
+    const rowBg = { background: idx % 2 === 0 ? '#fff' : '#fafafa' };
 
     if (tab === 'works') {
-      const contractors = item.prices ? Object.entries(item.prices).map(([k, v]) => `${k}: ${formatPrice(v)}`).join(', ') : '—';
+      const contractorsText = item.prices
+        ? Object.entries(item.prices).map(([k, v]) => `${k}: ${formatPrice(v)}`).join('\n')
+        : '—';
       return (
-        <tr key={item.id} style={{ background: idx % 2 === 0 ? '#fff' : '#fafafa' }}>
-          <td style={{ ...s.td, color: '#94a3b8', width: 36 }}>{rowNum}</td>
+        <tr key={item.id} style={rowBg}>
+          <td style={{ ...s.td, color: '#94a3b8' }}>{rowNum}</td>
           <td style={s.td}>{item.name}</td>
           <td style={{ ...s.td, color: '#64748b' }}>{item.unit || '—'}</td>
-          <td style={{ ...s.td, color: '#64748b', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{contractors}</td>
+          <td style={{ ...s.td, color: '#64748b', whiteSpace: 'pre-line' }}>{contractorsText}</td>
           <td style={{ ...s.td, fontWeight: 500 }}>{formatPrice(item.price)}</td>
           <td style={{ ...s.td, color: '#94a3b8' }}>{formatDate(item.updated_at)}</td>
-          {actions}
+          {actionsTd(item)}
         </tr>
       );
     }
 
     if (tab === 'materials') {
       return (
-        <tr key={item.id} style={{ background: idx % 2 === 0 ? '#fff' : '#fafafa' }}>
-          <td style={{ ...s.td, color: '#94a3b8', width: 36 }}>{rowNum}</td>
+        <tr key={item.id} style={rowBg}>
+          <td style={{ ...s.td, color: '#94a3b8' }}>{rowNum}</td>
           <td style={s.td}>{item.name}</td>
           <td style={{ ...s.td, color: '#64748b' }}>{item.unit || '—'}</td>
           <td style={{ ...s.td, fontWeight: 500 }}>{formatPrice(item.price)}</td>
           <td style={{ ...s.td, color: '#94a3b8' }}>{formatDate(item.updated_at)}</td>
-          {actions}
+          {actionsTd(item)}
         </tr>
       );
     }
 
+    // tab === 'all': № Тип Наименование Ед.изм Цена Обновлено
     return (
-      <tr key={item.id} style={{ background: idx % 2 === 0 ? '#fff' : '#fafafa' }}>
-        <td style={{ ...s.td, color: '#94a3b8', width: 36 }}>{rowNum}</td>
-        <td style={s.td}>{item.name}</td>
+      <tr key={item.id} style={rowBg}>
+        <td style={{ ...s.td, color: '#94a3b8' }}>{rowNum}</td>
         <td style={s.td}>
           <span style={s.kindBadge(item.kind)}>
             {item.kind === 'work' ? 'Работа' : 'Материал'}
           </span>
         </td>
+        <td style={s.td}>{item.name}</td>
         <td style={{ ...s.td, color: '#64748b' }}>{item.unit || '—'}</td>
         <td style={{ ...s.td, fontWeight: 500 }}>{formatPrice(item.price)}</td>
         <td style={{ ...s.td, color: '#94a3b8' }}>{formatDate(item.updated_at)}</td>
-        {actions}
+        {actionsTd(item)}
       </tr>
     );
   };
@@ -812,147 +973,152 @@ export default function PriceCatalog() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div style={s.page}>
-      {/* Header */}
-      <div style={s.header}>
-        <h1 style={s.title}>Каталог расценок</h1>
-        <div style={s.headerActions}>
-          <ImportButton onDone={fetchData} />
-          <button
-            style={s.btn}
-            onClick={() => exportCatalog(tab, debouncedSearch || undefined)}
-          >
-            ↓ Экспорт
-          </button>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button style={s.btn} onClick={() => downloadTemplate('works')}>Шаблон работ</button>
-            <button style={s.btn} onClick={() => downloadTemplate('materials')}>Шаблон материалов</button>
+    <Layout>
+      <div style={s.page}>
+        {/* Header */}
+        <div style={s.header}>
+          <h1 style={s.title}>Каталог расценок</h1>
+          <div style={s.headerActions}>
+            <ImportButton onDone={fetchData} />
+            <button
+              style={s.btn}
+              onClick={() => exportCatalog(tab, debouncedSearch || undefined)}
+            >
+              ↓ Экспорт
+            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button style={s.btn} onClick={() => downloadTemplate('works')}>Шаблон работ</button>
+              <button style={s.btn} onClick={() => downloadTemplate('materials')}>Шаблон материалов</button>
+            </div>
+            <button
+              style={{ ...s.btn, ...s.btnPrimary }}
+              onClick={() => setShowAdd(true)}
+            >
+              + Добавить позицию
+            </button>
           </div>
-          <button
-            style={{ ...s.btn, ...s.btnPrimary }}
-            onClick={() => setShowAdd(true)}
-          >
-            + Добавить позицию
-          </button>
         </div>
-      </div>
 
-      {/* Controls */}
-      <div style={s.controls}>
-        <input
-          style={s.searchInput}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Поиск по названию..."
-        />
-        <select style={s.select} value={sort} onChange={e => setSort(e.target.value as SortKey)}>
-          {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
-          Строк:
-          <select style={s.select} value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
-            {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+        {/* Controls */}
+        <div style={s.controls}>
+          <input
+            style={s.searchInput}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Поиск по названию..."
+          />
+          <select style={s.select} value={sort} onChange={e => setSort(e.target.value as SortKey)}>
+            {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div style={s.tabs}>
-        {(['all', 'works', 'materials'] as Tab[]).map(t => (
-          <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>
-            {t === 'all' ? 'Все' : t === 'works' ? 'Работы' : 'Материалы'}
-          </button>
-        ))}
-      </div>
-
-      {/* Table */}
-      {loading ? (
-        <div style={s.emptyState}>Загрузка...</div>
-      ) : items.length === 0 ? (
-        <div style={s.emptyState}>
-          {debouncedSearch
-            ? `Ничего не найдено по запросу «${debouncedSearch}»`
-            : 'Нет позиций. Загрузите прайс или добавьте вручную.'}
-        </div>
-      ) : (
-        <table style={s.table}>
-          <thead>{renderHead()}</thead>
-          <tbody>
-            {items.map((item, idx) => renderRow(item, idx))}
-          </tbody>
-        </table>
-      )}
-
-      {/* Pagination */}
-      {total > 0 && (
-        <div style={s.pagination}>
-          <span style={s.paginationInfo}>
-            {startIdx}–{endIdx} из {total}
-          </span>
-          <div style={s.paginationBtns}>
-            <button
-              style={s.pageBtn(false, page === 1)}
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-            >
-              ←
-            </button>
-            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-              let p: number;
-              if (totalPages <= 7) {
-                p = i + 1;
-              } else if (page <= 4) {
-                p = i + 1;
-              } else if (page >= totalPages - 3) {
-                p = totalPages - 6 + i;
-              } else {
-                p = page - 3 + i;
-              }
-              return (
-                <button key={p} style={s.pageBtn(p === page)} onClick={() => setPage(p)}>
-                  {p}
-                </button>
-              );
-            })}
-            <button
-              style={s.pageBtn(false, page === totalPages)}
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-            >
-              →
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
+            Строк:
+            <select style={s.select} value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
+              {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
           </div>
         </div>
-      )}
 
-      {/* Modals */}
-      {showAdd && (
-        <ItemFormModal
-          title="Добавить позицию"
-          initial={{ ...EMPTY_FORM, kind: tab === 'materials' ? 'material' : 'work' }}
-          onClose={() => setShowAdd(false)}
-          onSave={handleAdd}
-          allowKindChange={true}
-        />
-      )}
+        {/* Tabs */}
+        <div style={s.tabs}>
+          {(['all', 'works', 'materials'] as Tab[]).map(t => (
+            <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>
+              {t === 'all' ? 'Все' : t === 'works' ? 'Работы' : 'Материалы'}
+            </button>
+          ))}
+        </div>
 
-      {editItem && (
-        <ItemFormModal
-          title={`Редактировать: ${editItem.kind === 'work' ? 'Работа' : 'Материал'}`}
-          initial={editFormFor(editItem)}
-          onClose={() => setEditItem(null)}
-          onSave={handleEdit}
-          allowKindChange={false}
-        />
-      )}
+        {/* Table */}
+        {loading ? (
+          <div style={s.emptyState}>Загрузка...</div>
+        ) : items.length === 0 ? (
+          <div style={s.emptyState}>
+            {debouncedSearch
+              ? `Ничего не найдено по запросу «${debouncedSearch}»`
+              : 'Нет позиций. Загрузите прайс или добавьте вручную.'}
+          </div>
+        ) : (
+          <div style={s.tableWrap}>
+            <table style={s.table}>
+              {renderColgroup()}
+              <thead>{renderHead()}</thead>
+              <tbody>
+                {items.map((item, idx) => renderRow(item, idx))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-      {deleteItem && (
-        <ConfirmModal
-          message={`Удалить позицию «${deleteItem.name}»? Это действие необратимо.`}
-          onCancel={() => setDeleteItem(null)}
-          onConfirm={handleDelete}
-        />
-      )}
-    </div>
+        {/* Pagination */}
+        {total > 0 && (
+          <div style={s.pagination}>
+            <span style={s.paginationInfo}>
+              {startIdx}–{endIdx} из {total}
+            </span>
+            <div style={s.paginationBtns}>
+              <button
+                style={s.pageBtn(false, page === 1)}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+              >
+                ←
+              </button>
+              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                let p: number;
+                if (totalPages <= 7) {
+                  p = i + 1;
+                } else if (page <= 4) {
+                  p = i + 1;
+                } else if (page >= totalPages - 3) {
+                  p = totalPages - 6 + i;
+                } else {
+                  p = page - 3 + i;
+                }
+                return (
+                  <button key={p} style={s.pageBtn(p === page)} onClick={() => setPage(p)}>
+                    {p}
+                  </button>
+                );
+              })}
+              <button
+                style={s.pageBtn(false, page === totalPages)}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+              >
+                →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Modals */}
+        {showAdd && (
+          <ItemFormModal
+            title="Добавить позицию"
+            initial={{ ...EMPTY_FORM, kind: tab === 'materials' ? 'material' : 'work' }}
+            onClose={() => setShowAdd(false)}
+            onSave={handleAdd}
+            allowKindChange={true}
+          />
+        )}
+
+        {editItem && (
+          <ItemFormModal
+            title={`Редактировать: ${editItem.kind === 'work' ? 'Работа' : 'Материал'}`}
+            initial={editFormFor(editItem)}
+            onClose={() => setEditItem(null)}
+            onSave={handleEdit}
+            allowKindChange={false}
+          />
+        )}
+
+        {deleteItem && (
+          <ConfirmModal
+            message={`Удалить позицию «${deleteItem.name}»? Это действие необратимо.`}
+            onCancel={() => setDeleteItem(null)}
+            onConfirm={handleDelete}
+          />
+        )}
+      </div>
+    </Layout>
   );
 }
