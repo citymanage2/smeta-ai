@@ -1,22 +1,25 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Pencil, Check, X, Trash2 } from 'lucide-react';
+import {
+  Pencil, Check, X, Trash2, ChevronRight, ChevronsRight,
+  FolderOpen, Plus, FileText,
+} from 'lucide-react';
 import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
 import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
 import { updateTask } from '../api/tasks';
 import { deleteTask } from '../api/admin';
 import { useTaskSync } from '../stores/taskSync';
 
-const SIDEBAR_WIDTH = 260;
+const SIDEBAR_WIDTH = 264;
+const SIDEBAR_COLLAPSED_WIDTH = 44;
 
-// Tasks that are sub-tasks of other tasks — show only inside parent task page, not in sidebar
 const HIDDEN_TASK_TYPES = new Set(['CHECK_LIST_COMPLETENESS', 'CHECK_PROJECT_COMPLETENESS']);
 
 const STATUS_DOT_COLOR: Record<string, string> = {
   pending: '#f59e0b',
   processing: '#3b82f6',
-  completed: '#16a34a',
-  failed: '#dc2626',
+  completed: '#22c55e',
+  failed: '#ef4444',
   cancelled: '#94a3b8',
 };
 
@@ -24,16 +27,15 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
-const iconStyle: React.CSSProperties = {
-  color: '#94a3b8',
-  cursor: 'pointer',
-  flexShrink: 0,
-};
+interface Props {
+  open: boolean;
+  onToggle: () => void;
+}
 
-const ProjectsSidebar: React.FC = () => {
+const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   const navigate = useNavigate();
-
   const { version: taskSyncVersion } = useTaskSync();
+
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [unassignedTasks, setUnassignedTasks] = useState<TaskBrief[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +50,6 @@ const ProjectsSidebar: React.FC = () => {
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // Inline edit state
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -58,13 +59,9 @@ const ProjectsSidebar: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const [projectsData, unassigned] = await Promise.all([
-        listProjects(),
-        getUnassignedTasks(),
-      ]);
+      const [projectsData, unassigned] = await Promise.all([listProjects(), getUnassignedTasks()]);
       setProjects(projectsData);
       setUnassignedTasks(unassigned.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)));
-      // сбрасываем кэш задач по проектам — они будут перезагружены при раскрытии
       setProjectTasks({});
     } catch {
       setError('Ошибка загрузки');
@@ -73,9 +70,7 @@ const ProjectsSidebar: React.FC = () => {
     }
   }, [taskSyncVersion]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   useEffect(() => {
     if (editInputRef.current) {
@@ -88,8 +83,7 @@ const ProjectsSidebar: React.FC = () => {
     const isExpanding = !expanded.has(id);
     setExpanded(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
 
@@ -97,15 +91,14 @@ const ProjectsSidebar: React.FC = () => {
       setLoadingTasks(prev => new Set(prev).add(id));
       try {
         const detail = await getProject(id);
-        setProjectTasks(prev => ({ ...prev, [id]: detail.tasks.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)) }));
+        setProjectTasks(prev => ({
+          ...prev,
+          [id]: detail.tasks.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)),
+        }));
       } catch {
         // ignore
       } finally {
-        setLoadingTasks(prev => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
+        setLoadingTasks(prev => { const next = new Set(prev); next.delete(id); return next; });
       }
     }
   }
@@ -116,9 +109,7 @@ const ProjectsSidebar: React.FC = () => {
     setCreating(true);
     try {
       await createProject({ name: newName.trim(), description: newDesc.trim() || undefined });
-      setNewName('');
-      setNewDesc('');
-      setShowCreate(false);
+      setNewName(''); setNewDesc(''); setShowCreate(false);
       await loadData();
     } catch {
       setError('Ошибка при создании');
@@ -129,22 +120,16 @@ const ProjectsSidebar: React.FC = () => {
 
   function startProjectEdit(id: string, currentName: string, e: React.MouseEvent) {
     e.stopPropagation();
-    setEditingTaskId(null);
-    setEditingProjectId(id);
-    setEditValue(currentName);
+    setEditingTaskId(null); setEditingProjectId(id); setEditValue(currentName);
   }
 
   function startTaskEdit(taskId: string, currentName: string, e: React.MouseEvent) {
     e.stopPropagation();
-    setEditingProjectId(null);
-    setEditingTaskId(taskId);
-    setEditValue(currentName);
+    setEditingProjectId(null); setEditingTaskId(taskId); setEditValue(currentName);
   }
 
   function cancelEdit() {
-    setEditingProjectId(null);
-    setEditingTaskId(null);
-    setEditValue('');
+    setEditingProjectId(null); setEditingTaskId(null); setEditValue('');
   }
 
   async function saveProjectEdit(projectId: string) {
@@ -164,16 +149,9 @@ const ProjectsSidebar: React.FC = () => {
     if (!trimmed) { cancelEdit(); return; }
     try {
       await updateTask(taskId, { name: trimmed });
-      const updater = (tasks: TaskBrief[]) =>
-        tasks.map(t => t.id === taskId ? { ...t, name: trimmed } : t);
-      if (isUnassigned) {
-        setUnassignedTasks(updater);
-      } else if (projectId) {
-        setProjectTasks(prev => ({
-          ...prev,
-          [projectId]: updater(prev[projectId] ?? []),
-        }));
-      }
+      const updater = (tasks: TaskBrief[]) => tasks.map(t => t.id === taskId ? { ...t, name: trimmed } : t);
+      if (isUnassigned) setUnassignedTasks(updater);
+      else if (projectId) setProjectTasks(prev => ({ ...prev, [projectId]: updater(prev[projectId] ?? []) }));
     } catch {
       setError('Ошибка при сохранении');
     }
@@ -195,11 +173,8 @@ const ProjectsSidebar: React.FC = () => {
     try {
       await deleteTask(taskId);
       const removeTask = (tasks: TaskBrief[]) => tasks.filter(t => t.id !== taskId);
-      if (isUnassigned) {
-        setUnassignedTasks(removeTask);
-      } else if (projectId) {
-        setProjectTasks(prev => ({ ...prev, [projectId]: removeTask(prev[projectId] ?? []) }));
-      }
+      if (isUnassigned) setUnassignedTasks(removeTask);
+      else if (projectId) setProjectTasks(prev => ({ ...prev, [projectId]: removeTask(prev[projectId] ?? []) }));
     } catch {
       setError('Не удалось переместить задачу в корзину');
     }
@@ -214,62 +189,26 @@ const ProjectsSidebar: React.FC = () => {
     const isEditing = editingTaskId === task.id;
 
     return (
-      <div
-        key={task.id}
-        title={isEditing ? undefined : `${displayName}\n${statusLabel}`}
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '7px',
-          padding: '6px 8px 6px 28px',
-          margin: '1px 4px',
-          borderRadius: '5px',
-        }}
-        onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
-        onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
-      >
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            backgroundColor: dotColor,
-            flexShrink: 0,
-            marginTop: 4,
-          }}
-        />
+      <div key={task.id} title={isEditing ? undefined : `${displayName} · ${statusLabel}`} style={taskItemStyle} className="sidebar-task-item">
+        {/* Status dot */}
+        <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: dotColor, flexShrink: 0, marginTop: 5 }} />
+
         <div style={{ minWidth: 0, flex: 1 }}>
           {isEditing ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <input
                 ref={editInputRef}
                 value={editValue}
                 onChange={e => setEditValue(e.target.value)}
                 onKeyDown={e => handleTaskEditKeyDown(e, task.id, isUnassigned, projectId)}
                 onClick={e => e.stopPropagation()}
-                style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  border: '1px solid #93c5fd',
-                  borderRadius: '4px',
-                  padding: '2px 5px',
-                  outline: 'none',
-                  minWidth: 0,
-                }}
+                style={editInputStyle}
               />
-              <Check
-                size={13}
-                style={{ ...iconStyle, color: '#16a34a' }}
-                onClick={e => { e.stopPropagation(); saveTaskEdit(task.id, isUnassigned, projectId); }}
-              />
-              <X
-                size={13}
-                style={{ ...iconStyle, color: '#dc2626' }}
-                onClick={e => { e.stopPropagation(); cancelEdit(); }}
-              />
+              <Check size={13} style={iconGreen} onClick={e => { e.stopPropagation(); saveTaskEdit(task.id, isUnassigned, projectId); }} />
+              <X size={13} style={iconRed} onClick={e => { e.stopPropagation(); cancelEdit(); }} />
             </div>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} className="task-row-inner">
               <div
                 onClick={() => {
                   const dest = task.task_type === 'ESTIMATE_OPTIMIZATION' && task.status === 'completed'
@@ -277,45 +216,22 @@ const ProjectsSidebar: React.FC = () => {
                     : `/tasks/${task.id}/status`;
                   navigate(dest);
                 }}
-                style={{
-                  fontSize: '12px',
-                  color: '#1e293b',
-                  lineHeight: '1.3',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  cursor: 'pointer',
-                  flex: 1,
-                  minWidth: 0,
-                }}
+                style={taskNameStyle}
               >
                 {displayName}
               </div>
-              <Pencil
-                size={11}
-                style={iconStyle}
-                onClick={e => startTaskEdit(task.id, displayName, e)}
-              />
-              <Trash2
-                size={11}
-                style={{ ...iconStyle, color: '#ef4444' }}
-                onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId ?? undefined); }}
-              />
+              <div style={{ display: 'flex', gap: 2, flexShrink: 0 }} className="task-actions">
+                <ActionBtn onClick={e => startTaskEdit(task.id, displayName, e)} title="Переименовать">
+                  <Pencil size={11} />
+                </ActionBtn>
+                <ActionBtn onClick={e => { e.stopPropagation(); handleDeleteTask(task.id, isUnassigned, projectId ?? undefined); }} title="Удалить" danger>
+                  <Trash2 size={11} />
+                </ActionBtn>
+              </div>
             </div>
           )}
           {!isEditing && (
-            <div
-              style={{
-                fontSize: '11px',
-                color: '#94a3b8',
-                marginTop: '1px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {subtitle}
-            </div>
+            <div style={taskSubtitleStyle}>{subtitle}</div>
           )}
         </div>
       </div>
@@ -334,39 +250,29 @@ const ProjectsSidebar: React.FC = () => {
     const isEditingProject = !isUnassigned && editingProjectId === id;
 
     return (
-      <div key={id} style={{ marginBottom: '1px' }}>
+      <div key={id} style={{ marginBottom: 2 }}>
+        {/* Section header */}
         <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '5px',
-            padding: '6px 8px',
-            margin: '0 4px',
-            borderRadius: '5px',
-            userSelect: 'none',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#e2e8f0')}
+          style={sectionHeaderStyle}
+          onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
           onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
         >
-          {/* Toggle arrow */}
-          <span
+          {/* Chevron toggle */}
+          <button
             onClick={e => { e.stopPropagation(); toggleSection(id); }}
-            style={{
-              fontSize: '8px',
-              color: '#64748b',
-              display: 'inline-block',
-              transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
-              transition: 'transform 0.15s',
-              lineHeight: 1,
-              flexShrink: 0,
-              cursor: 'pointer',
-              padding: '2px',
-            }}
+            style={chevronBtnStyle}
           >
-            ▶
-          </span>
+            <ChevronRight
+              size={13}
+              style={{
+                transition: 'transform 0.18s',
+                transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                color: '#64748b',
+              }}
+            />
+          </button>
 
-          {/* Project name / edit input */}
+          {/* Label / edit */}
           {isEditingProject ? (
             <>
               <input
@@ -375,69 +281,38 @@ const ProjectsSidebar: React.FC = () => {
                 onChange={e => setEditValue(e.target.value)}
                 onKeyDown={e => handleProjectEditKeyDown(e, id)}
                 onClick={e => e.stopPropagation()}
-                style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  border: '1px solid #93c5fd',
-                  borderRadius: '4px',
-                  padding: '2px 6px',
-                  outline: 'none',
-                  minWidth: 0,
-                }}
+                style={{ ...editInputStyle, fontWeight: 600 }}
               />
-              <Check
-                size={14}
-                style={{ ...iconStyle, color: '#16a34a' }}
-                onClick={e => { e.stopPropagation(); saveProjectEdit(id); }}
-              />
-              <X
-                size={14}
-                style={{ ...iconStyle, color: '#dc2626' }}
-                onClick={e => { e.stopPropagation(); cancelEdit(); }}
-              />
+              <Check size={14} style={iconGreen} onClick={e => { e.stopPropagation(); saveProjectEdit(id); }} />
+              <X size={14} style={iconRed} onClick={e => { e.stopPropagation(); cancelEdit(); }} />
             </>
           ) : (
             <>
               <span
-                onClick={isUnassigned ? undefined : e => { e.stopPropagation(); navigate(`/projects/${id}`); }}
-                style={{
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: '#334155',
-                  flex: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  cursor: isUnassigned ? 'default' : 'pointer',
-                }}
+                onClick={isUnassigned ? () => toggleSection(id) : e => { e.stopPropagation(); navigate(`/projects/${id}`); }}
+                style={sectionLabelStyle(isUnassigned)}
               >
                 {label}
               </span>
-              {!isUnassigned && (
-                <Pencil
-                  size={12}
-                  style={iconStyle}
-                  onClick={e => startProjectEdit(id, label, e)}
-                />
-              )}
-              <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 500, flexShrink: 0 }}>
-                {taskCount}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto' }}>
+                {!isUnassigned && (
+                  <ActionBtn onClick={e => startProjectEdit(id, label, e)} title="Переименовать проект">
+                    <Pencil size={11} />
+                  </ActionBtn>
+                )}
+                <span style={badgeStyle}>{taskCount}</span>
+              </div>
             </>
           )}
         </div>
 
+        {/* Task list */}
         {isOpen && (
           <div>
             {isLoadingSection ? (
-              <div style={{ padding: '5px 28px', fontSize: '11px', color: '#94a3b8' }}>
-                Загрузка...
-              </div>
+              <div style={emptyStyle}>Загрузка...</div>
             ) : tasks.length === 0 ? (
-              <div style={{ padding: '5px 28px', fontSize: '11px', color: '#94a3b8' }}>
-                Нет задач
-              </div>
+              <div style={emptyStyle}>Нет задач</div>
             ) : (
               tasks.map(task => renderTaskItem(task, isUnassigned, isUnassigned ? undefined : id))
             )}
@@ -447,121 +322,104 @@ const ProjectsSidebar: React.FC = () => {
     );
   }
 
+  // ─── Collapsed sidebar (thin strip) ───────────────────────────
+  if (!open) {
+    return (
+      <div
+        style={{
+          width: SIDEBAR_COLLAPSED_WIDTH,
+          minWidth: SIDEBAR_COLLAPSED_WIDTH,
+          borderRight: '1px solid #e2e8f0',
+          backgroundColor: '#ffffff',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          overflow: 'hidden',
+          transition: 'width 0.22s ease',
+        }}
+      >
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 12, gap: 8 }}>
+          <button
+            onClick={() => navigate('/task/create')}
+            title="Создать задачу"
+            style={collapsedIconBtn}
+          >
+            <Plus size={16} color="#2563eb" />
+          </button>
+          <button
+            onClick={() => navigate('/projects')}
+            title="Проекты"
+            style={collapsedIconBtn}
+          >
+            <FolderOpen size={16} color="#64748b" />
+          </button>
+        </div>
+
+        {/* Expand button */}
+        <button onClick={onToggle} style={toggleBtnStyle} title="Показать панель">
+          <ChevronsRight size={15} color="#64748b" />
+        </button>
+      </div>
+    );
+  }
+
+  // ─── Expanded sidebar ─────────────────────────────────────────
   return (
     <div
       style={{
         width: SIDEBAR_WIDTH,
         minWidth: SIDEBAR_WIDTH,
         borderRight: '1px solid #e2e8f0',
-        backgroundColor: '#f8fafc',
+        backgroundColor: '#ffffff',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        transition: 'width 0.22s ease',
       }}
     >
-      {/* Header: new project button */}
-      <div
-        style={{
-          padding: '10px 10px 8px',
-          borderBottom: '1px solid #e2e8f0',
-          flexShrink: 0,
-        }}
-      >
-        <button
-          onClick={() => setShowCreate(v => !v)}
-          style={{
-            width: '100%',
-            padding: '7px 10px',
-            backgroundColor: '#2563eb',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '7px',
-            cursor: 'pointer',
-            fontSize: '12px',
-            fontWeight: 600,
-            textAlign: 'left',
-          }}
-        >
-          + Новый проект
-        </button>
+      {/* Header */}
+      <div style={{ padding: '10px 10px 8px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => setShowCreate(v => !v)}
+            style={primaryBtnStyle}
+          >
+            <Plus size={13} />
+            Новый проект
+          </button>
+          <button
+            onClick={() => navigate('/task/create')}
+            title="Создать задачу"
+            style={secondaryBtnStyle}
+          >
+            <FileText size={13} />
+          </button>
+        </div>
       </div>
 
       {/* Create form */}
       {showCreate && (
-        <form
-          onSubmit={handleCreate}
-          style={{
-            padding: '10px',
-            borderBottom: '1px solid #e2e8f0',
-            backgroundColor: '#fff',
-            flexShrink: 0,
-          }}
-        >
+        <form onSubmit={handleCreate} style={createFormStyle}>
           <input
             type="text"
             placeholder="Название *"
             value={newName}
             onChange={e => setNewName(e.target.value)}
             required
-            style={{
-              width: '100%',
-              padding: '6px 8px',
-              border: '1px solid #e2e8f0',
-              borderRadius: '5px',
-              fontSize: '12px',
-              marginBottom: '6px',
-              boxSizing: 'border-box',
-              outline: 'none',
-            }}
+            style={formInputStyle}
           />
           <textarea
-            placeholder="Описание"
+            placeholder="Описание (необязательно)"
             value={newDesc}
             onChange={e => setNewDesc(e.target.value)}
             rows={2}
-            style={{
-              width: '100%',
-              padding: '6px 8px',
-              border: '1px solid #e2e8f0',
-              borderRadius: '5px',
-              fontSize: '12px',
-              marginBottom: '6px',
-              resize: 'vertical',
-              boxSizing: 'border-box',
-              outline: 'none',
-            }}
+            style={{ ...formInputStyle, resize: 'vertical', marginBottom: 6 }}
           />
-          <div style={{ display: 'flex', gap: '5px' }}>
-            <button
-              type="submit"
-              disabled={creating}
-              style={{
-                flex: 1,
-                padding: '5px 8px',
-                backgroundColor: '#2563eb',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: creating ? 'not-allowed' : 'pointer',
-                fontSize: '11px',
-                fontWeight: 600,
-              }}
-            >
+          <div style={{ display: 'flex', gap: 5 }}>
+            <button type="submit" disabled={creating} style={primaryBtnStyle}>
               {creating ? '...' : 'Создать'}
             </button>
-            <button
-              type="button"
-              onClick={() => setShowCreate(false)}
-              style={{
-                padding: '5px 8px',
-                backgroundColor: 'transparent',
-                color: '#64748b',
-                border: '1px solid #e2e8f0',
-                borderRadius: '5px',
-                cursor: 'pointer',
-                fontSize: '11px',
-              }}
-            >
+            <button type="button" onClick={() => setShowCreate(false)} style={secondaryBtnStyle}>
               Отмена
             </button>
           </div>
@@ -570,31 +428,15 @@ const ProjectsSidebar: React.FC = () => {
 
       {/* Error */}
       {error && (
-        <div
-          style={{
-            padding: '6px 10px',
-            fontSize: '11px',
-            color: '#dc2626',
-            backgroundColor: '#fef2f2',
-            borderBottom: '1px solid #fecaca',
-            flexShrink: 0,
-          }}
-        >
+        <div style={{ padding: '6px 10px', fontSize: 11, color: '#dc2626', backgroundColor: '#fef2f2', borderBottom: '1px solid #fecaca', flexShrink: 0 }}>
           {error}
         </div>
       )}
 
       {/* Scrollable tree */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 48px' }}>
         {loading ? (
-          <div
-            style={{
-              padding: '24px 10px',
-              textAlign: 'center',
-              color: '#94a3b8',
-              fontSize: '12px',
-            }}
-          >
+          <div style={{ padding: '24px 10px', textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
             Загрузка...
           </div>
         ) : (
@@ -602,9 +444,7 @@ const ProjectsSidebar: React.FC = () => {
             {renderSection('unassigned', 'Без проекта', unassignedTasks, unassignedTasks.length, true)}
 
             {projects.length > 0 && (
-              <div
-                style={{ height: '1px', backgroundColor: '#e2e8f0', margin: '6px 10px' }}
-              />
+              <div style={{ height: 1, backgroundColor: '#f1f5f9', margin: '6px 12px' }} />
             )}
 
             {projects.map(p =>
@@ -618,15 +458,252 @@ const ProjectsSidebar: React.FC = () => {
               ),
             )}
 
-            {projects.length === 0 && (
-              <div style={{ padding: '10px 12px', fontSize: '11px', color: '#94a3b8' }}>
+            {projects.length === 0 && !loading && (
+              <div style={{ padding: '8px 12px', fontSize: 11, color: '#cbd5e1' }}>
                 Проектов пока нет
               </div>
             )}
           </>
         )}
       </div>
+
+      {/* Collapse button */}
+      <button onClick={onToggle} style={collapseBarStyle}>
+        <ChevronsRight size={14} style={{ transform: 'rotate(180deg)', color: '#64748b' }} />
+        <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>Скрыть</span>
+      </button>
     </div>
+  );
+};
+
+// ─── Styles ────────────────────────────────────────────────────────────────
+
+const sectionHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '5px 8px 5px 6px',
+  margin: '0 4px',
+  borderRadius: 6,
+  userSelect: 'none',
+  cursor: 'default',
+  transition: 'background-color 0.1s',
+};
+
+const sectionLabelStyle = (isUnassigned: boolean): React.CSSProperties => ({
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#334155',
+  flex: 1,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  cursor: isUnassigned ? 'pointer' : 'pointer',
+  minWidth: 0,
+});
+
+const taskItemStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 7,
+  padding: '5px 8px 5px 30px',
+  margin: '1px 4px',
+  borderRadius: 5,
+  cursor: 'default',
+  position: 'relative',
+};
+
+const taskNameStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: '#1e293b',
+  lineHeight: '1.35',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  flex: 1,
+  minWidth: 0,
+};
+
+const taskSubtitleStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: '#94a3b8',
+  marginTop: 1,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const chevronBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 20,
+  height: 20,
+  border: 'none',
+  background: 'none',
+  cursor: 'pointer',
+  padding: 0,
+  borderRadius: 4,
+  flexShrink: 0,
+};
+
+const badgeStyle: React.CSSProperties = {
+  fontSize: 10,
+  color: '#94a3b8',
+  fontWeight: 600,
+  backgroundColor: '#f1f5f9',
+  padding: '1px 6px',
+  borderRadius: 10,
+  minWidth: 18,
+  textAlign: 'center',
+};
+
+const emptyStyle: React.CSSProperties = {
+  padding: '4px 30px',
+  fontSize: 11,
+  color: '#cbd5e1',
+  fontStyle: 'italic',
+};
+
+const editInputStyle: React.CSSProperties = {
+  flex: 1,
+  fontSize: 12,
+  border: '1px solid #93c5fd',
+  borderRadius: 4,
+  padding: '2px 6px',
+  outline: 'none',
+  minWidth: 0,
+  backgroundColor: '#fff',
+};
+
+const iconGreen: React.CSSProperties = { color: '#16a34a', cursor: 'pointer', flexShrink: 0 };
+const iconRed: React.CSSProperties = { color: '#dc2626', cursor: 'pointer', flexShrink: 0 };
+
+const primaryBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 5,
+  flex: 1,
+  padding: '7px 10px',
+  backgroundColor: '#2563eb',
+  color: '#fff',
+  border: 'none',
+  borderRadius: 7,
+  cursor: 'pointer',
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const secondaryBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 5,
+  padding: '7px 10px',
+  backgroundColor: 'transparent',
+  color: '#64748b',
+  border: '1px solid #e2e8f0',
+  borderRadius: 7,
+  cursor: 'pointer',
+  fontSize: 12,
+  fontWeight: 500,
+};
+
+const createFormStyle: React.CSSProperties = {
+  padding: '10px',
+  borderBottom: '1px solid #f1f5f9',
+  backgroundColor: '#fafafa',
+  flexShrink: 0,
+};
+
+const formInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '6px 8px',
+  border: '1px solid #e2e8f0',
+  borderRadius: 5,
+  fontSize: 12,
+  marginBottom: 6,
+  boxSizing: 'border-box',
+  outline: 'none',
+  backgroundColor: '#fff',
+};
+
+const collapseBarStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 0,
+  left: 0,
+  right: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '10px 12px',
+  borderTop: '1px solid #f1f5f9',
+  backgroundColor: '#ffffff',
+  cursor: 'pointer',
+  border: 'none',
+  width: '100%',
+  textAlign: 'left',
+};
+
+const toggleBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '100%',
+  padding: '12px 0',
+  borderTop: '1px solid #f1f5f9',
+  backgroundColor: '#ffffff',
+  border: 'none',
+  cursor: 'pointer',
+};
+
+const collapsedIconBtn: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 32,
+  height: 32,
+  borderRadius: 7,
+  border: 'none',
+  backgroundColor: 'transparent',
+  cursor: 'pointer',
+};
+
+// ─── ActionBtn: shows on hover of parent ──────────────────────────────────
+
+interface ActionBtnProps {
+  onClick: (e: React.MouseEvent) => void;
+  title?: string;
+  danger?: boolean;
+  children: React.ReactNode;
+}
+
+const ActionBtn: React.FC<ActionBtnProps> = ({ onClick, title, danger, children }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 4,
+        border: 'none',
+        cursor: 'pointer',
+        backgroundColor: hovered ? (danger ? '#fee2e2' : '#f1f5f9') : 'transparent',
+        color: hovered ? (danger ? '#dc2626' : '#334155') : '#94a3b8',
+        padding: 0,
+        transition: 'background-color 0.1s, color 0.1s',
+      }}
+    >
+      {children}
+    </button>
   );
 };
 

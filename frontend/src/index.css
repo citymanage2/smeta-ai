@@ -27,6 +27,20 @@ button {
   font-family: inherit;
 }
 
+/* Sidebar task row: show action icons only on hover */
+.task-actions {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sidebar-task-item:hover .task-actions {
+  opacity: 1;
+}
+
+/* Sidebar task item hover background */
+.sidebar-task-item:hover {
+  background-color: #f8fafc;
+}
+
 /* Remove default input styles */
 input, textarea, select {
   font-family: inherit;
