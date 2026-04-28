@@ -46,7 +46,9 @@ function ActionButton({
 function ListStage({ card }: Props) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const [showTypeModal, setShowTypeModal] = useState(false)
+  // При retry фиксируем тип из существующей задачи; для новой — дефолт LIST_FROM_PROJECT
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
+  const [isRetry, setIsRetry] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -69,9 +71,13 @@ function ListStage({ card }: Props) {
     setShowTypeModal(false)
     await startTask(card.id, { task_type: taskType, file })
     setFile(null)
+    setIsRetry(false)
   }
 
   const handleRetry = () => {
+    // Фиксируем тип из существующей задачи — пользователь не может его изменить при повторе
+    if (task) setTaskType(task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND')
+    setIsRetry(true)
     setShowTypeModal(true)
   }
 
@@ -103,13 +109,17 @@ function ListStage({ card }: Props) {
 
       {showTypeModal && (
         <div style={{ marginTop: '10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
-          <div style={{ fontSize: '13px', color: '#475569', marginBottom: '8px', fontWeight: 500 }}>Тип перечня</div>
-          {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
-            <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
-              <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
-              {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
-            </label>
-          ))}
+          {!isRetry && (
+            <>
+              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '8px', fontWeight: 500 }}>Тип перечня</div>
+              {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
+                <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
+                  <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
+                  {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
+                </label>
+              ))}
+            </>
+          )}
           <div style={{ marginTop: '8px' }}>
             <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
             {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
