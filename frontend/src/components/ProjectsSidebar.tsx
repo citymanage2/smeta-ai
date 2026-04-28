@@ -5,7 +5,7 @@ import { LumaSpin } from './ui/LumaSpin';
 const LumaSpinInline = () => <LumaSpin size="sm" color="#94a3b8" />;
 import {
   Pencil, Check, X, Trash2, ChevronRight, ArrowRight,
-  FolderOpen, Plus,
+  FolderOpen, Plus, BookOpen,
 } from 'lucide-react';
 import { softDeleteTask } from '../api/tasks';
 import { DynamicIcon } from 'lucide-react/dynamic';
@@ -420,8 +420,15 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
           ))}
         </div>
 
-        {/* Trash + Expand */}
+        {/* Catalog + Trash + Expand */}
         <div style={{ padding: '4px 0 8px', borderTop: '1px solid #f1f5f9', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+          <CollapsedNavBtn
+            onClick={() => navigate('/catalog')}
+            tooltip="Каталог расценок"
+            active={location.pathname === '/catalog'}
+          >
+            <BookOpen size={15} />
+          </CollapsedNavBtn>
           <CollapsedNavBtn
             onClick={() => navigate('/trash')}
             tooltip="Корзина"
@@ -537,8 +544,9 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         )}
       </div>
 
-      {/* Footer: Trash + Collapse */}
+      {/* Footer: Catalog + Trash + Collapse */}
       <div style={{ flexShrink: 0, borderTop: '1px solid #f1f5f9', backgroundColor: '#ffffff' }}>
+        <CatalogBtn onClick={() => navigate('/catalog')} active={location.pathname === '/catalog'} />
         <TrashBtn onClick={() => navigate('/trash')} active={location.pathname === '/trash'} />
         <CollapseBtn onToggle={onToggle} />
       </div>
@@ -914,6 +922,33 @@ const ExpandBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
     >
       <DynamicIcon name="panel-left-open" size={16} color={color} />
       {hovered && rect && <SidebarTooltip text="Показать меню" anchorRect={rect} />}
+    </button>
+  );
+};
+
+const CatalogBtn: React.FC<{ onClick: () => void; active: boolean }> = ({ onClick, active }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '8px 12px',
+        backgroundColor: active ? '#eff6ff' : hovered ? '#eff6ff' : 'transparent',
+        color: active ? '#2563eb' : hovered ? '#2563eb' : '#64748b',
+        border: 'none',
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+        transition: 'background-color 0.12s, color 0.12s',
+      }}
+    >
+      <BookOpen size={14} />
+      <span style={{ fontSize: 12, fontWeight: 500 }}>Каталог расценок</span>
     </button>
   );
 };

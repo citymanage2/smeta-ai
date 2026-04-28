@@ -12,6 +12,7 @@ import ProjectDetail from './pages/ProjectDetail';
 import UnassignedTasks from './pages/UnassignedTasks';
 import Calculator from './pages/Calculator';
 import Trash from './pages/Trash';
+import PriceCatalog from './pages/PriceCatalog';
 import { useAuthStore } from './stores/auth';
 
 const App: React.FC = () => {
@@ -96,6 +97,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <Trash />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/catalog"
+          element={
+            <ProtectedRoute>
+              <PriceCatalog />
             </ProtectedRoute>
           }
         />
