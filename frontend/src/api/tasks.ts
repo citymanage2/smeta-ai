@@ -279,3 +279,34 @@ export async function repriceEstimateItem(
   );
   return res.data;
 }
+
+export interface TrashTaskItem {
+  id: string;
+  task_type: string;
+  status: string;
+  name: string | null;
+  created_at: string;
+  deleted_at: string;
+}
+
+export interface TrashTasksResponse {
+  items: TrashTaskItem[];
+  total: number;
+}
+
+export async function softDeleteTask(taskId: string): Promise<void> {
+  await apiClient.delete(`/tasks/${taskId}`);
+}
+
+export async function getMyTrashTasks(params?: { page?: number; page_size?: number }): Promise<TrashTasksResponse> {
+  const response = await apiClient.get<TrashTasksResponse>('/tasks/trash', { params });
+  return response.data;
+}
+
+export async function restoreMyTask(taskId: string): Promise<void> {
+  await apiClient.post(`/tasks/${taskId}/restore`);
+}
+
+export async function permanentDeleteMyTask(taskId: string): Promise<void> {
+  await apiClient.delete(`/tasks/${taskId}/permanent`);
+}

@@ -10,6 +10,7 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     UploadFile,
     File,
     Form,
@@ -20,7 +21,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 import structlog
 
 from app.database import get_db, AsyncSessionLocal
@@ -1631,3 +1632,107 @@ async def revert_history(
     await db.commit()
 
     return {"reverted": True}
+
+
+# ---------------------------------------------------------------------------
+# User trash endpoints
+# ---------------------------------------------------------------------------
+
+class TrashTaskItem(BaseModel):
+    id: str
+    task_type: str
+    status: str
+    name: Optional[str]
+    created_at: str
+    deleted_at: str
+
+
+class TrashTasksResponse(BaseModel):
+    items: list[TrashTaskItem]
+    total: int
+
+
+@router.get("/trash", response_model=TrashTasksResponse)
+async def list_my_trash(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Список удалённых задач текущего пользователя."""
+    role = current_user.get("role", "user")
+    conditions = [Task.deleted_at.is_not(None), Task.user_role == role]
+
+    count_result = await db.execute(select(func.count(Task.id)).where(*conditions))
+    total = count_result.scalar() or 0
+
+    data_query = (
+        select(Task.id, Task.task_type, Task.status, Task.name, Task.created_at, Task.deleted_at)
+        .where(*conditions)
+        .order_by(Task.deleted_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await db.execute(data_query)
+    rows = result.all()
+
+    items = [
+        TrashTaskItem(
+            id=str(row.id),
+            task_type=row.task_type,
+            status=row.status,
+            name=row.name,
+            created_at=row.created_at.isoformat(),
+            deleted_at=row.deleted_at.isoformat(),
+        )
+        for row in rows
+    ]
+    return TrashTasksResponse(items=items, total=total)
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def soft_delete_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Мягкое удаление задачи — перемещает в корзину."""
+    result = await db.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    task.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Task soft-deleted", task_id=task_id, role=current_user.get("role"))
+
+
+@router.post("/{task_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
+async def restore_my_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Восстановить задачу из корзины."""
+    result = await db.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_not(None)))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена или не удалена")
+    task.deleted_at = None
+    await db.commit()
+    logger.info("Task restored from trash", task_id=task_id, role=current_user.get("role"))
+
+
+@router.delete("/{task_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+async def permanent_delete_my_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Окончательное удаление задачи."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    await db.delete(task)
+    await db.commit()
+    logger.info("Task permanently deleted", task_id=task_id, role=current_user.get("role"))

@@ -7,6 +7,7 @@ import {
   Pencil, Check, X, Trash2, ChevronRight,
   FolderOpen, Plus,
 } from 'lucide-react';
+import { softDeleteTask } from '../api/tasks';
 import { DynamicIcon, type IconName } from 'lucide-react/dynamic';
 
 const EXPAND_ICON_KEY = 'sidebar-expand-icon';
@@ -14,7 +15,6 @@ import { SidebarIconPicker } from './ui/SidebarIconPicker';
 import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
 import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
 import { updateTask } from '../api/tasks';
-import { deleteTask } from '../api/admin';
 import { useTaskSync } from '../stores/taskSync';
 
 const SIDEBAR_WIDTH = 264;
@@ -49,7 +49,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(['unassigned']));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [projectTasks, setProjectTasks] = useState<Record<string, TaskBrief[]>>({});
   const [loadingTasks, setLoadingTasks] = useState<Set<string>>(new Set());
 
@@ -179,7 +179,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   async function handleDeleteTask(taskId: string, isUnassigned: boolean, projectId?: string) {
     if (!window.confirm('Переместить задачу в корзину?')) return;
     try {
-      await deleteTask(taskId);
+      await softDeleteTask(taskId);
       const removeTask = (tasks: TaskBrief[]) => tasks.filter(t => t.id !== taskId);
       if (isUnassigned) setUnassignedTasks(removeTask);
       else if (projectId) setProjectTasks(prev => ({ ...prev, [projectId]: removeTask(prev[projectId] ?? []) }));
@@ -387,8 +387,15 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
           ))}
         </div>
 
-        {/* Expand button */}
-        <div style={{ padding: '6px 0 8px', borderTop: '1px solid #f1f5f9', width: '100%', display: 'flex', justifyContent: 'center' }}>
+        {/* Trash + Expand */}
+        <div style={{ padding: '4px 0 8px', borderTop: '1px solid #f1f5f9', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+          <CollapsedNavBtn
+            onClick={() => navigate('/trash')}
+            tooltip="Корзина"
+            active={location.pathname === '/trash'}
+          >
+            <Trash2 size={15} />
+          </CollapsedNavBtn>
           <ExpandBtn onToggle={onToggle} />
         </div>
       </div>
@@ -466,7 +473,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       )}
 
       {/* Scrollable tree */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 48px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}><LumaSpinInline /></div>
         ) : (
@@ -497,8 +504,11 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         )}
       </div>
 
-      {/* Collapse button */}
-      <CollapseBtn onToggle={onToggle} />
+      {/* Footer: Trash + Collapse */}
+      <div style={{ flexShrink: 0, borderTop: '1px solid #f1f5f9', backgroundColor: '#ffffff' }}>
+        <TrashBtn onClick={() => navigate('/trash')} active={location.pathname === '/trash'} />
+        <CollapseBtn onToggle={onToggle} />
+      </div>
     </div>
   );
 };
@@ -657,10 +667,6 @@ const formInputStyle: React.CSSProperties = {
 };
 
 const collapseBarStyle: React.CSSProperties = {
-  position: 'absolute',
-  bottom: 0,
-  left: 0,
-  right: 0,
   display: 'flex',
   alignItems: 'center',
   gap: 6,
@@ -871,6 +877,33 @@ const ExpandBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
         />
       )}
     </>
+  );
+};
+
+const TrashBtn: React.FC<{ onClick: () => void; active: boolean }> = ({ onClick, active }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '8px 12px',
+        backgroundColor: active ? '#fef2f2' : hovered ? '#fef2f2' : 'transparent',
+        color: active ? '#dc2626' : hovered ? '#dc2626' : '#64748b',
+        border: 'none',
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+        transition: 'background-color 0.12s, color 0.12s',
+      }}
+    >
+      <Trash2 size={14} />
+      <span style={{ fontSize: 12, fontWeight: 500 }}>Корзина</span>
+    </button>
   );
 };
 
