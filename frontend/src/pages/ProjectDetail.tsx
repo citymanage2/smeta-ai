@@ -379,7 +379,7 @@ const ProjectDetailPage: React.FC = () => {
 
   return (
     <Layout>
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+      <div style={{ width: '90%', margin: '0 auto' }}>
         <button
           onClick={() => navigate('/projects')}
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: '14px', marginBottom: '16px', padding: 0 }}
