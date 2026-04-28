@@ -271,7 +271,12 @@ const ProjectsSidebar: React.FC = () => {
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
               <div
-                onClick={() => navigate(`/tasks/${task.id}/status`)}
+                onClick={() => {
+                  const dest = task.task_type === 'ESTIMATE_OPTIMIZATION' && task.status === 'completed'
+                    ? `/tasks/${task.id}/estimate`
+                    : `/tasks/${task.id}/status`;
+                  navigate(dest);
+                }}
                 style={{
                   fontSize: '12px',
                   color: '#1e293b',
