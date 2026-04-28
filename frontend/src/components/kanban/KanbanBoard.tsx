@@ -107,16 +107,24 @@ export function KanbanBoard({ projectId }: Props) {
   const columnCards = (stage: KanbanStage) => cards.filter((c) => c.stage === stage)
 
   return (
-    <div>
+    <div style={{
+      background: 'linear-gradient(135deg, #ede9fe 0%, #f8fafc 45%, #d1fae5 100%)',
+      borderRadius: '16px',
+      padding: '20px',
+      minHeight: '400px',
+    }}>
       {hardBlockMsg && (
         <div style={{
-          background: '#fef2f2',
-          border: '1px solid #fca5a5',
-          borderRadius: '8px',
-          padding: '10px 16px',
-          marginBottom: '12px',
+          background: 'rgba(254,242,242,0.85)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          border: '1px solid rgba(252,165,165,0.6)',
+          borderRadius: '12px',
+          padding: '12px 16px',
+          marginBottom: '16px',
           color: '#dc2626',
           fontSize: '14px',
+          fontWeight: 500,
         }}>
           {hardBlockMsg}
         </div>
@@ -124,15 +132,17 @@ export function KanbanBoard({ projectId }: Props) {
 
       {softBlock && (
         <div style={{
-          background: '#fffbeb',
-          border: '1px solid #fcd34d',
-          borderRadius: '8px',
-          padding: '12px 16px',
-          marginBottom: '12px',
+          background: 'rgba(255,251,235,0.9)',
+          backdropFilter: 'blur(10px)',
+          WebkitBackdropFilter: 'blur(10px)',
+          border: '1px solid rgba(252,211,77,0.7)',
+          borderRadius: '12px',
+          padding: '14px 16px',
+          marginBottom: '16px',
           fontSize: '14px',
           color: '#92400e',
         }}>
-          <div style={{ marginBottom: '10px' }}>{softBlock.message}</div>
+          <div style={{ marginBottom: '12px', fontWeight: 500 }}>{softBlock.message}</div>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={handleSoftConfirm}
@@ -140,9 +150,10 @@ export function KanbanBoard({ projectId }: Props) {
                 background: '#3b82f6',
                 color: '#fff',
                 border: 'none',
-                borderRadius: '6px',
-                padding: '6px 14px',
+                borderRadius: '8px',
+                padding: '6px 16px',
                 fontSize: '13px',
+                fontWeight: 500,
                 cursor: 'pointer',
               }}
             >
@@ -151,12 +162,13 @@ export function KanbanBoard({ projectId }: Props) {
             <button
               onClick={() => setSoftBlock(null)}
               style={{
-                background: '#f1f5f9',
+                background: 'rgba(255,255,255,0.7)',
                 color: '#475569',
-                border: '1px solid #e2e8f0',
-                borderRadius: '6px',
-                padding: '6px 14px',
+                border: '1px solid rgba(226,232,240,0.8)',
+                borderRadius: '8px',
+                padding: '6px 16px',
                 fontSize: '13px',
+                fontWeight: 500,
                 cursor: 'pointer',
               }}
             >

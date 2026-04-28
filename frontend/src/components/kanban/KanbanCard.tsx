@@ -1,6 +1,7 @@
 import React from 'react'
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
+import { GripVertical } from 'lucide-react'
 import { WorkflowCard } from '../../types/workflow'
 import { CardStageContent } from './CardStageContent'
 
@@ -15,37 +16,82 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
     data: { card },
   })
 
-  const style: React.CSSProperties = {
-    background: '#fff',
-    border: '1px solid #e2e8f0',
-    borderRadius: '8px',
-    padding: '12px',
-    marginBottom: '8px',
-    cursor: isOverlay ? 'grabbing' : 'grab',
+  const cardStyle: React.CSSProperties = {
+    background: isOverlay || isDragging ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.68)',
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+    border: '1px solid rgba(226,232,240,0.6)',
+    borderRadius: '14px',
+    padding: '16px',
+    cursor: isOverlay ? 'grabbing' : 'default',
     boxShadow: isOverlay
-      ? '0 4px 12px rgba(0,0,0,0.15)'
-      : '0 1px 3px rgba(0,0,0,0.06)',
-    opacity: isOverlay ? 0.85 : isDragging ? 0.4 : 1,
+      ? '0 8px 32px rgba(0,0,0,0.14)'
+      : isDragging
+      ? '0 4px 16px rgba(0,0,0,0.10)'
+      : '0 2px 8px rgba(0,0,0,0.05)',
+    opacity: isDragging ? 0.45 : 1,
     transform: CSS.Translate.toString(transform),
     userSelect: 'none',
+    transition: 'box-shadow 0.2s, background 0.2s',
+  }
+
+  const headerStyle: React.CSSProperties = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: '12px',
+    gap: '8px',
+  }
+
+  const titleStyle: React.CSSProperties = {
+    fontWeight: 600,
+    fontSize: '14px',
+    color: '#1e293b',
+    lineHeight: 1.4,
+    letterSpacing: '-0.01em',
+    flex: 1,
+    wordBreak: 'break-word',
+  }
+
+  const gripStyle: React.CSSProperties = {
+    cursor: 'grab',
+    color: '#cbd5e1',
+    flexShrink: 0,
+    lineHeight: 1,
+    marginTop: '1px',
+    transition: 'color 0.15s',
+  }
+
+  const dividerStyle: React.CSSProperties = {
+    borderTop: '1px solid rgba(226,232,240,0.5)',
+    paddingTop: '12px',
+    marginTop: '4px',
   }
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-        <span style={{ fontWeight: 500, fontSize: '14px', color: '#1e293b', flex: 1, marginRight: '8px', wordBreak: 'break-word' }}>
-          {card.name}
-        </span>
-        {/* Drag handle */}
+    <div ref={setNodeRef} style={cardStyle} {...attributes}>
+      <div style={headerStyle}>
+        <span style={titleStyle}>{card.name}</span>
         <span
           {...listeners}
-          style={{ cursor: 'grab', color: '#94a3b8', fontSize: '16px', flexShrink: 0, lineHeight: 1 }}
+          style={gripStyle}
           title="Перетащить"
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.color = '#94a3b8'
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.color = '#cbd5e1'
+          }}
         >
-          ⠿
+          <GripVertical size={16} />
         </span>
       </div>
-      {!isOverlay && <CardStageContent card={card} />}
+
+      {!isOverlay && (
+        <div style={dividerStyle}>
+          <CardStageContent card={card} />
+        </div>
+      )}
     </div>
   )
 }
