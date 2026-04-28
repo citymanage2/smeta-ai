@@ -310,3 +310,7 @@ export async function restoreMyTask(taskId: string): Promise<void> {
 export async function permanentDeleteMyTask(taskId: string): Promise<void> {
   await apiClient.delete(`/tasks/${taskId}/permanent`);
 }
+
+export async function clearMyTrash(): Promise<void> {
+  await apiClient.delete('/tasks/trash');
+}

@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trash2, RotateCcw, X } from 'lucide-react';
+import { Trash2, RotateCcw, X, Eraser } from 'lucide-react';
 import Layout from '../components/Layout';
 import { LumaSpin } from '../components/ui/LumaSpin';
 import { TASK_TYPE_LABELS, TaskType } from '../types';
-import { TrashTaskItem, getMyTrashTasks, restoreMyTask, permanentDeleteMyTask } from '../api/tasks';
+import { TrashTaskItem, getMyTrashTasks, restoreMyTask, permanentDeleteMyTask, clearMyTrash } from '../api/tasks';
 import { useTaskSync } from '../stores/taskSync';
 
 function formatDate(iso: string): string {
@@ -34,6 +34,7 @@ const Trash: React.FC = () => {
   const [error, setError] = useState('');
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -78,6 +79,21 @@ const Trash: React.FC = () => {
     }
   }
 
+  async function handleClearTrash() {
+    if (!window.confirm(`Удалить все ${total} задач из корзины навсегда? Это действие нельзя отменить.`)) return;
+    setClearing(true);
+    setError('');
+    try {
+      await clearMyTrash();
+      setTasks([]);
+      setTotal(0);
+    } catch {
+      setError('Не удалось очистить корзину');
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
     <Layout>
       <div style={{ maxWidth: 720, margin: '0 auto' }}>
@@ -86,15 +102,43 @@ const Trash: React.FC = () => {
           <div style={{
             width: 36, height: 36, borderRadius: 8,
             backgroundColor: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
           }}>
             <Trash2 size={18} color="#dc2626" />
           </div>
-          <div>
+          <div style={{ flex: 1 }}>
             <h1 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', margin: 0 }}>Корзина</h1>
             <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
               {total > 0 ? `${total} удалённых задач` : 'Корзина пуста'}
             </div>
           </div>
+          {total > 0 && !loading && (
+            <button
+              onClick={handleClearTrash}
+              disabled={clearing}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '7px 14px',
+                backgroundColor: clearing ? '#fef2f2' : '#fff',
+                color: '#dc2626',
+                border: '1px solid #fecaca',
+                borderRadius: 8,
+                cursor: clearing ? 'not-allowed' : 'pointer',
+                fontSize: 13,
+                fontWeight: 500,
+                opacity: clearing ? 0.7 : 1,
+                transition: 'background-color 0.15s',
+                flexShrink: 0,
+              }}
+              onMouseEnter={e => { if (!clearing) (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fef2f2'; }}
+              onMouseLeave={e => { if (!clearing) (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff'; }}
+            >
+              <Eraser size={14} />
+              {clearing ? 'Очистка...' : 'Очистить корзину'}
+            </button>
+          )}
         </div>
 
         {error && (

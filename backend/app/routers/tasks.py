@@ -1690,6 +1690,20 @@ async def list_my_trash(
     return TrashTasksResponse(items=items, total=total)
 
 
+@router.delete("/trash", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_my_trash(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Удалить все задачи из корзины текущего пользователя навсегда."""
+    role = current_user.get("role", "user")
+    await db.execute(
+        delete(Task).where(Task.deleted_at.is_not(None), Task.user_role == role)
+    )
+    await db.commit()
+    logger.info("Trash cleared", role=role)
+
+
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def soft_delete_task(
     task_id: str,
