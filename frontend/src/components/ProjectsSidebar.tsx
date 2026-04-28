@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Pencil, Check, X, Trash2, ChevronRight, ChevronsRight,
   FolderOpen, Plus,
@@ -34,6 +34,7 @@ interface Props {
 
 const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { version: taskSyncVersion } = useTaskSync();
 
   const [projects, setProjects] = useState<ProjectCard[]>([]);
@@ -340,39 +341,45 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       >
         {/* Action buttons */}
         <div style={{ padding: '10px 0 6px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, borderBottom: '1px solid #f1f5f9', width: '100%' }}>
-          <button onClick={() => navigate('/task/create')} title="Создать задачу" style={collapsedIconBtn}>
-            <Plus size={16} color="#2563eb" />
-          </button>
-          <button onClick={() => setShowCreate(v => !v)} title="Создать новый проект" style={collapsedIconBtn}>
-            <FolderOpen size={14} color="#64748b" />
-          </button>
+          <CollapsedNavBtn
+            onClick={() => navigate('/task/create')}
+            tooltip="Создать задачу"
+            active={location.pathname === '/task/create'}
+          >
+            <Plus size={16} />
+          </CollapsedNavBtn>
+          <CollapsedNavBtn
+            onClick={() => setShowCreate(v => !v)}
+            tooltip="Создать новый проект"
+            active={false}
+          >
+            <FolderOpen size={14} />
+          </CollapsedNavBtn>
         </div>
 
         {/* Project list */}
         <div style={{ flex: 1, overflowY: 'auto', width: '100%', padding: '6px 0' }}>
           {/* Без проекта */}
-          <button
+          <CollapsedProjectBtn
             onClick={() => navigate('/projects/unassigned')}
-            title="Без проекта"
-            style={collapsedProjectBtn}
-          >
-            <CollapsedProjectIcon initials="БП" />
-          </button>
+            tooltip="Без проекта"
+            active={location.pathname === '/projects/unassigned'}
+            initials="БП"
+          />
 
           {projects.map(p => (
-            <button
+            <CollapsedProjectBtn
               key={p.id}
               onClick={() => navigate(`/projects/${p.id}`)}
-              title={p.name}
-              style={collapsedProjectBtn}
-            >
-              <CollapsedProjectIcon initials={getInitials(p.name)} />
-            </button>
+              tooltip={p.name}
+              active={location.pathname === `/projects/${p.id}`}
+              initials={getInitials(p.name)}
+            />
           ))}
         </div>
 
         {/* Expand button */}
-        <button onClick={onToggle} style={toggleBtnStyle} title="Показать панель">
+        <button onClick={onToggle} data-tooltip="Показать панель" className="sidebar-fast-tooltip" style={toggleBtnStyle}>
           <ChevronsRight size={15} color="#64748b" />
         </button>
       </div>
@@ -674,17 +681,6 @@ const toggleBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-const collapsedIconBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 32,
-  height: 32,
-  borderRadius: 7,
-  border: 'none',
-  backgroundColor: 'transparent',
-  cursor: 'pointer',
-};
 
 // ─── ActionBtn: shows on hover of parent ──────────────────────────────────
 
@@ -731,37 +727,97 @@ function getInitials(name: string): string {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
-const CollapsedProjectIcon: React.FC<{ initials: string }> = ({ initials }) => (
-  <div
-    style={{
-      width: 30,
-      height: 30,
-      borderRadius: 7,
-      backgroundColor: '#eff6ff',
-      border: '1px solid #dbeafe',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontSize: 11,
-      fontWeight: 700,
-      color: '#2563eb',
-      letterSpacing: '0.5px',
-      flexShrink: 0,
-    }}
-  >
-    {initials}
-  </div>
-);
+// Action button (Plus, FolderOpen) with active/hover states
+const CollapsedNavBtn: React.FC<{
+  onClick: () => void;
+  tooltip: string;
+  active: boolean;
+  children: React.ReactNode;
+}> = ({ onClick, tooltip, active, children }) => {
+  const [hovered, setHovered] = useState(false);
+  const bg = active ? '#ffffff' : hovered ? '#f1f5f9' : 'transparent';
+  const border = active ? '1.5px solid #bfdbfe' : '1.5px solid transparent';
+  const color = active ? '#2563eb' : hovered ? '#334155' : '#94a3b8';
+  return (
+    <button
+      onClick={onClick}
+      data-tooltip={tooltip}
+      className="sidebar-fast-tooltip"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 34,
+        height: 34,
+        borderRadius: 8,
+        border,
+        backgroundColor: bg,
+        cursor: 'pointer',
+        color,
+        transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
+        boxShadow: active ? '0 1px 4px rgba(37,99,235,0.10)' : 'none',
+        padding: 0,
+      }}
+    >
+      {React.cloneElement(children as React.ReactElement, { color })}
+    </button>
+  );
+};
 
-const collapsedProjectBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '100%',
-  padding: '3px 0',
-  border: 'none',
-  backgroundColor: 'transparent',
-  cursor: 'pointer',
+// Project icon button with active/hover states
+const CollapsedProjectBtn: React.FC<{
+  onClick: () => void;
+  tooltip: string;
+  active: boolean;
+  initials: string;
+}> = ({ onClick, tooltip, active, initials }) => {
+  const [hovered, setHovered] = useState(false);
+  const bg = active ? '#ffffff' : hovered ? '#f1f5f9' : 'transparent';
+  const border = active ? '1.5px solid #bfdbfe' : '1.5px solid transparent';
+  const textColor = active ? '#2563eb' : hovered ? '#334155' : '#94a3b8';
+  return (
+    <button
+      onClick={onClick}
+      data-tooltip={tooltip}
+      className="sidebar-fast-tooltip"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%',
+        padding: '3px 0',
+        border: 'none',
+        backgroundColor: 'transparent',
+        cursor: 'pointer',
+      }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          backgroundColor: bg,
+          border,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 11,
+          fontWeight: 700,
+          color: textColor,
+          letterSpacing: '0.5px',
+          flexShrink: 0,
+          transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
+          boxShadow: active ? '0 1px 4px rgba(37,99,235,0.10)' : 'none',
+        }}
+      >
+        {initials}
+      </div>
+    </button>
+  );
 };
 
 export default ProjectsSidebar;

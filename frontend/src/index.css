@@ -77,3 +77,29 @@ input, textarea, select {
   outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
+
+/* Fast tooltip for collapsed sidebar buttons */
+.sidebar-fast-tooltip {
+  position: relative;
+}
+.sidebar-fast-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #1e293b;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 5px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+  transition-delay: 50ms;
+  z-index: 9999;
+}
+.sidebar-fast-tooltip:hover::after {
+  opacity: 1;
+}
