@@ -4,7 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { LumaSpin } from './ui/LumaSpin';
 const LumaSpinInline = () => <LumaSpin size="sm" color="#94a3b8" />;
 import {
-  Pencil, Check, X, Trash2, ChevronRight,
+  Pencil, Check, X, Trash2, ChevronRight, ArrowRight,
   FolderOpen, Plus,
 } from 'lucide-react';
 import { softDeleteTask } from '../api/tasks';
@@ -56,6 +56,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
 
+  const [hoveredSectionId, setHoveredSectionId] = useState<string | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -274,9 +275,12 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       <div key={id} style={{ marginBottom: 2 }}>
         {/* Section header */}
         <div
-          style={sectionHeaderStyle}
-          onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f1f5f9')}
-          onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+          style={{
+            ...sectionHeaderStyle,
+            backgroundColor: hoveredSectionId === id ? '#f1f5f9' : 'transparent',
+          }}
+          onMouseEnter={() => setHoveredSectionId(id)}
+          onMouseLeave={() => setHoveredSectionId(null)}
         >
           {/* Chevron toggle */}
           <button
@@ -310,16 +314,34 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
           ) : (
             <>
               <span
-                onClick={isUnassigned ? () => toggleSection(id) : e => { e.stopPropagation(); navigate(`/projects/${id}`); }}
+                onClick={() => toggleSection(id)}
                 style={sectionLabelStyle(isUnassigned)}
               >
                 {label}
               </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginLeft: 'auto' }}>
                 {!isUnassigned && (
-                  <ActionBtn onClick={e => startProjectEdit(id, label, e)} title="Переименовать проект">
-                    <Pencil size={11} />
-                  </ActionBtn>
+                  <>
+                    <div style={{
+                      opacity: hoveredSectionId === id ? 1 : 0,
+                      pointerEvents: hoveredSectionId === id ? 'auto' : 'none',
+                      transition: 'opacity 0.15s',
+                    }}>
+                      <ActionBtn onClick={e => startProjectEdit(id, label, e)} title="Переименовать проект">
+                        <Pencil size={11} />
+                      </ActionBtn>
+                    </div>
+                    <div style={{
+                      opacity: hoveredSectionId === id ? 1 : 0,
+                      pointerEvents: hoveredSectionId === id ? 'auto' : 'none',
+                      transition: 'opacity 0.15s',
+                    }}>
+                      <ArrowNavBtn
+                        onClick={e => { e.stopPropagation(); navigate(`/projects/${id}`); }}
+                        title="Открыть проект"
+                      />
+                    </div>
+                  </>
                 )}
                 <span style={badgeStyle}>{taskCount}</span>
               </div>
@@ -726,6 +748,42 @@ const ActionBtn: React.FC<ActionBtnProps> = ({ onClick, title, danger, children 
       }}
     >
       {children}
+    </button>
+  );
+};
+
+// ─── ArrowNavBtn: navigates to project on click, animates on hover ────────
+
+const ArrowNavBtn: React.FC<{ onClick: (e: React.MouseEvent) => void; title?: string }> = ({ onClick, title }) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 4,
+        border: 'none',
+        cursor: 'pointer',
+        backgroundColor: hovered ? '#dbeafe' : 'transparent',
+        color: hovered ? '#2563eb' : '#64748b',
+        padding: 0,
+        transition: 'background-color 0.12s, color 0.12s',
+      }}
+    >
+      <ArrowRight
+        size={12}
+        style={{
+          transition: 'transform 0.18s',
+          transform: hovered ? 'translateX(2px)' : 'translateX(0)',
+        }}
+      />
     </button>
   );
 };
