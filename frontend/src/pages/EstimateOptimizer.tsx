@@ -48,6 +48,7 @@ const EstimateOptimizer: React.FC = () => {
   } = useEstimateEditorStore();
 
   const [error, setError] = useState('');
+  const [taskName, setTaskName] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [stepResultBanner, setStepResultBanner] = useState<StepResultBanner | null>(null);
@@ -64,6 +65,7 @@ const EstimateOptimizer: React.FC = () => {
       try {
         // Fetch task status for progress message
         const taskData = await getTaskStatus(taskId);
+        if (taskData.name) setTaskName(taskData.name);
         if (taskData.status === 'failed') {
           setProcessingMsg(null);
           setError(taskData.error_message ?? 'Ошибка обработки задачи');
@@ -230,10 +232,10 @@ const EstimateOptimizer: React.FC = () => {
         {/* Page header */}
         <div style={{ marginBottom: '16px' }}>
           <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#0f172a' }}>
-            Оптимизация сметы
+            {taskName || 'Оптимизация сметы'}
           </h2>
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
-            Задача: {taskId}
+            Оптимизация сметы
             {isDirty && (
               <span style={{ marginLeft: 10, color: '#f59e0b', fontWeight: 500 }}>
                 • Несохранённые изменения

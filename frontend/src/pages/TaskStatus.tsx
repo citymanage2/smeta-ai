@@ -686,10 +686,17 @@ const TaskStatusPage: React.FC = () => {
     <Layout>
       <div style={{ maxWidth: '760px', margin: '0 auto' }}>
         {/* Page title */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
-          <h2 style={{ margin: 0, fontSize: '26px', fontWeight: 700, color: '#0f172a' }}>
-            Статус задачи
-          </h2>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '24px' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '26px', fontWeight: 700, color: '#0f172a' }}>
+              {task ? (taskName || TASK_TYPE_LABELS[task.task_type] || 'Статус задачи') : 'Статус задачи'}
+            </h2>
+            {task && (
+              <p style={{ margin: '4px 0 0', fontSize: '14px', color: '#64748b' }}>
+                {TASK_TYPE_LABELS[task.task_type]}
+              </p>
+            )}
+          </div>
           <button
             onClick={() => navigate('/task/create')}
             style={{
