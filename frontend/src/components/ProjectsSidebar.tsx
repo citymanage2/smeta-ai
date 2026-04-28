@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Pencil, Check, X, Trash2, ChevronRight, ChevronsRight,
-  FolderOpen, Plus, FileText,
+  FolderOpen, Plus,
 } from 'lucide-react';
 import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
 import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
@@ -381,18 +381,18 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       <div style={{ padding: '10px 10px 8px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
-            onClick={() => setShowCreate(v => !v)}
+            onClick={() => navigate('/task/create')}
             style={primaryBtnStyle}
           >
             <Plus size={13} />
-            Новый проект
+            Новая задача
           </button>
           <button
-            onClick={() => navigate('/task/create')}
-            title="Создать задачу"
+            onClick={() => setShowCreate(v => !v)}
+            title="Создать новый проект"
             style={secondaryBtnStyle}
           >
-            <FileText size={13} />
+            <FolderOpen size={14} />
           </button>
         </div>
       </div>
