@@ -1210,6 +1210,14 @@ def _row_cost_dict(row: dict) -> float:
     return qty * (pw + pm)
 
 
+def _safe_cell(value):
+    """Strip illegal XML control characters that crash openpyxl."""
+    if isinstance(value, str):
+        import re as _re
+        return _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', value)
+    return value
+
+
 def generate_estimate_export(
     rows: list,
     overhead_pct: float,
@@ -1257,9 +1265,9 @@ def generate_estimate_export(
             total_materials += cost
 
         ws.cell(row=row_idx, column=1, value=r.get("num") if not is_section else None)
-        ws.cell(row=row_idx, column=2, value=TYPE_LABELS.get(rtype, rtype))
-        ws.cell(row=row_idx, column=3, value=r.get("name", ""))
-        ws.cell(row=row_idx, column=4, value=r.get("unit", "") if not is_section else None)
+        ws.cell(row=row_idx, column=2, value=_safe_cell(TYPE_LABELS.get(rtype, rtype)))
+        ws.cell(row=row_idx, column=3, value=_safe_cell(r.get("name", "")))
+        ws.cell(row=row_idx, column=4, value=_safe_cell(r.get("unit", "")) if not is_section else None)
         ws.cell(row=row_idx, column=5, value=r.get("qty") if not is_section else None)
         ws.cell(row=row_idx, column=6, value=r.get("price_work") if not is_section else None)
         ws.cell(row=row_idx, column=7, value=r.get("price_material") if not is_section else None)

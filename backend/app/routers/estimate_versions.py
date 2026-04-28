@@ -722,19 +722,23 @@ async def export_version(
 ):
     """Download a single EstimateVersion as xlsx."""
     import io as _io
+    from urllib.parse import quote as _quote
     from app.services.excel_service import generate_estimate_export
 
     version = await _get_version_or_404(task_id, version_id, db)
 
-    xlsx_bytes = generate_estimate_export(
-        rows=version.rows or [],
-        overhead_pct=float(version.overhead_pct or 0),
-        transport_pct=float(version.transport_pct or 0),
-        contingency_pct=float(version.contingency_pct or 0),
-        version_display_name=version.version_display_name,
-    )
+    try:
+        xlsx_bytes = generate_estimate_export(
+            rows=version.rows or [],
+            overhead_pct=float(version.overhead_pct or 0),
+            transport_pct=float(version.transport_pct or 0),
+            contingency_pct=float(version.contingency_pct or 0),
+            version_display_name=version.version_display_name,
+        )
+    except Exception as exc:
+        logger.error("export_version failed", error=str(exc), task_id=task_id, version_id=version_id, exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Ошибка генерации файла: {exc}")
 
-    from urllib.parse import quote as _quote
     safe_name = version.version_display_name.replace(" ", "_").replace("/", "-")
     ascii_fallback = f"smeta_v{version.version_number}.xlsx"
     utf8_encoded = _quote(f"smeta_{safe_name}.xlsx", safe="")
