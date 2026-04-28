@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
+import { InlineSpinner } from '../components/ui/LumaSpin';
 import TaskTypeSelector from '../components/TaskTypeSelector';
 import FileUpload from '../components/FileUpload';
 import { TaskType, ProjectCard, TASK_TYPE_LABELS, ClientFileType, ClientFileMeta } from '../types';
@@ -662,20 +663,7 @@ const TaskCreate: React.FC = () => {
                 gap: '10px',
               }}
             >
-              {submitting && (
-                <span
-                  style={{
-                    width: '18px',
-                    height: '18px',
-                    border: '2.5px solid rgba(255,255,255,0.4)',
-                    borderTopColor: '#ffffff',
-                    borderRadius: '50%',
-                    display: 'inline-block',
-                    animation: 'spin 0.8s linear infinite',
-                    flexShrink: 0,
-                  }}
-                />
-              )}
+              {submitting && <InlineSpinner />}
               {submitting
                 ? submitStep === 'upload'
                   ? `Загрузка файлов... ${uploadPercent}%`
@@ -712,7 +700,6 @@ const TaskCreate: React.FC = () => {
               </div>
             )}
 
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </form>
         </div>
       </div>

@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { getTaskHistory, revertHistory } from '../api/tasks';
 import { HistoryEntry } from '../types';
+import { SectionLoader } from './ui/LumaSpin';
 
 interface HistoryModalProps {
   taskId: string;
@@ -217,11 +218,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ taskId, onClose }) => {
         )}
 
         {/* Loading */}
-        {loading && (
-          <p style={{ color: '#94a3b8', textAlign: 'center', padding: '20px 0' }}>
-            Загрузка...
-          </p>
-        )}
+        {loading && <SectionLoader />}
 
         {/* Empty state */}
         {!loading && entries.length === 0 && !fetchError && (

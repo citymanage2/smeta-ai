@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
+import { LumaSpin, SectionLoader } from '../components/ui/LumaSpin';
 import { BatchProgressBar } from '../components/BatchProgressBar';
 import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS, ProjectCard } from '../types';
 import {
@@ -36,21 +37,7 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
 };
 
 function Spinner() {
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        width: '16px',
-        height: '16px',
-        border: '2px solid #93c5fd',
-        borderTopColor: '#2563eb',
-        borderRadius: '50%',
-        animation: 'spin 0.7s linear infinite',
-        verticalAlign: 'middle',
-        marginRight: '8px',
-      }}
-    />
-  );
+  return <LumaSpin size="sm" color="#2563eb" />;
 }
 
 function formatDate(iso: string): string {
@@ -475,10 +462,7 @@ const TaskStatusPage: React.FC = () => {
     fetchStatus();
 
     const style = document.createElement('style');
-    style.textContent = `
-      @keyframes spin { to { transform: rotate(360deg); } }
-      @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-    `;
+    style.textContent = `@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }`;
     document.head.appendChild(style);
 
     pollingRef.current = setInterval(fetchStatus, 3000);
@@ -1100,10 +1084,7 @@ const TaskStatusPage: React.FC = () => {
               )}
             </>
           ) : (
-            <div style={{ textAlign: 'center', padding: '32px', color: '#94a3b8' }}>
-              <Spinner />
-              Загрузка информации о задаче...
-            </div>
+            <SectionLoader message="Загрузка информации о задаче..." />
           )}
         </div>
 

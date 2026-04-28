@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { EstimateVersionSummary, EstimateVersionFull, EstimateRow } from '../../types';
 import { getVersion, exportComparison } from '../../api/estimateVersions';
+import { SectionLoader } from '../ui/LumaSpin';
 
 interface EstimateComparisonProps {
   taskId: string;
@@ -231,11 +232,7 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
         </button>
       </div>
 
-      {loading && (
-        <div style={{ color: '#64748b', fontSize: '14px', padding: '16px 0' }}>
-          Загрузка данных версий...
-        </div>
-      )}
+      {loading && <SectionLoader message="Загрузка данных версий..." />}
 
       {/* Totals summary table */}
       {selectedVersions.length > 0 && (

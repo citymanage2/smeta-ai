@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
+import { SectionLoader } from '../components/ui/LumaSpin';
 import { ProjectCard } from '../types';
 import { listProjects, createProject, exportProject } from '../api/projects';
 
@@ -178,7 +179,7 @@ const Projects: React.FC = () => {
         )}
 
         {loading ? (
-          <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px' }}>Загрузка...</div>
+          <SectionLoader />
         ) : projects.length === 0 ? (
           <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
             Проекты не найдены. Создайте первый проект.

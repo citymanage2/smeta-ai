@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { LumaSpin } from './ui/LumaSpin';
+const LumaSpinInline = () => <LumaSpin size="sm" color="#94a3b8" />;
 import {
   Pencil, Check, X, Trash2, ChevronRight, ChevronsRight,
   FolderOpen, Plus,
@@ -312,7 +314,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         {isOpen && (
           <div>
             {isLoadingSection ? (
-              <div style={emptyStyle}>Загрузка...</div>
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0' }}><LumaSpinInline /></div>
             ) : tasks.length === 0 ? (
               <div style={emptyStyle}>Нет задач</div>
             ) : (
@@ -460,9 +462,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       {/* Scrollable tree */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 48px' }}>
         {loading ? (
-          <div style={{ padding: '24px 10px', textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
-            Загрузка...
-          </div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}><LumaSpinInline /></div>
         ) : (
           <>
             {renderSection('unassigned', 'Без проекта', unassignedTasks, unassignedTasks.length, true)}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
+import { LumaSpin } from '../components/ui/LumaSpin';
 import EstimateGrid from '../components/estimate/EstimateGrid';
 import AdditionalExpenses from '../components/estimate/AdditionalExpenses';
 import EstimateSummary from '../components/estimate/EstimateSummary';
@@ -252,11 +253,7 @@ const EstimateOptimizer: React.FC = () => {
             backgroundColor: '#eff6ff', border: '1px solid #bfdbfe',
             borderRadius: '10px', fontSize: '14px', color: '#1e40af',
           }}>
-            <div style={{
-              flexShrink: 0, width: '18px', height: '18px',
-              border: '2px solid #bfdbfe', borderTopColor: '#3b82f6',
-              borderRadius: '50%', animation: 'spin 0.8s linear infinite',
-            }} />
+            <LumaSpin size="sm" color="#3b82f6" />
             {processingMsg}
           </div>
         )}
@@ -424,17 +421,7 @@ const EstimateOptimizer: React.FC = () => {
                     >
                       {customRunning ? (
                         <>
-                          <span
-                            style={{
-                              width: 10,
-                              height: 10,
-                              borderRadius: '50%',
-                              border: '2px solid #86efac',
-                              borderTopColor: '#166534',
-                              animation: 'opt-spin 0.8s linear infinite',
-                              display: 'inline-block',
-                            }}
-                          />
+                          <LumaSpin size="sm" color="#166534" />
                           Анализ...
                         </>
                       ) : (
@@ -451,7 +438,6 @@ const EstimateOptimizer: React.FC = () => {
           </>
         )}
 
-        <style>{`@keyframes opt-spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     </Layout>
   );

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { EstimateVersionSummary, OptimizationProposal, OptimizationStep } from '../../types';
 import { runOptimization } from '../../api/estimateVersions';
 import { getTaskStatus } from '../../api/tasks';
+import { LumaSpin } from '../ui/LumaSpin';
 
 interface StepConfig {
   step: OptimizationStep;
@@ -172,18 +173,7 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
               >
                 {isDone && !isRunning && <span>✓</span>}
                 {isRunning && (
-                  <span
-                    style={{
-                      width: 12,
-                      height: 12,
-                      borderRadius: '50%',
-                      border: '2px solid #93c5fd',
-                      borderTopColor: '#2563eb',
-                      animation: 'opt-spin 0.8s linear infinite',
-                      display: 'inline-block',
-                      flexShrink: 0,
-                    }}
-                  />
+                  <LumaSpin size="sm" color="#2563eb" />
                 )}
                 {!isDone && !isRunning && (
                   <span
@@ -231,18 +221,7 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
             gap: '8px',
           }}
         >
-          <span
-            style={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              border: '2px solid #93c5fd',
-              borderTopColor: '#2563eb',
-              animation: 'opt-spin 0.8s linear infinite',
-              display: 'inline-block',
-              flexShrink: 0,
-            }}
-          />
+          <LumaSpin size="sm" color="#2563eb" />
           Анализ выполняется в фоне — вы можете продолжать работу. Результаты сохранятся.
         </div>
       )}
@@ -263,7 +242,6 @@ const OptimizationToolbar: React.FC<Props> = ({ taskId, versions, onStepComplete
         </div>
       )}
 
-      <style>{`@keyframes opt-spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };

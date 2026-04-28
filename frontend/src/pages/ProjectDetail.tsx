@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
+import { PageLoader } from '../components/ui/LumaSpin';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
 import { getProject, updateProject, deleteProject, exportProject, downloadSlotFile, uploadFileToSlot } from '../api/projects';
 import { updateTask, renameSlotFile } from '../api/tasks';
@@ -355,7 +356,7 @@ const ProjectDetailPage: React.FC = () => {
   }
 
   if (loading) {
-    return <Layout><div style={{ textAlign: 'center', padding: '48px', color: '#94a3b8' }}>Загрузка...</div></Layout>;
+    return <Layout><PageLoader /></Layout>;
   }
 
   if (error || !project) {
