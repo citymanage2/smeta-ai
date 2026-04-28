@@ -734,13 +734,16 @@ async def export_version(
         version_display_name=version.version_display_name,
     )
 
+    from urllib.parse import quote as _quote
     safe_name = version.version_display_name.replace(" ", "_").replace("/", "-")
-    filename = f"smeta_{safe_name}.xlsx"
+    ascii_fallback = f"smeta_v{version.version_number}.xlsx"
+    utf8_encoded = _quote(f"smeta_{safe_name}.xlsx", safe="")
+    content_disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
     return StreamingResponse(
         _io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition},
     )
 
 
