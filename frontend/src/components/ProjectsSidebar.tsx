@@ -321,28 +321,26 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0, marginLeft: 'auto' }}>
                 {!isUnassigned && (
-                  <>
-                    <div style={{
-                      opacity: hoveredSectionId === id ? 1 : 0,
-                      pointerEvents: hoveredSectionId === id ? 'auto' : 'none',
-                      transition: 'opacity 0.15s',
-                    }}>
-                      <ActionBtn onClick={e => startProjectEdit(id, label, e)} title="Переименовать проект">
-                        <Pencil size={11} />
-                      </ActionBtn>
-                    </div>
-                    <div style={{
-                      opacity: hoveredSectionId === id ? 1 : 0,
-                      pointerEvents: hoveredSectionId === id ? 'auto' : 'none',
-                      transition: 'opacity 0.15s',
-                    }}>
-                      <ArrowNavBtn
-                        onClick={e => { e.stopPropagation(); navigate(`/projects/${id}`); }}
-                        title="Открыть проект"
-                      />
-                    </div>
-                  </>
+                  <div style={{
+                    opacity: hoveredSectionId === id ? 1 : 0,
+                    pointerEvents: hoveredSectionId === id ? 'auto' : 'none',
+                    transition: 'opacity 0.15s',
+                  }}>
+                    <ActionBtn onClick={e => startProjectEdit(id, label, e)} title="Переименовать проект">
+                      <Pencil size={11} />
+                    </ActionBtn>
+                  </div>
                 )}
+                <div style={{
+                  opacity: hoveredSectionId === id ? 1 : 0,
+                  pointerEvents: hoveredSectionId === id ? 'auto' : 'none',
+                  transition: 'opacity 0.15s',
+                }}>
+                  <ArrowNavBtn
+                    onClick={e => { e.stopPropagation(); navigate(isUnassigned ? '/projects/unassigned' : `/projects/${id}`); }}
+                    title="Открыть"
+                  />
+                </div>
                 <span style={badgeStyle}>{taskCount}</span>
               </div>
             </>
