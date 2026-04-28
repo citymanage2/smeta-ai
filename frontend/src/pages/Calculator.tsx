@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Layout from '../components/Layout';
 import apiClient from '../api/client';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -155,24 +156,16 @@ function selectField<T extends string>(
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: '160px' }}>
       <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>{label}</span>
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value as T)}
-        style={{
-          padding: '8px 10px',
-          border: '1px solid #e2e8f0',
-          borderRadius: '7px',
-          fontSize: '14px',
-          outline: 'none',
-          backgroundColor: '#fff',
-          boxSizing: 'border-box',
-          width: '100%',
-        }}
-      >
-        {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger style={{ width: '100%' }}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(o => (
+            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </label>
   );
 }

@@ -7,6 +7,7 @@ import FileUpload from '../components/FileUpload';
 import { TaskType, ProjectCard, TASK_TYPE_LABELS, ClientFileType, ClientFileMeta } from '../types';
 import { createTask, getEstimateSources, EstimateSource } from '../api/tasks';
 import { listProjects } from '../api/projects';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel } from '../components/ui/Select';
 
 const CLIENT_FILE_TYPES: ClientFileType[] = ['Смета', 'Проект', 'ТЗ', 'Другое'];
 
@@ -436,35 +437,28 @@ const TaskCreate: React.FC = () => {
                     <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '8px' }}>
                       Перечень-источник
                     </label>
-                    <select
-                      value={selectedKey}
-                      onChange={(e) => handleSourceKeyChange(e.target.value)}
-                      disabled={submitting}
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: '1.5px solid #e2e8f0',
-                        borderRadius: '8px',
-                        fontSize: '14px',
-                        backgroundColor: '#fff',
-                      }}
-                    >
-                      <option value="">— Выберите перечень —</option>
-                      {(['LIST_FROM_GRAND', 'LIST_FROM_PROJECT'] as const).map((type) => {
-                        const opts = estimateOptions.filter((o) => o.task_type === type);
-                        if (opts.length === 0) return null;
-                        const groupLabel = type === 'LIST_FROM_GRAND' ? 'Перечень из Гранд-сметы' : 'Перечень из проекта';
-                        return (
-                          <optgroup key={type} label={groupLabel}>
-                            {opts.map((opt) => (
-                              <option key={opt.key} value={opt.key}>
-                                {opt.name || groupLabel} · {new Date(opt.created_at).toLocaleDateString('ru-RU')} · {opt.label} ({opt.items_count} поз.)
-                              </option>
-                            ))}
-                          </optgroup>
-                        );
-                      })}
-                    </select>
+                    <Select value={selectedKey || ''} onValueChange={handleSourceKeyChange} disabled={submitting} size="lg">
+                      <SelectTrigger style={{ width: '100%' }}>
+                        <SelectValue placeholder="— Выберите перечень —" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(['LIST_FROM_GRAND', 'LIST_FROM_PROJECT'] as const).map((type) => {
+                          const opts = estimateOptions.filter((o) => o.task_type === type);
+                          if (opts.length === 0) return null;
+                          const groupLabel = type === 'LIST_FROM_GRAND' ? 'Перечень из Гранд-сметы' : 'Перечень из проекта';
+                          return (
+                            <SelectGroup key={type}>
+                              <SelectLabel>{groupLabel}</SelectLabel>
+                              {opts.map((opt) => (
+                                <SelectItem key={opt.key} value={opt.key}>
+                                  {opt.name || groupLabel} · {new Date(opt.created_at).toLocaleDateString('ru-RU')} · {opt.label} ({opt.items_count} поз.)
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
                   </>
                 )}
               </div>
@@ -587,24 +581,16 @@ const TaskCreate: React.FC = () => {
               </div>
 
               {projectMode === 'existing' && (
-                <select
-                  value={selectedProjectId}
-                  onChange={(e) => setSelectedProjectId(e.target.value)}
-                  style={{
-                    marginTop: '12px',
-                    width: '100%',
-                    padding: '10px 12px',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    fontSize: '14px',
-                    backgroundColor: '#fff',
-                  }}
-                >
-                  <option value="">— Выберите проект —</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
+                <Select value={selectedProjectId || ''} onValueChange={setSelectedProjectId} size="lg">
+                  <SelectTrigger style={{ width: '100%', marginTop: '12px' }}>
+                    <SelectValue placeholder="— Выберите проект —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
 
               {projectMode === 'new' && (

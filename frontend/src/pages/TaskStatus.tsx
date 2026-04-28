@@ -27,6 +27,7 @@ import {
   linkTaskToProject,
   listProjects,
 } from '../api/projects';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 
 const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -1129,16 +1130,16 @@ const TaskStatusPage: React.FC = () => {
               </div>
             ) : attachingProject ? (
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <select
-                  value={selectedAttachProjectId}
-                  onChange={(e) => setSelectedAttachProjectId(e.target.value)}
-                  style={{ flex: 1, padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}
-                >
-                  <option value="">— Выберите проект —</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
+                <Select value={selectedAttachProjectId || ''} onValueChange={setSelectedAttachProjectId} size="md">
+                  <SelectTrigger style={{ flex: 1 }}>
+                    <SelectValue placeholder="— Выберите проект —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <button
                   onClick={handleAttachProject}
                   disabled={!selectedAttachProjectId}

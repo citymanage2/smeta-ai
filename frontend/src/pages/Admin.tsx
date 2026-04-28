@@ -11,6 +11,7 @@ import {
 import { getTaskResults, downloadResult } from '../api/tasks';
 import { useTaskSync } from '../stores/taskSync';
 import { SectionLoader } from '../components/ui/LumaSpin';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 
 const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -614,30 +615,32 @@ const AdminPage: React.FC = () => {
             >
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>Статус</div>
-                <select
-                  value={filterStatus}
-                  onChange={(e) => { setFilterStatus(e.target.value as TaskStatus | ''); setPage(1); }}
-                  style={inputStyle}
-                >
-                  <option value="">Все статусы</option>
-                  {STATUSES.map((s) => (
-                    <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                  ))}
-                </select>
+                <Select value={filterStatus} onValueChange={v => { setFilterStatus(v as TaskStatus | ''); setPage(1); }} size="sm">
+                  <SelectTrigger style={inputStyle}>
+                    <SelectValue placeholder="Все статусы" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Все статусы</SelectItem>
+                    {STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', marginBottom: '4px' }}>Тип задачи</div>
-                <select
-                  value={filterType}
-                  onChange={(e) => { setFilterType(e.target.value as TaskType | ''); setPage(1); }}
-                  style={inputStyle}
-                >
-                  <option value="">Все типы</option>
-                  {TASK_TYPES.map((t) => (
-                    <option key={t} value={t}>{TASK_TYPE_LABELS[t]}</option>
-                  ))}
-                </select>
+                <Select value={filterType} onValueChange={v => { setFilterType(v as TaskType | ''); setPage(1); }} size="sm">
+                  <SelectTrigger style={inputStyle}>
+                    <SelectValue placeholder="Все типы" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">Все типы</SelectItem>
+                    {TASK_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>{TASK_TYPE_LABELS[t]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>

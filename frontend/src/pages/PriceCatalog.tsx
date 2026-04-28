@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Layout from '../components/Layout';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 import {
   getCatalog,
   createWork,
@@ -545,14 +546,15 @@ function ItemFormModal({ title, initial, onClose, onSave, allowKindChange }: Ite
         {allowKindChange && (
           <div style={s.field}>
             <label style={s.label}>Тип</label>
-            <select
-              style={{ ...s.input, cursor: 'pointer' }}
-              value={form.kind}
-              onChange={e => setField('kind', e.target.value as 'work' | 'material')}
-            >
-              <option value="work">Работа</option>
-              <option value="material">Материал</option>
-            </select>
+            <Select value={form.kind} onValueChange={v => setField('kind', v as 'work' | 'material')}>
+              <SelectTrigger style={{ width: '100%' }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="work">Работа</SelectItem>
+                <SelectItem value="material">Материал</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -714,14 +716,15 @@ function ImportButton({ onDone }: ImportButtonProps) {
 
   return (
     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-      <select
-        style={{ ...s.select, fontSize: 12 }}
-        value={type}
-        onChange={e => setType(e.target.value as 'works' | 'materials')}
-      >
-        <option value="works">Работы</option>
-        <option value="materials">Материалы</option>
-      </select>
+      <Select value={type} onValueChange={v => setType(v as 'works' | 'materials')} size="sm">
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="works">Работы</SelectItem>
+          <SelectItem value="materials">Материалы</SelectItem>
+        </SelectContent>
+      </Select>
       <button
         style={{ ...s.btn, opacity: loading ? 0.7 : 1 }}
         onClick={() => fileRef.current?.click()}
@@ -1007,14 +1010,24 @@ export default function PriceCatalog() {
             onChange={e => setSearch(e.target.value)}
             placeholder="Поиск по названию..."
           />
-          <select style={s.select} value={sort} onChange={e => setSort(e.target.value as SortKey)}>
-            {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
+          <Select value={sort} onValueChange={v => setSort(v as SortKey)} size="sm">
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
             Строк:
-            <select style={s.select} value={pageSize} onChange={e => setPageSize(Number(e.target.value))}>
-              {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
+            <Select value={String(pageSize)} onValueChange={v => setPageSize(Number(v))} size="sm">
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map(n => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
