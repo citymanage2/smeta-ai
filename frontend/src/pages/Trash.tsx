@@ -5,6 +5,7 @@ import Layout from '../components/Layout';
 import { LumaSpin } from '../components/ui/LumaSpin';
 import { TASK_TYPE_LABELS, TaskType } from '../types';
 import { TrashTaskItem, getMyTrashTasks, restoreMyTask, permanentDeleteMyTask } from '../api/tasks';
+import { useTaskSync } from '../stores/taskSync';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', {
@@ -26,6 +27,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 const Trash: React.FC = () => {
   const navigate = useNavigate();
+  const { version: taskSyncVersion } = useTaskSync();
   const [tasks, setTasks] = useState<TrashTaskItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -47,7 +49,7 @@ const Trash: React.FC = () => {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, taskSyncVersion]);
 
   async function handleRestore(taskId: string) {
     setRestoringId(taskId);

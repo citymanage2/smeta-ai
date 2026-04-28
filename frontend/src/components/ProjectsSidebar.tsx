@@ -40,7 +40,7 @@ interface Props {
 const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { version: taskSyncVersion } = useTaskSync();
+  const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
 
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [unassignedTasks, setUnassignedTasks] = useState<TaskBrief[]>([]);
@@ -181,6 +181,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       const removeTask = (tasks: TaskBrief[]) => tasks.filter(t => t.id !== taskId);
       if (isUnassigned) setUnassignedTasks(removeTask);
       else if (projectId) setProjectTasks(prev => ({ ...prev, [projectId]: removeTask(prev[projectId] ?? []) }));
+      bumpTaskSync();
     } catch {
       setError('Не удалось переместить задачу в корзину');
     }
