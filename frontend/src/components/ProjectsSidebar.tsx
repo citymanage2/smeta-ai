@@ -322,7 +322,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
     );
   }
 
-  // ─── Collapsed sidebar (thin strip) ───────────────────────────
+  // ─── Collapsed sidebar ────────────────────────────────────────
   if (!open) {
     return (
       <div
@@ -338,21 +338,37 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
           transition: 'width 0.22s ease',
         }}
       >
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 12, gap: 8 }}>
-          <button
-            onClick={() => navigate('/task/create')}
-            title="Создать задачу"
-            style={collapsedIconBtn}
-          >
+        {/* Action buttons */}
+        <div style={{ padding: '10px 0 6px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, borderBottom: '1px solid #f1f5f9', width: '100%' }}>
+          <button onClick={() => navigate('/task/create')} title="Создать задачу" style={collapsedIconBtn}>
             <Plus size={16} color="#2563eb" />
           </button>
-          <button
-            onClick={() => navigate('/projects')}
-            title="Проекты"
-            style={collapsedIconBtn}
-          >
-            <FolderOpen size={16} color="#64748b" />
+          <button onClick={() => setShowCreate(v => !v)} title="Создать новый проект" style={collapsedIconBtn}>
+            <FolderOpen size={14} color="#64748b" />
           </button>
+        </div>
+
+        {/* Project list */}
+        <div style={{ flex: 1, overflowY: 'auto', width: '100%', padding: '6px 0' }}>
+          {/* Без проекта */}
+          <button
+            onClick={() => onToggle()}
+            title="Без проекта"
+            style={collapsedProjectBtn}
+          >
+            <CollapsedProjectIcon initials="БП" />
+          </button>
+
+          {projects.map(p => (
+            <button
+              key={p.id}
+              onClick={() => navigate(`/projects/${p.id}`)}
+              title={p.name}
+              style={collapsedProjectBtn}
+            >
+              <CollapsedProjectIcon initials={getInitials(p.name)} />
+            </button>
+          ))}
         </div>
 
         {/* Expand button */}
@@ -705,6 +721,47 @@ const ActionBtn: React.FC<ActionBtnProps> = ({ onClick, title, danger, children 
       {children}
     </button>
   );
+};
+
+// ─── Helpers for collapsed project icons ──────────────────────────────────
+
+function getInitials(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+const CollapsedProjectIcon: React.FC<{ initials: string }> = ({ initials }) => (
+  <div
+    style={{
+      width: 30,
+      height: 30,
+      borderRadius: 7,
+      backgroundColor: '#eff6ff',
+      border: '1px solid #dbeafe',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#2563eb',
+      letterSpacing: '0.5px',
+      flexShrink: 0,
+    }}
+  >
+    {initials}
+  </div>
+);
+
+const collapsedProjectBtn: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: '100%',
+  padding: '3px 0',
+  border: 'none',
+  backgroundColor: 'transparent',
+  cursor: 'pointer',
 };
 
 export default ProjectsSidebar;

@@ -12,7 +12,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
-    return localStorage.getItem('sidebarOpen') !== 'false';
+    const stored = localStorage.getItem('sidebarOpen');
+    return stored === null ? false : stored !== 'false';
   });
 
   const handleToggleSidebar = () => {
