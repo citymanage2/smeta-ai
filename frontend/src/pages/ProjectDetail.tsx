@@ -9,6 +9,7 @@ import { updateTask, renameSlotFile } from '../api/tasks';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
+import { KanbanBoard } from '../components/kanban/KanbanBoard';
 
 const ESTIMATION_LABELS: Record<string, string> = {
   unestimated: 'Не рассчитана',
@@ -267,6 +268,7 @@ const ProjectDetailPage: React.FC = () => {
   const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
   const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
 
   useEffect(() => {
     if (projectId) loadProject();
@@ -494,6 +496,32 @@ const ProjectDetailPage: React.FC = () => {
           )}
         </div>
 
+        {/* Переключатель вида */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+          {(['list', 'kanban'] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              style={{
+                border: viewMode === mode ? '1px solid #93c5fd' : '1px solid #e2e8f0',
+                background: viewMode === mode ? '#eff6ff' : '#fff',
+                color: viewMode === mode ? '#2563eb' : '#64748b',
+                borderRadius: '6px',
+                padding: '6px 14px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                fontWeight: viewMode === mode ? 600 : 400,
+              }}
+            >
+              {mode === 'list' ? 'Список' : 'Канбан'}
+            </button>
+          ))}
+        </div>
+
+        {viewMode === 'kanban' ? (
+          <KanbanBoard projectId={project.id} />
+        ) : (
+          <>
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#1e293b', marginBottom: '12px' }}>
           Задачи ({project.tasks.length})
         </h2>
@@ -627,6 +655,8 @@ const ProjectDetailPage: React.FC = () => {
               );
             })}
           </div>
+        )}
+          </>
         )}
       </div>
       {optimizingTaskId && (
