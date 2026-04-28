@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Pencil, Check, X, Trash2, ChevronRight, ChevronsRight,
@@ -335,8 +336,10 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          overflow: 'hidden',
+          overflow: 'visible',
           transition: 'width 0.22s ease',
+          position: 'relative',
+          zIndex: 10,
         }}
       >
         {/* Action buttons */}
@@ -358,7 +361,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         </div>
 
         {/* Project list */}
-        <div style={{ flex: 1, overflowY: 'auto', width: '100%', padding: '6px 0' }}>
+        <div className="collapsed-project-list" style={{ flex: 1, overflowY: 'auto', overflowX: 'visible', width: '100%', padding: '6px 0' }}>
           {/* Без проекта */}
           <CollapsedProjectBtn
             onClick={() => navigate('/projects/unassigned')}
@@ -379,9 +382,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         </div>
 
         {/* Expand button */}
-        <button onClick={onToggle} data-tooltip="Показать панель" className="sidebar-fast-tooltip" style={toggleBtnStyle}>
-          <ChevronsRight size={15} color="#64748b" />
-        </button>
+        <ExpandBtn onToggle={onToggle} />
       </div>
     );
   }
@@ -727,6 +728,28 @@ function getInitials(name: string): string {
   return (words[0][0] + words[1][0]).toUpperCase();
 }
 
+// Portal tooltip rendered at body level to escape overflow clipping
+const SidebarTooltip: React.FC<{ text: string; anchorRect: DOMRect }> = ({ text, anchorRect }) =>
+  ReactDOM.createPortal(
+    <div style={{
+      position: 'fixed',
+      left: anchorRect.right + 6,
+      top: anchorRect.top + anchorRect.height / 2,
+      transform: 'translateY(-50%)',
+      background: '#1e293b',
+      color: '#fff',
+      fontSize: 12,
+      whiteSpace: 'nowrap',
+      padding: '4px 8px',
+      borderRadius: 5,
+      pointerEvents: 'none',
+      zIndex: 9999,
+    }}>
+      {text}
+    </div>,
+    document.body
+  );
+
 // Action button (Plus, FolderOpen) with active/hover states
 const CollapsedNavBtn: React.FC<{
   onClick: () => void;
@@ -735,33 +758,25 @@ const CollapsedNavBtn: React.FC<{
   children: React.ReactNode;
 }> = ({ onClick, tooltip, active, children }) => {
   const [hovered, setHovered] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
   const bg = active ? '#ffffff' : hovered ? '#f1f5f9' : 'transparent';
   const border = active ? '1.5px solid #bfdbfe' : '1.5px solid transparent';
   const color = active ? '#2563eb' : hovered ? '#334155' : '#94a3b8';
   return (
     <button
       onClick={onClick}
-      data-tooltip={tooltip}
-      className="sidebar-fast-tooltip"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={e => { setHovered(true); setRect(e.currentTarget.getBoundingClientRect()); }}
+      onMouseLeave={() => { setHovered(false); setRect(null); }}
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 34,
-        height: 34,
-        borderRadius: 8,
-        border,
-        backgroundColor: bg,
-        cursor: 'pointer',
-        color,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 34, borderRadius: 8, border,
+        backgroundColor: bg, cursor: 'pointer', color, padding: 0,
         transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
         boxShadow: active ? '0 1px 4px rgba(37,99,235,0.10)' : 'none',
-        padding: 0,
       }}
     >
       {React.cloneElement(children as React.ReactElement, { color })}
+      {hovered && rect && <SidebarTooltip text={tooltip} anchorRect={rect} />}
     </button>
   );
 };
@@ -774,48 +789,49 @@ const CollapsedProjectBtn: React.FC<{
   initials: string;
 }> = ({ onClick, tooltip, active, initials }) => {
   const [hovered, setHovered] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
   const bg = active ? '#ffffff' : hovered ? '#f1f5f9' : 'transparent';
   const border = active ? '1.5px solid #bfdbfe' : '1.5px solid transparent';
   const textColor = active ? '#2563eb' : hovered ? '#334155' : '#94a3b8';
   return (
     <button
       onClick={onClick}
-      data-tooltip={tooltip}
-      className="sidebar-fast-tooltip"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={e => { setHovered(true); setRect(e.currentTarget.getBoundingClientRect()); }}
+      onMouseLeave={() => { setHovered(false); setRect(null); }}
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '100%',
-        padding: '3px 0',
-        border: 'none',
-        backgroundColor: 'transparent',
-        cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: '100%', padding: '3px 0', border: 'none',
+        backgroundColor: 'transparent', cursor: 'pointer',
       }}
     >
-      <div
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 8,
-          backgroundColor: bg,
-          border,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 11,
-          fontWeight: 700,
-          color: textColor,
-          letterSpacing: '0.5px',
-          flexShrink: 0,
-          transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
-          boxShadow: active ? '0 1px 4px rgba(37,99,235,0.10)' : 'none',
-        }}
-      >
+      <div style={{
+        width: 32, height: 32, borderRadius: 8,
+        backgroundColor: bg, border,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 11, fontWeight: 700, color: textColor,
+        letterSpacing: '0.5px', flexShrink: 0,
+        transition: 'background-color 0.12s, border-color 0.12s, color 0.12s',
+        boxShadow: active ? '0 1px 4px rgba(37,99,235,0.10)' : 'none',
+      }}>
         {initials}
       </div>
+      {hovered && rect && <SidebarTooltip text={tooltip} anchorRect={rect} />}
+    </button>
+  );
+};
+
+const ExpandBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
+  const [hovered, setHovered] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  return (
+    <button
+      onClick={onToggle}
+      onMouseEnter={e => { setHovered(true); setRect(e.currentTarget.getBoundingClientRect()); }}
+      onMouseLeave={() => { setHovered(false); setRect(null); }}
+      style={toggleBtnStyle}
+    >
+      <ChevronsRight size={15} color="#64748b" />
+      {hovered && rect && <SidebarTooltip text="Показать панель" anchorRect={rect} />}
     </button>
   );
 };
