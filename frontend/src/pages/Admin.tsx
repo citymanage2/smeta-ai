@@ -10,6 +10,7 @@ import {
 } from '../api/admin';
 import { getTaskResults, downloadResult } from '../api/tasks';
 import { useTaskSync } from '../stores/taskSync';
+import { SectionLoader } from '../components/ui/LumaSpin';
 
 const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -692,7 +693,7 @@ const AdminPage: React.FC = () => {
             {/* Table */}
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '10px', overflowX: 'auto' }}>
               {loading ? (
-                <div style={{ padding: '48px', textAlign: 'center', color: '#94a3b8' }}>Загрузка...</div>
+                <SectionLoader />
               ) : tasks.length === 0 ? (
                 <div style={{ padding: '48px', textAlign: 'center', color: '#94a3b8' }}>Задачи не найдены</div>
               ) : (
@@ -784,8 +785,8 @@ const AdminPage: React.FC = () => {
                               if (!det || det.loading) {
                                 return (
                                   <tr style={{ backgroundColor: '#f8fafc' }}>
-                                    <td colSpan={5} style={{ padding: '16px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
-                                      Загрузка...
+                                    <td colSpan={5} style={{ padding: '16px', textAlign: 'center' }}>
+                                      <SectionLoader />
                                     </td>
                                   </tr>
                                 );
@@ -975,7 +976,7 @@ const AdminPage: React.FC = () => {
             )}
 
             {trashLoading ? (
-              <p style={{ fontSize: '14px', color: '#94a3b8' }}>Загрузка корзины...</p>
+              <SectionLoader message="Загрузка корзины..." />
             ) : trashTasks.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8' }}>
                 <div style={{ fontSize: '48px', marginBottom: '12px' }}>🗑</div>
@@ -1080,7 +1081,7 @@ const AdminPage: React.FC = () => {
         {activeTab === 'prices' && (
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', maxWidth: '900px' }}>
             {priceInfoLoading && (
-              <p style={{ fontSize: '14px', color: '#94a3b8' }}>Загрузка информации о прайс-листах...</p>
+              <SectionLoader message="Загрузка информации о прайс-листах..." />
             )}
 
             {/* Hidden file inputs */}
