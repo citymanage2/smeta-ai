@@ -4,9 +4,13 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { LumaSpin } from './ui/LumaSpin';
 const LumaSpinInline = () => <LumaSpin size="sm" color="#94a3b8" />;
 import {
-  Pencil, Check, X, Trash2, ChevronRight, ChevronsRight,
+  Pencil, Check, X, Trash2, ChevronRight,
   FolderOpen, Plus,
 } from 'lucide-react';
+import { DynamicIcon, type IconName } from 'lucide-react/dynamic';
+
+const EXPAND_ICON_KEY = 'sidebar-expand-icon';
+import { SidebarIconPicker } from './ui/SidebarIconPicker';
 import { ProjectCard, TaskBrief, TaskType, TASK_TYPE_LABELS, STATUS_LABELS } from '../types';
 import { listProjects, createProject, getProject, getUnassignedTasks, updateProject } from '../api/projects';
 import { updateTask } from '../api/tasks';
@@ -384,7 +388,9 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         </div>
 
         {/* Expand button */}
-        <ExpandBtn onToggle={onToggle} />
+        <div style={{ padding: '6px 0 8px', borderTop: '1px solid #f1f5f9', width: '100%', display: 'flex', justifyContent: 'center' }}>
+          <ExpandBtn onToggle={onToggle} />
+        </div>
       </div>
     );
   }
@@ -492,10 +498,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       </div>
 
       {/* Collapse button */}
-      <button onClick={onToggle} style={collapseBarStyle}>
-        <ChevronsRight size={14} style={{ transform: 'rotate(180deg)', color: '#64748b' }} />
-        <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>Скрыть</span>
-      </button>
+      <CollapseBtn onToggle={onToggle} />
     </div>
   );
 };
@@ -670,18 +673,6 @@ const collapseBarStyle: React.CSSProperties = {
   textAlign: 'left',
 };
 
-const toggleBtnStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '100%',
-  padding: '12px 0',
-  borderTop: '1px solid #f1f5f9',
-  backgroundColor: '#ffffff',
-  border: 'none',
-  cursor: 'pointer',
-};
-
 
 // ─── ActionBtn: shows on hover of parent ──────────────────────────────────
 
@@ -823,16 +814,111 @@ const CollapsedProjectBtn: React.FC<{
 const ExpandBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
   const [hovered, setHovered] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
+  const [icon, setIcon] = useState<IconName>(() =>
+    (localStorage.getItem(EXPAND_ICON_KEY) as IconName) ?? 'chevrons-right'
+  );
+
+  const bg = hovered ? '#f1f5f9' : 'transparent';
+  const color = hovered ? '#334155' : '#94a3b8';
+
+  function handleContextMenu(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    setShowPicker(true);
+    setRect(e.currentTarget.getBoundingClientRect());
+  }
+
+  function handleIconSelect(iconName: IconName) {
+    setIcon(iconName);
+    localStorage.setItem(EXPAND_ICON_KEY, iconName);
+    setShowPicker(false);
+  }
+
   return (
-    <button
-      onClick={onToggle}
-      onMouseEnter={e => { setHovered(true); setRect(e.currentTarget.getBoundingClientRect()); }}
-      onMouseLeave={() => { setHovered(false); setRect(null); }}
-      style={toggleBtnStyle}
-    >
-      <ChevronsRight size={15} color="#64748b" />
-      {hovered && rect && <SidebarTooltip text="Показать панель" anchorRect={rect} />}
-    </button>
+    <>
+      <button
+        onClick={onToggle}
+        onContextMenu={handleContextMenu}
+        onMouseEnter={e => { setHovered(true); setRect(e.currentTarget.getBoundingClientRect()); }}
+        onMouseLeave={() => { setHovered(false); setRect(null); setShowPicker(false); }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 34,
+          height: 34,
+          borderRadius: 8,
+          border: '1.5px solid transparent',
+          backgroundColor: bg,
+          cursor: 'pointer',
+          color,
+          padding: 0,
+          transition: 'background-color 0.12s, color 0.12s',
+          position: 'relative',
+        }}
+      >
+        <DynamicIcon name={icon} size={16} color={color} />
+        {hovered && rect && !showPicker && (
+          <SidebarTooltip text="Развернуть · ПКМ — сменить иконку" anchorRect={rect} />
+        )}
+      </button>
+      {showPicker && rect && (
+        <SidebarIconPicker
+          anchorRect={rect}
+          selectedIcon={icon}
+          onSelect={handleIconSelect}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+    </>
+  );
+};
+
+const CollapseBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
+  const [hovered, setHovered] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerRect, setPickerRect] = useState<DOMRect | null>(null);
+  const [icon, setIcon] = useState<IconName>(() =>
+    (localStorage.getItem(EXPAND_ICON_KEY) as IconName) ?? 'chevrons-right'
+  );
+
+  function handleContextMenu(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    setPickerRect(e.currentTarget.getBoundingClientRect());
+    setShowPicker(true);
+  }
+
+  function handleIconSelect(iconName: IconName) {
+    setIcon(iconName);
+    localStorage.setItem(EXPAND_ICON_KEY, iconName);
+    setShowPicker(false);
+  }
+
+  return (
+    <>
+      <button
+        onClick={onToggle}
+        onContextMenu={handleContextMenu}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          ...collapseBarStyle,
+          backgroundColor: hovered ? '#f8fafc' : '#ffffff',
+          transition: 'background-color 0.12s',
+        }}
+      >
+        <DynamicIcon name={icon} size={14} color="#64748b" />
+        <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>Свернуть меню</span>
+      </button>
+      {showPicker && pickerRect && (
+        <SidebarIconPicker
+          anchorRect={pickerRect}
+          selectedIcon={icon}
+          onSelect={handleIconSelect}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
+    </>
   );
 };
 
