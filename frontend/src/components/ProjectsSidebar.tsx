@@ -60,6 +60,9 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const editInputRef = useRef<HTMLInputElement>(null);
+  const expandedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => { expandedRef.current = expanded; }, [expanded]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -68,7 +71,18 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
       const [projectsData, unassigned] = await Promise.all([listProjects(), getUnassignedTasks()]);
       setProjects(projectsData);
       setUnassignedTasks(unassigned.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)));
-      setProjectTasks({});
+
+      const expandedProjectIds = [...expandedRef.current].filter(id => id !== 'unassigned');
+      if (expandedProjectIds.length > 0) {
+        const results = await Promise.all(expandedProjectIds.map(id => getProject(id)));
+        const refreshed: Record<string, TaskBrief[]> = {};
+        expandedProjectIds.forEach((id, i) => {
+          refreshed[id] = results[i].tasks.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type));
+        });
+        setProjectTasks(refreshed);
+      } else {
+        setProjectTasks({});
+      }
     } catch {
       setError('Ошибка загрузки');
     } finally {
