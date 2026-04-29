@@ -404,13 +404,32 @@ function EstimateStage({ card }: Props) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.estimate_task
+  const listTask = card.list_task
+  const completenessTask = card.completeness_task
 
-  const listCompleted = card.list_task?.status === 'completed'
-  const completenessCompleted = card.completeness_task?.status === 'completed'
+  const listCompleted = listTask?.status === 'completed'
+  const completenessCompleted = completenessTask?.status === 'completed'
 
   const [sourceStage, setSourceStage] = useState<1 | 2>(completenessCompleted ? 2 : 1)
+  const [listTaskModalOpen, setListTaskModalOpen] = useState(false)
+  const [completenessTaskModalOpen, setCompletenessTaskModalOpen] = useState(false)
+  const [taskModalOpen, setTaskModalOpen] = useState(false)
 
   const noSource = !listCompleted && !completenessCompleted
+
+  const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
+    ? 'Перечень из проекта'
+    : listTask?.task_type === 'LIST_FROM_GRAND'
+    ? 'Перечень из Гранд-сметы'
+    : 'Перечень'
+
+  const sectionLabelStyle: React.CSSProperties = {
+    fontSize: '10px',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '4px',
+  }
 
   const handleCreate = async () => {
     await startTask(card.id, { task_type: 'ESTIMATE_FROM_LIST', source_stage: sourceStage })
@@ -420,10 +439,62 @@ function EstimateStage({ card }: Props) {
 
   return (
     <div>
-      <TaskStatusBadge task={task} />
+      {/* Блок 1: итог стадии «Перечень» */}
+      {listTask !== null && listTask.status === 'completed' && (
+        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
+          <div style={{ ...sectionLabelStyle, color: '#7c3aed' }}>{listTypeLabel}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+            <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
+            <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
+          </div>
+        </div>
+      )}
+
+      {/* Блок 2: итог стадии «Полнота» (только если файл создан) */}
+      {completenessTask !== null && completenessTask.status === 'completed' && (
+        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
+          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+            <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
+            <ArrowBtn onClick={() => setCompletenessTaskModalOpen(true)} title="Открыть задачу проверки" />
+          </div>
+        </div>
+      )}
+
+      {/* Блок 3: Смета из перечня */}
+      <div style={{ ...sectionLabelStyle, color: '#0f766e' }}>Смета из перечня</div>
+
+      {task !== null && (task.status === 'pending' || task.status === 'processing') && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
+          <LumaSpin size="sm" color="#d97706" />
+          <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
+            {task.progress_message || 'В очереди…'}
+          </span>
+          <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+        </div>
+      )}
+
+      {task !== null && task.status === 'completed' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+          <DownloadBtn onClick={() => safeDownload(task.id, 'estimate')} title="Скачать смету" />
+          <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
+        </div>
+      )}
+
+      {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
+        <div style={{ marginBottom: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <TaskStatusBadge task={task} />
+            <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+          </div>
+        </div>
+      )}
 
       {canCreate && (
-        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
+        <div style={{ marginTop: task !== null && (task.status === 'failed' || task.status === 'cancelled') ? '6px' : '4px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
           {noSource ? (
             <div style={{ color: '#dc2626', fontSize: '12px' }}>Сначала завершите Перечень</div>
           ) : (
@@ -447,12 +518,14 @@ function EstimateStage({ card }: Props) {
         </div>
       )}
 
-      {task !== null && task.status === 'completed' && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'estimate')}>
-            Открыть смету
-          </ActionButton>
-        </div>
+      {listTask !== null && (
+        <TaskDetailModal taskId={listTask.id} isOpen={listTaskModalOpen} onClose={() => setListTaskModalOpen(false)} />
+      )}
+      {completenessTask !== null && (
+        <TaskDetailModal taskId={completenessTask.id} isOpen={completenessTaskModalOpen} onClose={() => setCompletenessTaskModalOpen(false)} />
+      )}
+      {task !== null && (
+        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
       )}
     </div>
   )
