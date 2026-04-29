@@ -220,6 +220,7 @@ const OptimizationProposalsPanel: React.FC<Props> = ({
     redundancy: 'Шаг 2 — Лишние позиции',
     technology: 'Шаг 3 — Технологии',
     materials: 'Шаг 4 — Материалы',
+    fill_prices: 'Шаг 5 — Заполнить цены',
   };
 
   // ---------- AUTO-APPLIED summary mode ----------

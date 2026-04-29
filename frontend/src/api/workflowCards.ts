@@ -32,8 +32,9 @@ export async function startTask(cardId: string, payload: StartTaskPayload): Prom
   if (payload.use_previous_stage) {
     fd.append('use_previous_stage', 'true')
   }
-  if (payload.file) {
-    fd.append('file', payload.file)
+  const allFiles = payload.files ?? (payload.file ? [payload.file] : [])
+  for (const f of allFiles) {
+    fd.append('files', f)
   }
   const resp = await apiClient.post<WorkflowCard>(`/api/workflow-cards/${cardId}/start-task`, fd)
   return resp.data

@@ -44,6 +44,7 @@ export interface GuardResult {
 export interface StartTaskPayload {
   task_type: string
   file?: File
+  files?: File[]
   source_stage?: 1 | 2
   use_previous_stage?: boolean
 }

@@ -108,6 +108,27 @@ function DownloadBtn({ onClick, title = 'Скачать' }: { onClick: () => voi
   )
 }
 
+function Spinner() {
+  return (
+    <span style={{
+      display: 'inline-block',
+      width: '11px',
+      height: '11px',
+      border: '2px solid rgba(255,255,255,0.35)',
+      borderTopColor: 'rgba(255,255,255,0.9)',
+      borderRadius: '50%',
+      animation: 'spin 0.65s linear infinite',
+      verticalAlign: 'middle',
+      marginRight: '5px',
+    }} />
+  )
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  LIST_FROM_PROJECT: 'Перечень из проекта',
+  LIST_FROM_GRAND: 'Перечень из Гранд-сметы',
+}
+
 // -------- Стадия «Перечень» --------
 function ListStage({ card }: Props) {
   const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
@@ -115,98 +136,95 @@ function ListStage({ card }: Props) {
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>(
     pending?.task_type ?? 'LIST_FROM_PROJECT'
   )
-  const [file, setFile] = useState<File | null>(pending?.file ?? null)
+  const [files, setFiles] = useState<File[]>(pending?.files ?? [])
   const [fileError, setFileError] = useState<string | null>(null)
-  const [showChangeFile, setShowChangeFile] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [taskModalOpen, setTaskModalOpen] = useState(false)
-  const [showRetryForm, setShowRetryForm] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const retryFileRef = useRef<HTMLInputElement>(null)
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
 
-  // Синхронизируем, если pending появился после монтирования (Zustand нотифицирует раньше, чем pending выставлен)
+  // Синхронизируем: pending может появиться позже монтирования (Zustand нотифицирует до setPendingListTask)
   useEffect(() => {
-    if (pending && !file) {
+    if (pending && files.length === 0) {
       setTaskType(pending.task_type)
-      setFile(pending.file)
+      setFiles(pending.files)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending])
 
-  const typeLabel = task?.task_type === 'LIST_FROM_PROJECT'
-    ? 'Перечень из проекта'
-    : task?.task_type === 'LIST_FROM_GRAND'
-    ? 'Перечень из Гранд-сметы'
-    : null
+  const effectiveType = (task?.task_type ?? taskType) as string
+  const typeLabel = TYPE_LABEL[effectiveType] ?? effectiveType
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] ?? null
-    if (f && f.size > FILE_SIZE_LIMIT) {
+  const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const added = Array.from(e.target.files ?? [])
+    const oversized = added.find(f => f.size > FILE_SIZE_LIMIT)
+    if (oversized) {
       setFileError('Файл превышает 50 МБ')
-      setFile(null)
     } else {
       setFileError(null)
-      setFile(f)
-      setShowChangeFile(false)
+      setFiles(prev => [...prev, ...added])
     }
+    if (fileRef.current) fileRef.current.value = ''
   }
+
+  const removeFile = (idx: number) => setFiles(prev => prev.filter((_, i) => i !== idx))
+
+  const FileList = ({ editable = true }: { editable?: boolean }) => (
+    <>
+      {files.map((f, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '4px 8px', marginBottom: '4px', maxWidth: '100%' }}>
+          <span style={{ fontSize: '12px', flexShrink: 0 }}>📎</span>
+          <span style={{ fontSize: '11px', color: '#1e293b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{f.name}</span>
+          {editable && (
+            <button onClick={() => removeFile(i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '14px', lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>✕</button>
+          )}
+        </div>
+      ))}
+    </>
+  )
+
+  const AddFileBtn = () => (
+    <button
+      onClick={() => fileRef.current?.click()}
+      style={{ width: '100%', fontSize: '12px', color: '#3b82f6', background: 'none', border: '1px dashed #93c5fd', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', marginBottom: '6px' }}
+    >
+      + Добавить файл
+    </button>
+  )
+
+  const TypeHeader = () => (
+    <div style={{ fontSize: '10px', color: '#7c3aed', fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      {typeLabel}
+    </div>
+  )
 
   // Состояние: задача не создана — форма запуска
   if (task === null) {
-    const hasPendingFile = !!pending && !!file && !showChangeFile
     return (
       <div>
-        {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
-          <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '5px', cursor: 'pointer' }}>
-            <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
-            {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
-          </label>
-        ))}
-
-        <div style={{ marginTop: '6px', overflow: 'hidden', maxWidth: '100%' }}>
-          {hasPendingFile ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '5px 8px' }}>
-              <span style={{ fontSize: '13px' }}>📎</span>
-              <span style={{ fontSize: '12px', color: '#1e293b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {file!.name}
-              </span>
-              <button
-                onClick={() => setShowChangeFile(true)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '11px', padding: '0', flexShrink: 0 }}
-              >
-                Изменить
-              </button>
-            </div>
-          ) : (
-            <>
-              <input
-                ref={fileRef}
-                type="file"
-                style={{ fontSize: '12px', maxWidth: '100%' }}
-                onChange={handleFileChange}
-              />
-              {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
-            </>
-          )}
-        </div>
-
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton
-            onClick={async () => {
-              if (!file) return
-              const f = file
-              setFile(null)
-              setShowChangeFile(false)
-              if (fileRef.current) fileRef.current.value = ''
-              clearPendingListTask(card.id)
-              await startTask(card.id, { task_type: taskType, file: f })
-            }}
-            disabled={!file || submitting}
-          >
-            {submitting ? 'Создаю…' : 'Создать перечень'}
-          </ActionButton>
-        </div>
+        <TypeHeader />
+        <FileList />
+        <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleAddFiles} />
+        <AddFileBtn />
+        {fileError && <div style={{ color: '#dc2626', fontSize: '11px', marginBottom: '6px' }}>{fileError}</div>}
+        {submitError && <div style={{ color: '#dc2626', fontSize: '11px', marginBottom: '6px' }}>{submitError}</div>}
+        <ActionButton
+          onClick={async () => {
+            if (files.length === 0 || submitting) return
+            setSubmitError(null)
+            const toSend = [...files]
+            clearPendingListTask(card.id)
+            try {
+              await startTask(card.id, { task_type: taskType, files: toSend })
+            } catch {
+              setSubmitError('Не удалось создать задачу. Попробуйте ещё раз.')
+            }
+          }}
+          disabled={files.length === 0 || submitting}
+        >
+          {submitting ? <><Spinner />Создаю…</> : 'Создать перечень'}
+        </ActionButton>
       </div>
     )
   }
@@ -215,18 +233,11 @@ function ListStage({ card }: Props) {
   if (task.status === 'pending' || task.status === 'processing') {
     return (
       <div>
+        <TypeHeader />
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
           <TaskStatusBadge task={task} />
           {task.progress_message && (
-            <span style={{
-              fontSize: '11px',
-              color: '#92400e',
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}>
+            <span style={{ fontSize: '11px', color: '#92400e', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               {task.progress_message}
             </span>
           )}
@@ -241,11 +252,7 @@ function ListStage({ card }: Props) {
   if (task.status === 'completed') {
     return (
       <div>
-        {typeLabel && (
-          <div style={{ fontSize: '10px', color: '#7c3aed', fontWeight: 700, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            {typeLabel}
-          </div>
-        )}
+        <TypeHeader />
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
           <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
@@ -256,58 +263,34 @@ function ListStage({ card }: Props) {
     )
   }
 
-  // Состояние: ошибка / отменено — повтор
+  // Состояние: ошибка / отменено — форма повтора с файлами
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
+      <TypeHeader />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', marginBottom: '8px' }}>
         <TaskStatusBadge task={task} />
         <ArrowBtn onClick={() => setTaskModalOpen(true)} />
       </div>
-      {!showRetryForm && (
-        <ActionButton
-          onClick={() => {
-            setTaskType(task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND')
-            setShowRetryForm(true)
-          }}
-          disabled={submitting}
-        >
-          Повторить
-        </ActionButton>
-      )}
-      {showRetryForm && (
-        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
-          <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
-            <input
-              ref={retryFileRef}
-              type="file"
-              style={{ fontSize: '12px', maxWidth: '100%' }}
-              onChange={handleFileChange}
-            />
-            {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
-          </div>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-            <ActionButton
-              onClick={async () => {
-                if (!file) return
-                const f = file
-                setShowRetryForm(false)
-                setFile(null)
-                if (retryFileRef.current) retryFileRef.current.value = ''
-                await startTask(card.id, { task_type: task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND', file: f })
-              }}
-              disabled={!file || submitting}
-            >
-              {submitting ? 'Запускаю…' : 'Запустить'}
-            </ActionButton>
-            <ActionButton
-              variant="secondary"
-              onClick={() => { setShowRetryForm(false); setFile(null); setFileError(null) }}
-            >
-              Отмена
-            </ActionButton>
-          </div>
-        </div>
-      )}
+      <FileList />
+      <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleAddFiles} />
+      <AddFileBtn />
+      {fileError && <div style={{ color: '#dc2626', fontSize: '11px', marginBottom: '6px' }}>{fileError}</div>}
+      {submitError && <div style={{ color: '#dc2626', fontSize: '11px', marginBottom: '6px' }}>{submitError}</div>}
+      <ActionButton
+        onClick={async () => {
+          if (files.length === 0 || submitting) return
+          setSubmitError(null)
+          const toSend = [...files]
+          try {
+            await startTask(card.id, { task_type: task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND', files: toSend })
+          } catch {
+            setSubmitError('Не удалось запустить задачу. Попробуйте ещё раз.')
+          }
+        }}
+        disabled={files.length === 0 || submitting}
+      >
+        {submitting ? <><Spinner />Запускаю…</> : 'Повторить'}
+      </ActionButton>
       <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
     </div>
   )

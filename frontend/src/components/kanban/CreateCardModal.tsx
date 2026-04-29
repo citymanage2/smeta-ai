@@ -43,7 +43,7 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
     try {
       const card = await createCard(projectId, name.trim())
       if (isListStage) {
-        setPendingListTask(card.id, { task_type: taskType, file: file! })
+        setPendingListTask(card.id, { task_type: taskType, files: [file!] })
       } else if (isOptimization) {
         try {
           await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', file: file! })

@@ -243,7 +243,7 @@ async def start_task(
     task_type: str = Form(...),
     source_stage: Optional[int] = Form(None),
     use_previous_stage: Optional[bool] = Form(None),
-    file: Optional[UploadFile] = File(None),
+    files: list[UploadFile] = File(default=[]),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -263,7 +263,7 @@ async def start_task(
 
     # --- Подготовка файлов и user_prompt ---
     input_files_meta: list[dict] = []
-    raw_file_bytes: Optional[bytes] = None
+    raw_files_bytes: list[bytes] = []
     resolved_prompt: Optional[str] = None
 
     if task_type == "ESTIMATE_FROM_LIST":
@@ -300,7 +300,7 @@ async def start_task(
                 status_code=400,
                 detail="Файл сметы недоступен: результат не найден",
             )
-        raw_file_bytes = tr.file_data
+        raw_files_bytes = [tr.file_data]
         input_files_meta = [
             {"name": tr.file_name, "mime_type": tr.mime_type, "size_bytes": len(tr.file_data)}
         ]
@@ -314,13 +314,15 @@ async def start_task(
             )
         resolved_prompt = card.list_task_id
 
-    elif file is not None:
-        # Обычная загрузка файла (LIST_FROM_GRAND, LIST_FROM_PROJECT, ESTIMATE_OPTIMIZATION)
-        raw_file_bytes = await file.read()
-        mime = (file.content_type or "application/octet-stream").split(";")[0].strip()
-        input_files_meta = [
-            {"name": file.filename or "file", "mime_type": mime, "size_bytes": len(raw_file_bytes)}
-        ]
+    elif files:
+        # Загрузка одного или нескольких файлов (LIST_FROM_GRAND, LIST_FROM_PROJECT, ESTIMATE_OPTIMIZATION)
+        for upload in files:
+            content = await upload.read()
+            mime = (upload.content_type or "application/octet-stream").split(";")[0].strip()
+            raw_files_bytes.append(content)
+            input_files_meta.append(
+                {"name": upload.filename or "file", "mime_type": mime, "size_bytes": len(content)}
+            )
 
     # --- Атомарная транзакция: создать Task + обновить карточку ---
     task_id = str(uuid.uuid4())
@@ -339,16 +341,15 @@ async def start_task(
     db.add(new_task)
     await db.flush()  # получаем task.id, не коммитим
 
-    # Сохраняем файл в task_input_files если он есть
-    if raw_file_bytes is not None and input_files_meta:
-        meta = input_files_meta[0]
+    # Сохраняем все файлы в task_input_files
+    for idx, (file_bytes, meta) in enumerate(zip(raw_files_bytes, input_files_meta)):
         db.add(TaskInputFile(
             task_id=task_id,
-            file_index=0,
+            file_index=idx,
             file_name=meta["name"],
             mime_type=meta["mime_type"],
             size_bytes=meta["size_bytes"],
-            content=raw_file_bytes,
+            content=file_bytes,
         ))
 
     # Привязываем задачу к карточке

@@ -15,7 +15,7 @@ import {
 
 export interface PendingListTask {
   task_type: 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'
-  file: File
+  files: File[]
 }
 
 interface KanbanStore {
