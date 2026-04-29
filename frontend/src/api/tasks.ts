@@ -62,6 +62,11 @@ export async function getTaskResults(taskId: string): Promise<TaskResult[]> {
   return response.data;
 }
 
+export async function regenerateTaskResult(taskId: string): Promise<TaskResult> {
+  const response = await apiClient.post<TaskResult>(`/tasks/${taskId}/results/regenerate`);
+  return response.data;
+}
+
 export async function cancelTask(taskId: string): Promise<void> {
   await apiClient.post(`/tasks/${taskId}/cancel`);
 }

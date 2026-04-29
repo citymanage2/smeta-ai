@@ -20,6 +20,7 @@ import {
   getRelatedChecks,
   patchEstimateItems,
   repriceEstimateItem,
+  regenerateTaskResult,
   TaskStatusResponse,
   ChatMessage,
   EstimateItem,
@@ -108,6 +109,8 @@ const TaskStatusPage: React.FC = () => {
   const checkProjectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const checkProjectStartTimeRef = useRef<number | null>(null);
   const checkProjectFetchErrorCount = useRef(0);
+
+  const [regenerating, setRegenerating] = useState<string | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -588,6 +591,29 @@ const TaskStatusPage: React.FC = () => {
       setError('Ошибка при скачивании файла.');
     } finally {
       setDownloading(null);
+    }
+  };
+
+  const handleRegenerate = async (taskIdToRegen: string) => {
+    setRegenerating(taskIdToRegen);
+    try {
+      const updated = await regenerateTaskResult(taskIdToRegen);
+      // Refresh result lists so download uses the new file_id
+      if (taskIdToRegen === taskId) {
+        const fresh = await getTaskResults(taskIdToRegen);
+        setResults(fresh);
+      } else if (checkTaskId && taskIdToRegen === checkTaskId) {
+        const fresh = await getTaskResults(taskIdToRegen);
+        setCheckResults(fresh);
+      } else if (checkProjectTaskId && taskIdToRegen === checkProjectTaskId) {
+        const fresh = await getTaskResults(taskIdToRegen);
+        setCheckProjectResults(fresh);
+      }
+      await downloadResult(updated.file_id, updated.file_name);
+    } catch {
+      setError('Не удалось обновить файл. Попробуйте ещё раз.');
+    } finally {
+      setRegenerating(null);
     }
   };
 
@@ -1583,10 +1609,16 @@ const TaskStatusPage: React.FC = () => {
                             <span style={{ fontSize: '18px' }}>📋</span>
                             <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>{r.file_name}</span>
                           </div>
-                          <button onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
-                            style={{ padding: '7px 16px', backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
-                            {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
-                          </button>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={() => checkTaskId && handleRegenerate(checkTaskId)} disabled={regenerating === checkTaskId}
+                              style={{ padding: '7px 14px', backgroundColor: regenerating === checkTaskId ? '#e2e8f0' : '#ffffff', color: '#0369a1', border: '1.5px solid #0369a1', borderRadius: '6px', cursor: regenerating === checkTaskId ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                              {regenerating === checkTaskId ? 'Обновление...' : '↻ Обновить и скачать'}
+                            </button>
+                            <button onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                              style={{ padding: '7px 16px', backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                              {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -1742,10 +1774,16 @@ const TaskStatusPage: React.FC = () => {
                             <span style={{ fontSize: '18px' }}>📋</span>
                             <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>{r.file_name}</span>
                           </div>
-                          <button onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
-                            style={{ padding: '7px 16px', backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
-                            {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
-                          </button>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={() => checkProjectTaskId && handleRegenerate(checkProjectTaskId)} disabled={regenerating === checkProjectTaskId}
+                              style={{ padding: '7px 14px', backgroundColor: regenerating === checkProjectTaskId ? '#e2e8f0' : '#ffffff', color: '#0369a1', border: '1.5px solid #0369a1', borderRadius: '6px', cursor: regenerating === checkProjectTaskId ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                              {regenerating === checkProjectTaskId ? 'Обновление...' : '↻ Обновить и скачать'}
+                            </button>
+                            <button onClick={() => handleDownload(r.file_id, r.file_name)} disabled={downloading === r.file_id}
+                              style={{ padding: '7px 16px', backgroundColor: downloading === r.file_id ? '#86efac' : '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', cursor: downloading === r.file_id ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 600 }}>
+                              {downloading === r.file_id ? 'Скачивание...' : 'Скачать'}
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>

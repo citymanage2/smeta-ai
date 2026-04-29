@@ -11,8 +11,15 @@ from app.database import get_db
 from app.models.result import TaskResult
 from app.models.task import Task
 from app.utils.auth import get_current_user
+from app.services.excel_service import generate_list
 
 logger = structlog.get_logger()
+
+_REGENERABLE_TYPES = {
+    "LIST_FROM_GRAND",
+    "CHECK_LIST_COMPLETENESS",
+    "CHECK_PROJECT_COMPLETENESS",
+}
 
 router = APIRouter(tags=["results"])
 
@@ -52,6 +59,63 @@ async def list_task_results(
         )
         for f in files
     ]
+
+
+@router.post("/tasks/{task_id}/results/regenerate", response_model=ResultItem)
+async def regenerate_task_result(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Regenerate the Excel result for a completed LIST/CHECK task from saved progress_data."""
+    task_res = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_res.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    task_type = (task.task_type or "").upper()
+    if task_type not in _REGENERABLE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Перегенерация не поддерживается для типа задачи {task_type}",
+        )
+
+    progress = task.progress_data or {}
+    items = progress.get("items", [])
+    if not items:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="В задаче нет сохранённых позиций")
+
+    summaries = progress.get("summaries", [])
+    changes_summary: Optional[str] = "\n\n".join(summaries) if summaries else None
+
+    new_bytes = generate_list(items, changes_summary=changes_summary)
+
+    # Find existing result record (slot='result'), update its bytes; create if missing
+    existing_res = await db.execute(
+        select(TaskResult)
+        .where(TaskResult.task_id == task_id, TaskResult.slot == "result")
+        .order_by(TaskResult.created_at.desc())
+    )
+    existing = existing_res.scalar_one_or_none()
+
+    if existing:
+        existing.file_data = new_bytes
+        await db.commit()
+        await db.refresh(existing)
+        return ResultItem(file_id=existing.id, file_name=existing.file_name, mime_type=existing.mime_type)
+
+    # No result record yet — create one with a generic name
+    new_record = TaskResult(
+        task_id=task_id,
+        file_name="Перечень.xlsx",
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        file_data=new_bytes,
+        slot="result",
+    )
+    db.add(new_record)
+    await db.commit()
+    await db.refresh(new_record)
+    return ResultItem(file_id=new_record.id, file_name=new_record.file_name, mime_type=new_record.mime_type)
 
 
 @router.get("/results/{file_id}/download")
