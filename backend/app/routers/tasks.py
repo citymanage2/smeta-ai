@@ -983,7 +983,7 @@ async def download_input_file(
     task_id: str,
     file_index: int,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_download_user),
 ):
     """Download one of the original uploaded files by zero-based index."""
     task_row = await db.execute(select(Task).where(Task.id == task_id))

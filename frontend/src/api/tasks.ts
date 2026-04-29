@@ -126,18 +126,16 @@ export async function addInputFile(taskId: string, file: File): Promise<{ name: 
   return response.data;
 }
 
-export async function downloadInputFile(taskId: string, fileIndex: number, fileName: string): Promise<void> {
-  const response = await apiClient.get(`/tasks/${taskId}/input-file/${fileIndex}`, {
-    responseType: 'blob',
-  });
-  const url = window.URL.createObjectURL(new Blob([response.data]));
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', fileName);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
+export async function downloadInputFile(taskId: string, fileIndex: number, _fileName: string): Promise<void> {
+  const token = localStorage.getItem('token') ?? '';
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com';
+  const url = `${baseUrl}/tasks/${taskId}/input-file/${fileIndex}?token=${encodeURIComponent(token)}`;
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 export async function downloadResult(fileId: number, fileName: string): Promise<void> {

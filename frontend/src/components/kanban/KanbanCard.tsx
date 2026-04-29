@@ -210,6 +210,9 @@ export const KanbanCard = React.memo(KanbanCardInner, (prev, next) =>
   prev.card.list_task?.progress_message === next.card.list_task?.progress_message &&
   JSON.stringify(prev.card.list_task?.input_files) === JSON.stringify(next.card.list_task?.input_files) &&
   prev.card.completeness_task?.status === next.card.completeness_task?.status &&
+  prev.card.completeness_task?.progress_message === next.card.completeness_task?.progress_message &&
   prev.card.estimate_task?.status === next.card.estimate_task?.status &&
-  prev.card.optimization_task?.status === next.card.optimization_task?.status
+  prev.card.estimate_task?.progress_message === next.card.estimate_task?.progress_message &&
+  prev.card.optimization_task?.status === next.card.optimization_task?.status &&
+  prev.card.optimization_task?.progress_message === next.card.optimization_task?.progress_message
 )
