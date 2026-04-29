@@ -215,9 +215,25 @@ async def delete_workflow_card(
     card = result.scalar_one_or_none()
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+
+    task_ids = [tid for tid in [
+        card.list_task_id,
+        card.completeness_task_id,
+        card.estimate_task_id,
+        card.optimization_task_id,
+    ] if tid is not None]
+
+    # Удаляем задачи первыми — FK на карточке обнуляется SET NULL,
+    # CASCADE чистит TaskResult / TaskInputFile / TaskHistory
+    for task_id in task_ids:
+        task = await db.get(Task, task_id)
+        if task is not None:
+            await db.delete(task)
+
+    await db.flush()
     await db.delete(card)
     await db.commit()
-    logger.info("WorkflowCard deleted", card_id=card_id)
+    logger.info("WorkflowCard deleted with tasks", card_id=card_id, task_count=len(task_ids))
 
 
 @router.post("/workflow-cards/{card_id}/start-task", response_model=WorkflowCardResponse)
