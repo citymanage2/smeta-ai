@@ -245,9 +245,25 @@ function ListStage({ card }: Props) {
                   fontSize: '12px',
                   color: fileOpsLoading ? '#94a3b8' : '#64748b',
                   cursor: fileOpsLoading ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
                 }}
               >
-                + Добавить файл
+                {fileOpsLoading ? (
+                  <>
+                    <span style={{
+                      display: 'inline-block',
+                      width: '10px',
+                      height: '10px',
+                      border: '2px solid #cbd5e1',
+                      borderTopColor: '#64748b',
+                      borderRadius: '50%',
+                      animation: 'spin 0.7s linear infinite',
+                    }} />
+                    Загружаю…
+                  </>
+                ) : '+ Добавить файл'}
               </button>
             </div>
           )}

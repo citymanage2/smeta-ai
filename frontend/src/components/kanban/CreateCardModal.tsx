@@ -14,7 +14,6 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
   const isOptimization = stage === 'optimization'
   const { createCard, startTask } = useKanbanStore()
   const [name, setName] = useState('')
-  const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -31,20 +30,21 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
     }
   }
 
-  const canSubmit = name.trim().length > 0 && file !== null && !loading
+  const canSubmit = isOptimization
+    ? name.trim().length > 0 && file !== null && !loading
+    : name.trim().length > 0 && !loading
 
   const handleSubmit = async () => {
     if (!canSubmit) return
     setLoading(true)
     try {
       const card = await createCard(projectId, name.trim())
-      try {
-        const payload = isOptimization
-          ? { task_type: 'ESTIMATE_OPTIMIZATION', file: file! }
-          : { task_type: taskType, file: file! }
-        await startTask(card.id, payload)
-      } catch {
-        // Карточка создана, задача не запустилась — пользователь сможет запустить внутри карточки
+      if (isOptimization) {
+        try {
+          await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', file: file! })
+        } catch {
+          // Карточка создана, задача не запустилась — пользователь сможет запустить внутри карточки
+        }
       }
       onClose()
     } catch {
@@ -101,27 +101,15 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
           />
         </div>
 
-        {!isOptimization && (
-          <div style={{ marginBottom: '12px' }}>
-            <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '6px' }}>
-              Тип перечня
+        {isOptimization && (
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '4px' }}>
+              Файл сметы <span style={{ color: '#ef4444' }}>*</span>
             </label>
-            {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
-              <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
-                <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
-                {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
-              </label>
-            ))}
+            <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
+            {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
           </div>
         )}
-
-        <div style={{ marginBottom: '16px' }}>
-          <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '4px' }}>
-            {isOptimization ? 'Файл сметы' : 'Файл'} <span style={{ color: '#ef4444' }}>*</span>
-          </label>
-          <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
-          {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
-        </div>
 
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button

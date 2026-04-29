@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getTaskStatus, getTaskResults, downloadInputFile, downloadResult, TaskStatusResponse } from '../api/tasks'
 import { TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types'
 import { LumaSpin } from './ui/LumaSpin'
@@ -96,7 +97,7 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
 
   const statusColors = task ? (STATUS_COLORS[task.status] ?? STATUS_COLORS.pending) : null
 
-  return (
+  return createPortal(
     <div
       style={{
         position: 'fixed',
@@ -253,6 +254,7 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
