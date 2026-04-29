@@ -125,14 +125,14 @@ function ListStage({ card }: Props) {
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
 
-  // Синхронизируем, если pending появился после монтирования (повторный рендер)
+  // Синхронизируем, если pending появился после монтирования (Zustand нотифицирует раньше, чем pending выставлен)
   useEffect(() => {
     if (pending && !file) {
       setTaskType(pending.task_type)
       setFile(pending.file)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [card.id])
+  }, [pending])
 
   const typeLabel = task?.task_type === 'LIST_FROM_PROJECT'
     ? 'Перечень из проекта'
