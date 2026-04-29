@@ -253,6 +253,12 @@ async def call_claude(
                     response_body=getattr(e, "response", None) and e.response.text,
                     exc_info=True,
                 )
+                body = getattr(e, "body", None) or {}
+                err_msg = body.get("error", {}).get("message", "") if isinstance(body, dict) else ""
+                if "credit balance" in err_msg.lower() or "credit balance" in str(e).lower():
+                    raise RuntimeError(
+                        "Баланс API Anthropic меньше 0. Обратитесь к администратору сервиса"
+                    ) from e
                 raise
 
         except Exception as e:
