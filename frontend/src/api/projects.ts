@@ -89,8 +89,10 @@ export async function downloadSlotFile(taskId: string, slot: string): Promise<vo
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function exportProject(projectId: string, format: 'xlsx' | 'pdf'): Promise<void> {

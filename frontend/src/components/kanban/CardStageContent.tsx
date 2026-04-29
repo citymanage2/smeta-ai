@@ -4,6 +4,14 @@ import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
 import { TaskStatusBadge } from './TaskStatusBadge'
 
+async function safeDownload(taskId: string, slot: string) {
+  try {
+    await downloadSlotFile(taskId, slot)
+  } catch {
+    alert('Не удалось скачать файл. Попробуйте ещё раз.')
+  }
+}
+
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
 
 interface Props {
@@ -101,7 +109,7 @@ function ListStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => downloadSlotFile(task.id, 'source')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'source')}>
             Открыть результат
           </ActionButton>
         </div>
@@ -178,7 +186,7 @@ function CompletenessStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => downloadSlotFile(task.id, 'source')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'source')}>
             Открыть результат
           </ActionButton>
         </div>
@@ -237,7 +245,7 @@ function EstimateStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => downloadSlotFile(task.id, 'estimate')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'estimate')}>
             Открыть смету
           </ActionButton>
         </div>
@@ -318,7 +326,7 @@ function OptimizationStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => downloadSlotFile(task.id, 'optimized')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'optimized')}>
             Открыть результат
           </ActionButton>
         </div>
