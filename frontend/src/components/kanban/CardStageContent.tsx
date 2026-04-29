@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
@@ -272,7 +273,7 @@ function ListStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'source')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'result')}>
             Открыть результат
           </ActionButton>
         </div>
@@ -359,7 +360,7 @@ function CompletenessStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'source')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'result')}>
             Открыть результат
           </ActionButton>
         </div>
@@ -429,6 +430,7 @@ function EstimateStage({ card }: Props) {
 
 // -------- Стадия «Оптимизация» --------
 function OptimizationStage({ card }: Props) {
+  const navigate = useNavigate()
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.optimization_task
@@ -501,8 +503,8 @@ function OptimizationStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'optimized')}>
-            Открыть результат
+          <ActionButton variant="outline" onClick={() => navigate(`/tasks/${task.id}/estimate`)}>
+            Открыть смету
           </ActionButton>
         </div>
       )}
