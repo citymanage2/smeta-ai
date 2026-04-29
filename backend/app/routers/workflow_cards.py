@@ -29,6 +29,7 @@ from app.schemas.workflow_card import (
     WorkflowCardResponse,
     WorkflowCardUpdate,
     TaskBrief,
+    InputFileBrief,
 )
 from app.utils.auth import get_current_user
 from app.constants import ESTIMATE_TASK_TYPES
@@ -54,12 +55,24 @@ def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
     def _task_brief(task: Optional[Task]) -> Optional[TaskBrief]:
         if task is None:
             return None
+        raw_files = task.input_files or []
+        files = [
+            InputFileBrief(
+                name=f.get("name", ""),
+                mime_type=f.get("mime_type", ""),
+                size_bytes=f.get("size_bytes", 0),
+            )
+            for f in raw_files
+            if isinstance(f, dict)
+        ]
         return TaskBrief(
             id=str(task.id),
             task_type=task.task_type,
             status=task.status,
             name=task.name,
             created_at=task.created_at.isoformat(),
+            input_files=files,
+            progress_message=task.progress_message,
         )
 
     return WorkflowCardResponse(

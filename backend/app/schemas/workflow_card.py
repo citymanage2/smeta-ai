@@ -4,12 +4,20 @@ from uuid import UUID
 from datetime import datetime
 
 
+class InputFileBrief(BaseModel):
+    name: str
+    mime_type: str
+    size_bytes: int
+
+
 class TaskBrief(BaseModel):
     id: str
     task_type: str
     status: str
     name: Optional[str]
     created_at: str
+    input_files: list[InputFileBrief] = []
+    progress_message: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

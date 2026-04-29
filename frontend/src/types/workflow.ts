@@ -2,12 +2,20 @@ export type KanbanStage = 'list' | 'completeness' | 'estimate' | 'optimization'
 
 export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
 
+export interface InputFileBrief {
+  name: string
+  mime_type: string
+  size_bytes: number
+}
+
 export interface TaskBrief {
   id: string
   task_type: string
   status: TaskStatus
   name: string | null
   created_at: string
+  input_files: InputFileBrief[]
+  progress_message: string | null
 }
 
 export interface WorkflowCard {

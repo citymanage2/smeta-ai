@@ -110,6 +110,17 @@ export async function renameSlotFile(taskId: string, slot: string, name: string)
   await apiClient.patch(`/tasks/${taskId}/files/${slot}`, { name });
 }
 
+export async function deleteInputFile(taskId: string, fileIndex: number): Promise<void> {
+  await apiClient.delete(`/tasks/${taskId}/input-file/${fileIndex}`);
+}
+
+export async function addInputFile(taskId: string, file: File): Promise<{ name: string; mime_type: string; size_bytes: number; file_index: number }> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const response = await apiClient.post(`/tasks/${taskId}/input-files`, fd);
+  return response.data;
+}
+
 export async function downloadInputFile(taskId: string, fileIndex: number, fileName: string): Promise<void> {
   const response = await apiClient.get(`/tasks/${taskId}/input-file/${fileIndex}`, {
     responseType: 'blob',
