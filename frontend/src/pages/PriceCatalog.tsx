@@ -187,20 +187,19 @@ const s = {
   controls: {
     display: 'flex',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     marginBottom: 16,
-    flexWrap: 'wrap' as const,
   } as React.CSSProperties,
 
   searchInput: {
-    flex: '1 1 200px',
+    flex: 1,
+    minWidth: 0,
     padding: '7px 12px',
     border: '1px solid #e2e8f0',
     borderRadius: 6,
     fontSize: 13,
     color: '#1e293b',
     outline: 'none',
-    minWidth: 180,
   } as React.CSSProperties,
 
   select: {
@@ -1011,17 +1010,17 @@ export default function PriceCatalog() {
             placeholder="Поиск по названию..."
           />
           <Select value={sort} onValueChange={v => setSort(v as SortKey)} size="sm">
-            <SelectTrigger>
+            <SelectTrigger style={{ width: 160, flexShrink: 0 }}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {SORT_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
             </SelectContent>
           </Select>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b', flexShrink: 0, whiteSpace: 'nowrap' }}>
             Строк:
             <Select value={String(pageSize)} onValueChange={v => setPageSize(Number(v))} size="sm">
-              <SelectTrigger>
+              <SelectTrigger style={{ width: 70 }}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
