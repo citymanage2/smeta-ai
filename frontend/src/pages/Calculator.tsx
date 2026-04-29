@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import apiClient from '../api/client';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
@@ -213,8 +214,8 @@ const Calculator: React.FC = () => {
         document.getElementById('calc-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 50);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(msg ?? 'Ошибка при расчёте');
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(formatApiDetail(detail, 'Не удалось выполнить расчёт. Проверьте введённые данные и попробуйте ещё раз.'));
     } finally {
       setLoading(false);
     }

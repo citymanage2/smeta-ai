@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
 import {
@@ -467,7 +468,7 @@ const AdminPage: React.FC = () => {
       fetchPriceListsInfo();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } } };
-      setWorksMsg({ type: 'error', text: e.response?.data?.detail ?? 'Ошибка загрузки.' });
+      setWorksMsg({ type: 'error', text: formatApiDetail(e.response?.data?.detail, 'Не удалось загрузить прайс-лист работ. Проверьте формат файла.') });
     } finally {
       setWorksUploading(false);
     }
@@ -484,7 +485,7 @@ const AdminPage: React.FC = () => {
       fetchPriceListsInfo();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } } };
-      setMatsMsg({ type: 'error', text: e.response?.data?.detail ?? 'Ошибка загрузки.' });
+      setMatsMsg({ type: 'error', text: formatApiDetail(e.response?.data?.detail, 'Не удалось загрузить прайс-лист материалов. Проверьте формат файла.') });
     } finally {
       setMatsUploading(false);
     }

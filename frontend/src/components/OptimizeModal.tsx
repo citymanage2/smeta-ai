@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { formatTaskError } from '../utils/formatError';
 import { analyzeOptimize, runOptimize, getTaskStatus, OptimizeItem } from '../api/tasks';
 import apiClient from '../api/client';
 
@@ -104,7 +105,7 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
             setStep(4);
           } else if (status.status === 'failed') {
             clearInterval(pollingRef.current!);
-            setRunError(status.error_message ?? 'Ошибка оптимизации');
+            setRunError(formatTaskError(status.error_message));
           }
         } catch {
           // keep polling

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import { InlineSpinner } from '../components/ui/LumaSpin';
 import TaskTypeSelector from '../components/TaskTypeSelector';
@@ -238,7 +239,7 @@ const TaskCreate: React.FC = () => {
       if (axiosError.request && !axiosError.response) {
         setError('Ошибка сети при загрузке, проверьте соединение и попробуйте ещё раз.');
       } else {
-        setError(axiosError.response?.data?.detail ?? 'Ошибка при создании задачи. Попробуйте ещё раз.');
+        setError(formatApiDetail(axiosError.response?.data?.detail, 'Сервер отклонил создание задачи. Попробуйте ещё раз.'));
       }
     } finally {
       setSubmitting(false);

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { formatTaskError } from '../utils/formatError';
 import { useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { LumaSpin } from '../components/ui/LumaSpin';
@@ -69,7 +70,7 @@ const EstimateOptimizer: React.FC = () => {
         if (taskData.name) setTaskName(taskData.name);
         if (taskData.status === 'failed') {
           setProcessingMsg(null);
-          setError(taskData.error_message ?? 'Ошибка обработки задачи');
+          setError(formatTaskError(taskData.error_message));
           if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
           return;
         }

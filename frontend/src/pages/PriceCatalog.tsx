@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 import {
@@ -528,8 +529,8 @@ function ItemFormModal({ title, initial, onClose, onSave, allowKindChange }: Ite
     try {
       await onSave(form);
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(msg || 'Ошибка сохранения');
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(formatApiDetail(detail, 'Не удалось сохранить позицию. Попробуйте ещё раз.'));
     } finally {
       setSaving(false);
     }
@@ -705,8 +706,8 @@ function ImportButton({ onDone }: ImportButtonProps) {
       });
       onDone();
     } catch (err) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      alert(msg || 'Ошибка импорта');
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(formatApiDetail(detail, 'Не удалось импортировать файл. Проверьте формат и попробуйте ещё раз.'));
     } finally {
       setLoading(false);
       if (fileRef.current) fileRef.current.value = '';

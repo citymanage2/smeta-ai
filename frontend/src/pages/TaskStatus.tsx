@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { formatTaskError } from '../utils/formatError';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -1021,7 +1022,7 @@ const TaskStatusPage: React.FC = () => {
                         overflowY: 'auto',
                       }}
                     >
-                      {task.error_message}
+                      {formatTaskError(task.error_message)}
                     </div>
                   )}
                   {progressLog.length > 0 && (
@@ -1550,7 +1551,7 @@ const TaskStatusPage: React.FC = () => {
                 {checkTask && checkTask.status === 'failed' && (
                   <div style={{ padding: '12px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', marginBottom: '10px' }}>
                     <div style={{ fontSize: '13px', color: '#7f1d1d', marginBottom: '10px' }}>
-                      Ошибка: {checkTask.error_message}
+                      Ошибка: {formatTaskError(checkTask.error_message)}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {checkResults.filter((r) => r.slot.startsWith('partial')).map((r) => (
@@ -1709,7 +1710,7 @@ const TaskStatusPage: React.FC = () => {
                 {checkProjectTask && checkProjectTask.status === 'failed' && (
                   <div style={{ padding: '12px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', marginBottom: '10px' }}>
                     <div style={{ fontSize: '13px', color: '#7f1d1d', marginBottom: '10px' }}>
-                      Ошибка: {checkProjectTask.error_message}
+                      Ошибка: {formatTaskError(checkProjectTask.error_message)}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       {checkProjectResults.filter((r) => r.slot.startsWith('partial')).map((r) => (

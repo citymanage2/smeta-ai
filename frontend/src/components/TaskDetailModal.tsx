@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { formatTaskError } from '../utils/formatError'
 import { createPortal } from 'react-dom'
 import { getTaskStatus, getTaskResults, downloadInputFile, downloadResult, TaskStatusResponse } from '../api/tasks'
 import { TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types'
@@ -179,7 +180,7 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
               )}
               {task.status === 'failed' && task.error_message && (
                 <div style={{ marginTop: '8px', fontSize: '13px', color: '#dc2626', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px', padding: '8px 12px' }}>
-                  {task.error_message}
+                  {formatTaskError(task.error_message)}
                 </div>
               )}
             </div>
