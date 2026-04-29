@@ -11,9 +11,11 @@ interface Props {
 }
 
 export function CreateCardModal({ projectId, onClose, stage }: Props) {
+  const isListStage = stage === 'list'
   const isOptimization = stage === 'optimization'
   const { createCard, startTask } = useKanbanStore()
   const [name, setName] = useState('')
+  const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -30,7 +32,8 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
     }
   }
 
-  const canSubmit = isOptimization
+  const needsFile = isListStage || isOptimization
+  const canSubmit = needsFile
     ? name.trim().length > 0 && file !== null && !loading
     : name.trim().length > 0 && !loading
 
@@ -39,11 +42,17 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
     setLoading(true)
     try {
       const card = await createCard(projectId, name.trim())
-      if (isOptimization) {
+      if (isListStage) {
+        try {
+          await startTask(card.id, { task_type: taskType, file: file! })
+        } catch {
+          // Карточка создана, задача не запустилась — пользователь запустит с карточки
+        }
+      } else if (isOptimization) {
         try {
           await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', file: file! })
         } catch {
-          // Карточка создана, задача не запустилась — пользователь сможет запустить внутри карточки
+          // Карточка создана, задача не запустилась — пользователь запустит с карточки
         }
       }
       onClose()
@@ -71,11 +80,17 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
     boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
   }
 
+  const title = isListStage
+    ? 'Новая карточка · Перечень'
+    : isOptimization
+    ? 'Новая карточка · Оптимизация'
+    : 'Новая карточка'
+
   return (
     <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div style={modalStyle}>
         <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#1e293b' }}>
-          {isOptimization ? 'Новая карточка · Оптимизация' : 'Новая карточка'}
+          {title}
         </h3>
 
         <div style={{ marginBottom: '12px' }}>
@@ -97,9 +112,32 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
               fontSize: '14px',
               outline: 'none',
             }}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit() }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !isListStage) handleSubmit() }}
           />
         </div>
+
+        {isListStage && (
+          <>
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '8px', fontWeight: 500 }}>
+                Тип перечня <span style={{ color: '#ef4444' }}>*</span>
+              </div>
+              {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
+                <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
+                  <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
+                  {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
+                </label>
+              ))}
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '4px' }}>
+                Файл <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
+              {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
+            </div>
+          </>
+        )}
 
         {isOptimization && (
           <div style={{ marginBottom: '16px' }}>

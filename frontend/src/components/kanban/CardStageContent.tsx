@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
-import { deleteInputFile, addInputFile } from '../../api/tasks'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskDetailModal } from '../TaskDetailModal'
 
@@ -53,29 +52,84 @@ function ActionButton({
   )
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} Б`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
+function ArrowBtn({ onClick, title = 'Посмотреть задачу' }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        color: '#94a3b8',
+        padding: '2px 5px',
+        borderRadius: '4px',
+        fontSize: '13px',
+        display: 'flex',
+        alignItems: 'center',
+        flexShrink: 0,
+        lineHeight: 1,
+      }}
+      onMouseEnter={(e) => {
+        const el = e.currentTarget as HTMLElement
+        el.style.color = '#3b82f6'
+        el.style.background = '#eff6ff'
+      }}
+      onMouseLeave={(e) => {
+        const el = e.currentTarget as HTMLElement
+        el.style.color = '#94a3b8'
+        el.style.background = 'none'
+      }}
+    >
+      ↗
+    </button>
+  )
+}
+
+function DownloadBtn({ onClick, title = 'Скачать' }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        color: '#94a3b8',
+        padding: '2px 5px',
+        borderRadius: '4px',
+        fontSize: '14px',
+        display: 'flex',
+        alignItems: 'center',
+        flexShrink: 0,
+        lineHeight: 1,
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#94a3b8' }}
+    >
+      ⬇
+    </button>
+  )
 }
 
 // -------- Стадия «Перечень» --------
 function ListStage({ card }: Props) {
-  const { startTask, submittingCardIds, fetchCards } = useKanbanStore()
-  const [showTypeModal, setShowTypeModal] = useState(false)
+  const { startTask, submittingCardIds } = useKanbanStore()
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
-  const [isRetry, setIsRetry] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
-  const [fileOpsLoading, setFileOpsLoading] = useState(false)
-  const [fileOpsError, setFileOpsError] = useState<string | null>(null)
   const [taskModalOpen, setTaskModalOpen] = useState(false)
+  const [showRetryForm, setShowRetryForm] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
-  const addFileRef = useRef<HTMLInputElement>(null)
+  const retryFileRef = useRef<HTMLInputElement>(null)
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
 
-  const canModifyFiles = task !== null && task.status !== 'processing' && task.status !== 'pending'
+  const typeLabel = task?.task_type === 'LIST_FROM_PROJECT'
+    ? 'Перечень из проекта'
+    : task?.task_type === 'LIST_FROM_GRAND'
+    ? 'Перечень из Гранд-сметы'
+    : null
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null
@@ -88,250 +142,144 @@ function ListStage({ card }: Props) {
     }
   }
 
-  const handleLaunch = async () => {
-    if (!file) return
-    setShowTypeModal(false)
-    await startTask(card.id, { task_type: taskType, file })
-    setFile(null)
-    setIsRetry(false)
+  // Состояние: задача не создана — форма запуска
+  if (task === null) {
+    return (
+      <div>
+        <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Прикреплённые файлы
+        </div>
+        {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
+          <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '5px', cursor: 'pointer' }}>
+            <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
+            {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
+          </label>
+        ))}
+        <div style={{ marginTop: '6px', overflow: 'hidden', maxWidth: '100%' }}>
+          <input
+            ref={fileRef}
+            type="file"
+            style={{ fontSize: '12px', maxWidth: '100%' }}
+            onChange={handleFileChange}
+          />
+          {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
+        </div>
+        <div style={{ marginTop: '8px' }}>
+          <ActionButton
+            onClick={async () => {
+              if (!file) return
+              const f = file
+              setFile(null)
+              if (fileRef.current) fileRef.current.value = ''
+              await startTask(card.id, { task_type: taskType, file: f })
+            }}
+            disabled={!file || submitting}
+          >
+            {submitting ? 'Создаю…' : 'Создать перечень'}
+          </ActionButton>
+        </div>
+      </div>
+    )
   }
 
-  const handleRetry = () => {
-    if (task) setTaskType(task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND')
-    setIsRetry(true)
-    setShowTypeModal(true)
+  // Состояние: в очереди или выполняется — только прогресс
+  if (task.status === 'pending' || task.status === 'processing') {
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
+          <TaskStatusBadge task={task} />
+          {task.progress_message && (
+            <span style={{
+              fontSize: '11px',
+              color: '#92400e',
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}>
+              {task.progress_message}
+            </span>
+          )}
+          <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+        </div>
+        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
+      </div>
+    )
   }
 
-  const handleDeleteFile = async (fileIndex: number) => {
-    if (!task) return
-    setFileOpsLoading(true)
-    setFileOpsError(null)
-    try {
-      await deleteInputFile(task.id, fileIndex)
-      await fetchCards(card.project_id)
-    } catch {
-      setFileOpsError('Не удалось удалить файл')
-    } finally {
-      setFileOpsLoading(false)
-    }
+  // Состояние: завершено — тип + скачать + стрелка
+  if (task.status === 'completed') {
+    return (
+      <div>
+        {typeLabel && (
+          <div style={{ fontSize: '10px', color: '#7c3aed', fontWeight: 700, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {typeLabel}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+          <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
+          <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
+        </div>
+        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
+      </div>
+    )
   }
 
-  const handleAddFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (!f || !task) return
-    if (f.size > FILE_SIZE_LIMIT) {
-      setFileOpsError('Файл превышает 50 МБ')
-      return
-    }
-    setFileOpsLoading(true)
-    setFileOpsError(null)
-    try {
-      await addInputFile(task.id, f)
-      await fetchCards(card.project_id)
-    } catch {
-      setFileOpsError('Не удалось добавить файл')
-    } finally {
-      setFileOpsLoading(false)
-      if (addFileRef.current) addFileRef.current.value = ''
-    }
-  }
-
-  const typeLabel = task?.task_type === 'LIST_FROM_PROJECT'
-    ? 'Перечень из проекта'
-    : task?.task_type === 'LIST_FROM_GRAND'
-    ? 'Перечень из Гранд-сметы'
-    : null
-
+  // Состояние: ошибка / отменено — повтор
   return (
     <div>
-      {/* Статус + прогресс + кнопка просмотра задачи */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
         <TaskStatusBadge task={task} />
-        {task !== null && task.status === 'processing' && task.progress_message && (
-          <span style={{
-            fontSize: '11px',
-            color: '#92400e',
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            minWidth: 0,
-          }}>
-            {task.progress_message}
-          </span>
-        )}
-        {task !== null && (
-          <button
-            onClick={() => setTaskModalOpen(true)}
-            title="Посмотреть задачу"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: '#94a3b8',
-              padding: '2px 5px',
-              borderRadius: '4px',
-              fontSize: '13px',
-              display: 'flex',
-              alignItems: 'center',
-              flexShrink: 0,
-              lineHeight: 1,
-              marginLeft: 'auto',
-            }}
-            onMouseEnter={(e) => {
-              const el = e.currentTarget as HTMLElement
-              el.style.color = '#3b82f6'
-              el.style.background = '#eff6ff'
-            }}
-            onMouseLeave={(e) => {
-              const el = e.currentTarget as HTMLElement
-              el.style.color = '#94a3b8'
-              el.style.background = 'none'
-            }}
-          >
-            ↗
-          </button>
-        )}
+        <ArrowBtn onClick={() => setTaskModalOpen(true)} />
       </div>
-
-      {/* Метка типа + прикреплённые файлы */}
-      {task !== null && (
-        <div style={{ marginTop: '8px' }}>
-          {typeLabel && (
-            <div style={{ fontSize: '10px', color: '#7c3aed', fontWeight: 700, marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              {typeLabel}
-            </div>
-          )}
-
-          {task.input_files.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              {task.input_files.map((f, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '4px 7px' }}>
-                  <span style={{ fontSize: '12px', flexShrink: 0 }}>📎</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '12px', color: '#1e293b', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
-                    <div style={{ fontSize: '10px', color: '#94a3b8' }}>{formatFileSize(f.size_bytes)}</div>
-                  </div>
-                  {canModifyFiles && (
-                    <button
-                      onClick={() => handleDeleteFile(idx)}
-                      disabled={fileOpsLoading}
-                      title="Удалить файл"
-                      style={{ background: 'none', border: 'none', cursor: fileOpsLoading ? 'not-allowed' : 'pointer', color: '#cbd5e1', fontSize: '12px', padding: '2px 3px', borderRadius: '3px', lineHeight: 1, flexShrink: 0 }}
-                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#dc2626' }}
-                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#cbd5e1' }}
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>Нет прикреплённых файлов</div>
-          )}
-
-          {canModifyFiles && (
-            <div style={{ marginTop: '5px' }}>
-              <input ref={addFileRef} type="file" style={{ display: 'none' }} onChange={handleAddFile} />
-              <button
-                onClick={() => addFileRef.current?.click()}
-                disabled={fileOpsLoading}
-                style={{
-                  background: 'none',
-                  border: '1px dashed #cbd5e1',
-                  borderRadius: '5px',
-                  padding: '3px 10px',
-                  fontSize: '12px',
-                  color: fileOpsLoading ? '#94a3b8' : '#64748b',
-                  cursor: fileOpsLoading ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                }}
-              >
-                {fileOpsLoading ? (
-                  <>
-                    <span style={{
-                      display: 'inline-block',
-                      width: '10px',
-                      height: '10px',
-                      border: '2px solid #cbd5e1',
-                      borderTopColor: '#64748b',
-                      borderRadius: '50%',
-                      animation: 'spin 0.7s linear infinite',
-                    }} />
-                    Загружаю…
-                  </>
-                ) : '+ Добавить файл'}
-              </button>
-            </div>
-          )}
-
-          {fileOpsError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileOpsError}</div>}
-        </div>
+      {!showRetryForm && (
+        <ActionButton
+          onClick={() => {
+            setTaskType(task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND')
+            setShowRetryForm(true)
+          }}
+          disabled={submitting}
+        >
+          Повторить
+        </ActionButton>
       )}
-
-      {/* Кнопки действий */}
-      {task === null && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton onClick={() => setShowTypeModal(true)} disabled={submitting}>
-            Создать перечень
-          </ActionButton>
-        </div>
-      )}
-
-      {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton onClick={handleRetry} disabled={submitting}>Повторить</ActionButton>
-        </div>
-      )}
-
-      {task !== null && task.status === 'completed' && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'result')}>
-            Открыть результат
-          </ActionButton>
-        </div>
-      )}
-
-      {/* Форма создания / повтора */}
-      {showTypeModal && (
-        <div style={{ marginTop: '10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
-          {!isRetry && (
-            <>
-              <div style={{ fontSize: '13px', color: '#475569', marginBottom: '8px', fontWeight: 500 }}>Тип перечня</div>
-              {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
-                <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
-                  <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
-                  {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
-                </label>
-              ))}
-            </>
-          )}
-          <div style={{ marginTop: '8px', overflow: 'hidden', maxWidth: '100%' }}>
-            <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
+      {showRetryForm && (
+        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
+          <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
+            <input
+              ref={retryFileRef}
+              type="file"
+              style={{ fontSize: '12px', maxWidth: '100%' }}
+              onChange={handleFileChange}
+            />
             {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
           </div>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-            <ActionButton onClick={handleLaunch} disabled={!file || submitting}>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+            <ActionButton
+              onClick={async () => {
+                if (!file) return
+                const f = file
+                setShowRetryForm(false)
+                setFile(null)
+                if (retryFileRef.current) retryFileRef.current.value = ''
+                await startTask(card.id, { task_type: task.task_type as 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND', file: f })
+              }}
+              disabled={!file || submitting}
+            >
               {submitting ? 'Запускаю…' : 'Запустить'}
             </ActionButton>
-            <ActionButton variant="secondary" onClick={() => { setShowTypeModal(false); setFile(null); setFileError(null) }}>
+            <ActionButton
+              variant="secondary"
+              onClick={() => { setShowRetryForm(false); setFile(null); setFileError(null) }}
+            >
               Отмена
             </ActionButton>
           </div>
         </div>
       )}
-
-      {/* Модальное окно задачи */}
-      {task !== null && (
-        <TaskDetailModal
-          taskId={task.id}
-          isOpen={taskModalOpen}
-          onClose={() => setTaskModalOpen(false)}
-        />
-      )}
+      <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
     </div>
   )
 }
@@ -341,45 +289,97 @@ function CompletenessStage({ card }: Props) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.completeness_task
+  const listTask = card.list_task
+  const [listTaskModalOpen, setListTaskModalOpen] = useState(false)
+  const [taskModalOpen, setTaskModalOpen] = useState(false)
+
+  const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
+    ? 'Перечень из проекта'
+    : listTask?.task_type === 'LIST_FROM_GRAND'
+    ? 'Перечень из Гранд-сметы'
+    : 'Перечень'
 
   const getCompletenessType = () =>
     card.list_task?.task_type === 'LIST_FROM_PROJECT'
       ? 'CHECK_PROJECT_COMPLETENESS'
       : 'CHECK_LIST_COMPLETENESS'
 
-  const handleCheck = async () => {
-    await startTask(card.id, { task_type: getCompletenessType() })
-  }
-
-  const handleRetry = async () => {
-    const tt = task?.task_type ?? getCompletenessType()
-    await startTask(card.id, { task_type: tt })
+  const sectionLabelStyle: React.CSSProperties = {
+    fontSize: '10px',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '4px',
   }
 
   return (
     <div>
-      <TaskStatusBadge task={task} />
-
-      {task === null && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton onClick={handleCheck} disabled={submitting}>
-            {submitting ? 'Запускаю…' : 'Проверить полноту'}
-          </ActionButton>
+      {/* Блок 1: итог стадии «Перечень» */}
+      {listTask !== null && listTask.status === 'completed' && (
+        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
+          <div style={{ ...sectionLabelStyle, color: '#7c3aed' }}>{listTypeLabel}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+            <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
+            <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
+          </div>
         </div>
       )}
 
-      {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton onClick={handleRetry} disabled={submitting}>Повторить</ActionButton>
+      {/* Блок 2: задача проверки полноты */}
+      {task === null && (
+        <ActionButton onClick={async () => { await startTask(card.id, { task_type: getCompletenessType() }) }} disabled={submitting}>
+          {submitting ? 'Запускаю…' : 'Запустить проверку полноты'}
+        </ActionButton>
+      )}
+
+      {task !== null && (task.status === 'pending' || task.status === 'processing') && (
+        <div>
+          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
+            <TaskStatusBadge task={task} />
+            {task.progress_message && (
+              <span style={{ fontSize: '11px', color: '#92400e', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                {task.progress_message}
+              </span>
+            )}
+            <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+          </div>
         </div>
       )}
 
       {task !== null && task.status === 'completed' && (
-        <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'result')}>
-            Открыть результат
+        <div>
+          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+            <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
+            <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу проверки" />
+          </div>
+        </div>
+      )}
+
+      {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
+        <div>
+          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <TaskStatusBadge task={task} />
+            <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+          </div>
+          <ActionButton
+            onClick={async () => { await startTask(card.id, { task_type: task.task_type ?? getCompletenessType() }) }}
+            disabled={submitting}
+          >
+            {submitting ? 'Запускаю…' : 'Повторить'}
           </ActionButton>
         </div>
+      )}
+
+      {listTask !== null && (
+        <TaskDetailModal taskId={listTask.id} isOpen={listTaskModalOpen} onClose={() => setListTaskModalOpen(false)} />
+      )}
+      {task !== null && (
+        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
       )}
     </div>
   )

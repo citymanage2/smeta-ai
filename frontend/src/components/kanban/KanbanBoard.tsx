@@ -212,6 +212,7 @@ export function KanbanBoard({ projectId }: Props) {
       {showCreateModal && (
         <CreateCardModal
           projectId={projectId}
+          stage="list"
           onClose={() => setShowCreateModal(false)}
         />
       )}
