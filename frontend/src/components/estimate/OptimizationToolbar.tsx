@@ -16,6 +16,7 @@ const STEPS: StepConfig[] = [
   { step: 'redundancy', label: 'Проверить лишнее', requiredLabel: 'completeness_checked', producedLabel: 'no_redundant' },
   { step: 'technology', label: 'Оптимизация технологий', requiredLabel: 'no_redundant', producedLabel: 'tech_optimized' },
   { step: 'materials', label: 'Оптимизация материалов', requiredLabel: 'tech_optimized', producedLabel: 'material_optimized' },
+  { step: 'fill_prices', label: 'Проставить цены', requiredLabel: 'material_optimized', producedLabel: 'prices_filled' },
 ];
 
 export interface AbcBreakdown {

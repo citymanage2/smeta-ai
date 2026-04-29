@@ -176,8 +176,10 @@ const EstimateOptimizer: React.FC = () => {
       setActiveView('version');
       try {
         await setActiveVersion(versionId);
-        const full = await getVersion(taskId, versionId);
-        setPanel({ proposals: full.optimization_proposals ?? [], step, versionId, autoApplied: true });
+        if (step !== 'fill_prices') {
+          const full = await getVersion(taskId, versionId);
+          setPanel({ proposals: full.optimization_proposals ?? [], step, versionId, autoApplied: true });
+        }
       } catch {
         // silently ignore
       }
@@ -370,9 +372,13 @@ const EstimateOptimizer: React.FC = () => {
                 fontSize: '13px', color: '#166534',
               }}>
                 <span>
-                  <strong>✓ Шаг завершён</strong> — {stepResultBanner.count > 0
-                    ? `${stepResultBanner.count} предложений применено автоматически. Добавленные позиции выделены цветом в смете.`
-                    : 'Смета соответствует нормативам, предложений нет.'}
+                  <strong>✓ Шаг завершён</strong> — {stepResultBanner.step === 'fill_prices'
+                    ? (stepResultBanner.count > 0
+                      ? `Цены проставлены для ${stepResultBanner.count} позиций.`
+                      : 'По всем позициям цены проставлены. Дополнительного поиска не требуется.')
+                    : (stepResultBanner.count > 0
+                      ? `${stepResultBanner.count} предложений применено автоматически. Добавленные позиции выделены цветом в смете.`
+                      : 'Смета соответствует нормативам, предложений нет.')}
                 </span>
                 <button
                   onClick={() => setStepResultBanner(null)}

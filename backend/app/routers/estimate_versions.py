@@ -32,6 +32,7 @@ VALID_LABELS = frozenset({
     "no_redundant",
     "tech_optimized",
     "material_optimized",
+    "prices_filled",
     "custom",
 })
 
@@ -549,6 +550,304 @@ router.add_api_route(
     methods=["POST"],
     summary="Шаг 4 — Оптимизация материалов",
 )
+
+
+# ---------------------------------------------------------------------------
+# POST /tasks/{task_id}/estimate/optimize/fill-prices — Шаг 5
+# ---------------------------------------------------------------------------
+
+_PROMPT_FILL_PRICES = """Ты — эксперт по строительному сметному делу в России.
+
+Тебе переданы позиции сметы, для которых НЕ найдено совпадений в корпоративном прайсе.
+Твоя задача — определить рыночную цену для каждой позиции.
+
+Текущая дата: {current_date}
+Регион: г. Екатеринбург, Свердловская область
+
+Для каждой позиции:
+1. Найди 3 актуальных рыночных цены (г. Екатеринбург)
+   - Для работ: квалифицированные подрядчики с лицензиями/допусками СРО
+   - Для материалов: известные поставщики, нормальное качество
+2. Поставь среднюю из трёх найденных цен
+3. Укажи все 3 источника с ценами в поле sources
+4. Цена работ → в поле work_price (если тип "Работа")
+5. Цена материалов → в поле material_price (если тип "Материал")
+
+Позиции для оценки:
+{unmatched_items_json}
+
+Верни результат СТРОГО в формате JSON, без markdown, первый символ {{,
+последний }}:
+{{
+  "items": [
+    {{
+      "name": "Наименование позиции",
+      "type": "Работа" | "Материал",
+      "work_price": число или null,
+      "material_price": число или null,
+      "sources": "Источник 1: цена₁ руб; Источник 2: цена₂ руб; Источник 3: цена₃ руб"
+    }}
+  ]
+}}"""
+
+_FILL_PRICES_SYSTEM = (
+    "IMPORTANT: When the task requires JSON output, return ONLY raw JSON without any "
+    "markdown formatting, code blocks, backticks, or explanations. "
+    "Start your response directly with { or [ and end with } or ].\n\n"
+    "Ты — эксперт по строительному сметному делу в России. "
+    "Отвечай чётко, структурированно, на русском языке. "
+    "При указании цен ссылайся на источник."
+)
+
+
+async def _run_fill_prices_step(task_id: str) -> None:
+    """Background: find prices for rows without prices using price list → Claude web search."""
+    import json as _json
+    import uuid as _uuid
+    from datetime import date as _date
+    from app.services import price_service as _ps
+    from app.services.claude_service import call_claude
+    from app.utils.json_utils import extract_json
+
+    STEP = "fill_prices"
+
+    async with AsyncSessionLocal() as db:
+        try:
+            task = await db.get(Task, task_id)
+            if not task:
+                return
+
+            result = await db.execute(
+                select(EstimateVersion)
+                .where(
+                    EstimateVersion.task_id == task_id,
+                    EstimateVersion.is_rolled_back == False,  # noqa: E712
+                )
+                .order_by(EstimateVersion.version_number.desc())
+            )
+            source_version = result.scalars().first()
+            if source_version is None:
+                task.progress_data = {"opt_step": STEP, "status": "error", "error": "Нет версий сметы"}
+                await db.commit()
+                return
+
+            source_rows: list[dict] = list(source_version.rows or [])
+
+            def _has_no_price(row: dict) -> bool:
+                r_type = row.get("type", "")
+                if r_type == "work":
+                    return not (row.get("price_work") or 0)
+                if r_type == "material":
+                    return not (row.get("price_material") or 0)
+                return False
+
+            unpriced = [r for r in source_rows if _has_no_price(r)]
+
+            # Helper: create new version and signal done
+            async def _create_version_and_signal(rows: list, proposals: list, all_priced: bool) -> None:
+                count_res = await db.execute(
+                    select(EstimateVersion).where(EstimateVersion.task_id == task_id)
+                )
+                all_v = count_res.scalars().all()
+                next_num = _next_version_number(all_v)
+                new_ver = EstimateVersion(
+                    id=str(_uuid.uuid4()),
+                    task_id=task_id,
+                    version_number=next_num,
+                    version_label="prices_filled",
+                    version_display_name="V5 - Цены",
+                    rows=rows,
+                    overhead_pct=source_version.overhead_pct,
+                    transport_pct=source_version.transport_pct,
+                    contingency_pct=source_version.contingency_pct,
+                    expenses_overridden=source_version.expenses_overridden,
+                    optimization_proposals=proposals,
+                )
+                db.add(new_ver)
+                task.progress_message = None
+                task.progress_data = {
+                    "opt_step": STEP,
+                    "status": "done",
+                    "all_priced": all_priced,
+                    "proposals": proposals,
+                    "new_version_id": str(new_ver.id),
+                }
+                await db.commit()
+
+            if not unpriced:
+                await _create_version_and_signal(source_rows, [], True)
+                return
+
+            task.progress_message = f"Проставляем цены: 0/{len(unpriced)} позиций..."
+            task.progress_data = {"opt_step": STEP, "status": "running"}
+            await db.commit()
+
+            # ── Step 1: price list (exact + embedding, no web) ──────────────
+            price_list_hits: dict[str, dict] = {}   # row_id → {price_work|price_material, price_list_name}
+            for_claude: list[dict] = []
+
+            for row in unpriced:
+                row_id = str(row.get("id", ""))
+                name = str(row.get("name", "")).strip()
+                r_type = row.get("type", "")
+                found = False
+
+                if r_type == "work":
+                    work_info = _ps._exact_match_work(name)
+                    if work_info is None:
+                        work_info = await _ps._embedding_match_work(name)
+                    if work_info and work_info.get("min_price"):
+                        price_list_hits[row_id] = {
+                            "price_work": float(work_info["min_price"]),
+                            "price_list_name": work_info.get("name", name),
+                        }
+                        found = True
+
+                elif r_type == "material":
+                    mat = _ps._exact_match_material(name)
+                    if mat is None:
+                        mat = await _ps._embedding_match_material(name)
+                    if mat is not None:
+                        price_list_hits[row_id] = {
+                            "price_material": float(mat),
+                            "price_list_name": name,
+                        }
+                        found = True
+
+                if not found:
+                    for_claude.append({
+                        "id": row_id,
+                        "type": "Работа" if r_type == "work" else "Материал",
+                        "name": name,
+                        "unit": row.get("unit", ""),
+                        "quantity": row.get("qty"),
+                    })
+
+            # ── Step 2: Claude + web for items not in price list ────────────
+            claude_results: dict[str, dict] = {}
+
+            if for_claude:
+                current_date = _date.today().strftime("%d.%m.%Y")
+                # Chunk at "Работа" boundaries, max 25 per chunk
+                chunks: list[list] = []
+                cur_chunk: list = []
+                for it in for_claude:
+                    if it["type"] == "Работа" and cur_chunk and len(cur_chunk) >= 25:
+                        chunks.append(cur_chunk)
+                        cur_chunk = []
+                    cur_chunk.append(it)
+                if cur_chunk:
+                    chunks.append(cur_chunk)
+
+                for i, chunk in enumerate(chunks):
+                    task.progress_message = f"Claude: часть {i + 1}/{len(chunks)}..."
+                    await db.commit()
+
+                    items_payload = [
+                        {"type": it["type"], "name": it["name"],
+                         "unit": it["unit"], "quantity": it.get("quantity")}
+                        for it in chunk
+                    ]
+                    prompt_text = _PROMPT_FILL_PRICES.format(
+                        current_date=current_date,
+                        unmatched_items_json=_json.dumps(items_payload, ensure_ascii=False, indent=2),
+                    )
+                    try:
+                        resp = await call_claude(
+                            messages=[{"role": "user", "content": prompt_text}],
+                            system_prompt=_FILL_PRICES_SYSTEM,
+                            use_web_search=True,
+                        )
+                        data = extract_json(resp)
+                        for item in data.get("items", []):
+                            key = str(item.get("name", "")).strip()
+                            claude_results[key] = item
+                    except Exception as e:
+                        logger.warning("fill_prices Claude chunk failed", chunk=i + 1, error=str(e))
+
+            # ── Step 3: build updated rows + proposals ───────────────────────
+            updated_rows: list[dict] = []
+            proposals: list[dict] = []
+
+            for row in source_rows:
+                row_copy = dict(row)
+                row_id = str(row.get("id", ""))
+                name = str(row.get("name", "")).strip()
+                r_type = row.get("type", "")
+
+                if row_id in price_list_hits:
+                    hit = price_list_hits[row_id]
+                    pl_name = hit["price_list_name"]
+                    if r_type == "work":
+                        row_copy["price_work"] = hit["price_work"]
+                    elif r_type == "material":
+                        row_copy["price_material"] = hit["price_material"]
+                    row_copy["optimization_note"] = f"Из прайса: {pl_name}"
+                    proposals.append({
+                        "id": str(_uuid.uuid4()),
+                        "row_id": row_id,
+                        "proposal_type": "price_search",
+                        "description": f"Цена из прайса: {pl_name}",
+                        "explanation": f"Из прайса: {pl_name}",
+                        "economy_rub": None,
+                        "confidence": "high",
+                        "source": f"Из прайса: {pl_name}",
+                        "new_value": None,
+                    })
+
+                elif _has_no_price(row) and r_type in ("work", "material"):
+                    cr = claude_results.get(name)
+                    if cr:
+                        sources = cr.get("sources", "")
+                        note = f"Из интернета: {sources}" if sources else "Из интернета"
+                        filled_price: Optional[float] = None
+                        if r_type == "work" and cr.get("work_price"):
+                            row_copy["price_work"] = float(cr["work_price"])
+                            filled_price = float(cr["work_price"])
+                        elif r_type == "material" and cr.get("material_price"):
+                            row_copy["price_material"] = float(cr["material_price"])
+                            filled_price = float(cr["material_price"])
+                        if filled_price is not None:
+                            row_copy["optimization_note"] = note
+                            proposals.append({
+                                "id": str(_uuid.uuid4()),
+                                "row_id": row_id,
+                                "proposal_type": "price_search",
+                                "description": f"Цена из интернета: {filled_price}",
+                                "explanation": note,
+                                "economy_rub": None,
+                                "confidence": "medium",
+                                "source": sources,
+                                "new_value": None,
+                            })
+
+                updated_rows.append(row_copy)
+
+            await _create_version_and_signal(updated_rows, proposals, False)
+            logger.info("fill_prices step done", task_id=task_id, filled=len(proposals))
+
+        except Exception as e:
+            logger.error("fill_prices step failed", task_id=task_id, error=str(e))
+            try:
+                task = await db.get(Task, task_id)
+                if task:
+                    task.progress_message = None
+                    task.progress_data = {"opt_step": STEP, "status": "error", "error": str(e)}
+                    await db.commit()
+            except Exception:
+                pass
+
+
+@router.post("/{task_id}/estimate/optimize/fill-prices", summary="Шаг 5 — Проставить цены")
+async def optimize_fill_prices(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    await _get_task_or_404(task_id, db)
+    background_tasks.add_task(_run_fill_prices_step, task_id)
+    return {"status": "running", "step": "fill_prices"}
 
 
 # ---------------------------------------------------------------------------

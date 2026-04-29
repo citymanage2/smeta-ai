@@ -53,8 +53,9 @@ export async function runOptimization(
   taskId: string,
   step: OptimizationStep,
 ): Promise<{ status: 'running' }> {
+  const urlStep = step.replace(/_/g, '-');
   const res = await apiClient.post<{ status: 'running' }>(
-    `/tasks/${taskId}/estimate/optimize/${step}`,
+    `/tasks/${taskId}/estimate/optimize/${urlStep}`,
   );
   return res.data;
 }

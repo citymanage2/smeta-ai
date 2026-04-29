@@ -62,7 +62,7 @@ export interface EstimateVersionFull extends EstimateVersionSummary {
   optimization_proposals: OptimizationProposal[] | null;
 }
 
-export type OptimizationStep = 'completeness' | 'redundancy' | 'technology' | 'materials';
+export type OptimizationStep = 'completeness' | 'redundancy' | 'technology' | 'materials' | 'fill_prices';
 
 export interface Task {
   id: string;
