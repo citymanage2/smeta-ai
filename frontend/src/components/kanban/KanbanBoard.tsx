@@ -25,6 +25,7 @@ export function KanbanBoard({ projectId }: Props) {
   const { cards, loading, fetchCards, moveCard, clearCards } = useKanbanStore()
   const [activeCard, setActiveCard] = useState<WorkflowCard | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showCreateOptimizationModal, setShowCreateOptimizationModal] = useState(false)
   const [hardBlockMsg, setHardBlockMsg] = useState<string | null>(null)
   const [softBlock, setSoftBlock] = useState<{ cardId: string; stage: KanbanStage; message: string } | null>(null)
 
@@ -194,7 +195,11 @@ export function KanbanBoard({ projectId }: Props) {
               key={stage}
               stage={stage}
               cards={columnCards(stage)}
-              onAddCard={stage === 'list' ? () => setShowCreateModal(true) : undefined}
+              onAddCard={
+                stage === 'list' ? () => setShowCreateModal(true) :
+                stage === 'optimization' ? () => setShowCreateOptimizationModal(true) :
+                undefined
+              }
             />
           ))}
         </div>
@@ -208,6 +213,14 @@ export function KanbanBoard({ projectId }: Props) {
         <CreateCardModal
           projectId={projectId}
           onClose={() => setShowCreateModal(false)}
+        />
+      )}
+
+      {showCreateOptimizationModal && (
+        <CreateCardModal
+          projectId={projectId}
+          stage="optimization"
+          onClose={() => setShowCreateOptimizationModal(false)}
         />
       )}
     </div>

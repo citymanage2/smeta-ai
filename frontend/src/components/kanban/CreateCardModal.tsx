@@ -1,14 +1,17 @@
 import React, { useState, useRef } from 'react'
 import { useKanbanStore } from '../../stores/kanban'
+import { KanbanStage } from '../../types/workflow'
 
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
 
 interface Props {
   projectId: string
   onClose: () => void
+  stage?: KanbanStage
 }
 
-export function CreateCardModal({ projectId, onClose }: Props) {
+export function CreateCardModal({ projectId, onClose, stage }: Props) {
+  const isOptimization = stage === 'optimization'
   const { createCard, startTask } = useKanbanStore()
   const [name, setName] = useState('')
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
@@ -36,7 +39,10 @@ export function CreateCardModal({ projectId, onClose }: Props) {
     try {
       const card = await createCard(projectId, name.trim())
       try {
-        await startTask(card.id, { task_type: taskType, file: file! })
+        const payload = isOptimization
+          ? { task_type: 'ESTIMATE_OPTIMIZATION', file: file! }
+          : { task_type: taskType, file: file! }
+        await startTask(card.id, payload)
       } catch {
         // Карточка создана, задача не запустилась — пользователь сможет запустить внутри карточки
       }
@@ -68,7 +74,9 @@ export function CreateCardModal({ projectId, onClose }: Props) {
   return (
     <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <div style={modalStyle}>
-        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#1e293b' }}>Новая карточка</h3>
+        <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#1e293b' }}>
+          {isOptimization ? 'Новая карточка · Оптимизация' : 'Новая карточка'}
+        </h3>
 
         <div style={{ marginBottom: '12px' }}>
           <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '4px' }}>
@@ -93,21 +101,23 @@ export function CreateCardModal({ projectId, onClose }: Props) {
           />
         </div>
 
-        <div style={{ marginBottom: '12px' }}>
-          <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '6px' }}>
-            Тип перечня
-          </label>
-          {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
-            <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
-              <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
-              {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
+        {!isOptimization && (
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '6px' }}>
+              Тип перечня
             </label>
-          ))}
-        </div>
+            {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
+              <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '6px', cursor: 'pointer' }}>
+                <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
+                {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
+              </label>
+            ))}
+          </div>
+        )}
 
         <div style={{ marginBottom: '16px' }}>
           <label style={{ fontSize: '13px', color: '#475569', display: 'block', marginBottom: '4px' }}>
-            Файл <span style={{ color: '#ef4444' }}>*</span>
+            {isOptimization ? 'Файл сметы' : 'Файл'} <span style={{ color: '#ef4444' }}>*</span>
           </label>
           <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
           {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}

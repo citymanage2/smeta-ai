@@ -135,7 +135,7 @@ export function KanbanColumn({ stage, cards, onAddCard }: Props) {
 
       {cards.length === 0 && (
         <div style={emptyStyle}>
-          {stage === 'list' ? 'Нажмите + чтобы начать' : 'Перетащите карточку'}
+          {stage === 'list' || stage === 'optimization' ? 'Нажмите + чтобы начать' : 'Перетащите карточку'}
         </div>
       )}
     </div>
