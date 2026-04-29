@@ -68,7 +68,7 @@ GSN_REJECTION_MESSAGE = (
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 XLSX_MIME_ALT = "application/vnd.ms-excel"
-VALID_SLOTS = {"source", "estimate", "optimized"}
+VALID_SLOTS = {"source", "result", "estimate", "optimized"}
 
 
 def _get_mime_type(file: UploadFile) -> str:
@@ -1014,6 +1014,102 @@ async def download_input_file(
             "Content-Disposition": f'attachment; filename="{file_info.get("name", "file")}"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Input file management endpoints
+# ---------------------------------------------------------------------------
+
+@router.delete("/{task_id}/input-file/{file_index}", status_code=204)
+async def delete_input_file(
+    task_id: str,
+    file_index: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete one of the original uploaded input files by zero-based index."""
+    task_row = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_row.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    if task.status == "processing":
+        raise HTTPException(status_code=400, detail="Нельзя удалить файл во время обработки задачи")
+
+    # Remove from task_input_files table
+    await db.execute(
+        select(TaskInputFile).where(
+            TaskInputFile.task_id == task_id,
+            TaskInputFile.file_index == file_index,
+        )
+    )
+    input_file_row = await db.execute(
+        select(TaskInputFile).where(
+            TaskInputFile.task_id == task_id,
+            TaskInputFile.file_index == file_index,
+        )
+    )
+    input_file = input_file_row.scalar_one_or_none()
+    if input_file is not None:
+        await db.delete(input_file)
+
+    # Update file_index for remaining files
+    remaining_rows = await db.execute(
+        select(TaskInputFile).where(
+            TaskInputFile.task_id == task_id,
+            TaskInputFile.file_index > file_index,
+        )
+    )
+    for row in remaining_rows.scalars().all():
+        row.file_index -= 1
+
+    # Update task.input_files JSON metadata
+    files_meta = list(task.input_files or [])
+    if 0 <= file_index < len(files_meta):
+        files_meta.pop(file_index)
+        task.input_files = files_meta
+
+    await db.commit()
+
+
+@router.post("/{task_id}/input-files", status_code=200)
+async def add_input_file(
+    task_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Add a new input file to an existing task."""
+    task_row = await db.execute(select(Task).where(Task.id == task_id))
+    task = task_row.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+
+    if task.status == "processing":
+        raise HTTPException(status_code=400, detail="Нельзя добавить файл во время обработки задачи")
+
+    raw_bytes = await file.read()
+    mime = (file.content_type or "application/octet-stream").split(";")[0].strip()
+    file_name = file.filename or "file"
+    size_bytes = len(raw_bytes)
+
+    existing_meta = list(task.input_files or [])
+    new_index = len(existing_meta)
+
+    db.add(TaskInputFile(
+        task_id=task_id,
+        file_index=new_index,
+        file_name=file_name,
+        mime_type=mime,
+        size_bytes=size_bytes,
+        content=raw_bytes,
+    ))
+
+    existing_meta.append({"name": file_name, "mime_type": mime, "size_bytes": size_bytes})
+    task.input_files = existing_meta
+
+    await db.commit()
+    return {"name": file_name, "mime_type": mime, "size_bytes": size_bytes, "file_index": new_index}
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,11 @@
 import React, { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
+import { deleteInputFile, addInputFile } from '../../api/tasks'
 import { TaskStatusBadge } from './TaskStatusBadge'
+import { TaskDetailModal } from '../TaskDetailModal'
 
 async function safeDownload(taskId: string, slot: string) {
   try {
@@ -109,7 +112,7 @@ function ListStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'source')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'result')}>
             Открыть результат
           </ActionButton>
         </div>
@@ -128,8 +131,8 @@ function ListStage({ card }: Props) {
               ))}
             </>
           )}
-          <div style={{ marginTop: '8px' }}>
-            <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
+          <div style={{ marginTop: '8px', overflow: 'hidden', maxWidth: '100%' }}>
+            <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
             {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
           </div>
           <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
@@ -186,7 +189,7 @@ function CompletenessStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'source')}>
+          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'result')}>
             Открыть результат
           </ActionButton>
         </div>
@@ -256,6 +259,7 @@ function EstimateStage({ card }: Props) {
 
 // -------- Стадия «Оптимизация» --------
 function OptimizationStage({ card }: Props) {
+  const navigate = useNavigate()
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.optimization_task
@@ -311,7 +315,9 @@ function OptimizationStage({ card }: Props) {
           </div>
           <div>
             <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Или загрузить смету с ПК:</div>
-            <input ref={fileRef} type="file" style={{ fontSize: '13px' }} onChange={handleFileChange} />
+            <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
+              <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
+            </div>
             {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
             {file && (
               <div style={{ marginTop: '6px' }}>
@@ -326,8 +332,8 @@ function OptimizationStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => safeDownload(task.id, 'optimized')}>
-            Открыть результат
+          <ActionButton variant="outline" onClick={() => navigate(`/tasks/${task.id}/estimate`)}>
+            Открыть смету
           </ActionButton>
         </div>
       )}
