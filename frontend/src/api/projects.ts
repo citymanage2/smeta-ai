@@ -78,16 +78,26 @@ export async function linkTaskToProject(
   return resp.data;
 }
 
-export function downloadSlotFile(taskId: string, slot: string): void {
-  const token = localStorage.getItem('token') ?? '';
-  const base = (import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com').replace(/\/$/, '');
-  const url = `${base}/tasks/${taskId}/files/${slot}/download?token=${encodeURIComponent(token)}`;
+export async function downloadSlotFile(taskId: string, slot: string): Promise<void> {
+  const response = await apiClient.get(`/tasks/${taskId}/files/${slot}/download`, {
+    responseType: 'blob',
+  });
+  const contentDisposition: string = response.headers['content-disposition'] ?? '';
+  const rfcMatch = contentDisposition.match(/filename\*=UTF-8''([^;\s]+)/i);
+  const asciiMatch = contentDisposition.match(/filename="?([^";\n]+)"?/i);
+  const rawName = rfcMatch
+    ? decodeURIComponent(rfcMatch[1])
+    : asciiMatch
+    ? asciiMatch[1]
+    : `${slot}.xlsx`;
+  const url = URL.createObjectURL(response.data as Blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${slot}.xlsx`;
+  a.download = rawName;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export async function exportProject(projectId: string, format: 'xlsx' | 'pdf'): Promise<void> {

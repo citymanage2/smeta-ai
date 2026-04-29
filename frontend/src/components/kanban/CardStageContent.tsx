@@ -8,7 +8,10 @@ import { TaskDetailModal } from '../TaskDetailModal'
 import { LumaSpin } from '../ui/LumaSpin'
 
 function safeDownload(taskId: string, slot: string) {
-  downloadSlotFile(taskId, slot)
+  downloadSlotFile(taskId, slot).catch((err) => {
+    console.error('Ошибка скачивания файла:', err)
+    alert('Не удалось скачать файл. Попробуйте позже.')
+  })
 }
 
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
@@ -235,13 +238,11 @@ function ListStage({ card }: Props) {
     return (
       <div>
         <TypeHeader />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
-          <TaskStatusBadge task={task} />
-          {task.progress_message && (
-            <span style={{ fontSize: '11px', color: '#92400e', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              {task.progress_message}
-            </span>
-          )}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
+          <LumaSpin size="sm" color="#d97706" />
+          <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
+            {task.progress_message || 'В очереди…'}
+          </span>
           <ArrowBtn onClick={() => setTaskModalOpen(true)} />
         </div>
         <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />

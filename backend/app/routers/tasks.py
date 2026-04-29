@@ -3,6 +3,7 @@ import base64
 import io
 import time
 import uuid
+from urllib.parse import quote
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
@@ -69,6 +70,13 @@ GSN_REJECTION_MESSAGE = (
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 XLSX_MIME_ALT = "application/vnd.ms-excel"
 VALID_SLOTS = {"source", "result", "estimate", "optimized"}
+
+
+def _content_disposition(filename: str) -> str:
+    """Return Content-Disposition header value with RFC 5987 encoding for non-ASCII filenames."""
+    ascii_name = filename.encode("ascii", errors="replace").decode("ascii")
+    encoded = quote(filename, safe="")
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
 
 
 def _get_mime_type(file: UploadFile) -> str:
@@ -940,14 +948,14 @@ async def download_file_from_slot(
             return StreamingResponse(
                 io.BytesIO(file_bytes),
                 media_type=first_file.get("mime_type", "application/octet-stream"),
-                headers={"Content-Disposition": f'attachment; filename="{first_file.get("name", "source")}"'},
+                headers={"Content-Disposition": _content_disposition(first_file.get("name", "source"))},
             )
         if src_file is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Исходный файл не найден")
         return StreamingResponse(
             io.BytesIO(src_file.content),
             media_type=src_file.mime_type,
-            headers={"Content-Disposition": f'attachment; filename="{src_file.file_name}"'},
+            headers={"Content-Disposition": _content_disposition(src_file.file_name)},
         )
 
     result_row = await db.execute(
@@ -965,10 +973,8 @@ async def download_file_from_slot(
 
     return StreamingResponse(
         io.BytesIO(task_result.file_data),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{task_result.file_name}"',
-        },
+        media_type=task_result.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": _content_disposition(task_result.file_name)},
     )
 
 
@@ -997,7 +1003,7 @@ async def download_input_file(
         return StreamingResponse(
             io.BytesIO(input_file.content),
             media_type=input_file.mime_type,
-            headers={"Content-Disposition": f'attachment; filename="{input_file.file_name}"'},
+            headers={"Content-Disposition": _content_disposition(input_file.file_name)},
         )
 
     # Backward compat: old tasks stored content_b64 in input_file_data JSON
@@ -1010,9 +1016,7 @@ async def download_input_file(
     return StreamingResponse(
         io.BytesIO(raw),
         media_type=file_info.get("mime_type", "application/octet-stream"),
-        headers={
-            "Content-Disposition": f'attachment; filename="{file_info.get("name", "file")}"',
-        },
+        headers={"Content-Disposition": _content_disposition(file_info.get("name", "file"))},
     )
 
 
