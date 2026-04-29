@@ -9,6 +9,7 @@ import EstimateOptimizer from './pages/EstimateOptimizer';
 import Admin from './pages/Admin';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
+import ProjectCardPage from './pages/ProjectCardPage';
 import UnassignedTasks from './pages/UnassignedTasks';
 import Calculator from './pages/Calculator';
 import Trash from './pages/Trash';
@@ -81,6 +82,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <ProjectDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects/:projectId/cards/:cardId"
+          element={
+            <ProtectedRoute>
+              <ProjectCardPage />
             </ProtectedRoute>
           }
         />

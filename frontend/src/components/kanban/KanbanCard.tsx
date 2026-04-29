@@ -2,7 +2,8 @@ import React, { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDraggable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, Trash2 } from 'lucide-react'
+import { GripVertical, Trash2, LayoutList } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { WorkflowCard } from '../../types/workflow'
 import { CardStageContent } from './CardStageContent'
 import { useKanbanStore } from '../../stores/kanban'
@@ -18,6 +19,7 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
     data: { card },
   })
   const deleteCard = useKanbanStore((s) => s.deleteCard)
+  const navigate = useNavigate()
   const [showConfirm, setShowConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -100,6 +102,20 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
       <div style={headerStyle}>
         <span style={titleStyle}>{card.name}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+          {!isOverlay && (
+            <button
+              style={{ ...trashStyle, color: '#cbd5e1' }}
+              title="Открыть карточку"
+              onClick={(e) => {
+                e.stopPropagation()
+                navigate(`/projects/${card.project_id}/cards/${card.id}`)
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#cbd5e1' }}
+            >
+              <LayoutList size={14} />
+            </button>
+          )}
           {!isOverlay && (
             <button
               style={trashStyle}

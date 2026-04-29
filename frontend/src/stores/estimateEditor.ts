@@ -93,6 +93,12 @@ export const useEstimateEditorStore = create<EstimateEditorState>((set, get) => 
     if (!taskId || !activeVersionId) return;
     await apiSaveRows(taskId, activeVersionId, activeRows);
     set({ isDirty: false });
+    // Уведомляем родительское окно (если открыты в iframe из карточки проекта)
+    try {
+      window.parent.postMessage({ type: 'estimate-saved', taskId }, '*');
+    } catch {
+      // игнорируем, если нет родительского окна
+    }
   },
 
   setSelectedRowIds: (ids: ReadonlySet<string>) => {

@@ -4,6 +4,7 @@ from uuid import UUID
 from datetime import datetime
 
 
+
 class InputFileBrief(BaseModel):
     name: str
     mime_type: str
@@ -47,6 +48,48 @@ class WorkflowCardUpdate(BaseModel):
         if not v:
             raise ValueError("name cannot be empty or whitespace")
         return v
+
+
+# ---------------------------------------------------------------------------
+# Card Detail — rich per-stage file metadata
+# ---------------------------------------------------------------------------
+
+class InputFileDetail(BaseModel):
+    index: int
+    name: str
+    size_bytes: int
+    mime_type: str
+
+
+class ResultFileDetail(BaseModel):
+    result_id: int
+    slot: str
+    file_name: str
+    size_bytes: int
+    mime_type: str
+    created_at: str
+
+
+class StageDetail(BaseModel):
+    task_id: str
+    task_type: str
+    task_status: str
+    task_name: Optional[str]
+    task_created_at: str
+    manually_edited_at: Optional[str]
+    input_files: list[InputFileDetail] = []
+    result_files: list[ResultFileDetail] = []
+
+
+class CardDetailResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    stage: str
+    source_stage: Optional[StageDetail]
+    completeness_stage: Optional[StageDetail]
+    estimate_stage: Optional[StageDetail]
+    optimization_stage: Optional[StageDetail]
 
 
 class WorkflowCardResponse(BaseModel):

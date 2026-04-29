@@ -157,9 +157,12 @@ async def save_rows(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Persist edited rows for a version."""
+    """Persist edited rows for a version. Marks task as manually edited."""
+    from datetime import datetime, timezone
     version = await _get_version_or_404(task_id, version_id, db)
     version.rows = body.rows
+    task = await _get_task_or_404(task_id, db)
+    task.manually_edited_at = datetime.now(timezone.utc)
     await db.commit()
     return {"version_id": version_id, "rows_count": len(body.rows)}
 
