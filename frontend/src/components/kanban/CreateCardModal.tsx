@@ -13,7 +13,7 @@ interface Props {
 export function CreateCardModal({ projectId, onClose, stage }: Props) {
   const isListStage = stage === 'list'
   const isOptimization = stage === 'optimization'
-  const { createCard, startTask } = useKanbanStore()
+  const { createCard, startTask, setPendingListTask } = useKanbanStore()
   const [name, setName] = useState('')
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
   const [file, setFile] = useState<File | null>(null)
@@ -43,11 +43,7 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
     try {
       const card = await createCard(projectId, name.trim())
       if (isListStage) {
-        try {
-          await startTask(card.id, { task_type: taskType, file: file! })
-        } catch {
-          // Карточка создана, задача не запустилась — пользователь запустит с карточки
-        }
+        setPendingListTask(card.id, { task_type: taskType, file: file! })
       } else if (isOptimization) {
         try {
           await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', file: file! })

@@ -13,11 +13,17 @@ import {
   startTask as apiStartTask,
 } from '../api/workflowCards'
 
+export interface PendingListTask {
+  task_type: 'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'
+  file: File
+}
+
 interface KanbanStore {
   cards: WorkflowCard[]
   loading: boolean
   movingCardId: string | null
   submittingCardIds: Set<string>
+  pendingListTasks: Record<string, PendingListTask>
 
   fetchCards: (projectId: string, signal?: AbortSignal) => Promise<void>
   createCard: (projectId: string, name: string) => Promise<WorkflowCard>
@@ -25,6 +31,8 @@ interface KanbanStore {
   startTask: (cardId: string, payload: StartTaskPayload) => Promise<WorkflowCard>
   deleteCard: (cardId: string) => Promise<void>
   clearCards: () => void
+  setPendingListTask: (cardId: string, info: PendingListTask) => void
+  clearPendingListTask: (cardId: string) => void
 }
 
 function computeGuard(card: WorkflowCard, toStage: KanbanStage): GuardResult {
@@ -61,6 +69,7 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
   loading: false,
   movingCardId: null,
   submittingCardIds: new Set(),
+  pendingListTasks: {},
 
   fetchCards: async (projectId, _signal) => {
     if (get().movingCardId !== null) return
@@ -123,8 +132,22 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
 
   deleteCard: async (cardId) => {
     await deleteWorkflowCard(cardId)
-    set((s) => ({ cards: s.cards.filter((c) => c.id !== cardId) }))
+    set((s) => {
+      const { [cardId]: _, ...restPending } = s.pendingListTasks
+      return { cards: s.cards.filter((c) => c.id !== cardId), pendingListTasks: restPending }
+    })
   },
 
   clearCards: () => set({ cards: [], movingCardId: null }),
+
+  setPendingListTask: (cardId, info) => {
+    set((s) => ({ pendingListTasks: { ...s.pendingListTasks, [cardId]: info } }))
+  },
+
+  clearPendingListTask: (cardId) => {
+    set((s) => {
+      const { [cardId]: _, ...rest } = s.pendingListTasks
+      return { pendingListTasks: rest }
+    })
+  },
 }))

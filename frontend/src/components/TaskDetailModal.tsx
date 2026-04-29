@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatTaskError } from '../utils/formatError'
 import { createPortal } from 'react-dom'
-import { getTaskStatus, getTaskResults, downloadInputFile, downloadResult, TaskStatusResponse } from '../api/tasks'
+import { getTaskStatus, getTaskResults, downloadInputFile, downloadResult, cancelTask, TaskStatusResponse } from '../api/tasks'
 import { TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types'
 import { LumaSpin } from './ui/LumaSpin'
 
@@ -43,6 +43,7 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
   const [task, setTask] = useState<TaskStatusResponse | null>(null)
   const [results, setResults] = useState<TaskResult[]>([])
   const [loading, setLoading] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [downloadingInput, setDownloadingInput] = useState<number | null>(null)
   const [downloadingResult, setDownloadingResult] = useState<number | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -172,6 +173,35 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
                   {task.status === 'processing' && <LumaSpin size="sm" color={statusColors!.text} />}
                 </span>
                 <span style={{ fontSize: '12px', color: '#94a3b8' }}>{formatDate(task.created_at)}</span>
+                {(task.status === 'processing' || task.status === 'pending') && (
+                  <button
+                    onClick={async () => {
+                      setStopping(true)
+                      try {
+                        await cancelTask(taskId)
+                        await fetchData()
+                      } finally {
+                        setStopping(false)
+                      }
+                    }}
+                    disabled={stopping}
+                    style={{
+                      background: stopping ? '#fecaca' : '#fee2e2',
+                      color: '#dc2626',
+                      border: '1px solid #fca5a5',
+                      borderRadius: '8px',
+                      padding: '4px 12px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      cursor: stopping ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                    }}
+                  >
+                    {stopping ? 'Останавливаю…' : '⏹ Стоп'}
+                  </button>
+                )}
               </div>
               {task.status === 'processing' && task.progress_message && (
                 <div style={{ marginTop: '8px', fontSize: '13px', color: '#475569', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px 12px' }}>

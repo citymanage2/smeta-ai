@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
@@ -110,16 +110,29 @@ function DownloadBtn({ onClick, title = 'Скачать' }: { onClick: () => voi
 
 // -------- Стадия «Перечень» --------
 function ListStage({ card }: Props) {
-  const { startTask, submittingCardIds } = useKanbanStore()
-  const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>('LIST_FROM_PROJECT')
-  const [file, setFile] = useState<File | null>(null)
+  const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
+  const pending = pendingListTasks[card.id]
+  const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>(
+    pending?.task_type ?? 'LIST_FROM_PROJECT'
+  )
+  const [file, setFile] = useState<File | null>(pending?.file ?? null)
   const [fileError, setFileError] = useState<string | null>(null)
+  const [showChangeFile, setShowChangeFile] = useState(false)
   const [taskModalOpen, setTaskModalOpen] = useState(false)
   const [showRetryForm, setShowRetryForm] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const retryFileRef = useRef<HTMLInputElement>(null)
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
+
+  // Синхронизируем, если pending появился после монтирования (повторный рендер)
+  useEffect(() => {
+    if (pending && !file) {
+      setTaskType(pending.task_type)
+      setFile(pending.file)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.id])
 
   const typeLabel = task?.task_type === 'LIST_FROM_PROJECT'
     ? 'Перечень из проекта'
@@ -135,38 +148,58 @@ function ListStage({ card }: Props) {
     } else {
       setFileError(null)
       setFile(f)
+      setShowChangeFile(false)
     }
   }
 
   // Состояние: задача не создана — форма запуска
   if (task === null) {
+    const hasPendingFile = !!pending && !!file && !showChangeFile
     return (
       <div>
-        <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Прикреплённые файлы
-        </div>
         {(['LIST_FROM_PROJECT', 'LIST_FROM_GRAND'] as const).map((t) => (
           <label key={t} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '5px', cursor: 'pointer' }}>
             <input type="radio" value={t} checked={taskType === t} onChange={() => setTaskType(t)} />
             {t === 'LIST_FROM_PROJECT' ? 'Перечень из проекта' : 'Перечень из Гранд-сметы'}
           </label>
         ))}
+
         <div style={{ marginTop: '6px', overflow: 'hidden', maxWidth: '100%' }}>
-          <input
-            ref={fileRef}
-            type="file"
-            style={{ fontSize: '12px', maxWidth: '100%' }}
-            onChange={handleFileChange}
-          />
-          {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
+          {hasPendingFile ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '5px 8px' }}>
+              <span style={{ fontSize: '13px' }}>📎</span>
+              <span style={{ fontSize: '12px', color: '#1e293b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {file!.name}
+              </span>
+              <button
+                onClick={() => setShowChangeFile(true)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '11px', padding: '0', flexShrink: 0 }}
+              >
+                Изменить
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                style={{ fontSize: '12px', maxWidth: '100%' }}
+                onChange={handleFileChange}
+              />
+              {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
+            </>
+          )}
         </div>
+
         <div style={{ marginTop: '8px' }}>
           <ActionButton
             onClick={async () => {
               if (!file) return
               const f = file
               setFile(null)
+              setShowChangeFile(false)
               if (fileRef.current) fileRef.current.value = ''
+              clearPendingListTask(card.id)
               await startTask(card.id, { task_type: taskType, file: f })
             }}
             disabled={!file || submitting}
