@@ -228,6 +228,99 @@
   padding-right: 4px;
 }
 
+/* Cell editor wrapper */
+.cell-editor-wrap {
+  display: flex;
+  height: 100%;
+  align-items: stretch;
+  background: #fff;
+  outline: 2px solid #2563eb;
+  outline-offset: -2px;
+}
+
+.cell-editor-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  padding: 0 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: transparent;
+}
+
+.cell-editor-input-right {
+  text-align: right;
+}
+
+.cell-editor-confirm,
+.cell-editor-cancel {
+  flex-shrink: 0;
+  width: 22px;
+  border: none;
+  border-left: 1px solid #e2e8f0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.1s;
+}
+
+.cell-editor-confirm {
+  color: #16a34a;
+}
+
+.cell-editor-confirm:hover {
+  background: #f0fdf4;
+}
+
+.cell-editor-cancel {
+  color: #dc2626;
+}
+
+.cell-editor-cancel:hover {
+  background: #fef2f2;
+}
+
+/* Undo/Redo history buttons */
+.estimate-grid-history-btns {
+  display: flex;
+  gap: 3px;
+  margin-right: 6px;
+}
+
+.estimate-grid-history-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  line-height: 1;
+}
+
+.estimate-grid-history-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #1e293b;
+  border-color: #94a3b8;
+}
+
+.estimate-grid-history-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 /* Filter-active banner */
 .estimate-grid-filter-active {
   display: flex;

@@ -6,6 +6,8 @@ import {
 } from '../types';
 import { getVersions, getVersion, saveRows as apiSaveRows } from '../api/estimateVersions';
 
+const MAX_HISTORY = 50;
+
 interface EstimateEditorState {
   taskId: string | null;
   versions: EstimateVersionSummary[];
@@ -17,6 +19,8 @@ interface EstimateEditorState {
   optimizationStatus: 'idle' | 'running';
   proposals: OptimizationProposal[];
   isDirty: boolean;
+  undoStack: EstimateRow[][];
+  redoStack: EstimateRow[][];
 
   loadVersions: (taskId: string) => Promise<void>;
   setActiveVersion: (versionId: string) => Promise<void>;
@@ -27,6 +31,9 @@ interface EstimateEditorState {
   setOptimizationStatus: (status: 'idle' | 'running') => void;
   setProposals: (proposals: OptimizationProposal[]) => void;
   addVersion: (version: EstimateVersionSummary) => void;
+  undo: () => void;
+  redo: () => void;
+  deleteRows: (rowIds: string[]) => void;
   reset: () => void;
 }
 
@@ -41,11 +48,13 @@ export const useEstimateEditorStore = create<EstimateEditorState>((set, get) => 
   optimizationStatus: 'idle',
   proposals: [],
   isDirty: false,
+  undoStack: [],
+  redoStack: [],
 
   loadVersions: async (taskId: string) => {
     const versions = await getVersions(taskId);
     const active = versions.find((v) => !v.is_rolled_back) ?? versions[0] ?? null;
-    set({ taskId, versions, activeVersionMeta: active ?? null });
+    set({ taskId, versions, activeVersionMeta: active ?? null, undoStack: [], redoStack: [] });
 
     if (active) {
       const full = await getVersion(taskId, active.id);
@@ -64,11 +73,19 @@ export const useEstimateEditorStore = create<EstimateEditorState>((set, get) => 
       activeVersionMeta: meta,
       isDirty: false,
       selectedRowIds: new Set(),
+      undoStack: [],
+      redoStack: [],
     });
   },
 
   updateRows: (rows: EstimateRow[]) => {
-    set({ activeRows: rows, isDirty: true });
+    const { activeRows, undoStack } = get();
+    set({
+      undoStack: [...undoStack.slice(-(MAX_HISTORY - 1)), activeRows],
+      redoStack: [],
+      activeRows: rows,
+      isDirty: true,
+    });
   },
 
   saveRows: async () => {
@@ -91,6 +108,55 @@ export const useEstimateEditorStore = create<EstimateEditorState>((set, get) => 
   addVersion: (version) =>
     set((state) => ({ versions: [...state.versions, version] })),
 
+  undo: () => {
+    const { undoStack, redoStack, activeRows, taskId, activeVersionId } = get();
+    if (undoStack.length === 0) return;
+    const newUndoStack = [...undoStack];
+    const previous = newUndoStack.pop()!;
+    set({
+      undoStack: newUndoStack,
+      redoStack: [activeRows, ...redoStack.slice(0, MAX_HISTORY - 1)],
+      activeRows: previous,
+      isDirty: true,
+    });
+    if (taskId && activeVersionId) {
+      apiSaveRows(taskId, activeVersionId, previous)
+        .then(() => set({ isDirty: false }))
+        .catch(() => {});
+    }
+  },
+
+  redo: () => {
+    const { undoStack, redoStack, activeRows, taskId, activeVersionId } = get();
+    if (redoStack.length === 0) return;
+    const newRedoStack = [...redoStack];
+    const next = newRedoStack.shift()!;
+    set({
+      undoStack: [...undoStack.slice(-(MAX_HISTORY - 1)), activeRows],
+      redoStack: newRedoStack,
+      activeRows: next,
+      isDirty: true,
+    });
+    if (taskId && activeVersionId) {
+      apiSaveRows(taskId, activeVersionId, next)
+        .then(() => set({ isDirty: false }))
+        .catch(() => {});
+    }
+  },
+
+  deleteRows: (rowIds: string[]) => {
+    const { activeRows, undoStack } = get();
+    const toDelete = new Set(rowIds);
+    const newRows = activeRows.filter((r) => !toDelete.has(r.id));
+    set({
+      undoStack: [...undoStack.slice(-(MAX_HISTORY - 1)), activeRows],
+      redoStack: [],
+      activeRows: newRows,
+      isDirty: true,
+      selectedRowIds: new Set(),
+    });
+  },
+
   reset: () =>
     set({
       taskId: null,
@@ -103,5 +169,7 @@ export const useEstimateEditorStore = create<EstimateEditorState>((set, get) => 
       optimizationStatus: 'idle',
       proposals: [],
       isDirty: false,
+      undoStack: [],
+      redoStack: [],
     }),
 }));

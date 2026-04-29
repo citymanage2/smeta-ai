@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import DataGrid, { Column, SelectColumn, RenderEditCellProps, RenderCellProps, RenderRowProps, RowsChangeData, Row, textEditor } from 'react-data-grid';
+import DataGrid, { Column, SelectColumn, RenderEditCellProps, RenderCellProps, RenderRowProps, RowsChangeData, Row } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import './EstimateGrid.css';
 import { EstimateRow } from '../../types';
@@ -11,10 +11,14 @@ interface EstimateGridProps {
   selectedRowIds: ReadonlySet<string>;
   activeTab: GridTab;
   isReadonly?: boolean;
+  canUndo?: boolean;
+  canRedo?: boolean;
   onRowsChange: (rows: EstimateRow[]) => void;
   onSelectedRowIdsChange: (ids: ReadonlySet<string>) => void;
   onTabChange: (tab: GridTab) => void;
   onSave: () => Promise<void>;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
@@ -25,40 +29,92 @@ const calcCost = (row: EstimateRow): number =>
 function NumberEditor({ row, column, onRowChange }: RenderEditCellProps<EstimateRow>) {
   const key = column.key as keyof EstimateRow;
   const raw = row[key] as number | null;
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commit = useCallback(() => {
+    const val = inputRef.current?.value ?? '';
+    const parsed = val === '' ? null : parseFloat(val);
+    const updated = { ...row, [key]: parsed };
+    updated.cost = calcCost(updated);
+    onRowChange(updated, true);
+  }, [row, key, onRowChange]);
+
+  const cancel = useCallback(() => {
+    // Restore original row — commits unchanged value, effectively a no-op
+    onRowChange(row, true);
+  }, [row, onRowChange]);
+
   return (
-    <input
-      type="number"
-      min="0"
-      step="0.01"
-      defaultValue={raw ?? ''}
-      autoFocus
-      onBlur={(e) => {
-        const val = e.target.value === '' ? null : parseFloat(e.target.value);
-        const updated = { ...row, [key]: val };
-        updated.cost = calcCost(updated);
-        onRowChange(updated, true);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === 'Tab') {
-          const val = (e.target as HTMLInputElement).value;
-          const parsed = val === '' ? null : parseFloat(val);
-          const updated = { ...row, [key]: parsed };
-          updated.cost = calcCost(updated);
-          onRowChange(updated, true);
-        }
-      }}
-      style={{
-        width: '100%',
-        height: '100%',
-        border: 'none',
-        outline: 'none',
-        padding: '0 8px',
-        fontSize: '13px',
-        fontFamily: 'inherit',
-        textAlign: 'right',
-        background: '#fff',
-      }}
-    />
+    <div className="cell-editor-wrap">
+      <input
+        ref={inputRef}
+        type="number"
+        min="0"
+        step="0.01"
+        defaultValue={raw ?? ''}
+        autoFocus
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        }}
+        className="cell-editor-input cell-editor-input-right"
+      />
+      <button
+        className="cell-editor-confirm"
+        title="Подтвердить (Enter)"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={commit}
+      >✓</button>
+      <button
+        className="cell-editor-cancel"
+        title="Отменить (Esc)"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={cancel}
+      >✕</button>
+    </div>
+  );
+}
+
+function ConfirmTextEditor({ row, column, onRowChange }: RenderEditCellProps<EstimateRow>) {
+  const key = column.key as keyof EstimateRow;
+  const raw = String(row[key] ?? '');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commit = useCallback(() => {
+    const val = inputRef.current?.value ?? '';
+    onRowChange({ ...row, [key]: val }, true);
+  }, [row, key, onRowChange]);
+
+  const cancel = useCallback(() => {
+    onRowChange(row, true);
+  }, [row, onRowChange]);
+
+  return (
+    <div className="cell-editor-wrap">
+      <input
+        ref={inputRef}
+        type="text"
+        defaultValue={raw}
+        autoFocus
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        }}
+        className="cell-editor-input"
+      />
+      <button
+        className="cell-editor-confirm"
+        title="Подтвердить (Enter)"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={commit}
+      >✓</button>
+      <button
+        className="cell-editor-cancel"
+        title="Отменить (Esc)"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={cancel}
+      >✕</button>
+    </div>
   );
 }
 
@@ -100,14 +156,14 @@ const BASE_COLUMNS: Column<EstimateRow>[] = [
     key: 'name',
     name: 'Наименование',
     width: 340,
-    renderEditCell: textEditor,
+    renderEditCell: ConfirmTextEditor,
     editable: (row) => row.type !== 'section',
   },
   {
     key: 'unit',
     name: 'Ед. изм.',
     width: 80,
-    renderEditCell: textEditor,
+    renderEditCell: ConfirmTextEditor,
     editable: (row) => row.type !== 'section',
   },
   {
@@ -186,10 +242,14 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   selectedRowIds,
   activeTab,
   isReadonly = false,
+  canUndo = false,
+  canRedo = false,
   onRowsChange,
   onSelectedRowIdsChange,
   onTabChange,
   onSave,
+  onUndo,
+  onRedo,
 }) => {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
@@ -287,9 +347,6 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
       if (props.row.type !== 'section') {
         return <Row key={key} {...props} />;
       }
-      // Section header: render as a single full-width cell spanning all columns.
-      // react-data-grid v7 uses display:contents on Row, so cells are direct
-      // children of the DataGrid CSS grid. grid-column:1/-1 spans them all.
       return (
         <div
           key={key}
@@ -339,6 +396,21 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
           )}
         </div>
         <div className="estimate-grid-actions">
+          {/* Undo / Redo */}
+          <div className="estimate-grid-history-btns">
+            <button
+              className="estimate-grid-history-btn"
+              disabled={!canUndo || isReadonly}
+              onClick={onUndo}
+              title="Отменить изменение"
+            >↩</button>
+            <button
+              className="estimate-grid-history-btn"
+              disabled={!canRedo || isReadonly}
+              onClick={onRedo}
+              title="Вернуть изменение"
+            >↪</button>
+          </div>
           {saveStatusLabel && (
             <span className={`estimate-grid-save-status ${saveStatus}`}>{saveStatusLabel}</span>
           )}

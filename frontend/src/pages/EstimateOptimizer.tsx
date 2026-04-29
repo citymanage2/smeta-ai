@@ -28,6 +28,29 @@ interface StepResultBanner {
   count: number;
 }
 
+interface OrphanedGroup {
+  work: EstimateRow;
+  materials: EstimateRow[];
+}
+
+interface DeleteDialog {
+  orphanedGroups: OrphanedGroup[];
+  rowIdsToDelete: string[];
+}
+
+/** Find material rows that immediately follow a work row (until next work/section). */
+function getMaterialsForWork(workId: string, allRows: EstimateRow[]): EstimateRow[] {
+  const idx = allRows.findIndex((r) => r.id === workId);
+  if (idx === -1) return [];
+  const result: EstimateRow[] = [];
+  for (let i = idx + 1; i < allRows.length; i++) {
+    const r = allRows[i];
+    if (r.type === 'section' || r.type === 'work') break;
+    if (r.type === 'material') result.push(r);
+  }
+  return result;
+}
+
 const EstimateOptimizer: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
 
@@ -40,12 +63,17 @@ const EstimateOptimizer: React.FC = () => {
     activeTab,
     optimizationStatus,
     isDirty,
+    undoStack,
+    redoStack,
     setActiveVersion,
     updateRows,
     saveRows,
     setSelectedRowIds,
     setActiveTab,
     setOptimizationStatus,
+    undo,
+    redo,
+    deleteRows,
     reset,
   } = useEstimateEditorStore();
 
@@ -56,6 +84,7 @@ const EstimateOptimizer: React.FC = () => {
   const [stepResultBanner, setStepResultBanner] = useState<StepResultBanner | null>(null);
   const [customRunning, setCustomRunning] = useState(false);
   const [processingMsg, setProcessingMsg] = useState<string | null>('Загрузка сметы...');
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialog | null>(null);
   const pollingRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -65,7 +94,6 @@ const EstimateOptimizer: React.FC = () => {
 
     const tryLoad = async () => {
       try {
-        // Fetch task status for progress message
         const taskData = await getTaskStatus(taskId);
         if (taskData.name) setTaskName(taskData.name);
         if (taskData.status === 'failed') {
@@ -76,14 +104,12 @@ const EstimateOptimizer: React.FC = () => {
         }
         if (taskData.progress_message) setProcessingMsg(taskData.progress_message);
 
-        // Try to load versions — use direct API calls + single setState to avoid double-set crash
         const versionList = await getVersions(taskId);
         if (versionList.length === 0) return;
 
         const active = versionList.find((v) => !v.is_rolled_back) ?? versionList[0];
         const full = await getVersion(taskId, active.id);
 
-        // Single atomic state update — no double render
         useEstimateEditorStore.setState({
           taskId,
           versions: versionList,
@@ -92,12 +118,14 @@ const EstimateOptimizer: React.FC = () => {
           activeRows: full.rows,
           isDirty: false,
           selectedRowIds: new Set<string>(),
+          undoStack: [],
+          redoStack: [],
         });
 
         setProcessingMsg(null);
         if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
       } catch {
-        // Keep polling — transient errors shouldn't stop us
+        // Keep polling on transient errors
       }
     };
 
@@ -131,14 +159,11 @@ const EstimateOptimizer: React.FC = () => {
       setOptimizationStatus('idle');
       if (!taskId) return;
 
-      // Reload versions so toolbar can update unlock state
       const updated = await getVersions(taskId);
       useEstimateEditorStore.setState({ versions: updated });
 
-      // Switch to the new version — rows with optimization_confidence will be highlighted in grid
       await setActiveVersion(newVersionId);
 
-      // Show compact banner instead of full proposals panel
       setStepResultBanner({ step, count: proposals.length });
       setPanel(null);
     },
@@ -199,13 +224,12 @@ const EstimateOptimizer: React.FC = () => {
     if (!taskId || !activeVersionId || selectedRowIds.size === 0) return;
     setCustomRunning(true);
     try {
-      // Save any pending changes first
       if (isDirty) await saveRows();
       const result = await runCustomOptimization(taskId, activeVersionId, [...selectedRowIds]);
       if (result.proposals.length > 0) {
         setPanel({
           proposals: result.proposals,
-          step: 'completeness', // custom — reuse panel component, step label not critical
+          step: 'completeness',
           versionId: activeVersionId,
         });
       }
@@ -216,7 +240,52 @@ const EstimateOptimizer: React.FC = () => {
     }
   }, [taskId, activeVersionId, selectedRowIds, isDirty, saveRows]);
 
+  const executeDeleteRows = useCallback(
+    async (rowIds: string[]) => {
+      deleteRows(rowIds);
+      setDeleteDialog(null);
+      await saveRows();
+    },
+    [deleteRows, saveRows],
+  );
+
+  const handleDeleteRows = useCallback(() => {
+    if (selectedRowIds.size === 0) return;
+    const idsToDelete = [...selectedRowIds];
+    const selectedWorks = activeRows.filter(
+      (r) => idsToDelete.includes(r.id) && r.type === 'work',
+    );
+
+    const orphanedGroups: OrphanedGroup[] = [];
+    for (const work of selectedWorks) {
+      const associated = getMaterialsForWork(work.id, activeRows);
+      const unselected = associated.filter((m) => !idsToDelete.includes(m.id));
+      if (unselected.length > 0) {
+        orphanedGroups.push({ work, materials: unselected });
+      }
+    }
+
+    if (orphanedGroups.length > 0) {
+      setDeleteDialog({ orphanedGroups, rowIdsToDelete: idsToDelete });
+    } else {
+      executeDeleteRows(idsToDelete);
+    }
+  }, [selectedRowIds, activeRows, executeDeleteRows]);
+
+  const handleDeletePosition = useCallback(() => {
+    if (selectedRowIds.size === 0) return;
+    const idsToDelete = new Set([...selectedRowIds]);
+    const selectedWorks = activeRows.filter((r) => idsToDelete.has(r.id) && r.type === 'work');
+    for (const work of selectedWorks) {
+      const associated = getMaterialsForWork(work.id, activeRows);
+      associated.forEach((m) => idsToDelete.add(m.id));
+    }
+    executeDeleteRows([...idsToDelete]);
+  }, [selectedRowIds, activeRows, executeDeleteRows]);
+
   const isReadonly = optimizationStatus === 'running';
+  const canUndo = undoStack.length > 0;
+  const canRedo = redoStack.length > 0;
 
   const overhead = activeVersionMeta?.overhead_pct ?? 0;
   const transport = activeVersionMeta?.transport_pct ?? 0;
@@ -227,6 +296,20 @@ const EstimateOptimizer: React.FC = () => {
     .reduce((acc, r) => acc + (r.qty ?? 0) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
 
   const visibleVersions = versions.filter((v) => !v.is_rolled_back);
+
+  const btnBase: React.CSSProperties = {
+    width: '100%',
+    padding: '8px 12px',
+    borderRadius: '6px',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    border: '1px solid',
+  };
 
   return (
     <Layout>
@@ -246,7 +329,7 @@ const EstimateOptimizer: React.FC = () => {
           </p>
         </div>
 
-        {/* Processing banner — floats above editor while task is running */}
+        {/* Processing banner */}
         {processingMsg && !error && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: '12px',
@@ -272,7 +355,6 @@ const EstimateOptimizer: React.FC = () => {
 
         {visibleVersions.length > 0 && taskId && (
           <>
-            {/* Optimization Toolbar */}
             <OptimizationToolbar
               taskId={taskId}
               versions={visibleVersions}
@@ -280,7 +362,6 @@ const EstimateOptimizer: React.FC = () => {
               onViewStep={handleViewStep}
             />
 
-            {/* Step result banner — compact notification after auto-apply */}
             {stepResultBanner && (
               <div style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -302,7 +383,6 @@ const EstimateOptimizer: React.FC = () => {
               </div>
             )}
 
-            {/* Proposals Panel (auto-applied summary — shown when user clicks completed step) */}
             {panel && (
               <OptimizationProposalsPanel
                 proposals={panel.proposals}
@@ -316,7 +396,6 @@ const EstimateOptimizer: React.FC = () => {
               />
             )}
 
-            {/* VersionTabs */}
             <VersionTabs
               taskId={taskId}
               versions={visibleVersions}
@@ -331,16 +410,11 @@ const EstimateOptimizer: React.FC = () => {
               onVersionsChange={handleVersionsChange}
             />
 
-            {/* Comparison view */}
             {activeView === 'comparison' && (
-              <div
-                style={{
-                  background: '#fff',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '10px',
-                  padding: '20px',
-                }}
-              >
+              <div style={{
+                background: '#fff', border: '1px solid #e2e8f0',
+                borderRadius: '10px', padding: '20px',
+              }}>
                 <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: '#0f172a' }}>
                   Сравнение версий сметы
                 </h3>
@@ -348,7 +422,6 @@ const EstimateOptimizer: React.FC = () => {
               </div>
             )}
 
-            {/* Version editor view */}
             {activeView === 'version' && (
               <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
                 {/* Main column */}
@@ -359,10 +432,14 @@ const EstimateOptimizer: React.FC = () => {
                       selectedRowIds={selectedRowIds}
                       activeTab={activeTab}
                       isReadonly={isReadonly}
+                      canUndo={canUndo}
+                      canRedo={canRedo}
                       onRowsChange={handleRowsChange}
                       onSelectedRowIdsChange={setSelectedRowIds}
                       onTabChange={setActiveTab}
                       onSave={handleSave}
+                      onUndo={undo}
+                      onRedo={redo}
                     />
                   )}
 
@@ -385,38 +462,33 @@ const EstimateOptimizer: React.FC = () => {
                   )}
                 </div>
 
-                {/* Right panel: custom optimization */}
+                {/* Right panel: actions for selected rows */}
                 {selectedRowIds.size > 0 && (
-                  <div
-                    style={{
-                      width: '230px',
-                      flexShrink: 0,
-                      padding: '16px',
-                      background: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: '10px' }}>
+                  <div style={{
+                    width: '230px',
+                    flexShrink: 0,
+                    padding: '16px',
+                    background: '#fff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}>
+                    <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: 2 }}>
                       Выбрано строк: {selectedRowIds.size}
                     </div>
+
+                    {/* Optimize */}
                     <button
-                      disabled={customRunning}
+                      disabled={customRunning || isReadonly}
                       style={{
-                        width: '100%',
-                        padding: '9px 12px',
+                        ...btnBase,
                         background: customRunning ? '#f0fdf4' : '#f0fdf4',
-                        border: '1px solid #bbf7d0',
-                        borderRadius: '6px',
+                        borderColor: '#bbf7d0',
                         color: '#166534',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: customRunning ? 'wait' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 6,
+                        cursor: customRunning || isReadonly ? 'wait' : 'pointer',
                       }}
                       onClick={handleCustomOptimize}
                     >
@@ -429,8 +501,43 @@ const EstimateOptimizer: React.FC = () => {
                         `☑ Предложить варианты (${selectedRowIds.size})`
                       )}
                     </button>
-                    <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: 8, lineHeight: 1.4 }}>
-                      Claude предложит замену технологии, материала и найдёт актуальные цены.
+
+                    <div style={{ borderTop: '1px solid #f1f5f9', marginTop: 2 }} />
+
+                    {/* Delete row */}
+                    <button
+                      disabled={isReadonly}
+                      style={{
+                        ...btnBase,
+                        background: '#fff',
+                        borderColor: '#fca5a5',
+                        color: '#dc2626',
+                        opacity: isReadonly ? 0.5 : 1,
+                      }}
+                      onClick={handleDeleteRows}
+                      title="Удалить только выбранные строки"
+                    >
+                      🗑 Удалить строку
+                    </button>
+
+                    {/* Delete position (work + all its materials) */}
+                    <button
+                      disabled={isReadonly}
+                      style={{
+                        ...btnBase,
+                        background: '#fff',
+                        borderColor: '#fca5a5',
+                        color: '#b91c1c',
+                        opacity: isReadonly ? 0.5 : 1,
+                      }}
+                      onClick={handleDeletePosition}
+                      title="Удалить выбранные работы вместе со всеми их материалами"
+                    >
+                      🗑 Удалить позицию
+                    </button>
+
+                    <p style={{ color: '#94a3b8', fontSize: '11px', marginTop: 4, lineHeight: 1.4 }}>
+                      «Строку» — только выбранные. «Позицию» — работу вместе со всеми её материалами.
                     </p>
                   </div>
                 )}
@@ -439,6 +546,102 @@ const EstimateOptimizer: React.FC = () => {
           </>
         )}
 
+        {/* Delete dialog — orphaned materials warning */}
+        {deleteDialog && (
+          <div
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1000,
+              background: 'rgba(0,0,0,0.45)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+            onClick={() => setDeleteDialog(null)}
+          >
+            <div
+              style={{
+                background: '#fff', borderRadius: '12px',
+                padding: '24px', maxWidth: '520px', width: '90%',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+                maxHeight: '80vh', overflowY: 'auto',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ fontWeight: 700, fontSize: '16px', color: '#0f172a', marginBottom: 8 }}>
+                Обнаружены связанные материалы
+              </div>
+              <p style={{ color: '#475569', fontSize: '13px', margin: '0 0 16px' }}>
+                Вы удаляете работы, к которым в смете относятся материалы. Что сделать с ними?
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                {deleteDialog.orphanedGroups.map(({ work, materials }) => (
+                  <div
+                    key={work.id}
+                    style={{
+                      padding: '10px 14px',
+                      background: '#fef2f2',
+                      border: '1px solid #fecaca',
+                      borderRadius: '8px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '13px', color: '#991b1b' }}>
+                      Работа: {work.name}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#64748b', marginTop: 6 }}>
+                      Материалы ({materials.length}):
+                      <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+                        {materials.slice(0, 4).map((m) => (
+                          <li key={m.id}>{m.name}</li>
+                        ))}
+                        {materials.length > 4 && (
+                          <li style={{ color: '#94a3b8' }}>...ещё {materials.length - 4}</li>
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setDeleteDialog(null)}
+                  style={{
+                    padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+                    fontWeight: 500, border: '1px solid #e2e8f0', background: '#fff',
+                    cursor: 'pointer', color: '#475569',
+                  }}
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={() => executeDeleteRows(deleteDialog.rowIdsToDelete)}
+                  style={{
+                    padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+                    fontWeight: 600, border: '1px solid #fca5a5', background: '#fff',
+                    cursor: 'pointer', color: '#dc2626',
+                  }}
+                >
+                  Удалить только работы
+                </button>
+                <button
+                  onClick={() => {
+                    const allIds = [
+                      ...deleteDialog.rowIdsToDelete,
+                      ...deleteDialog.orphanedGroups.flatMap((g) => g.materials.map((m) => m.id)),
+                    ];
+                    executeDeleteRows(allIds);
+                  }}
+                  style={{
+                    padding: '8px 16px', borderRadius: '6px', fontSize: '13px',
+                    fontWeight: 600, border: 'none', background: '#dc2626',
+                    cursor: 'pointer', color: '#fff',
+                  }}
+                >
+                  Удалить и материалы тоже
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );
