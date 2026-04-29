@@ -5,6 +5,7 @@ import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskDetailModal } from '../TaskDetailModal'
+import { LumaSpin } from '../ui/LumaSpin'
 
 function safeDownload(taskId: string, slot: string) {
   downloadSlotFile(taskId, slot)
@@ -348,10 +349,10 @@ function CompletenessStage({ card }: Props) {
       {task !== null && (task.status === 'pending' || task.status === 'processing') && (
         <div>
           <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
-            <TaskStatusBadge task={task} />
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+            <LumaSpin size="sm" color="#d97706" />
             {task.progress_message && (
-              <span style={{ fontSize: '11px', color: '#92400e', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+              <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4' }}>
                 {task.progress_message}
               </span>
             )}
