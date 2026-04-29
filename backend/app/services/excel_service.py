@@ -16,7 +16,7 @@ TOTAL_FILL = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="so
 
 # Row highlight fills
 FILL_ADDED      = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # новая позиция
-FILL_ADJUSTED   = PatternFill(start_color="CFE2F3", end_color="CFE2F3", fill_type="solid")  # скорректированный объём
+FILL_ADJUSTED   = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # скорректированный объём
 FILL_UNKNOWN    = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # объём неизвестен
 FILL_CALCULATED = PatternFill(start_color="D9D2E9", end_color="D9D2E9", fill_type="solid")  # объём рассчитан по чертежам
 
@@ -49,7 +49,7 @@ def _row_fill(item: dict) -> Optional[PatternFill]:
     qty = item.get("quantity")
     if qty is None:
         return FILL_UNKNOWN
-    if "добавлено" in notes:
+    if "добавлен" in notes:
         return FILL_ADDED
     if "скорректирован" in notes:
         return FILL_ADJUSTED
@@ -133,7 +133,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
     ws_works = wb.create_sheet("Работы")
-    headers_works = ["№", "Наименование", "Ед. изм.", "Кол-во"]
+    headers_works = ["№", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
     for col, h in enumerate(headers_works, start=1):
         ws_works.cell(row=1, column=col, value=h)
     _style_header_row(ws_works, 1, len(headers_works))
@@ -145,6 +145,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_works.cell(row=row, column=2, value=item.get("name", ""))
         ws_works.cell(row=row, column=3, value=item.get("unit", ""))
         ws_works.cell(row=row, column=4, value=item.get("quantity"))
+        ws_works.cell(row=row, column=5, value=item.get("notes", "") or "")
         _style_data_row(ws_works, row, len(headers_works))
         _apply_row_fill(ws_works, row, len(headers_works), _row_fill(item))
 
@@ -154,7 +155,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     # Sheet 3: Материалы
     materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
     ws_mats = wb.create_sheet("Материалы")
-    headers_mats = ["№", "Наименование", "Ед. изм.", "Кол-во"]
+    headers_mats = ["№", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
     for col, h in enumerate(headers_mats, start=1):
         ws_mats.cell(row=1, column=col, value=h)
     _style_header_row(ws_mats, 1, len(headers_mats))
@@ -166,6 +167,7 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
         ws_mats.cell(row=row, column=2, value=item.get("name", ""))
         ws_mats.cell(row=row, column=3, value=item.get("unit", ""))
         ws_mats.cell(row=row, column=4, value=item.get("quantity"))
+        ws_mats.cell(row=row, column=5, value=item.get("notes", "") or "")
         _style_data_row(ws_mats, row, len(headers_mats))
         _apply_row_fill(ws_mats, row, len(headers_mats), _row_fill(item))
 
