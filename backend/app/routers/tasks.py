@@ -30,7 +30,7 @@ from app.models.result import TaskResult
 from app.models.task_input_file import TaskInputFile
 from app.models.history import TaskHistory
 from app.models.project import Project
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, get_download_user
 from app.config import settings
 from app.services.task_processor import process_task
 from app.constants import ESTIMATE_TASK_TYPES
@@ -911,7 +911,7 @@ async def download_file_from_slot(
     task_id: str,
     slot: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_download_user),
 ):
     if slot not in VALID_SLOTS:
         raise HTTPException(

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import bcrypt
 from jose import JWTError, jwt
@@ -56,6 +56,22 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return verify_token(credentials.credentials)
+
+
+async def get_download_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    token: Optional[str] = Query(None),
+) -> dict:
+    """Auth for file download endpoints: accepts Bearer header or ?token= query param.
+    Query param support is needed because browsers block a.click() after async requests."""
+    raw_token = credentials.credentials if credentials else token
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Требуется авторизация",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return verify_token(raw_token)
 
 
 async def get_admin_user(

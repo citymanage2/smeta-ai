@@ -6,12 +6,8 @@ import { downloadSlotFile } from '../../api/projects'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskDetailModal } from '../TaskDetailModal'
 
-async function safeDownload(taskId: string, slot: string) {
-  try {
-    await downloadSlotFile(taskId, slot)
-  } catch {
-    alert('Не удалось скачать файл. Попробуйте ещё раз.')
-  }
+function safeDownload(taskId: string, slot: string) {
+  downloadSlotFile(taskId, slot)
 }
 
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
