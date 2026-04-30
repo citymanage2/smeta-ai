@@ -386,6 +386,7 @@ class TaskProcessor:
             file_name=file_name,
             mime_type=mime_type,
             file_data=file_data,
+            size_bytes=len(file_data),
             slot=slot,
         )
         self.db.add(result_record)

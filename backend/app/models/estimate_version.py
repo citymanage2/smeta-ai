@@ -47,6 +47,10 @@ class EstimateVersion(Base):
     is_rolled_back: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+    # 'result' для result-файлов, 'input' для input-файлов
+    file_slot: Mapped[str] = mapped_column(String(20), nullable=False, default="result")
+    # Тип задачи — для generic-режима редактора без JOIN
+    task_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

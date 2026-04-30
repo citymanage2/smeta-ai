@@ -110,6 +110,7 @@ async def regenerate_task_result(
         file_name="Перечень.xlsx",
         mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         file_data=new_bytes,
+        size_bytes=len(new_bytes),
         slot="result",
     )
     db.add(new_record)

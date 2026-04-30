@@ -16,7 +16,7 @@ from fastapi import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, defer
 
 from app.database import get_db
 from app.models.project import Project
@@ -240,6 +240,56 @@ async def delete_workflow_card(
     logger.info("WorkflowCard deleted with tasks", card_id=card_id, task_count=len(task_ids))
 
 
+async def _build_stage_meta(task: Optional[Task], db: AsyncSession) -> Optional[StageDetail]:
+    """Метаданные файлов этапа без загрузки binary (использует size_bytes из колонки)."""
+    if task is None:
+        return None
+
+    inp_rows = await db.execute(
+        select(TaskInputFile)
+        .where(TaskInputFile.task_id == task.id)
+        .order_by(TaskInputFile.file_index)
+    )
+    inp_files = [
+        InputFileDetail(
+            index=r.file_index,
+            name=r.file_name,
+            size_bytes=r.size_bytes,
+            mime_type=r.mime_type,
+        )
+        for r in inp_rows.scalars().all()
+    ]
+
+    res_rows = await db.execute(
+        select(TaskResult)
+        .where(TaskResult.task_id == task.id)
+        .options(defer(TaskResult.file_data))
+        .order_by(TaskResult.id)
+    )
+    res_files = [
+        ResultFileDetail(
+            result_id=r.id,
+            slot=r.slot,
+            file_name=r.file_name,
+            size_bytes=r.size_bytes,
+            mime_type=r.mime_type,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in res_rows.scalars().all()
+    ]
+
+    return StageDetail(
+        task_id=str(task.id),
+        task_type=task.task_type,
+        task_status=task.status,
+        task_name=task.name,
+        task_created_at=task.created_at.isoformat(),
+        manually_edited_at=task.manually_edited_at.isoformat() if task.manually_edited_at else None,
+        input_files=inp_files,
+        result_files=res_files,
+    )
+
+
 @router.get("/workflow-cards/{card_id}/detail", response_model=CardDetailResponse)
 async def get_card_detail(
     card_id: str,
@@ -251,64 +301,38 @@ async def get_card_detail(
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
 
-    async def _build_stage(task: Optional[Task]) -> Optional[StageDetail]:
-        if task is None:
-            return None
+    return CardDetailResponse(
+        id=str(card.id),
+        project_id=str(card.project_id),
+        name=card.name,
+        stage=card.stage,
+        source_stage=await _build_stage_meta(card.list_task, db),
+        completeness_stage=await _build_stage_meta(card.completeness_task, db),
+        estimate_stage=await _build_stage_meta(card.estimate_task, db),
+        optimization_stage=await _build_stage_meta(card.optimization_task, db),
+    )
 
-        # Входные файлы (из task_input_files)
-        inp_rows = await db.execute(
-            select(TaskInputFile)
-            .where(TaskInputFile.task_id == task.id)
-            .order_by(TaskInputFile.file_index)
-        )
-        inp_files = [
-            InputFileDetail(
-                index=r.file_index,
-                name=r.file_name,
-                size_bytes=r.size_bytes,
-                mime_type=r.mime_type,
-            )
-            for r in inp_rows.scalars().all()
-        ]
 
-        # Файлы-результаты (из task_results)
-        res_rows = await db.execute(
-            select(TaskResult)
-            .where(TaskResult.task_id == task.id)
-            .order_by(TaskResult.id)
-        )
-        res_files = [
-            ResultFileDetail(
-                result_id=r.id,
-                slot=r.slot,
-                file_name=r.file_name,
-                size_bytes=len(r.file_data),
-                mime_type=r.mime_type,
-                created_at=r.created_at.isoformat(),
-            )
-            for r in res_rows.scalars().all()
-        ]
-
-        return StageDetail(
-            task_id=str(task.id),
-            task_type=task.task_type,
-            task_status=task.status,
-            task_name=task.name,
-            task_created_at=task.created_at.isoformat(),
-            manually_edited_at=task.manually_edited_at.isoformat() if task.manually_edited_at else None,
-            input_files=inp_files,
-            result_files=res_files,
-        )
+@router.get("/workflow-cards/{card_id}/files-meta", response_model=CardDetailResponse)
+async def get_card_files_meta(
+    card_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Лёгкий endpoint для канбан-карточек: метаданные файлов без binary-данных."""
+    card = await _load_card_with_tasks(card_id, db)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
 
     return CardDetailResponse(
         id=str(card.id),
         project_id=str(card.project_id),
         name=card.name,
         stage=card.stage,
-        source_stage=await _build_stage(card.list_task),
-        completeness_stage=await _build_stage(card.completeness_task),
-        estimate_stage=await _build_stage(card.estimate_task),
-        optimization_stage=await _build_stage(card.optimization_task),
+        source_stage=await _build_stage_meta(card.list_task, db),
+        completeness_stage=await _build_stage_meta(card.completeness_task, db),
+        estimate_stage=await _build_stage_meta(card.estimate_task, db),
+        optimization_stage=await _build_stage_meta(card.optimization_task, db),
     )
 
 

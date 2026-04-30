@@ -734,6 +734,7 @@ async def upload_file_to_slot(
         file_name=file.filename or f"{slot}.xlsx",
         mime_type=mime,
         file_data=file_bytes,
+        size_bytes=len(file_bytes),
         slot=slot,
     )
     db.add(new_result)
@@ -1366,6 +1367,7 @@ async def _run_optimization_background(
                     file_name="optimized.xlsx",
                     mime_type=XLSX_MIME,
                     file_data=optimized_bytes,
+                    size_bytes=len(optimized_bytes),
                 ))
             else:
                 previous_value = {"estimation_status": prev_estimation_status}
@@ -1375,6 +1377,7 @@ async def _run_optimization_background(
                     file_name="optimized.xlsx",
                     mime_type=XLSX_MIME,
                     file_data=optimized_bytes,
+                    size_bytes=len(optimized_bytes),
                 ))
 
             # History entry contains only metadata — no file bytes
@@ -1487,6 +1490,7 @@ async def update_estimate_items(
     old_result = existing_r.scalar_one_or_none()
     if old_result:
         old_result.file_data = excel_data
+        old_result.size_bytes = len(excel_data)
         old_result.file_name = "Смета_из_перечня.xlsx"
     else:
         db.add(TaskResult(
@@ -1494,6 +1498,7 @@ async def update_estimate_items(
             file_name="Смета_из_перечня.xlsx",
             mime_type=XLSX_MIME,
             file_data=excel_data,
+            size_bytes=len(excel_data),
             slot="estimate",
         ))
 
@@ -1704,6 +1709,7 @@ async def revert_history(
             file_name=prev.get("file_name", "restored.xlsx"),
             mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             file_data=restored_bytes,
+            size_bytes=len(restored_bytes),
         ))
     # else: no file to restore (e.g., reverting the very first optimization → back to "estimated")
 
