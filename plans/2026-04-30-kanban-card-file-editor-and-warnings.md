@@ -236,7 +236,7 @@ Acceptance criteria из задачи → покрытие:
 - `backend/app/routers/estimate_versions.py`
 - `backend/app/utils/xlsx_generic.py` (новый — хелперы parse/generate)
 
-**Статус:** `[ ]`
+**Статус:** `[x]`
 
 ---
 

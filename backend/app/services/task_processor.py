@@ -392,6 +392,35 @@ class TaskProcessor:
         self.db.add(result_record)
         await self.db.commit()
 
+    async def _create_initial_generic_version(self, file_data: bytes, task_type: str) -> None:
+        """Create V0 EstimateVersion for LIST/COMPLETENESS tasks (idempotent)."""
+        import uuid as _uuid
+        from app.models.estimate_version import EstimateVersion
+        from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
+
+        existing = await self.db.execute(
+            select(EstimateVersion).where(
+                EstimateVersion.task_id == self.task_id,
+                EstimateVersion.file_slot == "result",
+            ).limit(1)
+        )
+        if existing.scalar_one_or_none() is not None:
+            return
+
+        rows = parse_xlsx_to_generic_rows(file_data)
+        version = EstimateVersion(
+            id=str(_uuid.uuid4()),
+            task_id=self.task_id,
+            version_number=0,
+            version_label="original",
+            version_display_name="V0 — Оригинал",
+            rows=rows,
+            file_slot="result",
+            task_type=task_type,
+        )
+        self.db.add(version)
+        await self.db.commit()
+
     async def _save_progress_data(self, data: dict) -> None:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = result.scalar_one_or_none()
@@ -861,6 +890,7 @@ class TaskProcessor:
             _XLSX_MIME,
             excel_data,
         )
+        await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info("List from Grand task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
 
     async def _handle_check_completeness(self, task: Task) -> None:
@@ -936,6 +966,7 @@ class TaskProcessor:
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = generate_list(all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
+        await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info(
             "Check completeness task completed",
             task_id=self.task_id,
@@ -1037,6 +1068,7 @@ class TaskProcessor:
 
         excel_data = generate_list(items)
         await self.save_result(self._result_filename(task, "Перечень_из_проекта.xlsx"), _XLSX_MIME, excel_data)
+        await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info(
             "List from project task completed",
             task_id=self.task_id,
@@ -1117,6 +1149,7 @@ class TaskProcessor:
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = generate_list(all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_по_проекту.xlsx"), _XLSX_MIME, excel_data)
+        await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info(
             "Check project completeness task completed",
             task_id=self.task_id,

@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -111,16 +111,20 @@ def _next_version_number(versions: list[EstimateVersion]) -> int:
 @router.get("/{task_id}/estimate/versions", response_model=list[EstimateVersionSummary])
 async def list_versions(
     task_id: str,
+    file_slot: Optional[str] = Query(default=None, description="Фильтр по file_slot: 'result' или 'input'"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Return all non-rolled-back versions for a task (without rows for speed)."""
     await _get_task_or_404(task_id, db)
-    result = await db.execute(
+    query = (
         select(EstimateVersion)
         .where(EstimateVersion.task_id == task_id, EstimateVersion.is_rolled_back == False)  # noqa: E712
         .order_by(EstimateVersion.version_number)
     )
+    if file_slot is not None:
+        query = query.where(EstimateVersion.file_slot == file_slot)
+    result = await db.execute(query)
     versions = result.scalars().all()
     return [_version_to_summary(v) for v in versions]
 
@@ -149,6 +153,12 @@ class SaveRowsRequest(BaseModel):
     rows: list[dict]
 
 
+_LIST_COMPLETENESS_TYPES = frozenset({
+    "LIST_FROM_GRAND", "LIST_FROM_PROJECT",
+    "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS",
+})
+
+
 @router.put("/{task_id}/estimate/versions/{version_id}/rows")
 async def save_rows(
     task_id: str,
@@ -159,10 +169,48 @@ async def save_rows(
 ):
     """Persist edited rows for a version. Marks task as manually edited."""
     from datetime import datetime, timezone
+    from app.models.result import TaskResult
+    from app.models.task_input_file import TaskInputFile
+    from app.utils.xlsx_generic import rows_to_xlsx
+
     version = await _get_version_or_404(task_id, version_id, db)
     version.rows = body.rows
     task = await _get_task_or_404(task_id, db)
     task.manually_edited_at = datetime.now(timezone.utc)
+
+    # For LIST/COMPLETENESS: regenerate xlsx and persist back to source record
+    if version.task_type in _LIST_COMPLETENESS_TYPES:
+        xlsx_bytes = rows_to_xlsx(body.rows)
+
+        if version.file_slot == "result":
+            res = await db.execute(
+                select(TaskResult)
+                .where(TaskResult.task_id == task_id, TaskResult.slot == "result")
+                .order_by(TaskResult.id.desc())
+                .limit(1)
+            )
+            tr = res.scalar_one_or_none()
+            if tr is not None:
+                tr.file_data = xlsx_bytes
+                tr.size_bytes = len(xlsx_bytes)
+
+        elif version.file_slot == "input":
+            # file_index encoded in version_label as "input_N"
+            try:
+                file_index = int(version.version_label.split("_")[-1])
+            except (ValueError, AttributeError):
+                file_index = 0
+            res = await db.execute(
+                select(TaskInputFile).where(
+                    TaskInputFile.task_id == task_id,
+                    TaskInputFile.file_index == file_index,
+                )
+            )
+            tif = res.scalar_one_or_none()
+            if tif is not None:
+                tif.content = xlsx_bytes
+                tif.size_bytes = len(xlsx_bytes)
+
     await db.commit()
     return {"version_id": version_id, "rows_count": len(body.rows)}
 
@@ -193,6 +241,121 @@ async def save_expenses(
     version.expenses_overridden = True
     await db.commit()
     return {"version_id": version_id, "expenses_overridden": True}
+
+
+# ---------------------------------------------------------------------------
+# POST /tasks/{task_id}/estimate/init-from-result
+# ---------------------------------------------------------------------------
+
+@router.post("/{task_id}/estimate/init-from-result")
+async def init_from_result(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Idempotent: create V0 EstimateVersion from TaskResult for LIST/COMPLETENESS tasks."""
+    from app.models.result import TaskResult
+    from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
+    from sqlalchemy.orm import defer
+
+    task = await _get_task_or_404(task_id, db)
+
+    existing = await db.execute(
+        select(EstimateVersion).where(
+            EstimateVersion.task_id == task_id,
+            EstimateVersion.file_slot == "result",
+        ).limit(1)
+    )
+    if existing.scalar_one_or_none() is not None:
+        return {"status": "already_exists"}
+
+    res = await db.execute(
+        select(TaskResult)
+        .where(TaskResult.task_id == task_id, TaskResult.slot == "result")
+        .order_by(TaskResult.id.desc())
+        .limit(1)
+    )
+    tr = res.scalar_one_or_none()
+    if tr is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TaskResult не найден")
+
+    rows = parse_xlsx_to_generic_rows(tr.file_data)
+    count_res = await db.execute(select(EstimateVersion).where(EstimateVersion.task_id == task_id))
+    all_versions = count_res.scalars().all()
+    next_num = _next_version_number(all_versions)
+
+    version = EstimateVersion(
+        id=str(uuid.uuid4()),
+        task_id=task_id,
+        version_number=next_num,
+        version_label="original",
+        version_display_name="V0 — Оригинал",
+        rows=rows,
+        file_slot="result",
+        task_type=task.task_type,
+    )
+    db.add(version)
+    await db.commit()
+    return {"status": "created", "version_id": str(version.id)}
+
+
+# ---------------------------------------------------------------------------
+# POST /tasks/{task_id}/estimate/init-from-input
+# ---------------------------------------------------------------------------
+
+@router.post("/{task_id}/estimate/init-from-input")
+async def init_from_input(
+    task_id: str,
+    file_index: int = Query(default=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Create EstimateVersion from TaskInputFile[file_index] (file_slot='input'). Idempotent per file_index."""
+    from app.models.task_input_file import TaskInputFile
+    from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
+
+    task = await _get_task_or_404(task_id, db)
+    label = f"input_{file_index}"
+
+    existing = await db.execute(
+        select(EstimateVersion).where(
+            EstimateVersion.task_id == task_id,
+            EstimateVersion.file_slot == "input",
+            EstimateVersion.version_label == label,
+        ).limit(1)
+    )
+    ev = existing.scalar_one_or_none()
+    if ev is not None:
+        return {"status": "already_exists", "version_id": str(ev.id)}
+
+    res = await db.execute(
+        select(TaskInputFile).where(
+            TaskInputFile.task_id == task_id,
+            TaskInputFile.file_index == file_index,
+        )
+    )
+    tif = res.scalar_one_or_none()
+    if tif is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Input-файл с index={file_index} не найден")
+
+    rows = parse_xlsx_to_generic_rows(tif.content)
+    count_res = await db.execute(select(EstimateVersion).where(EstimateVersion.task_id == task_id))
+    all_versions = count_res.scalars().all()
+    next_num = _next_version_number(all_versions)
+
+    version = EstimateVersion(
+        id=str(uuid.uuid4()),
+        task_id=task_id,
+        version_number=next_num,
+        version_label=label,
+        version_display_name=f"V0 — Оригинал (файл {file_index})",
+        rows=rows,
+        file_slot="input",
+        task_type=task.task_type,
+    )
+    db.add(version)
+    await db.commit()
+    return {"status": "created", "version_id": str(version.id)}
 
 
 # ---------------------------------------------------------------------------
