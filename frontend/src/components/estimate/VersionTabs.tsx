@@ -13,7 +13,7 @@ interface VersionTabsProps {
   onVersionsChange: () => void; // reload after rollback/rename
 }
 
-const MAX_VISIBLE_TABS = 5;
+const MAX_VISIBLE_TABS = 6;
 
 const VersionTabs: React.FC<VersionTabsProps> = ({
   taskId,
@@ -31,8 +31,10 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmRollbackId, setConfirmRollbackId] = useState<string | null>(null);
+  const [overflowPos, setOverflowPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const menuRef = useRef<HTMLDivElement | null>(null);
   const overflowRef = useRef<HTMLDivElement | null>(null);
+  const overflowBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // Close menus on outside click
   useEffect(() => {
@@ -73,7 +75,7 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
   };
 
   const renderTab = (v: EstimateVersionSummary, isOverflow = false) => {
-    const isActive = !isOverflow && activeVersionId === v.id && activeView === 'version';
+    const isActive = activeVersionId === v.id && activeView === 'version';
     const isLast = versions.indexOf(v) === versions.length - 1;
 
     return (
@@ -234,7 +236,14 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
         {overflow.length > 0 && (
           <div style={{ position: 'relative' }} ref={overflowRef}>
             <button
-              onClick={() => setOverflowOpen(!overflowOpen)}
+              ref={overflowBtnRef}
+              onClick={() => {
+                if (!overflowOpen) {
+                  const rect = overflowBtnRef.current?.getBoundingClientRect();
+                  if (rect) setOverflowPos({ top: rect.bottom + 2, left: rect.left });
+                }
+                setOverflowOpen(!overflowOpen);
+              }}
               style={{
                 padding: '6px 12px',
                 fontSize: '13px',
@@ -251,17 +260,16 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
             {overflowOpen && (
               <div
                 style={{
-                  position: 'absolute',
-                  top: '100%',
-                  left: 0,
-                  zIndex: 200,
+                  position: 'fixed',
+                  top: overflowPos.top,
+                  left: overflowPos.left,
+                  zIndex: 500,
                   background: '#fff',
                   border: '1px solid #e2e8f0',
                   borderRadius: '8px',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                   minWidth: '200px',
                   padding: '4px 0',
-                  marginTop: '2px',
                 }}
               >
                 {overflow.map((v) => (
