@@ -3,6 +3,7 @@ import {
   EstimateVersionSummary,
   EstimateVersionFull,
   EstimateRow,
+  GenericRow,
   OptimizationProposal,
   OptimizationStep,
 } from '../types';
@@ -13,11 +14,36 @@ export interface Expenses {
   contingency_pct: number;
 }
 
-export async function getVersions(taskId: string): Promise<EstimateVersionSummary[]> {
+export async function getVersions(taskId: string, fileSlot?: string): Promise<EstimateVersionSummary[]> {
   const res = await apiClient.get<EstimateVersionSummary[]>(
     `/tasks/${taskId}/estimate/versions`,
+    fileSlot ? { params: { file_slot: fileSlot } } : undefined,
   );
   return res.data;
+}
+
+export async function initVersionFromResult(taskId: string): Promise<{ status: string; version_id?: string }> {
+  const res = await apiClient.post<{ status: string; version_id?: string }>(
+    `/tasks/${taskId}/estimate/init-from-result`,
+  );
+  return res.data;
+}
+
+export async function initVersionFromInput(taskId: string, fileIndex: number): Promise<{ status: string; version_id?: string }> {
+  const res = await apiClient.post<{ status: string; version_id?: string }>(
+    `/tasks/${taskId}/estimate/init-from-input`,
+    null,
+    { params: { file_index: fileIndex } },
+  );
+  return res.data;
+}
+
+export async function saveGenericRows(
+  taskId: string,
+  versionId: string,
+  rows: GenericRow[],
+): Promise<void> {
+  await apiClient.put(`/tasks/${taskId}/estimate/versions/${versionId}/rows`, { rows });
 }
 
 export async function getVersion(

@@ -6,6 +6,18 @@ export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_
 
 export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set(['ESTIMATE_FROM_LIST', 'ESTIMATE_OPTIMIZATION']);
 
+export const GENERIC_EDITOR_TASK_TYPES: Set<TaskType> = new Set([
+  'LIST_FROM_GRAND',
+  'LIST_FROM_PROJECT',
+  'CHECK_LIST_COMPLETENESS',
+  'CHECK_PROJECT_COMPLETENESS',
+]);
+
+export interface GenericRow {
+  row_id: string;
+  cells: Record<string, string | number | null>;
+}
+
 export type ClientFileType = 'Смета' | 'Проект' | 'ТЗ' | 'Другое';
 
 export interface ClientFileMeta {
