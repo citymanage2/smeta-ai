@@ -255,6 +255,10 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
   "Цена без НДС: X / НДС: Y / Цена с НДС: Z"
   Для работ на УСН: НДС = 0, указать "УСН, НДС не облагается"
 
+КРИТИЧЕСКИ ВАЖНО: каждая входная позиция имеет числовое поле "id".
+Ты ОБЯЗАН вернуть результат для КАЖДОЙ позиции из списка, сохранив то же самое
+значение "id" без изменений. Пропуск любой позиции недопустим.
+
 Позиции для оценки:
 {unmatched_items_json}
 
@@ -263,6 +267,7 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
 {{
   "items": [
     {{
+      "id": число (то же, что во входных данных — не менять!),
       "type": "Работа" | "Материал",
       "name": "Наименование позиции",
       "unit": "Ед. изм.",
@@ -1244,13 +1249,15 @@ class TaskProcessor:
         # ── Шаг 1: Поиск цен по прайсу ─────────────────────────────────────
         await self.update_progress(f"Поиск цен для {len(items)} позиций по корпоративному прайсу...")
 
-        matched: list[dict] = []   # items with prices found in price list
-        unmatched: list[dict] = [] # items needing Claude
+        # Keyed by global index in `items` — eliminates all name-based lookups later.
+        matched_by_gidx: dict[int, dict] = {}
+        unmatched_by_gidx: dict[int, dict] = {}  # gidx -> enriched item with "_id" = gidx
 
-        for item in items:
+        for gidx, item in enumerate(items):
             item_type = str(item.get("type", "")).strip()
             name = str(item.get("name", "")).strip()
             enriched = dict(item)
+            enriched["_id"] = gidx
             enriched.setdefault("work_price", None)
             enriched.setdefault("material_price", None)
             enriched.setdefault("price_list_name", None)
@@ -1288,30 +1295,69 @@ class TaskProcessor:
                     logger.info("Material NOT matched in price list", task_id=self.task_id, name=name)
 
             if found:
-                matched.append(enriched)
+                matched_by_gidx[gidx] = enriched
             else:
-                unmatched.append(enriched)
+                unmatched_by_gidx[gidx] = enriched
 
+        n_matched = len(matched_by_gidx)
+        n_unmatched = len(unmatched_by_gidx)
         logger.info(
             "Price lookup done",
             task_id=self.task_id,
-            matched=len(matched),
-            unmatched=len(unmatched),
+            matched=n_matched,
+            unmatched=n_unmatched,
         )
         await self.update_progress(
-            f"Прайс: найдено {len(matched)}, не найдено {len(unmatched)} из {len(items)} позиций."
+            f"Прайс: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций."
         )
 
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
-        claude_results: dict[str, dict] = {}  # name -> enriched item
+        # Results keyed by int _id (= global index), not by name string.
+        claude_results: dict[int, dict] = {}
 
-        if unmatched:
-            chunks = _chunk_by_work_boundaries(unmatched, max_chunk_size=25)
-            total_chunks = len(chunks)
+        async def _call_claude_chunk(chunk: list[dict], chunk_label: str) -> None:
+            """Send one chunk to Claude and populate claude_results by _id."""
+            unmatched_json = json.dumps(
+                [{"id": it["_id"], "type": it["type"], "name": it["name"],
+                  "unit": it["unit"], "quantity": it.get("quantity")}
+                 for it in chunk],
+                ensure_ascii=False, indent=2,
+            )
+            prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
+                current_date=current_date,
+                unmatched_items_json=unmatched_json,
+            )
+            messages = [{"role": "user", "content": prompt_text}]
+            try:
+                data = await self._interruptible_claude_json_with_retry(
+                    messages,
+                    system_prompt=SYSTEM_BASE,
+                    use_web_search=True,
+                    processing_timeout=1200.0,
+                )
+            except TaskCancelledError:
+                raise
+            except Exception as chunk_error:
+                logger.warning(
+                    "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
+                    task_id=self.task_id,
+                    chunk_label=chunk_label,
+                    error=str(chunk_error),
+                )
+                return
+            for result_item in data.get("items", []):
+                item_id = result_item.get("id")
+                if item_id is not None:
+                    claude_results[int(item_id)] = result_item
+
+        if unmatched_by_gidx:
+            unmatched_list = list(unmatched_by_gidx.values())
             current_date = _date.today().strftime("%d.%m.%Y")
+            chunks = _chunk_by_work_boundaries(unmatched_list, max_chunk_size=25)
+            total_chunks = len(chunks)
 
             await self.update_progress(
-                f"Прайс: {len(matched)} позиций найдено, {len(unmatched)} — нет. "
+                f"Прайс: {n_matched} позиций найдено, {n_unmatched} — нет. "
                 f"Отправляем {total_chunks} чанк(а) в Claude..."
             )
 
@@ -1320,78 +1366,65 @@ class TaskProcessor:
                     await self._check_cancelled()
                 except TaskCancelledError:
                     raise
-
                 if total_chunks > 1:
                     await self.update_progress(f"Claude: обработка части {i + 1} из {total_chunks}...")
+                await _call_claude_chunk(chunk, chunk_label=f"{i + 1}/{total_chunks}")
 
-                unmatched_json = json.dumps(
-                    [{"type": it["type"], "name": it["name"], "unit": it["unit"], "quantity": it.get("quantity")}
-                     for it in chunk],
-                    ensure_ascii=False, indent=2,
+            # Retry any ids Claude skipped — in smaller batches of 5.
+            missing_ids = set(unmatched_by_gidx.keys()) - set(claude_results.keys())
+            if missing_ids:
+                await self.update_progress(
+                    f"Повторная обработка {len(missing_ids)} пропущенных позиций (батчи по 5)..."
                 )
-                prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
-                    current_date=current_date,
-                    unmatched_items_json=unmatched_json,
+                missing_items = [unmatched_by_gidx[gidx] for gidx in sorted(missing_ids)]
+                retry_chunks = [missing_items[i:i + 5] for i in range(0, len(missing_items), 5)]
+                for j, retry_chunk in enumerate(retry_chunks):
+                    try:
+                        await self._check_cancelled()
+                    except TaskCancelledError:
+                        raise
+                    await _call_claude_chunk(retry_chunk, chunk_label=f"retry-{j + 1}/{len(retry_chunks)}")
+
+            still_missing = set(unmatched_by_gidx.keys()) - set(claude_results.keys())
+            if still_missing:
+                logger.warning(
+                    "Some items remain unpriced after retry",
+                    task_id=self.task_id,
+                    count=len(still_missing),
+                    names=[unmatched_by_gidx[gidx].get("name") for gidx in sorted(still_missing)],
                 )
-                messages = [{"role": "user", "content": prompt_text}]
-
-                try:
-                    data = await self._interruptible_claude_json_with_retry(
-                        messages,
-                        system_prompt=SYSTEM_BASE,
-                        use_web_search=True,
-                        processing_timeout=1200.0,
-                    )
-                except TaskCancelledError:
-                    raise
-                except Exception as chunk_error:
-                    logger.warning(
-                        "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
-                        task_id=self.task_id,
-                        chunk=i + 1,
-                        error=str(chunk_error),
-                    )
-                    # Keep unmatched items with null prices rather than failing entire task
-                    continue
-
-                for result_item in data.get("items", []):
-                    key = str(result_item.get("name", "")).strip()
-                    claude_results[key] = result_item
 
         # ── Шаг 3: Сборка итогового результата в исходном порядке ───────────
         final_items: list[dict] = []
-        for item in items:
-            name = str(item.get("name", "")).strip()
-            # Find in matched list first
-            enriched = next((m for m in matched if m.get("name") == name), None)
-            if enriched is None:
-                # Try claude result
-                cr = claude_results.get(name)
-                if cr:
-                    enriched = {
-                        "type": item.get("type", ""),
-                        "name": name,
-                        "unit": cr.get("unit") or item.get("unit", ""),
-                        "quantity": item.get("quantity"),
-                        "work_price": cr.get("work_price"),
-                        "material_price": cr.get("material_price"),
-                        "price_list_name": None,
-                        "sources": cr.get("sources", ""),
-                        "notes": cr.get("notes", ""),
-                    }
-                else:
-                    # Remained unmatched (e.g. Claude chunk failed)
-                    enriched = {
-                        "type": item.get("type", ""),
-                        "name": name,
-                        "unit": item.get("unit", ""),
-                        "quantity": item.get("quantity"),
-                        "work_price": None,
-                        "material_price": None,
-                        "price_list_name": None,
-                        "sources": "",
-                        "notes": "Цена не определена",
-                    }
+        for gidx, item in enumerate(items):
+            if gidx in matched_by_gidx:
+                final_items.append(matched_by_gidx[gidx])
+                continue
+            cr = claude_results.get(gidx)
+            if cr:
+                enriched = {
+                    "type": item.get("type", ""),
+                    "name": str(item.get("name", "")).strip(),
+                    "unit": cr.get("unit") or item.get("unit", ""),
+                    "quantity": item.get("quantity"),
+                    "work_price": cr.get("work_price"),
+                    "material_price": cr.get("material_price"),
+                    "price_list_name": None,
+                    "sources": cr.get("sources", ""),
+                    "notes": cr.get("notes", ""),
+                }
+            else:
+                enriched = {
+                    "type": item.get("type", ""),
+                    "name": str(item.get("name", "")).strip(),
+                    "unit": item.get("unit", ""),
+                    "quantity": item.get("quantity"),
+                    "work_price": None,
+                    "material_price": None,
+                    "price_list_name": None,
+                    "sources": "",
+                    "notes": "Цена не определена",
+                }
             final_items.append(enriched)
 
         await self.update_progress(f"Собрано {len(final_items)} позиций. Формирование Excel сметы...")
@@ -1418,8 +1451,8 @@ class TaskProcessor:
             "Estimate from list completed",
             task_id=self.task_id,
             items=len(final_items),
-            matched=len(matched),
-            unmatched=len(unmatched),
+            matched=len(matched_by_gidx),
+            unmatched=len(unmatched_by_gidx),
             grand_total=grand_total,
         )
 
