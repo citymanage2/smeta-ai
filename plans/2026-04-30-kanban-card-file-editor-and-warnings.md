@@ -371,14 +371,17 @@ function wasEditedBefore(editedAt: string | null, nextStageCreatedAt: string | n
 **Цель**: предупреждения на странице карточки покрывают все типы задач, включают конкретный этап
 
 **Задачи:**
-1. Убедиться что `ManualEditWarning` показывается в `source_stage` блоке (Перечень) когда исходный файл отредактирован
-2. Дата в FileRow для input-файлов: использовать `TaskInputFile.created_at` или `task.manually_edited_at` (что новее)
-3. Проверить `wasEditedBefore` для всех комбинаций: source→completeness, source→estimate, source→optimization, completeness→estimate, completeness→optimization, estimate→optimization
+1. ✅ ManualEditWarning в Stage 2 (Перечень) — показывается когда source_stage.manually_edited_at установлен (безусловно)
+2. ✅ Дата в FileRow для input-файлов — max(task_created_at, manually_edited_at)
+3. ✅ 6 парных wasEditedBefore: src→comp, src→est, src→opt, comp→est, comp→opt, est→opt; каждое предупреждение на правильном этапе
+4. ✅ Удалён isEstimateType() guard — редактор открывается для всех типов задач (LIST/COMPLETENESS тоже)
+5. ✅ Редактор для исходного файла в Stage 1 — добавлен для всех типов с fileSlot='input', fileIndex
+6. ✅ editorModal расширен fileSlot/fileIndex; EstimateEditorModal получает параметры
 
 **Файлы:**
 - `frontend/src/pages/ProjectCardPage.tsx`
 
-**Статус:** `[ ]`
+**Статус:** `[x]`
 
 ---
 
@@ -448,8 +451,8 @@ generic-режим             CardStageContent           ProjectCardPage
 
 ## Итоговый блок
 
-Реализован целиком: `[ ]`  
-Что осталось: Фазы 5 и 6 (frontend CardStageContent и ProjectCardPage)
+Реализован целиком: `[x]`  
+Все фазы завершены.
 
 ---
 
@@ -458,3 +461,4 @@ generic-режим             CardStageContent           ProjectCardPage
 - 2026-04-30: план создан (режим bulletproof, planning only)
 - 2026-04-30: фаза 4 выполнена — generic-режим и embed-режим в EstimateOptimizer
 - 2026-04-30: фаза 5 выполнена — CardStageContent с filesMeta, FileRow, ManualEditWarning, EditorModal; EstimateEditorModal поддерживает fileSlot/fileIndex; getCardFilesMeta в workflowCards.ts
+- 2026-04-30: фаза 6 выполнена — ProjectCardPage: 6 парных wasEditedBefore, предупреждения на правильных этапах, редактор для всех типов задач, isEstimateType удалён, дата input-файлов исправлена

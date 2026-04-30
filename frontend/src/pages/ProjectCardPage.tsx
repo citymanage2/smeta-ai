@@ -30,10 +30,6 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
 }
 
-function isEstimateType(taskType: string): boolean {
-  return taskType === 'ESTIMATE_FROM_LIST' || taskType === 'ESTIMATE_OPTIMIZATION'
-}
-
 // ---------------------------------------------------------------------------
 // Status dot
 // ---------------------------------------------------------------------------
@@ -294,7 +290,7 @@ const ProjectCardPage: React.FC = () => {
   const [error, setError] = useState('')
 
   const [taskModal, setTaskModal] = useState<string | null>(null)
-  const [editorModal, setEditorModal] = useState<{ taskId: string; title: string } | null>(null)
+  const [editorModal, setEditorModal] = useState<{ taskId: string; title: string; fileSlot?: string; fileIndex?: number } | null>(null)
 
   const load = useCallback(async () => {
     if (!cardId) return
@@ -339,15 +335,17 @@ const ProjectCardPage: React.FC = () => {
 
   const { source_stage, completeness_stage, estimate_stage, optimization_stage } = detail
 
-  // Определяем, был ли предыдущий этап изменён вручную ПОСЛЕ создания текущего
   function wasEditedBefore(prevStage: StageDetail | null, currentStage: StageDetail | null): boolean {
     if (!prevStage?.manually_edited_at || !currentStage) return false
     return new Date(prevStage.manually_edited_at) > new Date(currentStage.task_created_at)
   }
 
-  const sourceEditedWarning = wasEditedBefore(source_stage, completeness_stage || estimate_stage || optimization_stage || null)
-  const completenessEditedWarning = wasEditedBefore(completeness_stage, estimate_stage || optimization_stage || null)
-  const estimateEditedWarning = wasEditedBefore(estimate_stage, optimization_stage)
+  const srcBeforeCompleteness = wasEditedBefore(source_stage, completeness_stage)
+  const srcBeforeEstimate = wasEditedBefore(source_stage, estimate_stage)
+  const srcBeforeOptimization = wasEditedBefore(source_stage, optimization_stage)
+  const compBeforeEstimate = wasEditedBefore(completeness_stage, estimate_stage)
+  const compBeforeOptimization = wasEditedBefore(completeness_stage, optimization_stage)
+  const estBeforeOptimization = wasEditedBefore(estimate_stage, optimization_stage)
 
   return (
     <Layout>
@@ -387,28 +385,32 @@ const ProjectCardPage: React.FC = () => {
           >
             {source_stage && (
               <>
-                <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 700, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                  {TASK_TYPE_LABELS[source_stage.task_type] ?? source_stage.task_type}
-                </div>
                 {source_stage.input_files.length > 0 ? (
-                  source_stage.input_files.map(f => (
-                    <div key={f.index} style={{ marginBottom: '5px' }}>
-                      <FileRow
-                        name={f.name}
-                        size={f.size_bytes}
-                        mime={f.mime_type}
-                        date={formatDate(source_stage.task_created_at)}
-                        onDownload={() => downloadInputFileById(source_stage.task_id, f.index)}
-                        onOpenTask={() => setTaskModal(source_stage.task_id)}
-                        onOpenEditor={
-                          isEstimateType(source_stage.task_type)
-                            ? () => setEditorModal({ taskId: source_stage.task_id, title: `Исходный файл — ${f.name}` })
-                            : undefined
-                        }
-                        editorLabel="Открыть в онлайн-редакторе"
-                      />
-                    </div>
-                  ))
+                  source_stage.input_files.map(f => {
+                    const editedAt = source_stage.manually_edited_at
+                    const inputDate = editedAt && new Date(editedAt) > new Date(source_stage.task_created_at)
+                      ? editedAt
+                      : source_stage.task_created_at
+                    return (
+                      <div key={f.index} style={{ marginBottom: '5px' }}>
+                        <FileRow
+                          name={f.name}
+                          size={f.size_bytes}
+                          mime={f.mime_type}
+                          date={formatDate(inputDate)}
+                          onDownload={() => downloadInputFileById(source_stage.task_id, f.index)}
+                          onOpenTask={() => setTaskModal(source_stage.task_id)}
+                          onOpenEditor={() => setEditorModal({
+                            taskId: source_stage.task_id,
+                            title: `Исходный файл — ${f.name}`,
+                            fileSlot: 'input',
+                            fileIndex: f.index,
+                          })}
+                          editorLabel="Открыть в онлайн-редакторе"
+                        />
+                      </div>
+                    )
+                  })
                 ) : (
                   <div style={{ fontSize: '12px', color: '#94a3b8' }}>Файлы не загружены</div>
                 )}
@@ -430,11 +432,16 @@ const ProjectCardPage: React.FC = () => {
             status={source_stage?.task_status}
             missing={!source_stage}
             warning={
-              sourceEditedWarning && (completeness_stage || estimate_stage || optimization_stage) ? (
-                <ManualEditWarning editedAt={source_stage!.manually_edited_at!} prevStageName="Исходный файл" />
+              source_stage?.manually_edited_at ? (
+                <ManualEditWarning editedAt={source_stage.manually_edited_at} prevStageName="Исходный файл" />
               ) : undefined
             }
           >
+            {source_stage && (
+              <div style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 700, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                {TASK_TYPE_LABELS[source_stage.task_type] ?? source_stage.task_type}
+              </div>
+            )}
             {source_stage && source_stage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '5px' }}>
                 <FileRow
@@ -444,14 +451,10 @@ const ProjectCardPage: React.FC = () => {
                   date={formatDate(f.created_at)}
                   onDownload={() => downloadSlotFileById(source_stage.task_id, f.slot)}
                   onOpenTask={() => setTaskModal(source_stage.task_id)}
-                  onOpenEditor={
-                    isEstimateType(source_stage.task_type)
-                      ? () => setEditorModal({
-                          taskId: source_stage.task_id,
-                          title: `Перечень — ${f.file_name}`,
-                        })
-                      : undefined
-                  }
+                  onOpenEditor={() => setEditorModal({
+                    taskId: source_stage.task_id,
+                    title: `Перечень — ${f.file_name}`,
+                  })}
                   editorLabel="Открыть перечень в онлайн-редакторе"
                 />
               </div>
@@ -471,8 +474,8 @@ const ProjectCardPage: React.FC = () => {
             status={completeness_stage?.task_status}
             missing={!completeness_stage}
             warning={
-              completenessEditedWarning && (estimate_stage || optimization_stage) ? (
-                <ManualEditWarning editedAt={completeness_stage!.manually_edited_at!} prevStageName="Проверка полноты" />
+              srcBeforeCompleteness ? (
+                <ManualEditWarning editedAt={source_stage!.manually_edited_at!} prevStageName="Перечень" />
               ) : undefined
             }
           >
@@ -490,14 +493,10 @@ const ProjectCardPage: React.FC = () => {
                       date={formatDate(f.created_at)}
                       onDownload={() => downloadSlotFileById(completeness_stage.task_id, f.slot)}
                       onOpenTask={() => setTaskModal(completeness_stage.task_id)}
-                      onOpenEditor={
-                        isEstimateType(completeness_stage.task_type)
-                          ? () => setEditorModal({
-                              taskId: completeness_stage.task_id,
-                              title: `Полнота — ${f.file_name}`,
-                            })
-                          : undefined
-                      }
+                      onOpenEditor={() => setEditorModal({
+                        taskId: completeness_stage.task_id,
+                        title: `Полнота — ${f.file_name}`,
+                      })}
                       editorLabel="Открыть файл полноты в онлайн-редакторе"
                     />
                   </div>
@@ -520,8 +519,11 @@ const ProjectCardPage: React.FC = () => {
             status={estimate_stage?.task_status}
             missing={!estimate_stage}
             warning={
-              estimateEditedWarning && optimization_stage ? (
-                <ManualEditWarning editedAt={estimate_stage!.manually_edited_at!} prevStageName="Смета из перечня" />
+              (srcBeforeEstimate || compBeforeEstimate) ? (
+                <>
+                  {srcBeforeEstimate && <ManualEditWarning editedAt={source_stage!.manually_edited_at!} prevStageName="Перечень" />}
+                  {compBeforeEstimate && <ManualEditWarning editedAt={completeness_stage!.manually_edited_at!} prevStageName="Проверка полноты" />}
+                </>
               ) : undefined
             }
           >
@@ -565,6 +567,15 @@ const ProjectCardPage: React.FC = () => {
             optional
             status={optimization_stage?.task_status}
             missing={!optimization_stage}
+            warning={
+              (srcBeforeOptimization || compBeforeOptimization || estBeforeOptimization) ? (
+                <>
+                  {srcBeforeOptimization && <ManualEditWarning editedAt={source_stage!.manually_edited_at!} prevStageName="Перечень" />}
+                  {compBeforeOptimization && <ManualEditWarning editedAt={completeness_stage!.manually_edited_at!} prevStageName="Проверка полноты" />}
+                  {estBeforeOptimization && <ManualEditWarning editedAt={estimate_stage!.manually_edited_at!} prevStageName="Смета из перечня" />}
+                </>
+              ) : undefined
+            }
           >
             {optimization_stage && (
               <>
@@ -602,6 +613,8 @@ const ProjectCardPage: React.FC = () => {
         <EstimateEditorModal
           taskId={editorModal.taskId}
           title={editorModal.title}
+          fileSlot={editorModal.fileSlot}
+          fileIndex={editorModal.fileIndex}
           onClose={() => setEditorModal(null)}
           onSaved={handleEditorSaved}
         />
