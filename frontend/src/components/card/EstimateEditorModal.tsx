@@ -7,10 +7,15 @@ interface Props {
   title: string
   onClose: () => void
   onSaved?: () => void
+  fileSlot?: string
+  fileIndex?: number
 }
 
-export function EstimateEditorModal({ taskId, title, onClose, onSaved }: Props) {
-  const url = `/tasks/${taskId}/estimate?embed=1`
+export function EstimateEditorModal({ taskId, title, onClose, onSaved, fileSlot, fileIndex }: Props) {
+  const params = new URLSearchParams({ embed: '1' })
+  if (fileSlot) params.set('file_slot', fileSlot)
+  if (fileIndex !== undefined) params.set('file_index', String(fileIndex))
+  const url = `/tasks/${taskId}/estimate?${params.toString()}`
 
   useEffect(() => {
     const handler = (e: MessageEvent) => {

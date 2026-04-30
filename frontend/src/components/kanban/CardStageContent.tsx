@@ -1,11 +1,41 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { AlertTriangle, ChevronDown, ChevronUp, Download, Edit3, ExternalLink, FileText } from 'lucide-react'
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
+import {
+  CardDetail,
+  StageDetail,
+  downloadInputFileById,
+  downloadSlotFileById,
+  getCardFilesMeta,
+} from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskDetailModal } from '../TaskDetailModal'
+import { EstimateEditorModal } from '../card/EstimateEditorModal'
 import { LumaSpin } from '../ui/LumaSpin'
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} Б`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
+}
+
+function wasEditedBefore(editedAt: string | null, nextStageCreatedAt: string | null): boolean {
+  if (!editedAt || !nextStageCreatedAt) return false
+  return new Date(editedAt) > new Date(nextStageCreatedAt)
+}
 
 function safeDownload(taskId: string, slot: string) {
   downloadSlotFile(taskId, slot).catch((err) => {
@@ -16,15 +46,18 @@ function safeDownload(taskId: string, slot: string) {
 
 const FILE_SIZE_LIMIT = 50 * 1024 * 1024
 
-interface Props {
-  card: WorkflowCard
+// ---------------------------------------------------------------------------
+// UI Atoms
+// ---------------------------------------------------------------------------
+interface EditorModalState {
+  taskId: string
+  title: string
+  fileSlot?: string
+  fileIndex?: number
 }
 
 function ActionButton({
-  onClick,
-  disabled,
-  variant = 'primary',
-  children,
+  onClick, disabled, variant = 'primary', children,
 }: {
   onClick: () => void
   disabled?: boolean
@@ -32,13 +65,9 @@ function ActionButton({
   children: React.ReactNode
 }) {
   const base: React.CSSProperties = {
-    border: 'none',
-    borderRadius: '6px',
-    padding: '5px 12px',
-    fontSize: '13px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.5 : 1,
-    marginTop: '8px',
+    border: 'none', borderRadius: '6px', padding: '5px 12px',
+    fontSize: '13px', cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1, marginTop: '8px',
   }
   const variants: Record<string, React.CSSProperties> = {
     primary: { background: '#3b82f6', color: '#fff' },
@@ -58,28 +87,12 @@ function ArrowBtn({ onClick, title = 'Посмотреть задачу' }: { on
       onClick={onClick}
       title={title}
       style={{
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        color: '#94a3b8',
-        padding: '2px 5px',
-        borderRadius: '4px',
-        fontSize: '13px',
-        display: 'flex',
-        alignItems: 'center',
-        flexShrink: 0,
-        lineHeight: 1,
+        background: 'none', border: 'none', cursor: 'pointer',
+        color: '#94a3b8', padding: '2px 5px', borderRadius: '4px',
+        fontSize: '13px', display: 'flex', alignItems: 'center', flexShrink: 0, lineHeight: 1,
       }}
-      onMouseEnter={(e) => {
-        const el = e.currentTarget as HTMLElement
-        el.style.color = '#3b82f6'
-        el.style.background = '#eff6ff'
-      }}
-      onMouseLeave={(e) => {
-        const el = e.currentTarget as HTMLElement
-        el.style.color = '#94a3b8'
-        el.style.background = 'none'
-      }}
+      onMouseEnter={(e) => { const el = e.currentTarget as HTMLElement; el.style.color = '#3b82f6'; el.style.background = '#eff6ff' }}
+      onMouseLeave={(e) => { const el = e.currentTarget as HTMLElement; el.style.color = '#94a3b8'; el.style.background = 'none' }}
     >
       ↗
     </button>
@@ -92,17 +105,9 @@ function DownloadBtn({ onClick, title = 'Скачать' }: { onClick: () => voi
       onClick={onClick}
       title={title}
       style={{
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        color: '#94a3b8',
-        padding: '2px 5px',
-        borderRadius: '4px',
-        fontSize: '14px',
-        display: 'flex',
-        alignItems: 'center',
-        flexShrink: 0,
-        lineHeight: 1,
+        background: 'none', border: 'none', cursor: 'pointer',
+        color: '#94a3b8', padding: '2px 5px', borderRadius: '4px',
+        fontSize: '14px', display: 'flex', alignItems: 'center', flexShrink: 0, lineHeight: 1,
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#94a3b8' }}
@@ -115,26 +120,132 @@ function DownloadBtn({ onClick, title = 'Скачать' }: { onClick: () => voi
 function Spinner() {
   return (
     <span style={{
-      display: 'inline-block',
-      width: '11px',
-      height: '11px',
-      border: '2px solid rgba(255,255,255,0.35)',
-      borderTopColor: 'rgba(255,255,255,0.9)',
-      borderRadius: '50%',
-      animation: 'spin 0.65s linear infinite',
-      verticalAlign: 'middle',
-      marginRight: '5px',
+      display: 'inline-block', width: '11px', height: '11px',
+      border: '2px solid rgba(255,255,255,0.35)', borderTopColor: 'rgba(255,255,255,0.9)',
+      borderRadius: '50%', animation: 'spin 0.65s linear infinite',
+      verticalAlign: 'middle', marginRight: '5px',
     }} />
   )
 }
 
+// ---------------------------------------------------------------------------
+// ManualEditWarning
+// ---------------------------------------------------------------------------
+function ManualEditWarning({ editedAt, prevStageName }: { editedAt: string; prevStageName: string }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: '6px',
+      background: '#fffbeb', border: '1px solid #fcd34d',
+      borderRadius: '6px', padding: '7px 9px', marginTop: '8px',
+    }}>
+      <AlertTriangle size={13} color="#d97706" style={{ flexShrink: 0, marginTop: 1 }} />
+      <span style={{ fontSize: '11px', color: '#92400e', lineHeight: 1.5 }}>
+        Этап <strong>«{prevStageName}»</strong> изменён вручную {formatDate(editedAt)}. Рекомендуется переформировать этот этап.
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// FileRow (compact — для канбана)
+// ---------------------------------------------------------------------------
+interface FileRowProps {
+  name: string
+  size: number
+  mime: string
+  date: string
+  onDownload: () => void
+  onOpenEditor?: () => void
+  onOpenTask?: () => void
+}
+
+function FileRowCompact({ name, size, mime, date, onDownload, onOpenEditor, onOpenTask }: FileRowProps) {
+  const isXlsx = mime.includes('spreadsheet') || mime.includes('excel') || name.endsWith('.xlsx') || name.endsWith('.xls')
+  const [hover, setHover] = useState(false)
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: '5px',
+        background: hover ? '#f1f5f9' : '#f8fafc',
+        border: '1px solid #e2e8f0', borderRadius: '6px',
+        padding: '5px 7px', transition: 'background 0.1s',
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <FileText size={12} color="#94a3b8" style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '11px', color: '#1e293b', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {name}
+        </div>
+        <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+          {formatSize(size)} · {date}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+        <button
+          title="Скачать"
+          onClick={onDownload}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px 4px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#94a3b8' }}
+        >
+          <Download size={11} />
+        </button>
+        {onOpenTask && (
+          <button
+            title="Открыть задачу"
+            onClick={onOpenTask}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px 4px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#64748b' }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#94a3b8' }}
+          >
+            <ExternalLink size={11} />
+          </button>
+        )}
+        {onOpenEditor && isXlsx && (
+          <button
+            title="Открыть в онлайн-редакторе"
+            onClick={onOpenEditor}
+            style={{ background: '#3b82f6', border: 'none', cursor: 'pointer', color: '#fff', padding: '2px 5px', borderRadius: '4px', display: 'flex', alignItems: 'center', fontSize: '10px', fontWeight: 600 }}
+          >
+            <Edit3 size={11} />
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// SectionLabel
+// ---------------------------------------------------------------------------
+function SectionLabel({ color, children }: { color: string; children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: '10px', color, fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      {children}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 const TYPE_LABEL: Record<string, string> = {
   LIST_FROM_PROJECT: 'Перечень из проекта',
   LIST_FROM_GRAND: 'Перечень из Гранд-сметы',
 }
 
-// -------- Стадия «Перечень» --------
-function ListStage({ card }: Props) {
+interface StageProps {
+  card: WorkflowCard
+  filesMeta: CardDetail | null
+  onOpenEditor: (state: EditorModalState) => void
+}
+
+// ---------------------------------------------------------------------------
+// Stage: Перечень
+// ---------------------------------------------------------------------------
+function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
   const pending = pendingListTasks[card.id]
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>(
@@ -148,7 +259,6 @@ function ListStage({ card }: Props) {
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
 
-  // Синхронизируем: pending может появиться позже монтирования (Zustand нотифицирует до setPendingListTask)
   useEffect(() => {
     if (pending && files.length === 0) {
       setTaskType(pending.task_type)
@@ -197,17 +307,17 @@ function ListStage({ card }: Props) {
     </button>
   )
 
-  const TypeHeader = () => (
-    <div style={{ fontSize: '10px', color: '#7c3aed', fontWeight: 700, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-      {typeLabel}
-    </div>
-  )
+  const sourceStage = filesMeta?.source_stage
+  const nextStage: StageDetail | null = filesMeta?.completeness_stage ?? filesMeta?.estimate_stage ?? filesMeta?.optimization_stage ?? null
+  const showWarning = sourceStage?.manually_edited_at
+    ? wasEditedBefore(sourceStage.manually_edited_at, nextStage?.task_created_at ?? null)
+    : false
 
-  // Состояние: задача не создана — форма запуска
+  // Задача не создана — форма запуска
   if (task === null) {
     return (
       <div>
-        <TypeHeader />
+        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
         <FileList />
         <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleAddFiles} />
         <AddFileBtn />
@@ -233,11 +343,11 @@ function ListStage({ card }: Props) {
     )
   }
 
-  // Состояние: в очереди или выполняется — только прогресс
+  // В очереди / выполняется
   if (task.status === 'pending' || task.status === 'processing') {
     return (
       <div>
-        <TypeHeader />
+        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
           <LumaSpin size="sm" color="#d97706" />
           <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
@@ -250,25 +360,83 @@ function ListStage({ card }: Props) {
     )
   }
 
-  // Состояние: завершено — тип + скачать + стрелка
+  // Завершено
   if (task.status === 'completed') {
     return (
       <div>
-        <TypeHeader />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-          <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
-          <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
-        </div>
+        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+
+        {/* Исходные файлы */}
+        {sourceStage && sourceStage.input_files.length > 0 && (
+          <div style={{ marginBottom: '6px' }}>
+            <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>Исходные файлы:</div>
+            {sourceStage.input_files.map(f => (
+              <div key={f.index} style={{ marginBottom: '3px' }}>
+                <FileRowCompact
+                  name={f.name}
+                  size={f.size_bytes}
+                  mime={f.mime_type}
+                  date={formatDate(sourceStage.task_created_at)}
+                  onDownload={() => downloadInputFileById(task.id, f.index)}
+                  onOpenTask={() => setTaskModalOpen(true)}
+                  onOpenEditor={() => onOpenEditor({
+                    taskId: task.id,
+                    title: `Исходный файл — ${f.name}`,
+                    fileSlot: 'input',
+                    fileIndex: f.index,
+                  })}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Результат (перечень) */}
+        {sourceStage && sourceStage.result_files.length > 0 ? (
+          <div style={{ marginBottom: '4px' }}>
+            <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>Перечень:</div>
+            {sourceStage.result_files.map(f => (
+              <div key={f.result_id} style={{ marginBottom: '3px' }}>
+                <FileRowCompact
+                  name={f.file_name}
+                  size={f.size_bytes}
+                  mime={f.mime_type}
+                  date={formatDate(f.created_at)}
+                  onDownload={() => downloadSlotFileById(task.id, f.slot)}
+                  onOpenTask={() => setTaskModalOpen(true)}
+                  onOpenEditor={() => onOpenEditor({
+                    taskId: task.id,
+                    title: `Перечень — ${f.file_name}`,
+                    fileSlot: 'result',
+                  })}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          // Fallback если filesMeta ещё не загружен
+          !sourceStage && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
+              <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
+            </div>
+          )
+        )}
+
+        {showWarning && nextStage && (
+          <ManualEditWarning editedAt={sourceStage!.manually_edited_at!} prevStageName="Перечень" />
+        )}
+
         <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
       </div>
     )
   }
 
-  // Состояние: ошибка / отменено — форма повтора с файлами
+  // Ошибка / отменено — форма повтора
   return (
     <div>
-      <TypeHeader />
+      <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', marginBottom: '8px' }}>
         <TaskStatusBadge task={task} />
         <ArrowBtn onClick={() => setTaskModalOpen(true)} />
@@ -298,8 +466,10 @@ function ListStage({ card }: Props) {
   )
 }
 
-// -------- Стадия «Полнота» --------
-function CompletenessStage({ card }: Props) {
+// ---------------------------------------------------------------------------
+// Stage: Полнота
+// ---------------------------------------------------------------------------
+function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.completeness_task
@@ -318,29 +488,61 @@ function CompletenessStage({ card }: Props) {
       ? 'CHECK_PROJECT_COMPLETENESS'
       : 'CHECK_LIST_COMPLETENESS'
 
+  const sourceStage = filesMeta?.source_stage
+  const completenessStage = filesMeta?.completeness_stage
+  const nextStage: StageDetail | null = filesMeta?.estimate_stage ?? filesMeta?.optimization_stage ?? null
+
+  const listEditedWarning = sourceStage?.manually_edited_at && completenessStage
+    ? wasEditedBefore(sourceStage.manually_edited_at, completenessStage.task_created_at)
+    : false
+
+  const completenessEditedWarning = completenessStage?.manually_edited_at && nextStage
+    ? wasEditedBefore(completenessStage.manually_edited_at, nextStage.task_created_at)
+    : false
+
   const sectionLabelStyle: React.CSSProperties = {
-    fontSize: '10px',
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    marginBottom: '4px',
+    fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: '0.05em', marginBottom: '4px',
   }
 
   return (
     <div>
-      {/* Блок 1: итог стадии «Перечень» */}
+      {/* Итог стадии «Перечень» */}
       {listTask !== null && listTask.status === 'completed' && (
         <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
           <div style={{ ...sectionLabelStyle, color: '#7c3aed' }}>{listTypeLabel}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-            <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
-            <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
-          </div>
+          {sourceStage && sourceStage.result_files.length > 0 ? (
+            sourceStage.result_files.map(f => (
+              <div key={f.result_id} style={{ marginBottom: '3px' }}>
+                <FileRowCompact
+                  name={f.file_name}
+                  size={f.size_bytes}
+                  mime={f.mime_type}
+                  date={formatDate(f.created_at)}
+                  onDownload={() => downloadSlotFileById(listTask.id, f.slot)}
+                  onOpenTask={() => setListTaskModalOpen(true)}
+                  onOpenEditor={() => onOpenEditor({
+                    taskId: listTask.id,
+                    title: `Перечень — ${f.file_name}`,
+                    fileSlot: 'result',
+                  })}
+                />
+              </div>
+            ))
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
+              <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
+            </div>
+          )}
+          {listEditedWarning && (
+            <ManualEditWarning editedAt={sourceStage!.manually_edited_at!} prevStageName="Перечень" />
+          )}
         </div>
       )}
 
-      {/* Блок 2: задача проверки полноты */}
+      {/* Задача проверки полноты */}
       {task === null && (
         <ActionButton onClick={async () => { await startTask(card.id, { task_type: getCompletenessType() }) }} disabled={submitting}>
           {submitting ? 'Запускаю…' : 'Запустить проверку полноты'}
@@ -365,11 +567,34 @@ function CompletenessStage({ card }: Props) {
       {task !== null && task.status === 'completed' && (
         <div>
           <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-            <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
-            <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу проверки" />
-          </div>
+          {completenessStage && completenessStage.result_files.length > 0 ? (
+            completenessStage.result_files.map(f => (
+              <div key={f.result_id} style={{ marginBottom: '3px' }}>
+                <FileRowCompact
+                  name={f.file_name}
+                  size={f.size_bytes}
+                  mime={f.mime_type}
+                  date={formatDate(f.created_at)}
+                  onDownload={() => downloadSlotFileById(task.id, f.slot)}
+                  onOpenTask={() => setTaskModalOpen(true)}
+                  onOpenEditor={() => onOpenEditor({
+                    taskId: task.id,
+                    title: `Полнота — ${f.file_name}`,
+                    fileSlot: 'result',
+                  })}
+                />
+              </div>
+            ))
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
+              <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу проверки" />
+            </div>
+          )}
+          {completenessEditedWarning && (
+            <ManualEditWarning editedAt={completenessStage!.manually_edited_at!} prevStageName="Проверка полноты" />
+          )}
         </div>
       )}
 
@@ -399,8 +624,10 @@ function CompletenessStage({ card }: Props) {
   )
 }
 
-// -------- Стадия «Смета» --------
-function EstimateStage({ card }: Props) {
+// ---------------------------------------------------------------------------
+// Stage: Смета
+// ---------------------------------------------------------------------------
+function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.estimate_task
@@ -410,7 +637,7 @@ function EstimateStage({ card }: Props) {
   const listCompleted = listTask?.status === 'completed'
   const completenessCompleted = completenessTask?.status === 'completed'
 
-  const [sourceStage, setSourceStage] = useState<1 | 2>(completenessCompleted ? 2 : 1)
+  const [sourceStageNum, setSourceStageNum] = useState<1 | 2>(completenessCompleted ? 2 : 1)
   const [listTaskModalOpen, setListTaskModalOpen] = useState(false)
   const [completenessTaskModalOpen, setCompletenessTaskModalOpen] = useState(false)
   const [taskModalOpen, setTaskModalOpen] = useState(false)
@@ -424,46 +651,106 @@ function EstimateStage({ card }: Props) {
     : 'Перечень'
 
   const sectionLabelStyle: React.CSSProperties = {
-    fontSize: '10px',
-    fontWeight: 700,
-    textTransform: 'uppercase',
-    letterSpacing: '0.05em',
-    marginBottom: '4px',
+    fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: '0.05em', marginBottom: '4px',
   }
 
-  const handleCreate = async () => {
-    await startTask(card.id, { task_type: 'ESTIMATE_FROM_LIST', source_stage: sourceStage })
-  }
+  const sourceMetaStage = filesMeta?.source_stage
+  const completenessMetaStage = filesMeta?.completeness_stage
+  const estimateMetaStage = filesMeta?.estimate_stage
+  const nextStage: StageDetail | null = filesMeta?.optimization_stage ?? null
+
+  const listEditedWarning = sourceMetaStage?.manually_edited_at && estimateMetaStage
+    ? wasEditedBefore(sourceMetaStage.manually_edited_at, estimateMetaStage.task_created_at)
+    : false
+
+  const completenessEditedWarning = completenessMetaStage?.manually_edited_at && estimateMetaStage
+    ? wasEditedBefore(completenessMetaStage.manually_edited_at, estimateMetaStage.task_created_at)
+    : false
+
+  const estimateEditedWarning = estimateMetaStage?.manually_edited_at && nextStage
+    ? wasEditedBefore(estimateMetaStage.manually_edited_at, nextStage.task_created_at)
+    : false
 
   const canCreate = task === null || task.status === 'failed' || task.status === 'cancelled'
 
+  const handleCreate = async () => {
+    await startTask(card.id, { task_type: 'ESTIMATE_FROM_LIST', source_stage: sourceStageNum })
+  }
+
   return (
     <div>
-      {/* Блок 1: итог стадии «Перечень» */}
+      {/* Итог: Перечень */}
       {listTask !== null && listTask.status === 'completed' && (
         <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
           <div style={{ ...sectionLabelStyle, color: '#7c3aed' }}>{listTypeLabel}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-            <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
-            <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
-          </div>
+          {sourceMetaStage && sourceMetaStage.result_files.length > 0 ? (
+            sourceMetaStage.result_files.map(f => (
+              <div key={f.result_id} style={{ marginBottom: '3px' }}>
+                <FileRowCompact
+                  name={f.file_name}
+                  size={f.size_bytes}
+                  mime={f.mime_type}
+                  date={formatDate(f.created_at)}
+                  onDownload={() => downloadSlotFileById(listTask.id, f.slot)}
+                  onOpenTask={() => setListTaskModalOpen(true)}
+                  onOpenEditor={() => onOpenEditor({
+                    taskId: listTask.id,
+                    title: `Перечень — ${f.file_name}`,
+                    fileSlot: 'result',
+                  })}
+                />
+              </div>
+            ))
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
+              <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
+            </div>
+          )}
+          {listEditedWarning && (
+            <ManualEditWarning editedAt={sourceMetaStage!.manually_edited_at!} prevStageName="Перечень" />
+          )}
         </div>
       )}
 
-      {/* Блок 2: итог стадии «Полнота» (только если файл создан) */}
+      {/* Итог: Полнота */}
       {completenessTask !== null && completenessTask.status === 'completed' && (
         <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
           <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-            <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
-            <ArrowBtn onClick={() => setCompletenessTaskModalOpen(true)} title="Открыть задачу проверки" />
-          </div>
+          {completenessMetaStage && completenessMetaStage.result_files.length > 0 ? (
+            completenessMetaStage.result_files.map(f => (
+              <div key={f.result_id} style={{ marginBottom: '3px' }}>
+                <FileRowCompact
+                  name={f.file_name}
+                  size={f.size_bytes}
+                  mime={f.mime_type}
+                  date={formatDate(f.created_at)}
+                  onDownload={() => downloadSlotFileById(completenessTask.id, f.slot)}
+                  onOpenTask={() => setCompletenessTaskModalOpen(true)}
+                  onOpenEditor={() => onOpenEditor({
+                    taskId: completenessTask.id,
+                    title: `Полнота — ${f.file_name}`,
+                    fileSlot: 'result',
+                  })}
+                />
+              </div>
+            ))
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
+              <ArrowBtn onClick={() => setCompletenessTaskModalOpen(true)} title="Открыть задачу проверки" />
+            </div>
+          )}
+          {completenessEditedWarning && (
+            <ManualEditWarning editedAt={completenessMetaStage!.manually_edited_at!} prevStageName="Проверка полноты" />
+          )}
         </div>
       )}
 
-      {/* Блок 3: Смета из перечня */}
+      {/* Смета */}
       <div style={{ ...sectionLabelStyle, color: '#0f766e' }}>Смета из перечня</div>
 
       {task !== null && (task.status === 'pending' || task.status === 'processing') && (
@@ -477,11 +764,30 @@ function EstimateStage({ card }: Props) {
       )}
 
       {task !== null && task.status === 'completed' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-          <DownloadBtn onClick={() => safeDownload(task.id, 'estimate')} title="Скачать смету" />
-          <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
-        </div>
+        estimateMetaStage && estimateMetaStage.result_files.length > 0 ? (
+          estimateMetaStage.result_files.map(f => (
+            <div key={f.result_id} style={{ marginBottom: '3px' }}>
+              <FileRowCompact
+                name={f.file_name}
+                size={f.size_bytes}
+                mime={f.mime_type}
+                date={formatDate(f.created_at)}
+                onDownload={() => downloadSlotFileById(task.id, f.slot)}
+                onOpenTask={() => setTaskModalOpen(true)}
+                onOpenEditor={() => onOpenEditor({
+                  taskId: task.id,
+                  title: `Смета — ${f.file_name}`,
+                })}
+              />
+            </div>
+          ))
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+            <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+            <DownloadBtn onClick={() => safeDownload(task.id, 'estimate')} title="Скачать смету" />
+            <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
+          </div>
+        )
       )}
 
       {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
@@ -493,6 +799,10 @@ function EstimateStage({ card }: Props) {
         </div>
       )}
 
+      {estimateEditedWarning && nextStage && (
+        <ManualEditWarning editedAt={estimateMetaStage!.manually_edited_at!} prevStageName="Смета из перечня" />
+      )}
+
       {canCreate && (
         <div style={{ marginTop: task !== null && (task.status === 'failed' || task.status === 'cancelled') ? '6px' : '4px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
           {noSource ? (
@@ -501,11 +811,11 @@ function EstimateStage({ card }: Props) {
             <>
               <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>Источник:</div>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', marginBottom: '4px', cursor: listCompleted ? 'pointer' : 'not-allowed', opacity: listCompleted ? 1 : 0.4 }}>
-                <input type="radio" value={1} checked={sourceStage === 1} disabled={!listCompleted} onChange={() => setSourceStage(1)} />
+                <input type="radio" value={1} checked={sourceStageNum === 1} disabled={!listCompleted} onChange={() => setSourceStageNum(1)} />
                 На основе перечня
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: completenessCompleted ? 'pointer' : 'not-allowed', opacity: completenessCompleted ? 1 : 0.4 }}>
-                <input type="radio" value={2} checked={sourceStage === 2} disabled={!completenessCompleted} onChange={() => setSourceStage(2)} />
+                <input type="radio" value={2} checked={sourceStageNum === 2} disabled={!completenessCompleted} onChange={() => setSourceStageNum(2)} />
                 На основе полноты
               </label>
               <div style={{ marginTop: '8px' }}>
@@ -531,17 +841,24 @@ function EstimateStage({ card }: Props) {
   )
 }
 
-// -------- Стадия «Оптимизация» --------
-function OptimizationStage({ card }: Props) {
+// ---------------------------------------------------------------------------
+// Stage: Оптимизация
+// ---------------------------------------------------------------------------
+function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const navigate = useNavigate()
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.optimization_task
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
+  const [archiveExpanded, setArchiveExpanded] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const estimateCompleted = card.estimate_task?.status === 'completed'
+  const optimizationMeta = filesMeta?.optimization_stage
+
+  const mainFile = optimizationMeta?.result_files.find(f => f.slot === 'optimized') ?? optimizationMeta?.result_files[0]
+  const archiveFiles = optimizationMeta?.result_files.filter(f => f.slot !== 'optimized' && f.slot !== 'source') ?? []
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null
@@ -575,10 +892,7 @@ function OptimizationStage({ card }: Props) {
         <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
           <div style={{ marginBottom: '8px' }}>
             <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Использовать смету из предыдущей стадии:</div>
-            <ActionButton
-              onClick={handleUsePrevious}
-              disabled={!estimateCompleted || submitting}
-            >
+            <ActionButton onClick={handleUsePrevious} disabled={!estimateCompleted || submitting}>
               {submitting ? 'Запускаю…' : 'Использовать смету'}
             </ActionButton>
             {!estimateCompleted && (
@@ -606,27 +920,118 @@ function OptimizationStage({ card }: Props) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          <ActionButton variant="outline" onClick={() => navigate(`/tasks/${task.id}/estimate`)}>
-            Открыть смету
-          </ActionButton>
+          {/* Текущая версия */}
+          {mainFile ? (
+            <div style={{ marginBottom: '6px' }}>
+              <FileRowCompact
+                name={mainFile.file_name}
+                size={mainFile.size_bytes}
+                mime={mainFile.mime_type}
+                date={formatDate(mainFile.created_at)}
+                onDownload={() => downloadSlotFileById(task.id, mainFile.slot)}
+                onOpenEditor={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы' })}
+              />
+            </div>
+          ) : (
+            <ActionButton variant="outline" onClick={() => navigate(`/tasks/${task.id}/estimate`)}>
+              Открыть смету
+            </ActionButton>
+          )}
+
+          {/* Архив версий */}
+          {archiveFiles.length > 0 && (
+            <div>
+              <button
+                onClick={() => setArchiveExpanded(e => !e)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '4px',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#64748b', fontSize: '11px', padding: '2px 0', marginBottom: '4px',
+                }}
+              >
+                {archiveExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                Архив версий ({archiveFiles.length})
+              </button>
+              {archiveExpanded && archiveFiles.map(f => (
+                <div key={f.result_id} style={{ marginBottom: '3px' }}>
+                  <FileRowCompact
+                    name={f.file_name}
+                    size={f.size_bytes}
+                    mime={f.mime_type}
+                    date={formatDate(f.created_at)}
+                    onDownload={() => downloadSlotFileById(task.id, f.slot)}
+                    onOpenEditor={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы' })}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-// -------- Диспетчер по стадии --------
-export function CardStageContent({ card }: Props) {
-  switch (card.stage) {
-    case 'list':
-      return <ListStage card={card} />
-    case 'completeness':
-      return <CompletenessStage card={card} />
-    case 'estimate':
-      return <EstimateStage card={card} />
-    case 'optimization':
-      return <OptimizationStage card={card} />
-    default:
-      return null
-  }
+// ---------------------------------------------------------------------------
+// CardStageContent — диспетчер с загрузкой filesMeta
+// ---------------------------------------------------------------------------
+export function CardStageContent({ card }: { card: WorkflowCard }) {
+  const [filesMeta, setFilesMeta] = useState<CardDetail | null>(null)
+  const metaFetching = useRef(false)
+  const [editorModal, setEditorModal] = useState<EditorModalState | null>(null)
+
+  const fetchMeta = useCallback(async () => {
+    if (metaFetching.current) return
+    metaFetching.current = true
+    try {
+      const data = await getCardFilesMeta(card.id)
+      setFilesMeta(data)
+    } catch {
+      // Молча игнорируем: fallback на упрощённый вид
+    } finally {
+      metaFetching.current = false
+    }
+  }, [card.id])
+
+  useEffect(() => {
+    fetchMeta()
+  }, [fetchMeta])
+
+  // Обновляем метаданные после сохранения в редакторе
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type === 'estimate-saved') {
+        fetchMeta()
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [fetchMeta])
+
+  const stageProps: StageProps = { card, filesMeta, onOpenEditor: setEditorModal }
+
+  return (
+    <>
+      {(() => {
+        switch (card.stage) {
+          case 'list':        return <ListStage {...stageProps} />
+          case 'completeness': return <CompletenessStage {...stageProps} />
+          case 'estimate':    return <EstimateStage {...stageProps} />
+          case 'optimization': return <OptimizationStage {...stageProps} />
+          default:            return null
+        }
+      })()}
+
+      {editorModal && (
+        <EstimateEditorModal
+          taskId={editorModal.taskId}
+          title={editorModal.title}
+          fileSlot={editorModal.fileSlot}
+          fileIndex={editorModal.fileIndex}
+          onClose={() => setEditorModal(null)}
+          onSaved={fetchMeta}
+        />
+      )}
+    </>
+  )
 }

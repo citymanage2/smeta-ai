@@ -70,6 +70,11 @@ export async function getCardDetail(cardId: string): Promise<CardDetail> {
   return resp.data
 }
 
+export async function getCardFilesMeta(cardId: string): Promise<CardDetail> {
+  const resp = await apiClient.get<CardDetail>(`/api/workflow-cards/${cardId}/files-meta`)
+  return resp.data
+}
+
 export async function downloadSlotFileById(taskId: string, slot: string): Promise<void> {
   const token = localStorage.getItem('token') ?? ''
   const baseUrl = import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com'

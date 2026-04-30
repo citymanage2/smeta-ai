@@ -281,7 +281,7 @@ Acceptance criteria из задачи → покрытие:
 - `frontend/src/stores/estimateEditor.ts` (добавить file_slot в loadVersions)
 - `frontend/src/api/estimateVersions.ts` (добавить file_slot query param)
 
-**Статус:** `[ ]`
+**Статус:** `[x]`
 
 ---
 
@@ -363,7 +363,7 @@ function wasEditedBefore(editedAt: string | null, nextStageCreatedAt: string | n
 - `frontend/src/api/workflowCards.ts`
 - `frontend/src/types/workflow.ts` (добавить типы CardFilesMeta)
 
-**Статус:** `[ ]`
+**Статус:** `[x]`
 
 ---
 
@@ -449,10 +449,12 @@ generic-режим             CardStageContent           ProjectCardPage
 ## Итоговый блок
 
 Реализован целиком: `[ ]`  
-Что осталось: `всё (план только создан)`
+Что осталось: Фазы 5 и 6 (frontend CardStageContent и ProjectCardPage)
 
 ---
 
 ## История сессий
 
 - 2026-04-30: план создан (режим bulletproof, planning only)
+- 2026-04-30: фаза 4 выполнена — generic-режим и embed-режим в EstimateOptimizer
+- 2026-04-30: фаза 5 выполнена — CardStageContent с filesMeta, FileRow, ManualEditWarning, EditorModal; EstimateEditorModal поддерживает fileSlot/fileIndex; getCardFilesMeta в workflowCards.ts
