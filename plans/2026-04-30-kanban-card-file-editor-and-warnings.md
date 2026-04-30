@@ -244,21 +244,19 @@ Acceptance criteria из задачи → покрытие:
 **Цель**: корректно выставлять `manually_edited_at` и возвращать его в API
 
 **Задачи:**
-1. Убедиться что `manually_edited_at` выставляется при сохранении версии для ВСЕХ типов задач (уже делается в estimate_versions.py → проверить что и для LIST/COMPLETENESS путь покрыт после Фазы 2)
+1. ✅ Убедиться что `manually_edited_at` выставляется при сохранении версии для ВСЕХ типов задач — `save_rows` покрывает LIST/COMPLETENESS; добавлено в `save_expenses` и `apply_proposals` для ESTIMATE
 
-2. Обновить `GET /workflow-cards/{card_id}/files-meta` (из Фазы 1) — включить `manually_edited_at` для каждой стадии
+2. ✅ `GET /workflow-cards/{card_id}/files-meta` — включает `manually_edited_at` через `_build_stage_meta` (строка 287 workflow_cards.py)
 
-3. Добавить в `CardFilesMetaResponse.StageDetail`:
-   - `manually_edited_at: Optional[str]` (уже есть в существующем `StageDetail`)
-   - Проверить что endpoint возвращает это поле
+3. ✅ `StageDetail` имеет `manually_edited_at: Optional[str]` (строка 79 schemas/workflow_card.py)
 
-4. Логика определения "устаревших" этапов — чисто фронтенд (уже реализована в ProjectCardPage.tsx через `wasEditedBefore`). Реализовать ту же логику в CardStageContent.
+4. Логика определения "устаревших" этапов — чисто фронтенд (уже реализована в ProjectCardPage.tsx через `wasEditedBefore`). Реализовать ту же логику в CardStageContent (→ Фаза 5).
 
 **Файлы:**
-- `backend/app/routers/workflow_cards.py` (проверка)
-- `backend/app/routers/estimate_versions.py` (проверка)
+- `backend/app/routers/workflow_cards.py` (проверено)
+- `backend/app/routers/estimate_versions.py` (добавлен manually_edited_at в save_expenses и apply_proposals)
 
-**Статус:** `[ ]`
+**Статус:** `[x]`
 
 ---
 

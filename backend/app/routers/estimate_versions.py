@@ -234,11 +234,14 @@ async def save_expenses(
     current_user: dict = Depends(get_current_user),
 ):
     """Save additional expense percentages for a specific version."""
+    from datetime import datetime, timezone
     version = await _get_version_or_404(task_id, version_id, db)
     version.overhead_pct = body.overhead_pct
     version.transport_pct = body.transport_pct
     version.contingency_pct = body.contingency_pct
     version.expenses_overridden = True
+    task = await _get_task_or_404(task_id, db)
+    task.manually_edited_at = datetime.now(timezone.utc)
     await db.commit()
     return {"version_id": version_id, "expenses_overridden": True}
 
@@ -1168,6 +1171,9 @@ async def apply_proposals(
         expenses_overridden=version.expenses_overridden,
     )
     db.add(new_version)
+    task = await _get_task_or_404(task_id, db)
+    from datetime import datetime, timezone
+    task.manually_edited_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(new_version)
 
