@@ -813,7 +813,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
             <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
-            <DownloadBtn onClick={() => safeDownload(task.id, 'estimate')} title="Скачать смету" />
+            <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать смету" />
             <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
           </div>
         )

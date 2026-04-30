@@ -734,6 +734,7 @@ class TaskProcessor:
             else:
                 raise NotImplementedError(f"Тип задачи {task.task_type!r} ещё не настроен")
 
+            await self._auto_fill_estimate_slot()
             await self.update_status("completed")
 
         except TaskCancelledError:
