@@ -462,3 +462,4 @@ generic-режим             CardStageContent           ProjectCardPage
 - 2026-04-30: фаза 4 выполнена — generic-режим и embed-режим в EstimateOptimizer
 - 2026-04-30: фаза 5 выполнена — CardStageContent с filesMeta, FileRow, ManualEditWarning, EditorModal; EstimateEditorModal поддерживает fileSlot/fileIndex; getCardFilesMeta в workflowCards.ts
 - 2026-04-30: фаза 6 выполнена — ProjectCardPage: 6 парных wasEditedBefore, предупреждения на правильных этапах, редактор для всех типов задач, isEstimateType удалён, дата input-файлов исправлена
+- 2026-04-30: аудит — добавлен CollapsibleSection для summary-блоков в CompletenessStage и EstimateStage (критерий 5.3 — collapse/expand); по умолчанию свёрнуто, раскрывается при наличии ManualEditWarning

@@ -229,6 +229,38 @@ function SectionLabel({ color, children }: { color: string; children: React.Reac
 }
 
 // ---------------------------------------------------------------------------
+// CollapsibleSection — предыдущие стадии внутри карточки
+// ---------------------------------------------------------------------------
+function CollapsibleSection({
+  color, label, defaultExpanded = true, children,
+}: {
+  color: string
+  label: string
+  defaultExpanded?: boolean
+  children: React.ReactNode
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  return (
+    <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '4px', width: '100%',
+          background: 'none', border: 'none', cursor: 'pointer',
+          padding: '0 0 4px', marginBottom: expanded ? '4px' : 0,
+        }}
+      >
+        <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color, flex: 1, textAlign: 'left' }}>
+          {label}
+        </span>
+        {expanded ? <ChevronUp size={11} color="#94a3b8" /> : <ChevronDown size={11} color="#94a3b8" />}
+      </button>
+      {expanded && children}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 const TYPE_LABEL: Record<string, string> = {
@@ -507,10 +539,9 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
   return (
     <div>
-      {/* Итог стадии «Перечень» */}
+      {/* Итог стадии «Перечень» — сворачиваемый */}
       {listTask !== null && listTask.status === 'completed' && (
-        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
-          <div style={{ ...sectionLabelStyle, color: '#7c3aed' }}>{listTypeLabel}</div>
+        <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning}>
           {sourceStage && sourceStage.result_files.length > 0 ? (
             sourceStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -539,7 +570,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
           {listEditedWarning && (
             <ManualEditWarning editedAt={sourceStage!.manually_edited_at!} prevStageName="Перечень" />
           )}
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* Задача проверки полноты */}
@@ -680,10 +711,9 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
   return (
     <div>
-      {/* Итог: Перечень */}
+      {/* Итог: Перечень — сворачиваемый */}
       {listTask !== null && listTask.status === 'completed' && (
-        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
-          <div style={{ ...sectionLabelStyle, color: '#7c3aed' }}>{listTypeLabel}</div>
+        <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning}>
           {sourceMetaStage && sourceMetaStage.result_files.length > 0 ? (
             sourceMetaStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -712,13 +742,12 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
           {listEditedWarning && (
             <ManualEditWarning editedAt={sourceMetaStage!.manually_edited_at!} prevStageName="Перечень" />
           )}
-        </div>
+        </CollapsibleSection>
       )}
 
-      {/* Итог: Полнота */}
+      {/* Итог: Полнота — сворачиваемый */}
       {completenessTask !== null && completenessTask.status === 'completed' && (
-        <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
-          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+        <CollapsibleSection color="#3b82f6" label="Проверка полноты" defaultExpanded={!!completenessEditedWarning}>
           {completenessMetaStage && completenessMetaStage.result_files.length > 0 ? (
             completenessMetaStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -747,7 +776,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
           {completenessEditedWarning && (
             <ManualEditWarning editedAt={completenessMetaStage!.manually_edited_at!} prevStageName="Проверка полноты" />
           )}
-        </div>
+        </CollapsibleSection>
       )}
 
       {/* Смета */}
