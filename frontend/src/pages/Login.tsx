@@ -18,12 +18,8 @@ const Login: React.FC = () => {
     setError('');
 
     try {
-      const result = await login(password);
-      if (result.role === 'admin') {
-        navigate('/admin');
-      } else {
-        navigate('/task/create');
-      }
+      await login(password);
+      navigate('/system');
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string }; status?: number }; request?: unknown };
       if (axiosError.response?.status === 401) {

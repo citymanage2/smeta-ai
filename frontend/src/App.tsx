@@ -14,10 +14,11 @@ import UnassignedTasks from './pages/UnassignedTasks';
 import Calculator from './pages/Calculator';
 import Trash from './pages/Trash';
 import PriceCatalog from './pages/PriceCatalog';
+import System from './pages/System';
 import { useAuthStore } from './stores/auth';
 
 const App: React.FC = () => {
-  const { isAuthenticated, isAdmin } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
 
   return (
     <BrowserRouter>
@@ -27,7 +28,7 @@ const App: React.FC = () => {
           path="/login"
           element={
             isAuthenticated ? (
-              <Navigate to={isAdmin ? '/admin' : '/task/create'} replace />
+              <Navigate to="/system" replace />
             ) : (
               <Login />
             )
@@ -128,12 +129,22 @@ const App: React.FC = () => {
           }
         />
 
+        {/* System dashboard */}
+        <Route
+          path="/system"
+          element={
+            <ProtectedRoute>
+              <System />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Default redirect */}
         <Route
           path="/"
           element={
             <Navigate
-              to={isAuthenticated ? (isAdmin ? '/admin' : '/task/create') : '/login'}
+              to={isAuthenticated ? '/system' : '/login'}
               replace
             />
           }
@@ -144,7 +155,7 @@ const App: React.FC = () => {
           path="*"
           element={
             <Navigate
-              to={isAuthenticated ? (isAdmin ? '/admin' : '/task/create') : '/login'}
+              to={isAuthenticated ? '/system' : '/login'}
               replace
             />
           }
