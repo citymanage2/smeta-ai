@@ -8,6 +8,13 @@ interface EstimateComparisonProps {
   versions: EstimateVersionSummary[];
 }
 
+interface CustomerEstimateValues {
+  works: number;
+  materials: number;
+  vat: number;
+  grand_total: number;
+}
+
 interface AlignedRow {
   lineage_id: string;
   name: string;
@@ -105,11 +112,45 @@ function alignRows(versionData: Array<{ id: string; rows: EstimateRow[] }>): Ali
   });
 }
 
+function parseInputNumber(s: string): number {
+  const cleaned = s.replace(/\s/g, '').replace(',', '.');
+  const n = parseFloat(cleaned);
+  return isNaN(n) ? 0 : Math.max(0, n);
+}
+
 const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, versions }) => {
   const visibleVersions = versions.filter((v) => !v.is_rolled_back);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(visibleVersions.map((v) => v.id)));
   const [fullVersions, setFullVersions] = useState<Record<string, EstimateVersionFull>>({});
   const [loading, setLoading] = useState(false);
+
+  const storageKey = `customer_estimate_${taskId}`;
+
+  const [showCustomerEstimate, setShowCustomerEstimate] = useState<boolean>(() => {
+    try { return localStorage.getItem(`${storageKey}_show`) === 'true'; } catch { return false; }
+  });
+
+  const [customerValues, setCustomerValues] = useState<CustomerEstimateValues>(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      return saved ? JSON.parse(saved) : { works: 0, materials: 0, vat: 0, grand_total: 0 };
+    } catch { return { works: 0, materials: 0, vat: 0, grand_total: 0 }; }
+  });
+
+  const updateCustomerField = (field: keyof CustomerEstimateValues, value: number) => {
+    setCustomerValues((prev) => {
+      const next = { ...prev, [field]: value };
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  const toggleCustomerEstimate = () => {
+    setShowCustomerEstimate((prev) => {
+      try { localStorage.setItem(`${storageKey}_show`, String(!prev)); } catch { /* ignore */ }
+      return !prev;
+    });
+  };
 
   // Load full versions for selected ids
   useEffect(() => {
@@ -147,9 +188,12 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
 
   // Original version for delta calc
   const originalVersion = selectedVersions.find((v) => v.version_label === 'original') ?? selectedVersions[0];
-  const clientVersion = selectedVersions.find((v) => v.version_label === 'client');
   const origTotals = originalVersion ? totalsMap[originalVersion.id] : null;
-  const clientTotals = clientVersion ? totalsMap[clientVersion.id] : null;
+
+  // Customer estimate grand_total for "% к смете заказчика" row
+  const customerGrandTotal = showCustomerEstimate && customerValues.grand_total > 0
+    ? customerValues.grand_total
+    : null;
 
   const toggleVersion = (id: string) => {
     setSelectedIds((prev) => {
@@ -186,6 +230,31 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
       {/* Version selector + export button */}
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px', alignItems: 'center' }}>
         <span style={{ fontSize: '13px', color: '#64748b', paddingTop: '4px' }}>Показать версии:</span>
+
+        {/* Customer estimate toggle — always first */}
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 10px',
+            fontSize: '13px',
+            borderRadius: '6px',
+            border: showCustomerEstimate ? '1px solid #d97706' : '1px solid #e2e8f0',
+            background: showCustomerEstimate ? '#fffbeb' : '#fff',
+            cursor: 'pointer',
+            color: showCustomerEstimate ? '#d97706' : '#374151',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showCustomerEstimate}
+            onChange={toggleCustomerEstimate}
+            style={{ margin: 0 }}
+          />
+          Смета от заказчика
+        </label>
+
         {visibleVersions.map((v) => (
           <label
             key={v.id}
@@ -235,12 +304,18 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
       {loading && <SectionLoader message="Загрузка данных версий..." />}
 
       {/* Totals summary table */}
-      {selectedVersions.length > 0 && (
+      {(selectedVersions.length > 0 || showCustomerEstimate) && (
         <div style={{ overflowX: 'auto', marginBottom: '28px' }}>
           <table style={tableStyle}>
             <thead>
               <tr>
                 <th style={{ ...thStyle, textAlign: 'left', minWidth: '200px' }}>Показатель</th>
+                {showCustomerEstimate && (
+                  <th style={{ ...thStyle, minWidth: '160px', background: '#fffbeb', color: '#d97706' }}>
+                    Смета от заказчика
+                    <div style={{ fontSize: '11px', fontWeight: 400, color: '#b45309' }}>ввод вручную</div>
+                  </th>
+                )}
                 {selectedVersions.map((v) => (
                   <th key={v.id} style={{ ...thStyle, minWidth: '150px' }}>
                     {v.version_display_name}
@@ -256,52 +331,93 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
                 ['total', 'Итого с расходами, руб'],
                 ['vat', `НДС ${Math.round(VAT * 100)}%, руб`],
                 ['grand_total', 'ИТОГО с НДС, руб'],
-              ] as [keyof VersionTotals, string][]).map(([key, label]) => (
-                <tr key={key} style={{ background: key === 'grand_total' ? '#f8fafc' : undefined }}>
-                  <td style={{ ...tdStyle, fontWeight: key === 'grand_total' ? 700 : 400 }}>
-                    {label}
-                  </td>
-                  {selectedVersions.map((v) => {
-                    const t = totalsMap[v.id];
-                    const val = t ? t[key] : null;
-                    const origVal = origTotals ? origTotals[key] : null;
-                    const delta = val != null && origVal != null && v.id !== originalVersion?.id
-                      ? val - origVal
-                      : null;
-                    return (
-                      <td
-                        key={v.id}
-                        style={{
-                          ...tdStyle,
-                          textAlign: 'right',
-                          fontWeight: key === 'grand_total' ? 700 : 400,
-                          color: key === 'grand_total' && delta != null ? deltaColor(delta) : undefined,
-                        }}
-                      >
-                        {val != null ? fmt(val) : '—'}
-                        {delta != null && key === 'grand_total' && (
-                          <div style={{ fontSize: '11px', color: deltaColor(delta), fontWeight: 400 }}>
-                            {deltaStr(delta)}
-                          </div>
+              ] as [keyof VersionTotals, string][]).map(([key, label]) => {
+                const isEditableCustomerField = key === 'works' || key === 'materials' || key === 'vat' || key === 'grand_total';
+                return (
+                  <tr key={key} style={{ background: key === 'grand_total' ? '#f8fafc' : undefined }}>
+                    <td style={{ ...tdStyle, fontWeight: key === 'grand_total' ? 700 : 400 }}>
+                      {label}
+                    </td>
+                    {showCustomerEstimate && (
+                      <td style={{ ...tdStyle, textAlign: 'right', background: '#fffbeb', padding: '4px 8px' }}>
+                        {isEditableCustomerField ? (
+                          <input
+                            type="number"
+                            min={0}
+                            value={customerValues[key as keyof CustomerEstimateValues] || ''}
+                            placeholder="0"
+                            onChange={(e) =>
+                              updateCustomerField(
+                                key as keyof CustomerEstimateValues,
+                                parseInputNumber(e.target.value),
+                              )
+                            }
+                            style={{
+                              width: '100%',
+                              border: '1px solid #fcd34d',
+                              borderRadius: '4px',
+                              padding: '3px 6px',
+                              textAlign: 'right',
+                              fontSize: '13px',
+                              fontWeight: key === 'grand_total' ? 700 : 400,
+                              outline: 'none',
+                              background: 'transparent',
+                              color: '#92400e',
+                              minWidth: '120px',
+                            }}
+                          />
+                        ) : (
+                          <span style={{ color: '#94a3b8' }}>—</span>
                         )}
                       </td>
-                    );
-                  })}
-                </tr>
-              ))}
+                    )}
+                    {selectedVersions.map((v) => {
+                      const t = totalsMap[v.id];
+                      const val = t ? t[key] : null;
+                      const origVal = origTotals ? origTotals[key] : null;
+                      const delta = val != null && origVal != null && v.id !== originalVersion?.id
+                        ? val - origVal
+                        : null;
+                      return (
+                        <td
+                          key={v.id}
+                          style={{
+                            ...tdStyle,
+                            textAlign: 'right',
+                            fontWeight: key === 'grand_total' ? 700 : 400,
+                            color: key === 'grand_total' && delta != null ? deltaColor(delta) : undefined,
+                          }}
+                        >
+                          {val != null ? fmt(val) : '—'}
+                          {delta != null && key === 'grand_total' && (
+                            <div style={{ fontSize: '11px', color: deltaColor(delta), fontWeight: 400 }}>
+                              {deltaStr(delta)}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
 
-              {/* % to client */}
-              {clientTotals && (
+              {/* % к смете заказчика — показываем если введены данные вручную */}
+              {customerGrandTotal != null && (
                 <tr>
                   <td style={{ ...tdStyle, color: '#64748b', fontSize: '12px' }}>
                     % к смете заказчика
                   </td>
+                  {showCustomerEstimate && (
+                    <td style={{ ...tdStyle, textAlign: 'right', background: '#fffbeb', color: '#b45309', fontSize: '12px', fontWeight: 600 }}>
+                      базис
+                    </td>
+                  )}
                   {selectedVersions.map((v) => {
                     const t = totalsMap[v.id];
-                    if (!t || !clientTotals || clientTotals.grand_total === 0) {
+                    if (!t || customerGrandTotal === 0) {
                       return <td key={v.id} style={{ ...tdStyle, textAlign: 'right' }}>—</td>;
                     }
-                    const pct = ((t.grand_total - clientTotals.grand_total) / clientTotals.grand_total) * 100;
+                    const pct = ((t.grand_total - customerGrandTotal) / customerGrandTotal) * 100;
                     return (
                       <td
                         key={v.id}
