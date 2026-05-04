@@ -16,7 +16,8 @@ from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
-from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text, pdf_to_content_block
+from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
+from app.utils.pdf_text_extractor import extract_pdf_hybrid
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.services import price_service as _price_svc
@@ -1002,15 +1003,28 @@ class TaskProcessor:
         await self.update_progress("Анализ проектной документации...")
 
         try:
-            pdf_block = pdf_to_content_block(pdf_bytes)
-        except ValueError as e:
-            raise ValueError(str(e))
+            pdf_result = extract_pdf_hybrid(pdf_bytes)
+        except Exception as e:
+            logger.error("PDF hybrid extract failed", task_id=self.task_id, error=str(e))
+            raise ValueError(f"Не удалось обработать PDF: {e}")
 
-        messages = [{"role": "user", "content": PROMPT_LIST_FROM_PROJECT}]
+        logger.info(
+            "PDF hybrid extract done",
+            task_id=self.task_id,
+            text_preview=pdf_result["text_content"][:100] if pdf_result["text_content"] else "",
+            drawing_pages=len(pdf_result["image_pages"]),
+        )
+
+        prompt_pass1 = (
+            pdf_result["text_content"] + "\n\n" + PROMPT_LIST_FROM_PROJECT
+            if pdf_result["text_content"]
+            else PROMPT_LIST_FROM_PROJECT
+        )
+        messages = [{"role": "user", "content": prompt_pass1}]
         data = await self._interruptible_claude_json_with_retry(
             messages,
             system_prompt=SYSTEM_BASE,
-            image_data=[pdf_block],
+            image_data=pdf_result["image_pages"] or None,
             processing_timeout=1200.0,
         )
 
@@ -1044,7 +1058,7 @@ class TaskProcessor:
                     data2 = await self._interruptible_claude_json_with_retry(
                         messages2,
                         system_prompt=SYSTEM_BASE,
-                        image_data=[pdf_block],
+                        image_data=pdf_result["image_pages"] or None,
                         processing_timeout=900.0,
                     )
                     resolved = data2.get("items", [])
