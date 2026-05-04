@@ -8,6 +8,7 @@ import DashboardFunnel from '../components/dashboard/DashboardFunnel';
 import DashboardProjects from '../components/dashboard/DashboardProjects';
 import DashboardChart from '../components/dashboard/DashboardChart';
 import DashboardPriceLists from '../components/dashboard/DashboardPriceLists';
+import DashboardCosts from '../components/dashboard/DashboardCosts';
 
 const System: React.FC = () => {
   const { data, loading, error, refetch } = useDashboardStats();
@@ -95,6 +96,11 @@ const System: React.FC = () => {
             {/* Блок 7 — Прайс-листы */}
             <Section>
               <DashboardPriceLists priceLists={data.price_lists} />
+            </Section>
+
+            {/* Блок 8 — Стоимость Claude API */}
+            <Section>
+              <DashboardCosts costs={data.api_costs} />
             </Section>
           </div>
         )}

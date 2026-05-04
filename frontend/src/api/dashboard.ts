@@ -75,6 +75,20 @@ export interface PriceListInfo {
   items_count: number;
 }
 
+export interface ApiCostByTaskType {
+  task_type: string | null;
+  cost_usd: number;
+  calls_count: number;
+}
+
+export interface ApiCosts {
+  today_usd: number;
+  week_usd: number;
+  month_usd: number;
+  cache_hit_rate: number;
+  by_task_type: ApiCostByTaskType[];
+}
+
 export interface DashboardStats {
   pulse: PulseStats;
   active_queue: ActiveTask[];
@@ -84,6 +98,7 @@ export interface DashboardStats {
   orphan_tasks_count: number;
   task_chart: ChartDay[];
   price_lists: PriceListInfo[];
+  api_costs: ApiCosts;
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
