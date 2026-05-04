@@ -5,7 +5,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -338,7 +338,7 @@ async def get_dashboard_stats(
     chart_rows = (
         await db.execute(
             select(
-                func.date_trunc("day", Task.created_at).label("day"),
+                func.date_trunc(text("'day'"), Task.created_at).label("day"),
                 Task.task_type,
                 func.count(Task.id).label("count"),
             )
@@ -346,8 +346,8 @@ async def get_dashboard_stats(
                 Task.deleted_at.is_(None),
                 Task.created_at >= ten_days_ago,
             )
-            .group_by(func.date_trunc("day", Task.created_at), Task.task_type)
-            .order_by(func.date_trunc("day", Task.created_at))
+            .group_by(func.date_trunc(text("'day'"), Task.created_at), Task.task_type)
+            .order_by(func.date_trunc(text("'day'"), Task.created_at))
         )
     ).all()
 
