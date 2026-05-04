@@ -4,7 +4,7 @@ import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
 import { PageLoader } from '../components/ui/LumaSpin';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
-import { getProject, updateProject, deleteProject, exportProject, downloadSlotFile, uploadFileToSlot } from '../api/projects';
+import { getProject, updateProject, deleteProject, downloadSlotFile, uploadFileToSlot } from '../api/projects';
 import { updateTask, renameSlotFile } from '../api/tasks';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
@@ -46,15 +46,18 @@ function InlineEditName({
   onSave,
   inputStyle,
   iconSize = 16,
+  hoverOnly = false,
 }: {
   value: string;
   onSave: (name: string) => Promise<void>;
   inputStyle?: React.CSSProperties;
   iconSize?: number;
+  hoverOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saveError, setSaveError] = useState('');
+  const [hovered, setHovered] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -93,7 +96,10 @@ function InlineEditName({
   if (editing) {
     return (
       <>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+        <span
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          onClick={e => e.stopPropagation()}
+        >
           <input
             ref={inputRef}
             value={draft}
@@ -121,13 +127,45 @@ function InlineEditName({
     );
   }
 
+  const showIcon = !hoverOnly || hovered;
+
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+    <span
+      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <span>{value}</span>
-      <button style={iconBtnStyle} onClick={() => { setDraft(value); setEditing(true); }}>
+      <button
+        style={{ ...iconBtnStyle, opacity: showIcon ? 1 : 0, transition: 'opacity 0.15s' }}
+        onClick={(e) => { e.stopPropagation(); setDraft(value); setEditing(true); }}
+      >
         <Pencil size={iconSize} />
       </button>
     </span>
+  );
+}
+
+function DescriptionRow({ description, onEdit }: { description: string | null; onEdit: () => void }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {description ? (
+        <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>{description}</p>
+      ) : (
+        <span style={{ fontSize: '13px', color: '#cbd5e1' }}>Без описания</span>
+      )}
+      <button
+        style={{ ...iconBtnStyle, opacity: hovered ? 1 : 0, transition: 'opacity 0.15s' }}
+        onClick={onEdit}
+      >
+        <Pencil size={14} />
+      </button>
+    </div>
   );
 }
 
@@ -189,7 +227,7 @@ function SlotRow({
       {fileName ? (
         <>
           {editing ? (
-            <>
+            <span style={{ display: 'contents' }} onClick={e => e.stopPropagation()}>
               <input
                 ref={inputRef}
                 value={draft}
@@ -206,12 +244,12 @@ function SlotRow({
               <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={cancelRename}>
                 <X size={13} />
               </button>
-            </>
+            </span>
           ) : (
             <>
               <span style={{ color: '#475569' }}>{fileName}</span>
               {onRename && slot !== 'source' && (
-                <button style={iconBtnStyle} onClick={() => { setDraft(fileName); setEditing(true); }}>
+                <button style={iconBtnStyle} onClick={(e) => { e.stopPropagation(); setDraft(fileName); setEditing(true); }}>
                   <Pencil size={11} />
                 </button>
               )}
@@ -265,7 +303,6 @@ const ProjectDetailPage: React.FC = () => {
   const [editDesc, setEditDesc] = useState('');
   const [editingDesc, setEditingDesc] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
   const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
@@ -345,18 +382,6 @@ const ProjectDetailPage: React.FC = () => {
     }
   }
 
-  async function handleExport(format: 'xlsx' | 'pdf') {
-    if (!projectId) return;
-    setExporting(format);
-    try {
-      await exportProject(projectId, format);
-    } catch {
-      setError('Ошибка при экспорте проекта');
-    } finally {
-      setExporting(null);
-    }
-  }
-
   if (loading) {
     return <Layout><PageLoader /></Layout>;
   }
@@ -397,6 +422,7 @@ const ProjectDetailPage: React.FC = () => {
                   onSave={handleSaveProjectName}
                   inputStyle={{ fontSize: '20px', fontWeight: 700, width: '280px' }}
                   iconSize={18}
+                  hoverOnly
                 />
               </h1>
 
@@ -417,34 +443,14 @@ const ProjectDetailPage: React.FC = () => {
                   </button>
                 </form>
               ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  {project.description ? (
-                    <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>{project.description}</p>
-                  ) : (
-                    <span style={{ fontSize: '13px', color: '#cbd5e1' }}>Без описания</span>
-                  )}
-                  <button style={iconBtnStyle} onClick={() => { setEditDesc(project.description ?? ''); setEditingDesc(true); }}>
-                    <Pencil size={14} />
-                  </button>
-                </div>
+                <DescriptionRow
+                  description={project.description ?? null}
+                  onEdit={() => { setEditDesc(project.description ?? ''); setEditingDesc(true); }}
+                />
               )}
             </div>
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-              <button
-                onClick={() => handleExport('xlsx')}
-                disabled={exporting !== null}
-                style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#15803d', fontWeight: 500 }}
-              >
-                {exporting === 'xlsx' ? '...' : '↓ xlsx'}
-              </button>
-              <button
-                onClick={() => handleExport('pdf')}
-                disabled={exporting !== null}
-                style={{ padding: '7px 14px', backgroundColor: 'transparent', border: '1px solid #e2e8f0', borderRadius: '8px', cursor: exporting !== null ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}
-              >
-                {exporting === 'pdf' ? '...' : '↓ PDF'}
-              </button>
               {isAdmin && (
                 <button onClick={handleDelete} style={{ padding: '7px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
                   Удалить
@@ -546,11 +552,13 @@ const ProjectDetailPage: React.FC = () => {
               return (
                 <div
                   key={task.id}
+                  onClick={() => navigate(`/tasks/${task.id}/status`)}
                   style={{
                     backgroundColor: '#fff',
                     border: '1px solid #e2e8f0',
                     borderRadius: '10px',
                     overflow: 'hidden',
+                    cursor: 'pointer',
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)')}
                   onMouseLeave={(e) => (e.currentTarget.style.boxShadow = 'none')}
@@ -567,6 +575,7 @@ const ProjectDetailPage: React.FC = () => {
                           onSave={(name) => handleSaveTaskName(task.id, name)}
                           inputStyle={{ fontSize: '13px', fontWeight: 600, width: '220px' }}
                           iconSize={14}
+                          hoverOnly
                         />
                       </div>
                       <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
@@ -591,8 +600,7 @@ const ProjectDetailPage: React.FC = () => {
                     </div>
 
                     <div
-                      onClick={() => { if (task.id) navigate(`/tasks/${task.id}/status`); }}
-                      style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', flexShrink: 0, marginLeft: '12px' }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, marginLeft: '12px' }}
                     >
                       {isEstimateType && task.estimation_status === 'estimated' && (
                         <button
