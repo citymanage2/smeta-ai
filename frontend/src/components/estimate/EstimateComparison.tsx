@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { EstimateVersionSummary, EstimateVersionFull, EstimateRow } from '../../types';
-import { getVersion, exportComparison } from '../../api/estimateVersions';
+import { getVersion, exportComparison, CustomerEstimateExport } from '../../api/estimateVersions';
 import { SectionLoader } from '../ui/LumaSpin';
 
 interface EstimateComparisonProps {
@@ -219,7 +219,11 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
     if (selectedVersions.length === 0) return;
     setExporting(true);
     try {
-      await exportComparison(taskId, selectedVersions.map((v) => v.id));
+      const customerExport: CustomerEstimateExport | undefined =
+        showCustomerEstimate && customerValues.grand_total > 0
+          ? { ...customerValues }
+          : undefined;
+      await exportComparison(taskId, selectedVersions.map((v) => v.id), customerExport);
     } finally {
       setExporting(false);
     }

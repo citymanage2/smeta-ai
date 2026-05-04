@@ -1222,8 +1222,16 @@ async def export_version(
     )
 
 
+class CustomerEstimateExport(BaseModel):
+    works: float = 0
+    materials: float = 0
+    vat: float = 0
+    grand_total: float = 0
+
+
 class ComparisonExportBody(BaseModel):
     version_ids: list[str]
+    customer_estimate: Optional[CustomerEstimateExport] = None
 
 
 @router.post("/{task_id}/estimate/comparison/export")
@@ -1263,7 +1271,8 @@ async def export_comparison(
     if not versions_data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Версии не найдены")
 
-    xlsx_bytes = generate_comparison_export(versions_data)
+    customer_est = body.customer_estimate.model_dump() if body.customer_estimate else None
+    xlsx_bytes = generate_comparison_export(versions_data, customer_estimate=customer_est)
 
     return StreamingResponse(
         _io.BytesIO(xlsx_bytes),

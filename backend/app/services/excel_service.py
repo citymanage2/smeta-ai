@@ -1330,12 +1330,160 @@ def generate_estimate_export(
     return buf.getvalue()
 
 
-def generate_comparison_export(versions: list) -> bytes:
+def _build_svodная(wb: "openpyxl.Workbook", versions: list, customer_estimate: Optional[dict]) -> None:
+    """Add 'Сводная' sheet as the first sheet with summary totals table."""
+    ws = wb.create_sheet("Сводная", 0)
+
+    VAT_RATE = _VAT_RATE
+    AMBER_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    AMBER_HEADER = PatternFill(start_color="D97706", end_color="D97706", fill_type="solid")
+    GRAND_BLUE = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    PCT_FILL = PatternFill(start_color="F0F4FF", end_color="F0F4FF", fill_type="solid")
+    VERSION_FILLS = [
+        PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid"),
+        PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid"),
+        PatternFill(start_color="ED7D31", end_color="ED7D31", fill_type="solid"),
+        PatternFill(start_color="A9D18E", end_color="A9D18E", fill_type="solid"),
+        PatternFill(start_color="F4B942", end_color="F4B942", fill_type="solid"),
+    ]
+
+    def _calc_totals(v: dict) -> dict:
+        rows = v["rows"]
+        works = sum(_row_cost_dict(r) for r in rows if r.get("type") == "work" and not r.get("is_excluded"))
+        materials = sum(_row_cost_dict(r) for r in rows if r.get("type") == "material" and not r.get("is_excluded"))
+        base = works + materials
+        ovh = base * v["overhead_pct"] / 100
+        trp = base * v["transport_pct"] / 100
+        cng = base * v["contingency_pct"] / 100
+        total = base + ovh + trp + cng
+        vat = total * VAT_RATE
+        return {"works": works, "materials": materials, "base": base, "total": total, "vat": vat, "grand_total": total + vat}
+
+    all_totals = [_calc_totals(v) for v in versions]
+
+    has_customer = customer_estimate is not None and customer_estimate.get("grand_total", 0) > 0
+
+    # Column layout: col1=Показатель, col2=Смета от заказчика (optional), col3..N=versions
+    col_offset = 2 if has_customer else 1
+    total_cols = col_offset + len(versions)
+
+    # Header row
+    h = ws.cell(row=1, column=1, value="Показатель")
+    h.font = Font(bold=True, color="FFFFFF", size=11)
+    h.fill = HEADER_FILL
+    h.border = THIN_BORDER
+    h.alignment = Alignment(horizontal="left")
+    ws.column_dimensions["A"].width = 30
+
+    if has_customer:
+        hc = ws.cell(row=1, column=2, value="Смета от заказчика")
+        hc.font = Font(bold=True, color="FFFFFF", size=11)
+        hc.fill = AMBER_HEADER
+        hc.border = THIN_BORDER
+        hc.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[get_column_letter(2)].width = 20
+
+    for vi, v in enumerate(versions):
+        ci = col_offset + 1 + vi
+        hv = ws.cell(row=1, column=ci, value=v["version_display_name"])
+        hv.font = Font(bold=True, color="FFFFFF", size=11)
+        hv.fill = VERSION_FILLS[vi % len(VERSION_FILLS)]
+        hv.border = THIN_BORDER
+        hv.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[get_column_letter(ci)].width = 20
+
+    ws.row_dimensions[1].height = 28
+
+    # Row definitions: (key, label, customer_field_or_none)
+    ROWS = [
+        ("works",       "Работы, руб",              "works"),
+        ("materials",   "Материалы, руб",            "materials"),
+        ("base",        "Итого (базис), руб",         None),
+        ("total",       "Итого с расходами, руб",     None),
+        ("vat",         f"НДС {int(VAT_RATE*100)}%, руб", "vat"),
+        ("grand_total", "ИТОГО с НДС, руб",           "grand_total"),
+    ]
+
+    orig_totals = all_totals[0] if all_totals else {}
+
+    for ri, (key, label, cust_field) in enumerate(ROWS):
+        row_num = ri + 2
+        is_grand = key == "grand_total"
+        row_fill = GRAND_BLUE if is_grand else None
+
+        lc = ws.cell(row=row_num, column=1, value=label)
+        lc.font = Font(bold=is_grand, color="FFFFFF" if is_grand else "000000", size=11)
+        lc.fill = row_fill or PatternFill(fill_type=None)
+        lc.border = THIN_BORDER
+
+        if has_customer:
+            cval = customer_estimate.get(cust_field) if cust_field else None
+            cc = ws.cell(row=row_num, column=2, value=cval if cval is not None else "—")
+            cc.fill = AMBER_FILL
+            cc.border = THIN_BORDER
+            cc.alignment = Alignment(horizontal="right")
+            if isinstance(cval, (int, float)):
+                cc.number_format = _NUMBER_FMT
+                cc.font = Font(bold=is_grand, size=11)
+
+        for vi, vt in enumerate(all_totals):
+            ci = col_offset + 1 + vi
+            val = vt.get(key, 0)
+            orig_val = orig_totals.get(key, 0)
+            vc = ws.cell(row=row_num, column=ci, value=val)
+            vc.number_format = _NUMBER_FMT
+            vc.border = THIN_BORDER
+            vc.alignment = Alignment(horizontal="right")
+            if is_grand:
+                vc.fill = GRAND_BLUE
+                vc.font = Font(bold=True, color="FFFFFF", size=11)
+            else:
+                if vi > 0 and val < orig_val - 0.01:
+                    vc.fill = _CHEAPER_FILL
+                    vc.font = BOLD_FONT
+                elif vi > 0 and val > orig_val + 0.01:
+                    vc.fill = _DEARER_FILL
+                    vc.font = BOLD_FONT
+                else:
+                    vc.font = Font(bold=is_grand, size=11)
+
+    # "% к смете заказчика" row — only if customer grand_total > 0
+    if has_customer and customer_estimate.get("grand_total", 0) > 0:
+        pct_row = len(ROWS) + 2
+        base_row = ws.cell(row=pct_row, column=1, value="% к смете заказчика")
+        base_row.font = Font(italic=True, size=10, color="374151")
+        base_row.fill = PCT_FILL
+        base_row.border = THIN_BORDER
+
+        if has_customer:
+            bc = ws.cell(row=pct_row, column=2, value="базис")
+            bc.fill = AMBER_FILL
+            bc.border = THIN_BORDER
+            bc.alignment = Alignment(horizontal="center")
+            bc.font = Font(bold=True, color="92400E", size=10)
+
+        cgt = customer_estimate["grand_total"]
+        for vi, vt in enumerate(all_totals):
+            ci = col_offset + 1 + vi
+            pct = ((vt["grand_total"] - cgt) / cgt) * 100
+            pct_str = f"{'+' if pct > 0 else ''}{pct:.1f}%"
+            pc = ws.cell(row=pct_row, column=ci, value=pct_str)
+            pc.fill = PCT_FILL
+            pc.border = THIN_BORDER
+            pc.alignment = Alignment(horizontal="right")
+            color = "166534" if pct < -0.05 else ("dc2626" if pct > 0.05 else "475569")
+            pc.font = Font(bold=True, color=color, size=11)
+
+    ws.freeze_panes = "B2"
+
+
+def generate_comparison_export(versions: list, customer_estimate: Optional[dict] = None) -> bytes:
     """
     Export multi-version comparison to xlsx.
 
     versions: list of dicts:
         { id, version_display_name, rows: list[dict], overhead_pct, transport_pct, contingency_pct }
+    customer_estimate: optional dict { works, materials, vat, grand_total } — manual user values.
     Rows aligned by lineage_id. Cells cheaper than original are green, dearer — red.
     """
     wb = openpyxl.Workbook()
@@ -1346,6 +1494,8 @@ def generate_comparison_export(versions: list) -> bytes:
         buf = io.BytesIO()
         wb.save(buf)
         return buf.getvalue()
+
+    _build_svodная(wb, versions, customer_estimate)
 
     # Align rows by lineage_id
     original_rows = versions[0]["rows"]

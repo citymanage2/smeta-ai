@@ -163,13 +163,21 @@ export async function exportVersion(
   window.URL.revokeObjectURL(url);
 }
 
+export interface CustomerEstimateExport {
+  works: number;
+  materials: number;
+  vat: number;
+  grand_total: number;
+}
+
 export async function exportComparison(
   taskId: string,
   versionIds: string[],
+  customerEstimate?: CustomerEstimateExport,
 ): Promise<void> {
   const response = await apiClient.post(
     `/tasks/${taskId}/estimate/comparison/export`,
-    { version_ids: versionIds },
+    { version_ids: versionIds, customer_estimate: customerEstimate ?? null },
     { responseType: 'blob' },
   );
   const url = window.URL.createObjectURL(new Blob([response.data]));
