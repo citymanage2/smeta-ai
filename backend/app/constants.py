@@ -19,3 +19,21 @@ ESTIMATION_STATUS_LABELS: dict[str, str] = {
     "optimizing": "Оптимизируется",
     "not_applicable": "—",
 }
+
+TASK_TYPE_TO_FIELD: dict[str, str] = {
+    "LIST_FROM_GRAND": "list_task_id",
+    "LIST_FROM_PROJECT": "list_task_id",
+    "CHECK_LIST_COMPLETENESS": "completeness_task_id",
+    "CHECK_PROJECT_COMPLETENESS": "completeness_task_id",
+    "ESTIMATE_FROM_LIST": "estimate_task_id",
+    "ESTIMATE_OPTIMIZATION": "optimization_task_id",
+}
+
+TASK_TYPE_TO_STAGE: dict[str, str] = {
+    "LIST_FROM_GRAND": "list",
+    "LIST_FROM_PROJECT": "list",
+    "CHECK_LIST_COMPLETENESS": "completeness",
+    "CHECK_PROJECT_COMPLETENESS": "completeness",
+    "ESTIMATE_FROM_LIST": "estimate",
+    "ESTIMATE_OPTIMIZATION": "optimization",
+}

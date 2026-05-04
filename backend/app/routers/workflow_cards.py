@@ -36,7 +36,7 @@ from app.schemas.workflow_card import (
     ResultFileDetail,
 )
 from app.utils.auth import get_current_user
-from app.constants import ESTIMATE_TASK_TYPES
+from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD
 
 logger = structlog.get_logger()
 
@@ -45,14 +45,7 @@ router = APIRouter(tags=["workflow-cards"])
 _COMPLETENESS_TYPES = {"CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"}
 _LIST_TYPES = {"LIST_FROM_GRAND", "LIST_FROM_PROJECT"}
 
-_TASK_TYPE_TO_FIELD = {
-    "LIST_FROM_GRAND": "list_task_id",
-    "LIST_FROM_PROJECT": "list_task_id",
-    "CHECK_LIST_COMPLETENESS": "completeness_task_id",
-    "CHECK_PROJECT_COMPLETENESS": "completeness_task_id",
-    "ESTIMATE_FROM_LIST": "estimate_task_id",
-    "ESTIMATE_OPTIMIZATION": "optimization_task_id",
-}
+_TASK_TYPE_TO_FIELD = TASK_TYPE_TO_FIELD
 
 
 def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:

@@ -34,7 +34,8 @@ from app.models.project import Project
 from app.utils.auth import get_current_user, get_download_user
 from app.config import settings
 from app.services.task_processor import process_task
-from app.constants import ESTIMATE_TASK_TYPES
+from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
+from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
 
 logger = structlog.get_logger()
@@ -313,6 +314,20 @@ async def create_task(
         if proj_check.scalar_one_or_none():
             task.project_id = project_id
             await db.commit()
+
+    if task.project_id and task_type in TASK_TYPE_TO_FIELD:
+        field_name = TASK_TYPE_TO_FIELD[task_type]
+        stage = TASK_TYPE_TO_STAGE[task_type]
+        card_name = task.name if task.name else TASK_TYPE_LABELS.get(task_type, task_type)
+        card = WorkflowCard(
+            id=str(uuid.uuid4()),
+            project_id=task.project_id,
+            name=card_name,
+            stage=stage,
+        )
+        setattr(card, field_name, task.id)
+        db.add(card)
+        await db.commit()
 
     task_id = str(task.id)
     logger.info(
