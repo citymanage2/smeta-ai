@@ -152,6 +152,17 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
     });
   };
 
+  // Auto-select newly added versions (e.g. "Ручная правка" created after mount)
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const newIds = visibleVersions.map((v) => v.id).filter((id) => !prev.has(id));
+      if (newIds.length === 0) return prev;
+      const next = new Set(prev);
+      for (const id of newIds) next.add(id);
+      return next;
+    });
+  }, [visibleVersions.map((v) => v.id).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load full versions for selected ids
   useEffect(() => {
     const missing = [...selectedIds].filter((id) => !fullVersions[id]);
