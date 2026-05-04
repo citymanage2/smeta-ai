@@ -369,6 +369,8 @@ class TaskProcessor:
         if task:
             task.status = status
             task.updated_at = datetime.now(timezone.utc)
+            if status == "completed":
+                task.progress_message = None
             if error:
                 task.error_message = error
             await self.db.commit()

@@ -13,7 +13,6 @@ from app.database import get_db, AsyncSessionLocal
 from app.models.estimate_version import EstimateVersion
 from app.models.task import Task
 from app.schemas.estimate_version import (
-    EstimateRowSchema,
     EstimateVersionResponse,
     EstimateVersionSummary,
     OptimizationProposalSchema,
@@ -79,7 +78,7 @@ def _version_to_summary(v: EstimateVersion) -> EstimateVersionSummary:
 
 
 def _version_to_response(v: EstimateVersion) -> EstimateVersionResponse:
-    rows = [EstimateRowSchema(**r) for r in (v.rows or [])]
+    rows = list(v.rows or [])
     proposals = None
     if v.optimization_proposals:
         proposals = [OptimizationProposalSchema(**p) for p in v.optimization_proposals]

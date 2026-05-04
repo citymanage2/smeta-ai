@@ -1,6 +1,6 @@
 from __future__ import annotations
 from decimal import Decimal
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 import uuid as _uuid
 
@@ -79,7 +79,7 @@ class EstimateVersionResponse(BaseModel):
     version_number: int
     version_label: str
     version_display_name: str
-    rows: list[EstimateRowSchema]
+    rows: list[Any]
     overhead_pct: Decimal
     transport_pct: Decimal
     contingency_pct: Decimal
