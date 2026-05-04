@@ -346,6 +346,30 @@ const TaskStatusPage: React.FC = () => {
     }
   };
 
+  const handleCheckRestart = () => {
+    stopCheckPolling();
+    setCheckTaskId(null);
+    setCheckTask(null);
+    setCheckResults([]);
+    setCheckProgressLog([]);
+    setCheckElapsed(0);
+    setCheckStartError('');
+    checkStartTimeRef.current = null;
+    checkFetchErrorCount.current = 0;
+  };
+
+  const handleCheckProjectRestart = () => {
+    stopCheckProjectPolling();
+    setCheckProjectTaskId(null);
+    setCheckProjectTask(null);
+    setCheckProjectResults([]);
+    setCheckProjectProgressLog([]);
+    setCheckProjectElapsed(0);
+    setCheckProjectStartError('');
+    checkProjectStartTimeRef.current = null;
+    checkProjectFetchErrorCount.current = 0;
+  };
+
   const handleResume = async () => {
     if (!taskId || resuming) return;
     setResuming(true);
@@ -1592,6 +1616,10 @@ const TaskStatusPage: React.FC = () => {
                           {checkResuming ? 'Запуск...' : '▶ Продолжить'}
                         </button>
                       )}
+                      <button onClick={handleCheckRestart}
+                        style={{ alignSelf: 'flex-start', padding: '7px 18px', backgroundColor: '#ffffff', color: '#0284c7', border: '1.5px solid #0284c7', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 700 }}>
+                        ↺ Перезапустить
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1757,6 +1785,10 @@ const TaskStatusPage: React.FC = () => {
                           {checkProjectResuming ? 'Запуск...' : '▶ Продолжить'}
                         </button>
                       )}
+                      <button onClick={handleCheckProjectRestart}
+                        style={{ alignSelf: 'flex-start', padding: '7px 18px', backgroundColor: '#ffffff', color: '#0284c7', border: '1.5px solid #0284c7', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 700 }}>
+                        ↺ Перезапустить
+                      </button>
                     </div>
                   </div>
                 )}
