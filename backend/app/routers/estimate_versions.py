@@ -1088,6 +1088,7 @@ class ApplyProposalsRequest(BaseModel):
     version_id: str
     accepted_proposal_ids: list[str]
     version_display_name: Optional[str] = None
+    proposals: Optional[list[dict]] = None  # inline proposals (e.g. from custom optimization, not stored in version)
 
 
 @router.post("/{task_id}/estimate/apply-proposals", response_model=EstimateVersionResponse)
@@ -1101,7 +1102,8 @@ async def apply_proposals(
     import copy as _copy
 
     version = await _get_version_or_404(task_id, body.version_id, db)
-    proposals = version.optimization_proposals or []
+    # prefer inline proposals (from custom single-row optimization, not persisted in version)
+    proposals = body.proposals if body.proposals is not None else (version.optimization_proposals or [])
 
     accepted = {p["id"]: p for p in proposals if p.get("id") in body.accepted_proposal_ids}
     if not accepted:

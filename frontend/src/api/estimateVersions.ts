@@ -103,6 +103,7 @@ export async function applyProposals(
   versionId: string,
   acceptedIds: string[],
   displayName?: string,
+  proposals?: OptimizationProposal[],
 ): Promise<EstimateVersionFull> {
   const res = await apiClient.post<EstimateVersionFull>(
     `/tasks/${taskId}/estimate/apply-proposals`,
@@ -110,6 +111,7 @@ export async function applyProposals(
       version_id: versionId,
       accepted_proposal_ids: acceptedIds,
       ...(displayName ? { version_display_name: displayName } : {}),
+      ...(proposals ? { proposals } : {}),
     },
   );
   return res.data;

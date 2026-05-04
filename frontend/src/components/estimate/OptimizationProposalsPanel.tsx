@@ -103,7 +103,7 @@ const OptimizationProposalsPanel: React.FC<Props> = ({
     setSaving(true);
     setSaveError('');
     try {
-      const newVersion = await applyProposals(taskId, versionId, [...accepted]);
+      const newVersion = await applyProposals(taskId, versionId, [...accepted], undefined, proposals);
       onProposalsApplied(newVersion);
     } catch (e: unknown) {
       setSaveError(e instanceof Error ? e.message : 'Ошибка сохранения');
