@@ -624,7 +624,7 @@ const ProjectDetailPage: React.FC = () => {
                           История
                         </button>
                       )}
-                      {task.estimation_status !== 'not_applicable' && (
+                      {task.estimation_status !== 'not_applicable' && task.task_type !== 'ESTIMATE_OPTIMIZATION' && (
                         <span style={{ padding: '3px 10px', backgroundColor: estColors.bg, color: estColors.text, borderRadius: '12px', fontSize: '12px', fontWeight: 500 }}>
                           {ESTIMATION_LABELS[task.estimation_status]}
                         </span>
@@ -632,39 +632,6 @@ const ProjectDetailPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Slot files (only for ESTIMATE_TASK_TYPES) */}
-                  {isEstimateType && (
-                    <div style={{ borderTop: '1px solid #f1f5f9', padding: '10px 18px', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                      <SlotRow
-                        label="Исходный"
-                        fileName={task.source_file_name ?? null}
-                        taskId={task.id}
-                        slot="source"
-                        onDownload={() => downloadSlotFile(task.id, 'source')}
-                      />
-                      <SlotRow
-                        label="Смета"
-                        fileName={slots['estimate'] ?? null}
-                        taskId={task.id}
-                        slot="estimate"
-                        onDownload={() => downloadSlotFile(task.id, 'estimate')}
-                        onRename={(name) => handleRenameSlotFile(task.id, 'estimate', name)}
-                      />
-                      <SlotRow
-                        label="Оптимизированная"
-                        fileName={slots['optimized'] ?? null}
-                        taskId={task.id}
-                        slot="optimized"
-                        onDownload={() => downloadSlotFile(task.id, 'optimized')}
-                        allowUpload
-                        onUpload={async (file) => {
-                          await uploadFileToSlot(task.id, 'optimized', file);
-                          loadProject();
-                        }}
-                        onRename={(name) => handleRenameSlotFile(task.id, 'optimized', name)}
-                      />
-                    </div>
-                  )}
                 </div>
               );
             })}
