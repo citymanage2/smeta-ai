@@ -4,8 +4,8 @@ import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
 import { PageLoader } from '../components/ui/LumaSpin';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
-import { getProject, updateProject, deleteProject, downloadSlotFile, uploadFileToSlot } from '../api/projects';
-import { updateTask, renameSlotFile } from '../api/tasks';
+import { getProject, updateProject, deleteProject } from '../api/projects';
+import { updateTask } from '../api/tasks';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
@@ -169,129 +169,6 @@ function DescriptionRow({ description, onEdit }: { description: string | null; o
   );
 }
 
-function SlotRow({
-  label,
-  fileName,
-  slot,
-  onDownload,
-  allowUpload = false,
-  onUpload,
-  onRename,
-}: {
-  label: string;
-  fileName: string | null;
-  taskId?: string;
-  slot: string;
-  onDownload: () => void;
-  allowUpload?: boolean;
-  onUpload?: (file: File) => Promise<void>;
-  onRename?: (newName: string) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(fileName ?? '');
-  const [renameError, setRenameError] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editing]);
-
-  async function saveRename() {
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== fileName && onRename) {
-      try {
-        await onRename(trimmed);
-        setRenameError('');
-        setEditing(false);
-      } catch {
-        setRenameError('Не удалось переименовать файл. Попробуйте ещё раз.');
-      }
-    } else {
-      setEditing(false);
-    }
-  }
-
-  function cancelRename() {
-    setDraft(fileName ?? '');
-    setRenameError('');
-    setEditing(false);
-  }
-
-  return (
-    <div style={{ fontSize: '12px', color: '#64748b' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-      <span style={{ fontWeight: 500, color: '#94a3b8', minWidth: '100px' }}>{label}:</span>
-      {fileName ? (
-        <>
-          {editing ? (
-            <span style={{ display: 'contents' }} onClick={e => e.stopPropagation()}>
-              <input
-                ref={inputRef}
-                value={draft}
-                onChange={e => setDraft(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') { e.preventDefault(); saveRename(); }
-                  if (e.key === 'Escape') cancelRename();
-                }}
-                style={{ border: '1px solid #93c5fd', borderRadius: '4px', padding: '2px 6px', outline: 'none', fontSize: '12px', minWidth: 0, flex: 1 }}
-              />
-              <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={saveRename}>
-                <Check size={13} />
-              </button>
-              <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={cancelRename}>
-                <X size={13} />
-              </button>
-            </span>
-          ) : (
-            <>
-              <span style={{ color: '#475569' }}>{fileName}</span>
-              {onRename && slot !== 'source' && (
-                <button style={iconBtnStyle} onClick={(e) => { e.stopPropagation(); setDraft(fileName); setEditing(true); }}>
-                  <Pencil size={11} />
-                </button>
-              )}
-              <button
-                onClick={(e) => { e.stopPropagation(); onDownload(); }}
-                style={{ padding: '2px 8px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}
-              >
-                ↓
-              </button>
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          <span style={{ color: '#cbd5e1' }}>—</span>
-          {allowUpload && onUpload && (
-            <label onClick={(e) => e.stopPropagation()} style={{ cursor: 'pointer' }}>
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) onUpload(f);
-                  e.target.value = '';
-                }}
-              />
-              <span style={{ padding: '2px 8px', backgroundColor: '#f0fdf4', color: '#15803d', border: '1px solid #86efac', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
-                Загрузить
-              </span>
-            </label>
-          )}
-        </>
-      )}
-      </div>
-      {renameError && (
-        <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '2px', paddingLeft: '106px' }}>{renameError}</div>
-      )}
-    </div>
-  );
-}
-
 const ProjectDetailPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -357,17 +234,6 @@ const ProjectDetailPage: React.FC = () => {
     setProject(prev => prev ? {
       ...prev,
       tasks: prev.tasks.map(t => t.id === taskId ? { ...t, name } : t),
-    } : prev);
-  }
-
-  async function handleRenameSlotFile(taskId: string, slot: string, name: string) {
-    await renameSlotFile(taskId, slot, name);
-    setProject(prev => prev ? {
-      ...prev,
-      tasks: prev.tasks.map(t => t.id === taskId ? {
-        ...t,
-        slot_files: { ...(t.slot_files ?? {}), [slot]: name },
-      } : t),
     } : prev);
   }
 
@@ -547,7 +413,6 @@ const ProjectDetailPage: React.FC = () => {
             {project.tasks.map((task: TaskBrief) => {
               const estColors = ESTIMATION_COLORS[task.estimation_status] ?? ESTIMATION_COLORS.not_applicable;
               const isEstimateType = ESTIMATE_TASK_TYPES.has(task.task_type as any);
-              const slots = task.slot_files ?? {};
               const taskLabel = TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type;
               const taskDisplayName = task.name || taskLabel;
               const showCost = !!task.cost &&
