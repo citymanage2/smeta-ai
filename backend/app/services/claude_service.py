@@ -1,15 +1,45 @@
 import asyncio
+from decimal import Decimal
 from typing import Any, Callable, Optional
 
 import httpx
 import anthropic
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 
 logger = structlog.get_logger()
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
+
+# USD per token for cost calculation
+_COST_PER_TOKEN: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-6": {
+        "input": 3.0 / 1_000_000,
+        "output": 15.0 / 1_000_000,
+        "cache_read": 0.30 / 1_000_000,
+        "cache_creation": 3.75 / 1_000_000,
+    },
+    # fallback for unknown models — same as sonnet
+    "default": {
+        "input": 3.0 / 1_000_000,
+        "output": 15.0 / 1_000_000,
+        "cache_read": 0.30 / 1_000_000,
+        "cache_creation": 3.75 / 1_000_000,
+    },
+}
+
+
+def _calc_cost(model: str, input_t: int, output_t: int, cache_read_t: int, cache_creation_t: int) -> Decimal:
+    rates = _COST_PER_TOKEN.get(model, _COST_PER_TOKEN["default"])
+    total = (
+        input_t * rates["input"]
+        + output_t * rates["output"]
+        + cache_read_t * rates["cache_read"]
+        + cache_creation_t * rates["cache_creation"]
+    )
+    return Decimal(str(round(total, 6)))
 
 # Seconds to wait after a 429 when the API does not send a retry-after header.
 DEFAULT_RATE_LIMIT_DELAY = 60
@@ -80,6 +110,8 @@ async def call_claude(
     image_data: Optional[list[dict]] = None,
     processing_timeout: Optional[float] = None,
     on_rate_limit_wait: Optional[Callable[[float], None]] = None,
+    task_id: Optional[str] = None,
+    db: Optional[AsyncSession] = None,
 ) -> str:
     """
     Call Claude API (non-streaming) with retry logic and optional web search.
@@ -175,13 +207,38 @@ async def call_claude(
                 if hasattr(block, "text") and isinstance(block.text, str)
             ]
             result = "".join(text_parts)
+
+            input_t = getattr(response.usage, "input_tokens", 0) or 0
+            output_t = getattr(response.usage, "output_tokens", 0) or 0
+            cache_read_t = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+            cache_creation_t = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+
             logger.info(
                 "Claude API call successful",
                 chars=len(result),
                 attempt=attempt,
-                cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0),
-                cache_creation_tokens=getattr(response.usage, "cache_creation_input_tokens", 0),
+                cache_read_tokens=cache_read_t,
+                cache_creation_tokens=cache_creation_t,
             )
+
+            if db is not None:
+                try:
+                    from app.models.api_call_log import ApiCallLog
+                    cost = _calc_cost(CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t)
+                    log_entry = ApiCallLog(
+                        task_id=task_id,
+                        model=CLAUDE_MODEL,
+                        input_tokens=input_t,
+                        output_tokens=output_t,
+                        cache_read_tokens=cache_read_t,
+                        cache_creation_tokens=cache_creation_t,
+                        cost_usd=cost,
+                    )
+                    db.add(log_entry)
+                    await db.flush()
+                except Exception as log_err:
+                    logger.warning("Failed to log API call", error=str(log_err))
+
             return result
 
         except asyncio.TimeoutError:

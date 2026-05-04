@@ -596,6 +596,8 @@ class TaskProcessor:
             use_web_search=use_web_search,
             image_data=image_data,
             processing_timeout=processing_timeout,
+            task_id=self.task_id,
+            db=self.db,
         )
         try:
             return self._parse_json_response(response)
@@ -618,6 +620,8 @@ class TaskProcessor:
                 system_prompt=system_prompt,
                 use_web_search=False,
                 processing_timeout=processing_timeout,
+                task_id=self.task_id,
+                db=self.db,
             )
             return self._parse_json_response(retry_response)
 

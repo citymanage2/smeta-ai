@@ -1,7 +1,7 @@
 # Дашборд «Система» — главный экран
 
 **Дата:** 2026-05-04  
-**Статус:** в работе (фазы 1–2 завершены, фазы 3–4 в очереди)
+**Статус:** в работе (фазы 1–3 завершены, фаза 4 в очереди)
 
 ## Цель
 
@@ -120,25 +120,11 @@
 
 ### Фаза 3. Бэкенд: таблица `api_call_log` (стоимость Claude API)
 
-- [ ] Создать миграцию `backend/alembic/versions/0NN_add_api_call_log.py`
-  ```sql
-  CREATE TABLE IF NOT EXISTS api_call_log (
-    id SERIAL PRIMARY KEY,
-    task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
-    model VARCHAR(50),
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0,
-    called_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-  );
-  CREATE INDEX IF NOT EXISTS ix_api_call_log_task_id ON api_call_log(task_id);
-  CREATE INDEX IF NOT EXISTS ix_api_call_log_called_at ON api_call_log(called_at);
-  ```
-- [ ] Создать модель `ApiCallLog` в `backend/app/models/`
-- [ ] Изменить `backend/app/services/claude_service.py` — после каждого вызова Claude писать запись в `api_call_log` (input_tokens, output_tokens, cache_read_tokens, cost_usd)
-- [ ] Добавить в `GET /dashboard/stats` агрегаты стоимости
+- [x] Создать миграцию `backend/alembic/versions/020_add_api_call_log.py`
+- [x] Создать модель `ApiCallLog` в `backend/app/models/api_call_log.py`
+- [x] Изменить `backend/app/services/claude_service.py` — после каждого вызова Claude писать запись в `api_call_log` (input_tokens, output_tokens, cache_read_tokens, cost_usd)
+- [x] Передавать `task_id` и `db` из `TaskProcessor._call_claude_json` в `call_claude`
+- [x] Добавить в `GET /dashboard/stats` агрегаты стоимости (ApiCosts: today/week/month USD, cache_hit_rate, by_task_type)
 
 ### Фаза 4. Фронтенд: Блок 8 — «Стоимость Claude API»
 
@@ -170,8 +156,8 @@
 
 - [x] Фаза 1 завершена
 - [x] Фаза 2 завершена
-- [ ] Фаза 3 завершена
+- [x] Фаза 3 завершена
 - [ ] Фаза 4 завершена
 
 **Реализовано целиком:** нет  
-**Что осталось:** Фазы 3, 4 (api_call_log, блок стоимости Claude API)
+**Что осталось:** Фаза 4 — фронтенд блок «Стоимость Claude API» (DashboardCosts.tsx)

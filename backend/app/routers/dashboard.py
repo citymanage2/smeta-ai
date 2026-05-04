@@ -9,6 +9,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.api_call_log import ApiCallLog
 from app.models.price import PriceMaterial, PriceWork
 from app.models.price_list import PriceList
 from app.models.project import Project
@@ -100,6 +101,20 @@ class PriceListInfo(BaseModel):
     items_count: int
 
 
+class ApiCostByTaskType(BaseModel):
+    task_type: Optional[str]
+    cost_usd: float
+    calls_count: int
+
+
+class ApiCosts(BaseModel):
+    today_usd: float
+    week_usd: float
+    month_usd: float
+    cache_hit_rate: float
+    by_task_type: list[ApiCostByTaskType]
+
+
 class DashboardStats(BaseModel):
     pulse: PulseStats
     active_queue: list[ActiveTask]
@@ -109,6 +124,7 @@ class DashboardStats(BaseModel):
     orphan_tasks_count: int
     task_chart: list[ChartDay]
     price_lists: list[PriceListInfo]
+    api_costs: ApiCosts
 
 
 # ── Endpoint ───────────────────────────────────────────────────────────────────
@@ -400,6 +416,69 @@ async def get_dashboard_stats(
                 )
             )
 
+    # 9. API costs from api_call_log
+    week_ago = now - timedelta(days=7)
+
+    cost_rows = (
+        await db.execute(
+            select(
+                func.sum(ApiCallLog.cost_usd).label("total_cost"),
+                func.sum(ApiCallLog.input_tokens).label("total_input"),
+                func.sum(ApiCallLog.cache_read_tokens).label("total_cache_read"),
+                func.count(ApiCallLog.id).label("calls"),
+            ).where(ApiCallLog.called_at >= thirty_days_ago)
+        )
+    ).one()
+
+    today_cost_row = (
+        await db.execute(
+            select(func.sum(ApiCallLog.cost_usd)).where(ApiCallLog.called_at >= today_start)
+        )
+    ).scalar_one()
+
+    week_cost_row = (
+        await db.execute(
+            select(func.sum(ApiCallLog.cost_usd)).where(ApiCallLog.called_at >= week_ago)
+        )
+    ).scalar_one()
+
+    # Cache hit rate: cache_read_tokens / (input_tokens + cache_read_tokens)
+    total_input = cost_rows.total_input or 0
+    total_cache_read = cost_rows.total_cache_read or 0
+    denom = total_input + total_cache_read
+    cache_hit_rate = round(total_cache_read / denom * 100, 1) if denom > 0 else 0.0
+
+    # Breakdown by task_type (join with tasks table)
+    breakdown_rows = (
+        await db.execute(
+            select(
+                Task.task_type,
+                func.sum(ApiCallLog.cost_usd).label("cost_usd"),
+                func.count(ApiCallLog.id).label("calls_count"),
+            )
+            .outerjoin(Task, ApiCallLog.task_id == Task.id)
+            .where(ApiCallLog.called_at >= thirty_days_ago)
+            .group_by(Task.task_type)
+        )
+    ).all()
+
+    by_task_type = [
+        ApiCostByTaskType(
+            task_type=row.task_type,
+            cost_usd=round(float(row.cost_usd or 0), 4),
+            calls_count=row.calls_count,
+        )
+        for row in sorted(breakdown_rows, key=lambda r: float(r.cost_usd or 0), reverse=True)
+    ]
+
+    api_costs = ApiCosts(
+        today_usd=round(float(today_cost_row or 0), 4),
+        week_usd=round(float(week_cost_row or 0), 4),
+        month_usd=round(float(cost_rows.total_cost or 0), 4),
+        cache_hit_rate=cache_hit_rate,
+        by_task_type=by_task_type,
+    )
+
     return DashboardStats(
         pulse=pulse,
         active_queue=active_queue,
@@ -409,4 +488,5 @@ async def get_dashboard_stats(
         orphan_tasks_count=orphan_count,
         task_chart=task_chart,
         price_lists=price_list_infos,
+        api_costs=api_costs,
     )
