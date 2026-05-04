@@ -451,6 +451,12 @@ const ProjectDetailPage: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+              <button
+                onClick={() => navigate(`/task/create?project_id=${projectId}`)}
+                style={{ padding: '7px 14px', backgroundColor: '#2563eb', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#fff', fontWeight: 500 }}
+              >
+                + Новая задача
+              </button>
               {isAdmin && (
                 <button onClick={handleDelete} style={{ padding: '7px 14px', backgroundColor: '#fee2e2', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
                   Удалить

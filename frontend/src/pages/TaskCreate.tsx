@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import { InlineSpinner } from '../components/ui/LumaSpin';
@@ -19,6 +19,7 @@ interface ClientFileEntry {
 
 const TaskCreate: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [taskType, setTaskType] = useState<TaskType>('LIST_FROM_GRAND');
   const [files, setFiles] = useState<File[]>([]);
   const [name, setName] = useState('');
@@ -50,6 +51,18 @@ const TaskCreate: React.FC = () => {
   useEffect(() => {
     listProjects().then(setProjects).catch(() => {});
   }, []);
+
+  const preselectedProjectId = searchParams.get('project_id');
+
+  useEffect(() => {
+    if (preselectedProjectId && projects.length > 0) {
+      const found = projects.find((p) => p.id === preselectedProjectId);
+      if (found) {
+        setProjectMode('existing');
+        setSelectedProjectId(preselectedProjectId);
+      }
+    }
+  }, [preselectedProjectId, projects]);
 
   // Load estimate sources when Path B mode is selected
   useEffect(() => {
