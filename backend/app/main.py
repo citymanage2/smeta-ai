@@ -118,6 +118,7 @@ def create_app() -> FastAPI:
     # Include routers
     from app.routers import auth, tasks, results, admin, projects
     from app.routers.calculator import router as calculator_router
+    from app.routers.dashboard import router as dashboard_router
     from app.routers.estimate_versions import router as estimate_versions_router
     from app.routers.prices_catalog import router as prices_catalog_router
     from app.routers.workflow_cards import router as workflow_cards_router
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(projects.router)
     app.include_router(calculator_router)
+    app.include_router(dashboard_router)
     app.include_router(estimate_versions_router)
     app.include_router(prices_catalog_router)
     app.include_router(workflow_cards_router, prefix="/api")
