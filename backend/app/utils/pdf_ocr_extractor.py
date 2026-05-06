@@ -1,0 +1,148 @@
+"""Извлечение текста из PDF: embedded-текст через PyMuPDF, сканы — через Tesseract OCR."""
+
+from __future__ import annotations
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+try:
+    import pytesseract
+    _TESSERACT_AVAILABLE = True
+except ImportError:
+    _TESSERACT_AVAILABLE = False
+
+import fitz  # PyMuPDF
+
+
+def extract_pdf_with_ocr(pdf_bytes: bytes) -> list[dict]:
+    """Открывает PDF и возвращает список страниц с текстом.
+
+    Каждый элемент: {"page": int, "text": str, "method": "embedded"|"ocr"}
+
+    Raises ValueError для некорректных/неподдерживаемых PDF.
+    """
+    # A3: обёртка вокруг fitz.open
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть PDF: {e}") from e
+
+    # A1: пустой PDF
+    if len(doc) == 0:
+        raise ValueError("PDF не содержит страниц")
+
+    # A2: PDF с паролем
+    if doc.needs_pass:
+        raise ValueError("PDF защищён паролем — снимите защиту перед загрузкой")
+
+    # A4: слишком большой PDF
+    if len(doc) > 150:
+        raise ValueError(
+            f"PDF слишком большой ({len(doc)} стр.). Разбейте на части по 100 страниц."
+        )
+
+    pages: list[dict] = []
+
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        result = _process_page(page, page_num + 1)
+        pages.append(result)
+
+    doc.close()
+    return pages
+
+
+def _process_page(page: fitz.Page, page_num: int) -> dict:
+    """Обрабатывает одну страницу: embedded-текст или OCR."""
+    text = page.get_text().strip()
+    words = text.split()
+
+    # D1: валидация по доле кириллицы
+    cyrillic_count = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
+    cyrillic_ratio = cyrillic_count / max(len(text), 1)
+
+    if len(words) >= 30 and cyrillic_ratio >= 0.10:
+        return {"page": page_num, "text": text, "method": "embedded"}
+
+    # Скан или плохая кодировка — OCR
+    return _ocr_page(page, page_num)
+
+
+def _ocr_page(page: fitz.Page, page_num: int) -> dict:
+    """Растеризует страницу и запускает Tesseract OCR."""
+    if not _TESSERACT_AVAILABLE:
+        # C1: Tesseract не установлен
+        raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
+
+    # B1: dpi=200, ограничение ширины 2480px
+    dpi = 200
+    scale = dpi / 72.0
+
+    page_width_at_scale = page.rect.width * scale
+    if page_width_at_scale > 2480:
+        scale = 2480 / page.rect.width
+
+    matrix = fitz.Matrix(scale, scale)
+
+    # B2: pixmap создаём и сразу освобождаем после получения PIL Image
+    pix = page.get_pixmap(matrix=matrix)
+    # B3: PIL Image напрямую без PNG round-trip
+    img = pix.pil_image()
+    pix = None  # освобождаем память
+
+    logger.info("ocr_start", page=page_num)
+
+    try:
+        # C3: таймаут 30 сек на страницу
+        ocr_text = pytesseract.image_to_string(img, lang="rus+eng", timeout=30)
+    except RuntimeError:
+        # C6: таймаут — логируем, возвращаем пустую строку
+        logger.warning("ocr_timeout", page=page_num)
+        ocr_text = ""
+    except pytesseract.pytesseract.TesseractNotFoundError:
+        # C1: Tesseract не найден в системе
+        raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
+
+    logger.info("ocr_end", page=page_num)
+
+    return {"page": page_num, "text": ocr_text.strip(), "method": "ocr"}
+
+
+def chunk_pdf_pages(pages: list[dict], pages_per_chunk: int = 8) -> list[str]:
+    """Группирует страницы в текстовые чанки для передачи в Claude.
+
+    C4: страницы с текстом < 20 символов пропускаются.
+    Возвращает только непустые чанки (суммарный текст > 50 символов).
+    """
+    chunks: list[str] = []
+    current_parts: list[str] = []
+    current_text_len = 0
+
+    for i, page_info in enumerate(pages):
+        text = page_info["text"].strip()
+        page_num = page_info["page"]
+        method = page_info.get("method", "unknown")
+
+        # C4: пропускаем страницы с менее чем 20 символами текста
+        if len(text) < 20:
+            continue
+
+        header = f"--- Страница {page_num} (метод: {method}) ---"
+        part = f"{header}\n{text}"
+        current_parts.append(part)
+        current_text_len += len(text)
+
+        # Когда набрали pages_per_chunk страниц — закрываем чанк
+        if len(current_parts) >= pages_per_chunk:
+            chunk_text = "\n\n".join(current_parts)
+            if current_text_len > 50:
+                chunks.append(chunk_text)
+            current_parts = []
+            current_text_len = 0
+
+    # Остаток страниц в последний чанк
+    if current_parts and current_text_len > 50:
+        chunks.append("\n\n".join(current_parts))
+
+    return chunks
