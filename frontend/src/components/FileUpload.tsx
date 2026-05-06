@@ -6,6 +6,8 @@ interface FileUploadProps {
   maxFiles?: number;
   maxSizeMB?: number;
   accept?: string;
+  onValidateFile?: (file: File) => string | null;
+  hint?: string;
 }
 
 const MAX_FILES = 10;
@@ -24,6 +26,8 @@ const FileUpload: React.FC<FileUploadProps> = ({
   maxFiles = MAX_FILES,
   maxSizeMB = MAX_SIZE_MB,
   accept = ACCEPTED_EXTENSIONS.join(','),
+  onValidateFile,
+  hint,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -44,6 +48,13 @@ const FileUpload: React.FC<FileUploadProps> = ({
         if (file.size > maxSizeMB * 1024 * 1024) {
           validationErrors.push(`«${file.name}»: файл превышает ${maxSizeMB} МБ`);
           return;
+        }
+        if (onValidateFile) {
+          const customError = onValidateFile(file);
+          if (customError) {
+            validationErrors.push(`«${file.name}»: ${customError}`);
+            return;
+          }
         }
         validated.push(file);
       });
@@ -121,7 +132,7 @@ const FileUpload: React.FC<FileUploadProps> = ({
           Перетащите файлы сюда или нажмите для выбора
         </p>
         <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8' }}>
-          {ACCEPTED_EXTENSIONS.join(', ')} · Макс. {maxFiles} файлов · Макс. {maxSizeMB} МБ каждый
+          {hint ?? `${ACCEPTED_EXTENSIONS.join(', ')} · Макс. ${maxFiles} файлов · Макс. ${maxSizeMB} МБ каждый`}
         </p>
         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#f59e0b' }}>
           Формат .gsn не поддерживается

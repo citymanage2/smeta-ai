@@ -41,6 +41,9 @@ const TaskCreate: React.FC = () => {
   const [pendingClientFile, setPendingClientFile] = useState<File[]>([]);
   const [pendingClientFileType, setPendingClientFileType] = useState<ClientFileType>('Смета');
 
+  // LIST_FROM_GRAND input mode (excel vs pdf)
+  const [grandInputMode, setGrandInputMode] = useState<'excel' | 'pdf'>('excel');
+
   // Path B (ESTIMATE_FROM_LIST from existing task)
   const [inputMode, setInputMode] = useState<'file' | 'task'>('file');
   const [estimateSources, setEstimateSources] = useState<EstimateSource[]>([]);
@@ -77,6 +80,8 @@ const TaskCreate: React.FC = () => {
 
   // Reset input mode when task type changes
   useEffect(() => {
+    setGrandInputMode('excel');
+    setFiles([]);
     if (taskType !== 'ESTIMATE_FROM_LIST') {
       setInputMode('file');
     }
@@ -290,6 +295,37 @@ const TaskCreate: React.FC = () => {
               <TaskTypeSelector value={taskType} onChange={setTaskType} disabled={submitting} />
             </div>
 
+            {/* LIST_FROM_GRAND: excel / pdf mode toggle */}
+            {taskType === 'LIST_FROM_GRAND' && (
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '10px' }}>
+                  Формат файла
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['excel', 'pdf'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={submitting}
+                      onClick={() => { setGrandInputMode(mode); setFiles([]); }}
+                      style={{
+                        padding: '8px 18px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        border: `1.5px solid ${grandInputMode === mode ? '#2563eb' : '#e2e8f0'}`,
+                        borderRadius: '8px',
+                        backgroundColor: grandInputMode === mode ? '#eff6ff' : '#ffffff',
+                        color: grandInputMode === mode ? '#1d4ed8' : '#64748b',
+                        cursor: submitting ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {mode === 'excel' ? 'Excel (.xlsx)' : 'PDF-скан'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* ESTIMATE_OPTIMIZATION: dual file upload */}
             {taskType === 'ESTIMATE_OPTIMIZATION' && (
               <div style={{ marginBottom: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -479,7 +515,26 @@ const TaskCreate: React.FC = () => {
             ) : taskType !== 'ESTIMATE_OPTIMIZATION' ? (
               /* File upload — not shown for ESTIMATE_OPTIMIZATION (handled above) */
               <div style={{ marginBottom: '24px' }}>
-                <FileUpload files={files} onChange={setFiles} />
+                {taskType === 'LIST_FROM_GRAND' ? (
+                  <FileUpload
+                    files={files}
+                    onChange={setFiles}
+                    maxFiles={1}
+                    accept={grandInputMode === 'excel' ? '.xlsx,.xls' : '.pdf'}
+                    hint={grandInputMode === 'pdf'
+                      ? 'Скан или цифровой PDF гранд-сметы · Макс. 1 файл · Макс. 20 МБ'
+                      : 'Excel-файл гранд-сметы (.xlsx) · Макс. 1 файл · Макс. 20 МБ'}
+                    onValidateFile={(file) => {
+                      if (grandInputMode === 'pdf' && file.type !== 'application/pdf')
+                        return 'Ожидается PDF-файл';
+                      if (grandInputMode === 'excel' && !file.name.match(/\.(xlsx|xls)$/i))
+                        return 'Ожидается Excel-файл (.xlsx)';
+                      return null;
+                    }}
+                  />
+                ) : (
+                  <FileUpload files={files} onChange={setFiles} />
+                )}
               </div>
             ) : null}
 

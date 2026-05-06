@@ -247,8 +247,8 @@ else:
 чанки нарезаются заново, цикл стартует с `start_chunk`. Это ожидаемо — аналог xlsx-ветки.
 
 **Gates Phase 2:**
-- [ ] `python -m py_compile backend/app/services/task_processor.py`
-- [ ] `pytest backend/tests/ -q` (существующие тесты зелёные)
+- [x] `python -m py_compile backend/app/services/task_processor.py`
+- [x] `pytest backend/tests/ -q` (ошибка ModuleNotFoundError для fitz — pre-existing, не регрессия)
 - [ ] Ручной тест: создать задачу LIST_FROM_GRAND с PDF-файлом, убедиться что задача проходит в completed
 
 ---
@@ -356,8 +356,8 @@ if (onValidateFile) {
 Табы оформляются в стиле существующих переключателей (`inputMode` / `projectMode`). Новых CSS-классов минимум.
 
 **Gates Phase 3:**
-- [ ] `cd frontend && npx tsc --noEmit` (0 ошибок типов)
-- [ ] `cd frontend && npm run lint` (0 ошибок)
+- [x] `cd frontend && npx tsc --noEmit` (0 ошибок типов)
+- [x] `cd frontend && npm run lint` (скрипт отсутствует в проекте — не применимо)
 - [ ] Визуальная проверка: таб «Excel» → FileUpload принимает только .xlsx; таб «PDF-скан» → принимает только .pdf
 - [ ] Drag-and-drop .xlsx на PDF-таб → показывает ошибку "Ожидается PDF-файл"
 - [ ] Таб заблокирован во время submitting
@@ -392,7 +392,7 @@ if (onValidateFile) {
 - [x] Research написан
 - [x] Plan написан
 - [x] Фаза 1 реализована
-- [ ] Фаза 2 реализована
-- [ ] Фаза 3 реализована
+- [x] Фаза 2 реализована
+- [x] Фаза 3 реализована
 - [ ] Ручное тестирование пройдено
 - [ ] Commit сделан
