@@ -17,7 +17,8 @@ from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
-from app.utils.pdf_text_extractor import extract_pdf_hybrid
+from app.utils.pdf_text_extractor import chunk_project_pdf
+from app.utils.pdf_ocr_extractor import extract_pdf_with_ocr, chunk_pdf_pages
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.services import price_service as _price_svc
@@ -62,6 +63,35 @@ PROMPT_LIST_FROM_GRAND = """Ты — опытный инженер-сметчи�
   ...
 
 Каждый вид работы должен идти ПЕРВОЙ строкой, затем сразу все материалы к этой работе.
+
+Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
+{
+  "items": [
+    {
+      "type": "Работа" | "Материал",
+      "name": "Наименование",
+      "unit": "Ед. изм.",
+      "quantity": число или null,
+      "notes": ""
+    }
+  ]
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
+PROMPT_LIST_FROM_GRAND_PDF = """Ты — опытный инженер-сметчик.
+
+Тебе передан текст, распознанный из PDF-скана гранд-сметы. Текст может содержать артефакты OCR (лишние символы, разрывы строк, перепутанные символы). Восстанавливай смысл по контексту.
+
+Задача: извлечь все позиции — работы и материалы — точно как в документе. Ничего не добавляй от себя.
+
+ПРОПУСКАЙ строки:
+- итого, всего, НДС, сметная прибыль, накладные расходы, непредвиденные затраты
+- коэффициенты и поправки
+- шифры расценок (ТЕР-xx-xx-xx, ФЕРр-xx, ГЭСН-xx и т.д.) если они стоят отдельной строкой без наименования работы
+- заголовки разделов и глав
+
+ПОРЯДОК: Работа 1 → её Материалы → Работа 2 → её Материалы → ...
 
 Верни результат СТРОГО в формате JSON, без markdown блоков, без preamble текста, первый символ {, последний }:
 {
@@ -546,6 +576,7 @@ class TaskProcessor:
         image_data: Optional[list] = None,
         processing_timeout: Optional[float] = None,
         cancel_check_interval: float = 30.0,
+        max_tokens: int = 32000,
     ) -> dict:
         """Like _call_claude_json but checks for task cancellation every cancel_check_interval seconds.
 
@@ -559,6 +590,7 @@ class TaskProcessor:
                 use_web_search=use_web_search,
                 image_data=image_data,
                 processing_timeout=processing_timeout,
+                max_tokens=max_tokens,
             )
         )
         try:
@@ -584,6 +616,7 @@ class TaskProcessor:
         use_web_search: bool = False,
         image_data: Optional[list] = None,
         processing_timeout: Optional[float] = None,
+        max_tokens: int = 32000,
     ) -> dict:
         """Call Claude and parse the JSON response, retrying once if parsing fails.
 
@@ -599,6 +632,7 @@ class TaskProcessor:
             processing_timeout=processing_timeout,
             task_id=self.task_id,
             db=self.db,
+            max_tokens=max_tokens,
         )
         try:
             return self._parse_json_response(response)
@@ -623,6 +657,7 @@ class TaskProcessor:
                 processing_timeout=processing_timeout,
                 task_id=self.task_id,
                 db=self.db,
+                max_tokens=max_tokens,
             )
             return self._parse_json_response(retry_response)
 
@@ -635,6 +670,7 @@ class TaskProcessor:
         processing_timeout: Optional[float] = None,
         max_chunk_retries: int = 3,
         chunk_retry_delays: tuple = (5.0, 15.0, 30.0),
+        max_tokens: int = 32000,
     ) -> dict:
         """_call_claude_json с retry для transient ошибок уровня чанка."""
         last_error: Optional[Exception] = None
@@ -646,6 +682,7 @@ class TaskProcessor:
                     use_web_search=use_web_search,
                     image_data=image_data,
                     processing_timeout=processing_timeout,
+                    max_tokens=max_tokens,
                 )
             except TaskCancelledError:
                 raise
@@ -675,6 +712,7 @@ class TaskProcessor:
         processing_timeout: Optional[float] = None,
         max_chunk_retries: int = 3,
         chunk_retry_delays: tuple = (5.0, 15.0, 30.0),
+        max_tokens: int = 32000,
     ) -> dict:
         """_interruptible_claude_json с retry для transient ошибок уровня чанка."""
         last_error: Optional[Exception] = None
@@ -686,6 +724,7 @@ class TaskProcessor:
                     use_web_search=use_web_search,
                     image_data=image_data,
                     processing_timeout=processing_timeout,
+                    max_tokens=max_tokens,
                 )
             except TaskCancelledError:
                 raise
@@ -770,23 +809,35 @@ class TaskProcessor:
         )
 
     async def _handle_list_from_grand(self, task: Task) -> None:
+        await self.update_progress("Анализ файла гранд-сметы...")
+
+        excel_bytes: Optional[bytes] = None
+        pdf_bytes: Optional[bytes] = None
+
+        for f in await self._load_input_files(task):
+            mime = f.get("mime_type", "")
+            if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
+                excel_bytes = base64.b64decode(f["content_b64"])
+            elif mime == "application/pdf":
+                pdf_bytes = base64.b64decode(f["content_b64"])
+
+        # E2: запретить оба одновременно
+        if excel_bytes and pdf_bytes:
+            raise ValueError("Загрузите один файл: либо .xlsx, либо .pdf, но не оба сразу")
+
+        if excel_bytes:
+            await self._handle_list_from_grand_xlsx(task, excel_bytes)
+        elif pdf_bytes:
+            await self._handle_list_from_grand_pdf(task, pdf_bytes)
+        else:
+            raise ValueError("Не найден файл (.xlsx или .pdf) во вложениях задачи")
+
+    async def _handle_list_from_grand_xlsx(self, task: Task, excel_bytes: bytes) -> None:
         # --- Определяем, это resume или новый запуск ---
         progress_data = task.progress_data or {}
         start_chunk = progress_data.get("chunks_done", 0)
         accumulated_items: list = list(progress_data.get("items", []))
         partial_count: int = progress_data.get("partial_count", 0)
-
-        # --- Извлекаем Excel из вложений ---
-        await self.update_progress("Анализ файла гранд-сметы...")
-        excel_bytes: Optional[bytes] = None
-        for f in await self._load_input_files(task):
-            mime = f.get("mime_type", "")
-            if "spreadsheet" in mime or "excel" in mime or mime == _XLSX_MIME:
-                excel_bytes = base64.b64decode(f["content_b64"])
-                break
-
-        if not excel_bytes:
-            raise ValueError("Excel-файл (.xlsx) не найден во вложениях задачи")
 
         # --- Парсим и разбиваем на чанки ---
         rows = parse_xlsx_grand(excel_bytes)
@@ -906,6 +957,133 @@ class TaskProcessor:
         await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info("List from Grand task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
 
+    async def _handle_list_from_grand_pdf(self, task: Task, pdf_bytes: bytes) -> None:
+        progress_data = task.progress_data or {}
+        start_chunk = progress_data.get("chunks_done", 0)
+        accumulated_items: list = list(progress_data.get("items", []))
+        partial_count: int = progress_data.get("partial_count", 0)
+
+        await self.update_progress("Извлечение текста из PDF гранд-сметы...")
+        pages = extract_pdf_with_ocr(pdf_bytes)
+
+        # A5: предупреждение о большом файле
+        if len(pages) > 50:
+            await self.update_progress(
+                f"Большой файл: {len(pages)} страниц, обработка займёт несколько минут..."
+            )
+
+        chunks = chunk_pdf_pages(pages)
+        total_chunks = len(chunks)
+
+        if not chunks:
+            raise ValueError("Не удалось извлечь текст из PDF. Проверьте качество скана или формат файла.")
+
+        if start_chunk >= total_chunks:
+            logger.info("All PDF chunks already done, generating final Excel", task_id=self.task_id)
+        else:
+            if start_chunk > 0:
+                await self.update_progress(
+                    f"Возобновление с части {start_chunk + 1} из {total_chunks}..."
+                )
+            else:
+                await self.update_progress(
+                    f"PDF разбит на {total_chunks} частей. Начинаем обработку..."
+                )
+
+            for i in range(start_chunk, total_chunks):
+                try:
+                    await self._check_cancelled()
+                except TaskCancelledError:
+                    if accumulated_items:
+                        partial_count += 1
+                        partial_excel = generate_list(accumulated_items)
+                        await self.save_result(
+                            f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
+                            _XLSX_MIME,
+                            partial_excel,
+                            slot=f"partial_{partial_count}",
+                        )
+                        await self._save_progress_data({
+                            "chunks_done": i,
+                            "total_chunks": total_chunks,
+                            "items": accumulated_items,
+                            "partial_count": partial_count,
+                        })
+                        logger.info(
+                            "PDF task cancelled by user, partial result saved",
+                            task_id=self.task_id,
+                            chunks_done=i,
+                            total=total_chunks,
+                        )
+                    raise
+
+                await self.update_progress(f"Обрабатывается часть {i + 1} из {total_chunks}...")
+
+                chunk_text = chunks[i]
+                messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND_PDF}"}]
+
+                try:
+                    data = await self._call_claude_json_with_retry(
+                        messages,
+                        system_prompt=SYSTEM_BASE,
+                        use_web_search=False,
+                    )
+                    chunk_items = data.get("items", [])
+                    accumulated_items.extend(chunk_items)
+
+                    await self._save_progress_data({
+                        "chunks_done": i + 1,
+                        "total_chunks": total_chunks,
+                        "items": accumulated_items,
+                        "partial_count": partial_count,
+                    })
+                    logger.info("PDF chunk processed", task_id=self.task_id, chunk=i + 1, total=total_chunks, items=len(chunk_items))
+
+                except TaskCancelledError:
+                    raise
+
+                except Exception as chunk_error:
+                    if accumulated_items:
+                        partial_count += 1
+                        partial_excel = generate_list(accumulated_items)
+                        await self.save_result(
+                            f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
+                            _XLSX_MIME,
+                            partial_excel,
+                            slot=f"partial_{partial_count}",
+                        )
+                        await self._save_progress_data({
+                            "chunks_done": i,
+                            "total_chunks": total_chunks,
+                            "items": accumulated_items,
+                            "partial_count": partial_count,
+                        })
+                        await self.update_progress(
+                            f"Обработано {i} из {total_chunks} частей. Частичный результат сохранён."
+                        )
+                        logger.warning(
+                            "PDF chunk failed, partial result saved",
+                            task_id=self.task_id,
+                            chunk=i + 1,
+                            total=total_chunks,
+                            error=str(chunk_error),
+                        )
+                    raise
+
+        # E1: если ни одной позиции не извлечено
+        if not accumulated_items:
+            raise ValueError("Не удалось извлечь позиции из PDF. Проверьте качество скана.")
+
+        await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
+        excel_data = generate_list(accumulated_items)
+        await self.save_result(
+            self._result_filename(task, "Перечень_из_Гранд-сметы.xlsx"),
+            _XLSX_MIME,
+            excel_data,
+        )
+        await self._create_initial_generic_version(excel_data, task.task_type)
+        logger.info("List from Grand PDF task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
+
     async def _handle_check_completeness(self, task: Task) -> None:
         source_task_id = (task.user_prompt or "").strip()
         if not source_task_id:
@@ -1003,32 +1181,82 @@ class TaskProcessor:
         await self.update_progress("Анализ проектной документации...")
 
         try:
-            pdf_result = extract_pdf_hybrid(pdf_bytes)
+            chunks = chunk_project_pdf(pdf_bytes)
         except Exception as e:
-            logger.error("PDF hybrid extract failed", task_id=self.task_id, error=str(e))
+            logger.error("PDF chunk extract failed", task_id=self.task_id, error=str(e))
             raise ValueError(f"Не удалось обработать PDF: {e}")
 
+        total_chunks = len(chunks)
         logger.info(
-            "PDF hybrid extract done",
+            "PDF chunked for project list",
             task_id=self.task_id,
-            text_preview=pdf_result["text_content"][:100] if pdf_result["text_content"] else "",
-            drawing_pages=len(pdf_result["image_pages"]),
+            total_chunks=total_chunks,
+            drawing_pages=len(chunks[0]["image_pages"]) if chunks else 0,
         )
 
-        prompt_pass1 = (
-            pdf_result["text_content"] + "\n\n" + PROMPT_LIST_FROM_PROJECT
-            if pdf_result["text_content"]
-            else PROMPT_LIST_FROM_PROJECT
-        )
-        messages = [{"role": "user", "content": prompt_pass1}]
-        data = await self._interruptible_claude_json_with_retry(
-            messages,
-            system_prompt=SYSTEM_BASE,
-            image_data=pdf_result["image_pages"] or None,
-            processing_timeout=1200.0,
-        )
+        if total_chunks > 1:
+            await self.update_progress(
+                f"PDF разбит на {total_chunks} части для обработки..."
+            )
 
-        items = data.get("items", [])
+        accumulated_items: list[dict] = []
+        seen_names: set[str] = set()
+
+        for chunk_idx, chunk in enumerate(chunks, 1):
+            if total_chunks > 1:
+                await self.update_progress(
+                    f"Обработка части {chunk_idx} из {total_chunks}..."
+                )
+
+            prompt_pass1 = (
+                chunk["text"] + "\n\n" + PROMPT_LIST_FROM_PROJECT
+                if chunk["text"]
+                else PROMPT_LIST_FROM_PROJECT
+            )
+
+            if total_chunks > 1:
+                prompt_pass1 = (
+                    f"ЧАСТЬ {chunk_idx} ИЗ {total_chunks} ДОКУМЕНТА.\n\n"
+                    + prompt_pass1
+                )
+
+            messages = [{"role": "user", "content": prompt_pass1}]
+            try:
+                data = await self._interruptible_claude_json_with_retry(
+                    messages,
+                    system_prompt=SYSTEM_BASE,
+                    image_data=chunk["image_pages"] or None,
+                    processing_timeout=1200.0,
+                    max_tokens=64000,
+                )
+            except Exception as chunk_err:
+                logger.warning(
+                    "Project PDF chunk failed",
+                    task_id=self.task_id,
+                    chunk=chunk_idx,
+                    error=str(chunk_err),
+                )
+                if chunk_idx == 1:
+                    raise
+                continue
+
+            chunk_items = data.get("items", [])
+            for item in chunk_items:
+                name_key = (item.get("name", "").strip().lower(), item.get("type", "").strip())
+                if name_key not in seen_names:
+                    seen_names.add(name_key)
+                    accumulated_items.append(item)
+
+            logger.info(
+                "Project PDF chunk processed",
+                task_id=self.task_id,
+                chunk=chunk_idx,
+                total=total_chunks,
+                new_items=len(chunk_items),
+                total_items=len(accumulated_items),
+            )
+
+        items = accumulated_items
         if not items:
             raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое PDF.")
 
@@ -1055,11 +1283,13 @@ class TaskProcessor:
                 messages2 = [{"role": "user", "content": f"{null_json}\n\n{PROMPT_LIST_FROM_PROJECT_PASS2}"}]
 
                 try:
+                    all_images = chunks[0]["image_pages"] if chunks else []
                     data2 = await self._interruptible_claude_json_with_retry(
                         messages2,
                         system_prompt=SYSTEM_BASE,
-                        image_data=pdf_result["image_pages"] or None,
+                        image_data=all_images or None,
                         processing_timeout=900.0,
+                        max_tokens=64000,
                     )
                     resolved = data2.get("items", [])
 

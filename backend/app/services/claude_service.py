@@ -112,6 +112,7 @@ async def call_claude(
     on_rate_limit_wait: Optional[Callable[[float], None]] = None,
     task_id: Optional[str] = None,
     db: Optional[AsyncSession] = None,
+    max_tokens: int = 32000,
 ) -> str:
     """
     Call Claude API (non-streaming) with retry logic and optional web search.
@@ -129,7 +130,7 @@ async def call_claude(
 
     kwargs: dict[str, Any] = {
         "model": CLAUDE_MODEL,
-        "max_tokens": 32000,
+        "max_tokens": max_tokens,
         "temperature": 0.1,
         "messages": built_messages,
     }
