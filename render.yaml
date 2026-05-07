@@ -2,8 +2,8 @@ services:
   - type: web
     name: smeta-ai-backend
     runtime: docker
-    rootDir: backend
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
     startCommand: python scripts/fix_production_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ANTHROPIC_API_KEY
