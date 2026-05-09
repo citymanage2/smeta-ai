@@ -963,8 +963,18 @@ class TaskProcessor:
         accumulated_items: list = list(progress_data.get("items", []))
         partial_count: int = progress_data.get("partial_count", 0)
 
-        await self.update_progress("Извлечение текста из PDF гранд-сметы...")
-        pages = extract_pdf_with_ocr(pdf_bytes)
+        # Если OCR уже выполнялся до рестарта — берём сохранённые страницы
+        if "ocr_pages" in progress_data:
+            pages = progress_data["ocr_pages"]
+            await self.update_progress(
+                f"OCR уже выполнен ({len(pages)} стр.), продолжаем обработку..."
+            )
+        else:
+            await self.update_progress("Извлечение текста из PDF гранд-сметы...")
+            # run_in_executor чтобы не блокировать event loop во время длительного OCR
+            pages = await asyncio.to_thread(extract_pdf_with_ocr, pdf_bytes)
+            # Сохраняем результат OCR в progress_data — при рестарте не придётся повторять
+            await self._save_progress_data({**progress_data, "ocr_pages": pages})
 
         # A5: предупреждение о большом файле
         if len(pages) > 50:
