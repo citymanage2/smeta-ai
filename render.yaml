@@ -4,7 +4,7 @@ services:
     runtime: python
     rootDir: backend
     pythonVersion: "3.12.0"
-    buildCommand: apt-get install -y tesseract-ocr tesseract-ocr-rus libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 fonts-dejavu-core 2>/dev/null || true && pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python scripts/fix_production_db.py && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ANTHROPIC_API_KEY
