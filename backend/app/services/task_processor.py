@@ -18,7 +18,7 @@ from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.pdf_text_extractor import chunk_project_pdf
-from app.utils.pdf_ocr_extractor import extract_pdf_with_ocr, chunk_pdf_pages
+from app.utils.pdf_ocr_extractor import extract_pdf_with_ocr, chunk_pdf_pages, extract_single_page, get_pdf_page_count
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.services import price_service as _price_svc
@@ -963,24 +963,55 @@ class TaskProcessor:
         accumulated_items: list = list(progress_data.get("items", []))
         partial_count: int = progress_data.get("partial_count", 0)
 
-        # Если OCR уже выполнялся до рестарта — берём сохранённые страницы
+        # OCR выполняется постранично: каждая страница сохраняется в progress_data.
+        # При рестарте инстанса — продолжаем с той страницы, на которой остановились.
         if "ocr_pages" in progress_data:
+            # Все страницы уже распознаны до предыдущего рестарта
             pages = progress_data["ocr_pages"]
             await self.update_progress(
                 f"OCR уже выполнен ({len(pages)} стр.), продолжаем обработку..."
             )
         else:
-            await self.update_progress("Извлечение текста из PDF гранд-сметы...")
-            # run_in_executor чтобы не блокировать event loop во время длительного OCR
-            pages = await asyncio.to_thread(extract_pdf_with_ocr, pdf_bytes)
-            # Сохраняем результат OCR в progress_data — при рестарте не придётся повторять
-            await self._save_progress_data({**progress_data, "ocr_pages": pages})
+            pages_partial: list = list(progress_data.get("ocr_pages_partial", []))
+            ocr_start_page = len(pages_partial)
 
-        # A5: предупреждение о большом файле
-        if len(pages) > 50:
-            await self.update_progress(
-                f"Большой файл: {len(pages)} страниц, обработка займёт несколько минут..."
-            )
+            total_pages = await asyncio.to_thread(get_pdf_page_count, pdf_bytes)
+
+            if ocr_start_page > 0:
+                await self.update_progress(
+                    f"Продолжаем OCR со страницы {ocr_start_page + 1} из {total_pages}..."
+                )
+            else:
+                await self.update_progress(
+                    f"Извлечение текста из PDF гранд-сметы ({total_pages} стр.)..."
+                )
+
+            # A5: предупреждение о большом файле
+            if total_pages > 50:
+                await self.update_progress(
+                    f"Большой файл: {total_pages} страниц, обработка займёт несколько минут..."
+                )
+
+            for page_idx in range(ocr_start_page, total_pages):
+                await self.update_progress(
+                    f"OCR страницы {page_idx + 1} из {total_pages}..."
+                )
+                # Каждая страница обрабатывается в отдельном потоке — event loop свободен.
+                # extract_single_page открывает и закрывает PDF каждый раз — освобождает память.
+                page_result = await asyncio.to_thread(extract_single_page, pdf_bytes, page_idx)
+                pages_partial.append(page_result)
+                # Сохраняем прогресс после каждой страницы — при следующем рестарте пропустим её
+                await self._save_progress_data({
+                    **progress_data,
+                    "ocr_pages_partial": pages_partial,
+                })
+
+            pages = pages_partial
+            # Помечаем OCR как полностью завершённый
+            await self._save_progress_data({
+                **{k: v for k, v in progress_data.items() if k != "ocr_pages_partial"},
+                "ocr_pages": pages,
+            })
 
         chunks = chunk_pdf_pages(pages)
         total_chunks = len(chunks)

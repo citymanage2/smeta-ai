@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -75,8 +76,8 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
         # C1: Tesseract не установлен
         raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
 
-    # B1: dpi=200, ограничение ширины 2480px
-    dpi = 200
+    # B1: dpi=150 (уменьшено с 200 для экономии памяти), ограничение ширины 2480px
+    dpi = 150
     scale = dpi / 72.0
 
     page_width_at_scale = page.rect.width * scale
@@ -90,6 +91,7 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
     # B3: PIL Image напрямую без PNG round-trip
     img = pix.pil_image()
     pix = None  # освобождаем память
+    gc.collect()
 
     logger.info("ocr_start", page=page_num)
 
@@ -103,10 +105,43 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
     except pytesseract.pytesseract.TesseractNotFoundError:
         # C1: Tesseract не найден в системе
         raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
+    finally:
+        del img
+        gc.collect()
 
     logger.info("ocr_end", page=page_num)
 
     return {"page": page_num, "text": ocr_text.strip(), "method": "ocr"}
+
+
+def get_pdf_page_count(pdf_bytes: bytes) -> int:
+    """Возвращает число страниц PDF без полной обработки."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        count = len(doc)
+        doc.close()
+        return count
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть PDF: {e}") from e
+
+
+def extract_single_page(pdf_bytes: bytes, page_idx: int) -> dict:
+    """Обрабатывает одну страницу PDF (0-indexed). Открывает и закрывает doc каждый раз
+    чтобы не держать весь документ в памяти между вызовами."""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть PDF: {e}") from e
+
+    if doc.needs_pass:
+        doc.close()
+        raise ValueError("PDF защищён паролем — снимите защиту перед загрузкой")
+
+    page = doc[page_idx]
+    result = _process_page(page, page_idx + 1)
+    doc.close()
+    gc.collect()
+    return result
 
 
 def chunk_pdf_pages(pages: list[dict], pages_per_chunk: int = 8) -> list[str]:
