@@ -52,7 +52,7 @@ const DashboardChart: React.FC<Props> = ({ data }) => {
         </div>
       ) : (
         <div style={{ width: '100%', height: 240 }}>
-          <ResponsiveContainer>
+          <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
               <XAxis dataKey="_label" tick={{ fontSize: 11, fill: '#94a3b8' }} />
