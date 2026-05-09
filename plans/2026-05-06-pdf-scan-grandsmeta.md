@@ -243,8 +243,7 @@ else:
 8. generate_list(accumulated_items) → xlsx → save_result
 ```
 
-**resume-логика (E3):** при `start_chunk > 0` — `extract_pdf_with_ocr()` запускается заново (re-OCR),
-чанки нарезаются заново, цикл стартует с `start_chunk`. Это ожидаемо — аналог xlsx-ветки.
+**resume-логика (E3 — ИСПРАВЛЕНО 2026-05-10):** OCR теперь запускается в `asyncio.to_thread()` (не блокирует event loop → Render не перезапускает инстанс). После завершения OCR результат сохраняется в `progress_data["ocr_pages"]`. При повторном запуске (после рестарта) — OCR пропускается, берутся сохранённые страницы.
 
 **Gates Phase 2:**
 - [x] `python -m py_compile backend/app/services/task_processor.py`
@@ -394,5 +393,5 @@ if (onValidateFile) {
 - [x] Фаза 1 реализована
 - [x] Фаза 2 реализована
 - [x] Фаза 3 реализована
-- [ ] Ручное тестирование пройдено
-- [ ] Commit сделан
+- [x] Hotfix: OCR→asyncio.to_thread + кэш ocr_pages в progress_data (2026-05-10)
+- [ ] Ручное тестирование пройдено (post-deploy)
