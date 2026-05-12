@@ -313,6 +313,29 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
 }}"""
 
 
+PROMPT_ENRICH_NORMS = """Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области.
+
+Тебе передан перечень работ и материалов из строительной сметы.
+Для каждого материала определи норматив расхода на единицу работы по ГЭСН/ФСНБ.
+
+Для каждого материала верни:
+- qty_per_work_unit: число (норма расхода на 1 единицу работы) или null, если норма не определена
+- norm_reference: шифр нормы, например "ГЭСН 08-01-003" или null
+
+Верни результат СТРОГО в формате JSON, без markdown, первый символ {, последний }:
+{
+  "materials": [
+    {
+      "row_id": "id строки материала",
+      "qty_per_work_unit": число или null,
+      "norm_reference": "ГЭСН XX-XX-XXX" или null
+    }
+  ]
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
+
+
 def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
     """Split items into chunks, always starting a new chunk at a 'Работа' boundary."""
     if not items:
@@ -1757,6 +1780,53 @@ class TaskProcessor:
             elapsed += 30
             logger.info("Task still running", task_id=self.task_id, elapsed_seconds=elapsed)
 
+    async def _enrich_rows_with_gesn_norms(self, rows: list[dict]) -> list[dict]:
+        """Enrich parsed estimate rows with GESN norms via Claude API.
+
+        Sends work+material pairs to Claude in chunks of 25, gets back
+        qty_per_work_unit and norm_reference for each material row.
+        On Claude errors the rows are returned without norms — import is not blocked.
+        """
+        # Only process rows that have materials linked to works
+        has_linked_materials = any(
+            r.get("type") == "material" and r.get("work_row_id")
+            for r in rows
+        )
+        if not has_linked_materials:
+            return rows
+
+        rows_by_id = {r["id"]: r for r in rows}
+
+        # Chunk by work boundaries using "work" type (distinct from LIST_FROM_GRAND "Работа")
+        chunks: list[list[dict]] = []
+        current_chunk: list[dict] = []
+        for row in rows:
+            if row.get("type") == "work" and current_chunk and len(current_chunk) >= 25:
+                chunks.append(current_chunk)
+                current_chunk = []
+            current_chunk.append(row)
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        for chunk in chunks:
+            chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+            messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_ENRICH_NORMS}"}]
+            try:
+                data = await self._interruptible_claude_json_with_retry(
+                    messages, system_prompt=SYSTEM_BASE, processing_timeout=120.0
+                )
+            except Exception:
+                # Non-fatal: rows stay without norms, import continues
+                continue
+
+            for item in data.get("materials", []):
+                row = rows_by_id.get(item.get("row_id"))
+                if row is not None and item.get("qty_per_work_unit") is not None:
+                    row["qty_per_work_unit"] = item["qty_per_work_unit"]
+                    row["norm_reference"] = item.get("norm_reference")
+
+        return rows
+
     async def _handle_estimate_optimization(self, task: Task) -> None:
         """Parse uploaded Excel files and create initial EstimateVersion records."""
         import uuid as _uuid
@@ -1802,6 +1872,8 @@ class TaskProcessor:
                 "Не удалось извлечь строки из Excel-сметы. "
                 "Проверьте формат файла (должен быть .xlsx с заголовком Наименование)."
             )
+        await self.update_progress("Определяем нормативы ГЭСН для материалов...")
+        rows = await self._enrich_rows_with_gesn_norms(rows)
 
         # Create "original" version
         original = EstimateVersion(
@@ -1833,6 +1905,9 @@ class TaskProcessor:
                 await self.update_progress("Парсинг сметы заказчика...")
                 client_bytes = base64.b64decode(f["content_b64"])
                 client_rows = parse_estimate_excel(client_bytes)
+                if client_rows:
+                    await self.update_progress("Определяем нормативы ГЭСН для сметы заказчика...")
+                    client_rows = await self._enrich_rows_with_gesn_norms(client_rows)
                 if client_rows:
                     client_version = EstimateVersion(
                         id=str(_uuid.uuid4()),

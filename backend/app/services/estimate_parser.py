@@ -127,6 +127,22 @@ def _is_comment_name(name: str) -> bool:
     return False
 
 
+def link_materials_to_works(rows: list[dict]) -> list[dict]:
+    """Set work_row_id on each material row pointing to the preceding work row.
+
+    Section rows do not reset the link — materials after a section header
+    still belong to the last seen work. Multiple works in a row: subsequent
+    materials link to the last work (known limitation, documented in plan).
+    """
+    last_work_id = None
+    for row in rows:
+        if row.get("type") == "work":
+            last_work_id = row["id"]
+        elif row.get("type") == "material" and last_work_id is not None:
+            row["work_row_id"] = last_work_id
+    return rows
+
+
 def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
     """Parse xlsx bytes into a list of EstimateRow dicts.
 
@@ -280,4 +296,4 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
             "optimization_note": None,
         })
 
-    return result
+    return link_materials_to_works(result)

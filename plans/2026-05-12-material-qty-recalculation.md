@@ -60,7 +60,7 @@ norm_reference: Optional[str] = None       # ссылка на норму, на�
 - [x] `backend/app/schemas/estimate_version.py` — добавить пять полей в `EstimateRowSchema`
 - [x] `frontend/src/types/index.ts` — добавить пять полей в `interface EstimateRow`
 
-### [ ] Фаза 2 — Обогащение нормативами ГЭСН при импорте (backend)
+### [x] Фаза 2 — Обогащение нормативами ГЭСН при импорте (backend)
 
 Схема реализации полностью аналогична `_handle_check_completeness` в `task_processor.py`.
 
