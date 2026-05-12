@@ -163,7 +163,7 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
     _bold_row(ws, next_row, "Полная себестоимость", full_cost, _TOTAL_FILL)
     next_row += 1
 
-    for label, val in [(f"НДС на работы {vat_w_pct}%", vat), (f"Другие налоги {_ov('tax_pct', 3.0)}%", tax)]:
+    for label, val in [(f"НДС {vat_w_pct}%", vat), (f"Другие налоги {_ov('tax_pct', 3.0)}%", tax)]:
         ws.cell(row=next_row, column=1, value=label)
         c = ws.cell(row=next_row, column=4, value=round(val, 2))
         c.number_format = _NUM_FMT
