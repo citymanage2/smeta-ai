@@ -50,6 +50,7 @@ class ProjectCardResponse(BaseModel):
     other: int
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
+    summary_total: Optional[float] = None
 
 
 class TaskBrief(BaseModel):
@@ -77,6 +78,7 @@ class ProjectDetailResponse(BaseModel):
     other: int
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
+    summary_total: Optional[float] = None
     tasks: list[TaskBrief]
 
 
@@ -153,6 +155,7 @@ async def list_projects(
             Project.description,
             Project.created_at,
             Project.updated_at,
+            Project.summary_total,
             func.count(case((Task.estimation_status == "unestimated", 1), else_=None)).label("unestimated"),
             func.count(case((Task.estimation_status == "estimated", 1), else_=None)).label("estimated"),
             func.count(case((Task.estimation_status == "optimized", 1), else_=None)).label("optimized"),
@@ -177,6 +180,7 @@ async def list_projects(
             Project.description,
             Project.created_at,
             Project.updated_at,
+            Project.summary_total,
         )
         .order_by(Project.created_at.desc())
     )
@@ -192,7 +196,12 @@ async def list_projects(
             estimated=row.estimated or 0,
             optimized=row.optimized or 0,
             other=row.other or 0,
-            total_cost=float(row.total_cost) if row.total_cost is not None else None,
+            summary_total=float(row.summary_total) if row.summary_total is not None else None,
+            total_cost=(
+                float(row.summary_total)
+                if row.summary_total is not None
+                else (float(row.total_cost) if row.total_cost is not None else None)
+            ),
             optimized_cost=float(row.optimized_cost) if row.optimized_cost is not None else None,
         )
         for row in rows
@@ -235,6 +244,9 @@ async def get_project(
 ):
     project = await _get_project_or_404(project_id, db)
     agg = await _aggregate(project_id, db)
+    summary_total = float(project.summary_total) if project.summary_total is not None else None
+    if summary_total is not None:
+        agg["total_cost"] = summary_total
 
     tasks_result = await db.execute(
         select(
@@ -264,6 +276,7 @@ async def get_project(
         description=project.description,
         created_at=project.created_at.isoformat(),
         updated_at=project.updated_at.isoformat(),
+        summary_total=summary_total,
         tasks=[
             TaskBrief(
                 id=str(t.id),

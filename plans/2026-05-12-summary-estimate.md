@@ -1,6 +1,6 @@
 # Сводная себестоимость — многолистовой редактор смет
 
-**Статус:** [ ] В работе (Фаза 1 завершена)  
+**Статус:** [x] Завершён (все 5 фаз)  
 **Создан:** 2026-05-12  
 **Размер задачи:** L (10+ файлов, новая модель БД, новый раздел UI)
 
@@ -222,13 +222,16 @@ frontend/src/
 - [x] Gate: `npx tsc --noEmit` — 0 ошибок
 
 ### Фаза 5 — Интеграция project total + завершение
-**Статус:** [ ]
+**Статус:** [x]
 
-- [ ] Добавить `summary_total: Decimal | None` в модель `Project` (миграция `016_add_summary_total_to_project.py`)
-- [ ] В `summary_service.py`: при `POST`/`PUT` summary — обновлять `project.summary_total`
-- [ ] В `routers/projects.py` `_aggregate()`: если `project.summary_total is not None` → возвращать его, иначе `SUM(Task.cost)` (обратная совместимость)
-- [ ] В `ProjectCardResponse` / `ProjectDetail`: показывать индикатор «Сводная сформирована» рядом с суммой
-- [ ] Gate: все тесты, `tsc --noEmit`, `lint` зелёные
+- [x] Миграция `023_add_summary_total_to_project.py` — добавить `summary_total DECIMAL(14,2)` в таблицу `projects`
+- [x] Модель `Project`: поле `summary_total: Optional[Decimal]`
+- [x] `summary_service.py`: при `POST` → `project.summary_total = Decimal("0")`; при `PUT` с `total_for_customer` → `project.summary_total = total_for_customer`
+- [x] `routers/projects.py`: `summary_total` в `ProjectCardResponse`/`ProjectDetailResponse`; в `list_projects` — добавлен в SELECT + GROUP BY; `total_cost` переопределяется из `summary_total` если не None
+- [x] `frontend/src/types/index.ts`: `summary_total?: number | null` в `ProjectCard`
+- [x] `ProjectDetail.tsx`: фиолетовый бейдж «Сводная сформирована» + «Итого для заказчика» когда `summary_total != null`, иначе fallback на `SUM(Task.cost)`
+- [x] `Projects.tsx`: фиолетовый бейдж «Сводная · X ₽» в карточке проекта
+- [x] Gate: 91 passed (8 fail pre-existing fitz), ruff чистый, tsc 0 ошибок
 
 ---
 
@@ -267,5 +270,5 @@ frontend/src/
 | 4 — UI-компоненты | Пользователь может работать со сводной |
 | 5 — Project total | Сумма проекта берётся из сводной, всё интегрировано |
 
-**Реализован целиком:** нет (план в работе)  
-**Что осталось:** все 5 фаз
+**Реализован целиком:** да  
+**Что осталось:** —

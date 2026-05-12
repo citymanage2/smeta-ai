@@ -213,7 +213,12 @@ const Projects: React.FC = () => {
                   )}
                   {p.estimated > 0 && (
                     <span style={{ padding: '3px 10px', backgroundColor: '#fef9c3', color: '#854d0e', borderRadius: '20px', fontSize: '12px', fontWeight: 500 }}>
-                      {p.estimated} рассчитано{p.total_cost !== null ? ` · ${formatCost(p.total_cost)}` : ''}
+                      {p.estimated} рассчитано{p.summary_total == null && p.total_cost !== null ? ` · ${formatCost(p.total_cost)}` : ''}
+                    </span>
+                  )}
+                  {p.summary_total != null && (
+                    <span style={{ padding: '3px 10px', backgroundColor: '#f5f3ff', color: '#7c3aed', borderRadius: '20px', fontSize: '12px', fontWeight: 500 }}>
+                      Сводная · {formatCost(p.summary_total)}
                     </span>
                   )}
                   {p.optimized > 0 && (

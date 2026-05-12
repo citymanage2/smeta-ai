@@ -1,6 +1,7 @@
 import uuid as _uuid
+from decimal import Decimal
 from typing import Optional
-from sqlalchemy import String, Text, DateTime
+from sqlalchemy import String, Text, DateTime, Numeric
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from datetime import datetime, timezone
@@ -27,4 +28,7 @@ class Project(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+    summary_total: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2), nullable=True, default=None
     )

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.estimate_version import EstimateVersion
+from app.models.project import Project
 from app.models.summary_estimate import SummaryEstimate
 from app.models.workflow_card import WorkflowCard
 from app.schemas.summary_estimate import (
@@ -69,6 +70,11 @@ async def create_summary(
         total_for_customer=Decimal("0"),
     )
     db.add(summary)
+
+    project = await db.get(Project, project_id)
+    if project is not None:
+        project.summary_total = Decimal("0")
+
     await db.commit()
     await db.refresh(summary)
     logger.info("SummaryEstimate created", project_id=project_id, summary_id=summary.id)
@@ -86,6 +92,9 @@ async def update_summary(
         summary.overrides = data.overrides.model_dump(mode="json")
     if data.total_for_customer is not None:
         summary.total_for_customer = data.total_for_customer
+        project = await db.get(Project, summary.project_id)
+        if project is not None:
+            project.summary_total = data.total_for_customer
     summary.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(summary)

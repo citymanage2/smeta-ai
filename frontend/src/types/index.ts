@@ -154,6 +154,7 @@ export interface ProjectCard extends Project {
   other: number;
   total_cost: number | null;
   optimized_cost?: number | null;
+  summary_total?: number | null;
 }
 
 export interface TaskBrief {

@@ -12,6 +12,7 @@ from app.schemas.summary_estimate import (
     SummaryEstimateCreate,
     SummaryEstimateResponse,
     SummaryEstimateUpdate,
+    SummaryOverrides,
 )
 from app.services import summary_service
 from app.utils.auth import get_current_user
@@ -52,10 +53,10 @@ async def create_summary(
     await _project_or_404(project_id, db)
     existing = await summary_service.get_summary(project_id, db)
     if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="Сводная смета уже существует. Используйте PUT для обновления.",
-        )
+        preserved_overrides = body.overrides or SummaryOverrides(**existing.overrides)
+        await db.delete(existing)
+        await db.commit()
+        body = SummaryEstimateCreate(sections=body.sections, overrides=preserved_overrides)
     return await summary_service.create_summary(project_id, body, db)
 
 
