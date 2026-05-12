@@ -31,6 +31,7 @@ export interface WorkflowCard {
   completeness_task: TaskBrief | null
   estimate_task: TaskBrief | null
   optimization_task: TaskBrief | null
+  primary_version_id: string | null
   created_at: string
   updated_at: string
 }
