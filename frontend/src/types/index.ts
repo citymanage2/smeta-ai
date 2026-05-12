@@ -41,6 +41,11 @@ export interface EstimateRow {
   optimization_note?: string;
   optimization_confidence?: 'high' | 'medium' | 'low';
   is_excluded?: boolean;
+  work_row_id?: string | null;
+  qty_per_work_unit?: number | null;
+  qty_overridden?: boolean | null;
+  qty_manual_backup?: number | null;
+  norm_reference?: string | null;
 }
 
 export interface OptimizationProposal {

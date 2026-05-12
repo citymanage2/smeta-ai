@@ -22,6 +22,11 @@ class EstimateRowSchema(BaseModel):
     optimization_note: Optional[str] = None
     optimization_confidence: Optional[Literal["high", "medium", "low"]] = None
     is_excluded: Optional[bool] = None
+    work_row_id: Optional[str] = None
+    qty_per_work_unit: Optional[float] = None
+    qty_overridden: Optional[bool] = None
+    qty_manual_backup: Optional[float] = None
+    norm_reference: Optional[str] = None
 
 
 class OptimizationProposalSchema(BaseModel):
