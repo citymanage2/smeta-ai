@@ -8,7 +8,7 @@
 
 При ручном изменении объёма работы в онлайн-редакторе сметы — автоматически пересчитываются объёмы всех связанных материалов в соответствии с нормативами **ГЭСН** (Государственные Элементные Сметные Нормы).
 
-Нормативы берутся из справочника ГЭСН по коду работы, а не вычисляются из данных входящей сметы. Пересчёт срабатывает для всех связанных материалов — в том числе тех, чей объём был ранее задан вручную.
+Нормативы берутся из ГЭСН-2017/ФСНБ-2022 через Claude API (по аналогии с задачей «Проверка полноты по ГЭСН») — никакой локальной базы нет, Claude сам знает нормы. Пересчёт срабатывает для всех связанных материалов — в том числе тех, чей объём был ранее задан вручную.
 
 ## Acceptance Criteria
 
@@ -23,7 +23,7 @@
    - нажатие восстанавливает `qty_manual_backup` и сбрасывает `qty_overridden`
    - кнопка не показывается, если `work_row_id` не найден в `activeRows`
    - нажатие не открывает редактор ячейки: `e.stopPropagation()` + `onMouseDown e.preventDefault()`
-7. `qty_per_work_unit` берётся из справочника ГЭСН по коду работы. Если код ГЭСН отсутствует — поле `null`, пересчёт не применяется
+7. `qty_per_work_unit` и `norm_reference` заполняются Claude при импорте сметы по ГЭСН-2017/ФСНБ-2022. Если Claude не нашёл норму для данной пары работа–материал — поля `null`, пересчёт не применяется
 8. Строки материалов с `qty_overridden = true` выделяются цветом (отдельный цвет, добавляется в существующую легенду цветов строк в редакторе)
 9. При первом открытии сметы с нормативами — показывается однократная dismissable-плашка вверху грида: _«В этой смете работает авто-расчёт материалов. При изменении объёма работы материалы пересчитаются автоматически.»_ + кнопка «Понятно». Факт прочтения хранится в `localStorage`
 10. После пересчёта — кратковременная подсветка (flash-анимация 1.5–2 сек: жёлтый фон → прозрачный) на ячейках `qty` всех пересчитанных материалов. То же — при Undo/Redo
@@ -34,10 +34,11 @@
 ## Архитектурные решения
 
 - **Норматив хранится inline** в JSON-поле `rows` (без новых таблиц и миграций БД)
-- **Нормативы из ГЭСН** — `qty_per_work_unit` заполняется при парсинге по коду работы из справочника ГЭСН (способ хранения справочника: JSON-файл или отдельная таблица — определить до Фазы 2)
+- **Нормативы получает Claude** — при импорте сметы вызывается отдельный async-шаг в `task_processor.py`, который отправляет структуру работа→материалы в Claude с промптом по ГЭСН-2017/ФСНБ-2022. Локальной базы нет. Схема точно такая же, как в `_handle_check_completeness`: чанкинг по `_chunk_by_work_boundaries`, по 25 элементов, Claude возвращает `qty_per_work_unit` и `norm_reference` на каждый материал
+- **`parse_estimate_excel()` остаётся синхронной** — только парсит структуру и проставляет `work_row_id`. Claude-шаг вызывается отдельно после неё в async-обработчике
 - **Пересчёт — клиентский**, выполняется в `handleRowsChange` в `EstimateGrid.tsx` (не внутри `NumberEditor`) — там доступны все строки сразу
 - **Пересчёт применяется к полному `rows`** (до фильтрации по табам «Работы» / «Всё»), результат затем мерджится обратно — иначе изменения материалов потеряются при активном табе «Работы»
-- **Ретроактивная миграция не нужна** — нормативы из ГЭСН заполняются только при новых парсингах; существующие сметы остаются без нормативов
+- **Ретроактивная миграция не нужна** — нормативы заполняются только при новых парсингах; существующие сметы остаются без нормативов
 - **Комментарий** — мелкий серый текст в ячейке (second-line), не тултип
 
 ## Новые поля в EstimateRow
@@ -47,52 +48,110 @@ work_row_id: Optional[str] = None           # ссылка на id работы
 qty_per_work_unit: Optional[float] = None   # норматив ГЭСН: кол-во материала на 1 ед. работы
 qty_overridden: Optional[bool] = None       # True = задано вручную
 qty_manual_backup: Optional[float] = None  # сохранённый ручной объём до последнего пересчёта
+norm_reference: Optional[str] = None       # ссылка на норму, напр. «ГЭСН 08-01-003»
 ```
 
 Все поля опциональные — полная обратная совместимость.
-
-## Зависимость: справочник ГЭСН
-
-До начала Фазы 2 нужно определить:
-- Где хранится справочник нормативов ГЭСН (JSON-файл в `backend/app/data/`, таблица в БД или внешний источник)
-- Как сопоставляется код работы в смете с кодом в ГЭСН
-- Что делать, если код не найден: `qty_per_work_unit = null`, пересчёт не применяется
 
 ## Фазы
 
 ### [ ] Фаза 1 — Схема данных
 
-- [ ] `backend/app/schemas/estimate_version.py` — добавить четыре поля в `EstimateRowSchema`
-- [ ] `frontend/src/types/index.ts` — добавить четыре поля в `interface EstimateRow`
+- [ ] `backend/app/schemas/estimate_version.py` — добавить пять полей в `EstimateRowSchema`
+- [ ] `frontend/src/types/index.ts` — добавить пять полей в `interface EstimateRow`
 
-### [ ] Фаза 2 — Парсер (нормативы ГЭСН при импорте)
+### [ ] Фаза 2 — Обогащение нормативами ГЭСН при импорте (backend)
 
-- [ ] Написать утилиту `enrich_rows_with_norms(rows)` в `backend/app/utils/`
-- [ ] Вызвать утилиту **в конце `parse_estimate_excel()`**, перед `return rows` — тогда покрываются оба места вызова в `task_processor.py` (строки ≈1799 и ≈1835) автоматически
+Схема реализации полностью аналогична `_handle_check_completeness` в `task_processor.py`.
 
-Логика утилиты (нормативы из ГЭСН):
+#### Шаг 2.1 — Синхронная привязка материалов к работам
+
+В конце `parse_estimate_excel()` вызывается синхронная утилита `link_materials_to_works(rows)` — только проставляет `work_row_id`, Claude не вызывает:
+
 ```python
-def enrich_rows_with_norms(rows: list[dict]) -> list[dict]:
+def link_materials_to_works(rows: list[dict]) -> list[dict]:
     last_work = None
     for row in rows:
         if row["type"] == "work":
             last_work = row
         elif row["type"] == "material" and last_work is not None:
             row["work_row_id"] = last_work["id"]
-            gesn_norm = lookup_gesn_norm(last_work.get("code"), row.get("code"))
-            if gesn_norm is not None:
-                row["qty_per_work_unit"] = gesn_norm
-        # section — не сбрасывает last_work, связь сохраняется
+        # section — не сбрасывает last_work
     return rows
 ```
 
-**Ограничение:** если в смете идут несколько работ подряд без материалов между ними — последующие материалы привяжутся только к последней работе. Это осознанное ограничение алгоритма `last_work`, задокументированное здесь.
+**Ограничение:** несколько работ подряд без материалов между ними — последующие материалы привязываются к последней работе. Это осознанное ограничение, задокументированное здесь.
+
+#### Шаг 2.2 — Async Claude-шаг: получение нормативов ГЭСН
+
+Вызывается в `task_processor.py` **после** `parse_estimate_excel()`, перед сохранением `EstimateVersion`. Оба места вызова парсера (строки ≈1799 и ≈1835) обрабатываются одинаково.
+
+**Новый промпт** `PROMPT_ENRICH_NORMS` в `task_processor.py`:
+
+```
+Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022, ФЕР/ТЕР по Свердловской области.
+
+Тебе передан перечень работ и материалов из строительной сметы.
+Для каждого материала определи норматив расхода на единицу работы по ГЭСН/ФСНБ.
+
+Для каждого материала верни:
+- qty_per_work_unit: число (норма расхода на 1 единицу работы) или null, если норма не определена
+- norm_reference: шифр нормы, например "ГЭСН 08-01-003" или null
+
+Верни результат СТРОГО в формате JSON, без markdown, первый символ {, последний }:
+{
+  "materials": [
+    {
+      "row_id": "id строки материала",
+      "qty_per_work_unit": число или null,
+      "norm_reference": "ГЭСН XX-XX-XXX" или null
+    }
+  ]
+}
+
+ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }.
+```
+
+**Новая async-функция** `_enrich_rows_with_gesn_norms(rows)` в `task_processor.py`:
+
+```python
+async def _enrich_rows_with_gesn_norms(self, rows: list[dict]) -> list[dict]:
+    # Чанкинг по границам работ, аналогично _handle_check_completeness
+    chunks = _chunk_by_work_boundaries(rows, max_chunk_size=25)
+    rows_by_id = {r["id"]: r for r in rows}
+
+    for chunk in chunks:
+        chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+        messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_ENRICH_NORMS}"}]
+        try:
+            data = await self._interruptible_claude_json_with_retry(
+                messages, system_prompt=SYSTEM_BASE, processing_timeout=120.0
+            )
+        except Exception:
+            # Не падаем — строки останутся без нормативов
+            continue
+
+        for item in data.get("materials", []):
+            row = rows_by_id.get(item.get("row_id"))
+            if row and item.get("qty_per_work_unit") is not None:
+                row["qty_per_work_unit"] = item["qty_per_work_unit"]
+                row["norm_reference"] = item.get("norm_reference")
+
+    return rows
+```
+
+Порядок вызовов в обработчике:
+```python
+rows = parse_estimate_excel(file_data)          # синхронно — парсинг + link_materials_to_works
+rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭСН
+# далее сохранение EstimateVersion
+```
 
 ### [ ] Фаза 3 — Логика пересчёта (frontend)
 
 - [ ] Создать `frontend/src/utils/estimateRecalc.ts`:
   - `applyWorkQuantityChange(rows, changedWorkId, newQty)` — пересчёт **всех** связанных материалов, включая `qty_overridden = true`; для последних сохраняет `qty_manual_backup` (только если `qty_manual_backup` ещё не было — т.е. не перезатирает уже сохранённое)
-  - `buildNormComment(row, workQty)` — возвращает строку: `«авто: 50 кг (норм. 0.5 на м²)»` или `«задано вручную»`
+  - `buildNormComment(row, workQty)` — возвращает строку: `«авто: 50 кг (норм. 0.5 на м²)»`; если есть `norm_reference` — добавляет в title-атрибут ячейки: `«ГЭСН 08-01-003»`; при `qty_overridden` без `qty_per_work_unit` — `«задано вручную»`
 
 - [ ] `frontend/src/components/estimate/EstimateGrid.tsx`:
   - **Пересчёт в `handleRowsChange`** (не в `NumberEditor`): если изменилась строка с `type === 'work'` и поле `qty` → вызвать `applyWorkQuantityChange(fullRows, changedWorkId, newQty)` и смерджить результат перед сохранением. `fullRows` — полный массив (не `displayedRows`)
@@ -113,11 +172,13 @@ def enrich_rows_with_norms(rows: list[dict]) -> list[dict]:
 ### [ ] Фаза 4 — Тесты
 
 - [ ] `backend/tests/test_estimate_norms.py`:
-  - `test_enrich_rows_sets_work_row_id`
-  - `test_enrich_rows_applies_gesn_norm`
-  - `test_enrich_rows_skips_when_no_gesn_code`
-  - `test_enrich_rows_section_does_not_break_link`
-  - `test_enrich_rows_multiple_works_in_row_links_to_last` — документирует осознанное ограничение
+  - `test_link_materials_sets_work_row_id` — синхронная привязка
+  - `test_link_materials_section_does_not_break_link` — section не сбрасывает last_work
+  - `test_link_materials_multiple_works_in_row_links_to_last` — документирует ограничение
+  - `test_enrich_norms_stores_qty_per_work_unit` — Claude-ответ записывается в строку
+  - `test_enrich_norms_stores_norm_reference` — ссылка на норму сохраняется
+  - `test_enrich_norms_skips_null_from_claude` — null-норма не перезаписывает поле
+  - `test_enrich_norms_tolerates_claude_error` — при ошибке Claude строки остаются без нормативов, не падают
 
 - [ ] `frontend/src/utils/estimateRecalc.test.ts`:
   - `applyWorkQuantityChange` пересчитывает материалы без `qty_overridden`
@@ -135,8 +196,8 @@ def enrich_rows_with_norms(rows: list[dict]) -> list[dict]:
 
 | Ситуация | Решение |
 |---|---|
-| Код ГЭСН для работы не найден в справочнике | `qty_per_work_unit = null`, пересчёт не применяется |
-| Код ГЭСН для материала не найден | Норматив берётся по коду работы + тип материала |
+| Claude не нашёл норму для пары работа–материал | `qty_per_work_unit = null`, пересчёт не применяется |
+| Claude вернул ошибку или невалидный JSON | Строки остаются без нормативов, сохранение не блокируется |
 | `material.qty = null` | Норматив `null` |
 | `material.qty = 0` | `qty_per_work_unit = 0` — валидно, показывается `«авто: 0»` |
 | Материал стоит до любой работы | `work_row_id = null` — пересчёт не применяется |
