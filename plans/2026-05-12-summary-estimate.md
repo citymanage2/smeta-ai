@@ -165,17 +165,18 @@ frontend/src/
 - [x] Gate: pytest — 91 passed (8 fail pre-existing, все из-за fitz/render.yaml), ruff на новых файлах чистый
 
 ### Фаза 2 — API эндпоинты и Excel-экспорт
-**Статус:** [ ]
+**Статус:** [x]
 
-- [ ] `backend/app/routers/summary.py` — CRUD эндпоинты (`GET`, `POST`, `PUT`)
-- [ ] Эндпоинт `PATCH /workflow-cards/{card_id}/primary-version` в `routers/workflow_cards.py`
-- [ ] `backend/app/services/summary_service.py` — бизнес-логика: сборка sections из WorkflowCard + выбранной версии
-- [ ] `backend/app/utils/xlsx_summary.py` — функция `generate_summary_xlsx(summary)`:
+- [x] `backend/app/routers/summary.py` — CRUD эндпоинты (`GET`, `POST`, `PUT`)
+- [x] Эндпоинт `PATCH /workflow-cards/{card_id}/primary-version` в `routers/workflow_cards.py`
+- [x] `backend/app/services/summary_service.py` — бизнес-логика: сборка sections из WorkflowCard + выбранной версии
+- [x] `backend/app/utils/xlsx_summary.py` — функция `generate_summary_xlsx(summary)`:
   - Лист на каждый раздел (строки из `section.rows`, стиль как в `generate_estimate_xlsx`)
   - Лист «Сводная» — левая и правая таблицы как на скриншоте
-- [ ] Эндпоинт `GET /projects/{id}/summary/export` возвращает xlsx
-- [ ] Подключить роутер в `main.py`
-- [ ] Gate: все тесты зелёные, эндпоинты отвечают корректно
+- [x] Эндпоинт `GET /projects/{id}/summary/export` возвращает xlsx
+- [x] Подключить роутер в `main.py`
+- [x] Fix: заменить `JSONB` на generic `JSON` в `SummaryEstimate` (JSONB несовместим с SQLite-тестами; миграция в БД остаётся JSONB)
+- [x] Gate: 91 passed, 8 fail pre-existing (fitz/render.yaml), ruff чистый
 
 ### Фаза 3 — Фронтенд: стор, API-клиент, типы
 **Статус:** [ ]

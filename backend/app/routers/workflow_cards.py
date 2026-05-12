@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
+from pydantic import BaseModel
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -12,7 +13,6 @@ from fastapi import (
     HTTPException,
     UploadFile,
     File,
-    status,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,6 +81,7 @@ def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
         completeness_task_id=str(card.completeness_task_id) if card.completeness_task_id else None,
         estimate_task_id=str(card.estimate_task_id) if card.estimate_task_id else None,
         optimization_task_id=str(card.optimization_task_id) if card.optimization_task_id else None,
+        primary_version_id=str(card.primary_version_id) if card.primary_version_id else None,
         list_task=_task_brief(card.list_task),
         completeness_task=_task_brief(card.completeness_task),
         estimate_task=_task_brief(card.estimate_task),
@@ -231,6 +232,38 @@ async def delete_workflow_card(
     await db.delete(card)
     await db.commit()
     logger.info("WorkflowCard deleted with tasks", card_id=card_id, task_count=len(task_ids))
+
+
+class _PrimaryVersionBody(BaseModel):
+    version_id: Optional[str] = None
+
+
+@router.patch("/workflow-cards/{card_id}/primary-version", response_model=WorkflowCardResponse)
+async def set_primary_version(
+    card_id: str,
+    body: _PrimaryVersionBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Устанавливает или сбрасывает главную версию сметы для карточки раздела."""
+    from app.models.estimate_version import EstimateVersion
+
+    result = await db.execute(select(WorkflowCard).where(WorkflowCard.id == card_id))
+    card = result.scalar_one_or_none()
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
+
+    if body.version_id is not None:
+        ver = await db.get(EstimateVersion, body.version_id)
+        if ver is None:
+            raise HTTPException(status_code=404, detail="Версия сметы не найдена")
+
+    card.primary_version_id = body.version_id
+    card.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    updated = await _load_card_with_tasks(card_id, db)
+    return _build_card_response(updated)
 
 
 async def _build_stage_meta(task: Optional[Task], db: AsyncSession) -> Optional[StageDetail]:

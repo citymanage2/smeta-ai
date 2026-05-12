@@ -122,6 +122,7 @@ def create_app() -> FastAPI:
     from app.routers.estimate_versions import router as estimate_versions_router
     from app.routers.prices_catalog import router as prices_catalog_router
     from app.routers.workflow_cards import router as workflow_cards_router
+    from app.routers.summary import router as summary_router
 
     app.include_router(auth.router)
     app.include_router(tasks.router)
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(estimate_versions_router)
     app.include_router(prices_catalog_router)
     app.include_router(workflow_cards_router, prefix="/api")
+    app.include_router(summary_router, prefix="/api")
 
     # Global error handler
     @app.exception_handler(Exception)
