@@ -1,7 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
-from uuid import UUID
-from datetime import datetime
 
 
 
@@ -101,6 +99,7 @@ class WorkflowCardResponse(BaseModel):
     completeness_task_id: Optional[str]
     estimate_task_id: Optional[str]
     optimization_task_id: Optional[str]
+    primary_version_id: Optional[str] = None
     list_task: Optional[TaskBrief]
     completeness_task: Optional[TaskBrief]
     estimate_task: Optional[TaskBrief]

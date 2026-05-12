@@ -50,6 +50,12 @@ class WorkflowCard(Base):
         ForeignKey("tasks.id", ondelete="SET NULL"),
         nullable=True,
     )
+    primary_version_id: Mapped[Optional[str]] = mapped_column(
+        PG_UUID(as_uuid=False),
+        ForeignKey("estimate_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
