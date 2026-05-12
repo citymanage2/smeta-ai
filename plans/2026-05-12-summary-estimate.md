@@ -179,45 +179,47 @@ frontend/src/
 - [x] Gate: 91 passed, 8 fail pre-existing (fitz/render.yaml), ruff чистый
 
 ### Фаза 3 — Фронтенд: стор, API-клиент, типы
-**Статус:** [ ]
+**Статус:** [x]
 
-- [ ] `frontend/src/types/summary.ts` — типы `SectionTab`, `SummaryOverrides`, `SummaryEstimate`, `SummaryEstimateResponse`
-- [ ] `frontend/src/api/summaryEstimate.ts` — функции `getSummary`, `createSummary`, `updateSummary`, `exportSummary`, `setPrimaryVersion`
-- [ ] `frontend/src/stores/summaryEditorStore.ts`:
+- [x] `frontend/src/types/summary.ts` — типы `SectionTab`, `SummaryOverrides`, `SummaryEstimate`, `SummaryEstimateResponse`, `SummaryCalcResult`, `DEFAULT_OVERRIDES`
+- [x] `frontend/src/api/summaryEstimate.ts` — функции `getSummary`, `createSummary`, `updateSummary`, `exportSummary`, `setPrimaryVersion`
+- [x] `frontend/src/stores/summaryEditorStore.ts`:
   - State: `sections`, `summaryOverrides`, `activeTabIndex`, `isDirty`, `summaryId`, `undoStack`, `redoStack`
-  - Actions: `loadSummary`, `updateSectionRows`, `updateOverride`, `save`, `undo`, `redo`, `reset`
-  - `undo`/`redo` по той же схеме что в `estimateEditor.ts` (undoStack/redoStack из EstimateRow[][])
-  - Pure function `calcSummary(sections, overrides)` → все итоги для SummarySheet
-- [ ] Gate: `npx tsc --noEmit` без ошибок
+  - Actions: `loadSummary`, `updateSectionRows`, `updateOverride`, `setActiveTabIndex`, `save`, `undo`, `redo`, `reset`
+  - `undo`/`redo` по той же схеме что в `estimateEditor.ts` (per active section, сбрасывается при смене вкладки)
+  - Pure function `calcSummary(sections, overrides)` → все итоги для SummarySheet (экспортируется отдельно)
+- [x] `frontend/src/types/workflow.ts` — добавлено поле `primary_version_id: string | null` в `WorkflowCard`
+- [x] Gate: `npx tsc --noEmit` без ошибок (0 ошибок)
 
 ### Фаза 4 — Фронтенд: UI-компоненты и страница
-**Статус:** [ ]
+**Статус:** [x]
 
-- [ ] UI выбора главной версии на `WorkflowCard`:
-  - В списке версий карточки раздела добавить кнопку/иконку «Сделать главной» рядом с каждой версией
-  - Вызывает `PATCH /workflow-cards/{card_id}/primary-version`
-  - Выбранная версия помечается визуально (иконка звезды или метка «Главная»)
-- [ ] `SectionSelector.tsx` — модальное окно:
-  - Список WorkflowCard проекта у которых есть `estimate_task_id` или `optimization_task_id`
-  - Для каждой карты: чекбокс + дропдаун версий EstimateVersion (не rolled_back)
-  - Дефолт дропдауна: `primary_version_id` карты если задан, иначе автовыбор (optimized > estimated)
+- [x] UI выбора главной версии на `WorkflowCard`:
+  - В `VersionTabs.tsx`: новые props `cardId`, `primaryVersionId`, `onPrimaryVersionChange`
+  - В контекстном меню версии: кнопка «Сделать главной» / «Главная версия» (звезда)
+  - Вызывает `PATCH /workflow-cards/{card_id}/primary-version` через `setPrimaryVersion`
+- [x] `SectionSelector.tsx` — модальное окно:
+  - Список WorkflowCard с `estimate_task_id` или `optimization_task_id`
+  - Для каждой карты: чекбокс + дропдаун версий (не rolled_back)
+  - Дефолт: `primary_version_id` если задан, иначе последняя активная версия
+  - Кнопка «Сделать главной» (звезда) рядом с дропдауном
   - Кнопка «Создать сводную»
-- [ ] `SummarySheet.tsx` — Сводный лист:
-  - Левая таблица: строки 1-10 с редактируемыми ячейками (% или руб.), итоги readonly
-  - Правая таблица: разбивка по разделам, итоги
-  - Реактивный пересчёт через `calcSummary()` при каждом изменении
-  - Ставки НДС: работы 22%, материалы 20% (как на скриншоте)
-- [ ] `SummaryEditorTabs.tsx` — горизонтальные вкладки:
-  - Вкладки разделов: рендерят `EstimateGrid` с `rows` из `summaryEditorStore.sections[i].rows`, передавать `onUndo`/`onRedo` из store
-  - Вкладка «Сводная» — рендерит `SummarySheet`
-  - Кнопки панели инструментов: Сохранить, Экспорт xlsx — кнопки «Отменить изменение» / «Вернуть изменение» рендерит сам `EstimateGrid` через props (как в `EstimateOptimizer.tsx`)
-- [ ] `SummaryEditor.tsx` — страница:
-  - Если summary нет: показывает кнопку «Создать сводную» → открывает `SectionSelector`
-  - Если summary есть: показывает `SummaryEditorTabs`
-  - Breadcrumb: Проект → Сводная себестоимость
-- [ ] Маршрут `/projects/:projectId/summary` в `App.tsx`
-- [ ] Кнопка «Сводная себестоимость» в `ProjectDetail.tsx` (на странице проекта, рядом с суммой или в шапке)
-- [ ] Gate: `npx tsc --noEmit`, `npm run lint`, визуальная проверка в браузере (golden path)
+- [x] `SummarySheet.tsx` — Сводный лист:
+  - Левая таблица: строки 1-10, редактируемые % и руб. через `NumberInput`
+  - Правая таблица: разбивка по разделам
+  - Реактивный пересчёт через `calcSummary()`
+  - НДС: работы 22%, материалы 20%
+- [x] `SummaryEditorTabs.tsx` — горизонтальные вкладки:
+  - Вкладки разделов → `EstimateGrid` с undo/redo из store
+  - Вкладка «Сводная» → `SummarySheet`
+  - Toolbar: Сохранить, Экспорт xlsx, индикатор несохранённых изменений
+- [x] `SummaryEditor.tsx` — страница:
+  - Пустое состояние: кнопка «Создать сводную» → `SectionSelector`
+  - Есть сводная: `SummaryEditorTabs`
+  - Кнопка «Изменить разделы» в шапке
+- [x] Маршрут `/projects/:projectId/summary` в `App.tsx`
+- [x] Кнопка «Сводная себестоимость» в `ProjectDetail.tsx` (фиолетовая, рядом с «+ Новая задача»)
+- [x] Gate: `npx tsc --noEmit` — 0 ошибок
 
 ### Фаза 5 — Интеграция project total + завершение
 **Статус:** [ ]

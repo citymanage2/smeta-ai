@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { Star } from 'lucide-react';
 import { EstimateVersionSummary } from '../../types';
 import { rollbackVersion, renameVersion, exportVersion } from '../../api/estimateVersions';
+import { setPrimaryVersion } from '../../api/summaryEstimate';
 
 interface VersionTabsProps {
   taskId: string;
@@ -11,6 +13,9 @@ interface VersionTabsProps {
   onSelectVersion: (versionId: string) => void;
   onSelectComparison: () => void;
   onVersionsChange: () => void; // reload after rollback/rename
+  cardId?: string;
+  primaryVersionId?: string | null;
+  onPrimaryVersionChange?: (versionId: string) => void;
 }
 
 const MAX_VISIBLE_TABS = 6;
@@ -24,8 +29,12 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
   onSelectVersion,
   onSelectComparison,
   onVersionsChange,
+  cardId,
+  primaryVersionId,
+  onPrimaryVersionChange,
 }) => {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -194,6 +203,35 @@ const VersionTabs: React.FC<VersionTabsProps> = ({
             >
               ⬇ Скачать .xlsx
             </button>
+            {cardId && (
+              <button
+                disabled={settingPrimaryId === v.id}
+                onClick={async () => {
+                  setMenuOpenId(null);
+                  setSettingPrimaryId(v.id);
+                  try {
+                    await setPrimaryVersion(cardId, v.id);
+                    onPrimaryVersionChange?.(v.id);
+                  } finally {
+                    setSettingPrimaryId(null);
+                  }
+                }}
+                style={{
+                  ...menuItemStyle,
+                  color: primaryVersionId === v.id ? '#f59e0b' : '#374151',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Star
+                  size={13}
+                  fill={primaryVersionId === v.id ? '#f59e0b' : 'none'}
+                  color={primaryVersionId === v.id ? '#f59e0b' : '#374151'}
+                />
+                {primaryVersionId === v.id ? 'Главная версия' : 'Сделать главной'}
+              </button>
+            )}
             {!isLast && (
               <button
                 onClick={() => {

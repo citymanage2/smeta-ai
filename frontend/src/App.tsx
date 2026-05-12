@@ -15,6 +15,7 @@ import Calculator from './pages/Calculator';
 import Trash from './pages/Trash';
 import PriceCatalog from './pages/PriceCatalog';
 import System from './pages/System';
+import SummaryEditor from './pages/SummaryEditor';
 import { useAuthStore } from './stores/auth';
 
 const App: React.FC = () => {
@@ -91,6 +92,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <ProjectCardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/projects/:projectId/summary"
+          element={
+            <ProtectedRoute>
+              <SummaryEditor />
             </ProtectedRoute>
           }
         />

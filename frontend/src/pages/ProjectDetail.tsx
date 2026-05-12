@@ -318,6 +318,12 @@ const ProjectDetailPage: React.FC = () => {
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
               <button
+                onClick={() => navigate(`/projects/${projectId}/summary`)}
+                style={{ padding: '7px 14px', backgroundColor: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#7c3aed', fontWeight: 500 }}
+              >
+                Сводная себестоимость
+              </button>
+              <button
                 onClick={() => navigate(`/task/create?project_id=${projectId}`)}
                 style={{ padding: '7px 14px', backgroundColor: '#2563eb', border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: '#fff', fontWeight: 500 }}
               >
