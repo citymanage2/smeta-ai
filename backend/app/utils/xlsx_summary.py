@@ -118,7 +118,9 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
 
     vat_w_pct = _ov("vat_works_pct", 22.0)
     vat_m_pct = _ov("vat_materials_pct", 20.0)
-    vat = full_cost * _pct(vat_w_pct)
+    vat_works = total_works * _pct(vat_w_pct)
+    vat_materials = total_materials * _pct(vat_m_pct)
+    vat = vat_works + vat_materials
     tax = full_cost * _pct(_ov("tax_pct", 3.0))
     total_customer = full_cost + vat + tax
 
@@ -163,7 +165,11 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
     _bold_row(ws, next_row, "Полная себестоимость", full_cost, _TOTAL_FILL)
     next_row += 1
 
-    for label, val in [(f"НДС {vat_w_pct}%", vat), (f"Другие налоги {_ov('tax_pct', 3.0)}%", tax)]:
+    for label, val in [
+        (f"НДС на работы {vat_w_pct}%", vat_works),
+        (f"НДС на материалы {vat_m_pct}%", vat_materials),
+        (f"Другие налоги {_ov('tax_pct', 3.0)}%", tax),
+    ]:
         ws.cell(row=next_row, column=1, value=label)
         c = ws.cell(row=next_row, column=4, value=round(val, 2))
         c.number_format = _NUM_FMT
