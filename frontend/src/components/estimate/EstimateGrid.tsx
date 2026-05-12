@@ -363,6 +363,27 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     [],
   );
 
+  const hasExcluded = useMemo(() => rows.some((r) => r.is_excluded), [rows]);
+  const hasProposalHigh = useMemo(() => rows.some((r) => r.optimization_confidence === 'high'), [rows]);
+  const hasProposalMedium = useMemo(() => rows.some((r) => r.optimization_confidence === 'medium'), [rows]);
+  const hasProposalLow = useMemo(() => rows.some((r) => r.optimization_confidence === 'low'), [rows]);
+  const hasUnfilled = useMemo(
+    () => rows.some((r) => r.type !== 'section' && r.optimization_note != null && (r.price_work == null || r.price_material == null)),
+    [rows],
+  );
+
+  const legendItems = useMemo(() => {
+    const items: { color: string; border?: string; label: string; strikethrough?: boolean }[] = [
+      { color: '#dbeafe', border: '#93c5fd', label: 'Раздел' },
+    ];
+    if (hasUnfilled) items.push({ color: '#fffbeb', border: '#fde68a', label: 'Нет цены' });
+    if (hasExcluded) items.push({ color: '#fef2f2', border: '#fecaca', label: 'Исключена', strikethrough: true });
+    if (hasProposalHigh) items.push({ color: '#f0fdf4', border: '#22c55e', label: 'Высокая уверенность' });
+    if (hasProposalMedium) items.push({ color: '#fefce8', border: '#eab308', label: 'Средняя уверенность' });
+    if (hasProposalLow) items.push({ color: '#fff7ed', border: '#f97316', label: 'Низкая уверенность' });
+    return items;
+  }, [hasExcluded, hasProposalHigh, hasProposalMedium, hasProposalLow, hasUnfilled]);
+
   const saveStatusLabel =
     saveStatus === 'saving'
       ? 'Сохранение...'
@@ -416,6 +437,27 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
           )}
         </div>
       </div>
+
+      {/* Legend */}
+      {legendItems.length > 0 && (
+        <div className="estimate-grid-legend">
+          <span className="estimate-grid-legend-title">Обозначения:</span>
+          {legendItems.map((item) => (
+            <span key={item.label} className="estimate-grid-legend-item">
+              <span
+                className="estimate-grid-legend-swatch"
+                style={{
+                  background: item.color,
+                  borderColor: item.border ?? '#e2e8f0',
+                }}
+              />
+              <span style={{ textDecoration: item.strikethrough ? 'line-through' : undefined }}>
+                {item.label}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Unfilled warning */}
       {unfilledCount > 0 && !showOnlyAdded && (

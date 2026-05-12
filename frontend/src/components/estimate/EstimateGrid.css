@@ -321,6 +321,44 @@
   cursor: default;
 }
 
+/* Legend */
+.estimate-grid-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 6px 10px;
+  margin-top: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #475569;
+}
+
+.estimate-grid-legend-title {
+  font-weight: 600;
+  color: #64748b;
+  margin-right: 2px;
+  flex-shrink: 0;
+}
+
+.estimate-grid-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.estimate-grid-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid;
+  flex-shrink: 0;
+}
+
 /* Filter-active banner */
 .estimate-grid-filter-active {
   display: flex;
