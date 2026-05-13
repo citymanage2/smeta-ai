@@ -167,9 +167,9 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
 
 - [x] `frontend/src/stores/estimateEditor.ts` — без изменений: `updateRows()` уже корректно сохраняет снапшот до применения новых rows
 
-### [ ] Фаза 4 — Тесты
+### [x] Фаза 4 — Тесты
 
-- [ ] `backend/tests/test_estimate_norms.py`:
+- [x] `backend/tests/test_estimate_norms.py`:
   - `test_link_materials_sets_work_row_id` — синхронная привязка
   - `test_link_materials_section_does_not_break_link` — section не сбрасывает last_work
   - `test_link_materials_multiple_works_in_row_links_to_last` — документирует ограничение
@@ -178,7 +178,7 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
   - `test_enrich_norms_skips_null_from_claude` — null-норма не перезаписывает поле
   - `test_enrich_norms_tolerates_claude_error` — при ошибке Claude строки остаются без нормативов, не падают
 
-- [ ] `frontend/src/utils/estimateRecalc.test.ts`:
+- [x] `frontend/src/__tests__/estimateRecalc.test.ts`:
   - `applyWorkQuantityChange` пересчитывает материалы без `qty_overridden`
   - `applyWorkQuantityChange` пересчитывает материалы **с** `qty_overridden = true` и сохраняет `qty_manual_backup`
   - `applyWorkQuantityChange` не перезатирает `qty_manual_backup`, если он уже был
@@ -186,7 +186,7 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
   - `applyWorkQuantityChange` пропускает материалы с другим `work_row_id`
   - `buildNormComment` формирует `«авто: 50 кг (норм. 0.5 на м²)»`
   - `buildNormComment` возвращает `«задано вручную»` при `qty_overridden` и нет `qty_per_work_unit`
-  - `buildNormComment` при `qty_per_work_unit = 0` → `«авто: 0 кг (норм. 0 на м²)»`
+  - `buildNormComment` при `qty_per_work_unit = 0` → `«авто: 0 кг (норм. 0 на ед.)»`
 
 ## Edge Cases (решены до имплементации)
 
@@ -235,8 +235,6 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
 
 ## Итог
 
-- [ ] Реализован целиком
-- [x] Реализован частично
+- [x] Реализован целиком
+- [ ] Реализован частично
 - [ ] Не реализован
-
-**Что осталось:** Фаза 4 — тесты (`backend/tests/test_estimate_norms.py` и `frontend/src/utils/estimateRecalc.test.ts`)
