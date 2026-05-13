@@ -216,6 +216,79 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
             cell.number_format = _NUM_FMT
 
 
+_COLUMN_META: dict[str, tuple[str, int, bool]] = {
+    # key: (заголовок, ширина, денежный)
+    "num":            ("№",              5,  False),
+    "name":           ("Наименование",  50,  False),
+    "unit":           ("Ед. изм.",      10,  False),
+    "qty":            ("Кол-во",        10,  False),
+    "price_work":     ("Цена работ",    14,  True),
+    "cost_work":      ("Стоим. работ",  16,  True),
+    "price_material": ("Цена матер.",   14,  True),
+    "cost_material":  ("Стоим. матер.", 16,  True),
+    "section":        ("Раздел",        30,  False),
+}
+
+
+def generate_custom_export_xlsx(
+    rows: list[dict],
+    visible_columns: list[str],
+    section_groups: list[tuple[str, list[dict]]],
+) -> bytes:
+    """
+    Генерирует Excel для кастомной выгрузки.
+
+    rows: уже отфильтрованные строки (с полем section_name).
+    visible_columns: список ключей из _COLUMN_META.
+    section_groups: [(section_name, [rows])] — для разбивки по листам.
+    """
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+
+    cols = [c for c in visible_columns if c in _COLUMN_META]
+
+    if len(section_groups) > 1:
+        for sec_name, sec_rows in section_groups:
+            sheet_name = sec_name[:31] or "Раздел"
+            ws = wb.create_sheet(title=sheet_name)
+            _write_custom_sheet(ws, sec_rows, cols, show_section=False)
+        ws_all = wb.create_sheet(title="Все разделы")
+        _write_custom_sheet(ws_all, rows, cols, show_section=True)
+    else:
+        sec_name = section_groups[0][0] if section_groups else "Выгрузка"
+        ws = wb.create_sheet(title=sec_name[:31] or "Выгрузка")
+        _write_custom_sheet(ws, rows, cols, show_section=False)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _write_custom_sheet(ws, rows: list[dict], cols: list[str], show_section: bool) -> None:
+    effective_cols = (["section"] + cols) if show_section and "section" not in cols else cols
+
+    for col_idx, key in enumerate(effective_cols, 1):
+        meta = _COLUMN_META.get(key)
+        if not meta:
+            continue
+        header, width, _ = meta
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = _BOLD_WHITE
+        cell.fill = _HEADER_FILL
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    for row_idx, row in enumerate(rows, 2):
+        for col_idx, key in enumerate(effective_cols, 1):
+            meta = _COLUMN_META.get(key)
+            if not meta:
+                continue
+            _, _, is_money = meta
+            val = row.get(key)
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            if is_money and isinstance(val, (int, float)):
+                cell.number_format = _NUM_FMT
+
+
 def _bold_row(ws, row: int, label: str, value: float, fill: PatternFill) -> None:
     for col in range(1, 5):
         ws.cell(row=row, column=col).fill = fill

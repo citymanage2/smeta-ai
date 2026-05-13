@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.project import Project
 from app.schemas.summary_estimate import (
+    CustomExportRequest,
     SummaryEstimateCreate,
     SummaryEstimateResponse,
     SummaryEstimateUpdate,
@@ -16,7 +17,7 @@ from app.schemas.summary_estimate import (
 )
 from app.services import summary_service
 from app.utils.auth import get_current_user
-from app.utils.xlsx_summary import generate_summary_xlsx
+from app.utils.xlsx_summary import generate_custom_export_xlsx, generate_summary_xlsx
 
 logger = structlog.get_logger()
 
@@ -90,4 +91,49 @@ async def export_summary(
         io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=summary_{project_id}.xlsx"},
+    )
+
+
+@router.post("/projects/{project_id}/summary/custom-export")
+async def custom_export_summary(
+    project_id: str,
+    body: CustomExportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    await _project_or_404(project_id, db)
+
+    flat_rows: list[dict] = []
+    section_groups: list[tuple[str, list[dict]]] = []
+
+    for row in body.rows:
+        flat_rows.append({
+            "section": row.section_name or "",
+            "num": row.num,
+            "name": row.name,
+            "unit": row.unit,
+            "qty": row.qty,
+            "price_work": row.price_work,
+            "cost_work": row.cost_work,
+            "price_material": row.price_material,
+            "cost_material": row.cost_material,
+        })
+
+    # Группировка для многолистового вывода
+    seen: dict[str, list[dict]] = {}
+    for r in flat_rows:
+        sec = r.get("section") or "Раздел"
+        seen.setdefault(sec, []).append(r)
+    section_groups = list(seen.items())
+
+    xlsx_bytes = generate_custom_export_xlsx(
+        rows=flat_rows,
+        visible_columns=body.visible_columns,
+        section_groups=section_groups,
+    )
+
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=export.xlsx"},
     )

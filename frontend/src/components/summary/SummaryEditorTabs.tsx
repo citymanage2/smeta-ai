@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
-import { Download, Save } from 'lucide-react'
+import { Download, Save, Table2 } from 'lucide-react'
 import EstimateGrid from '../estimate/EstimateGrid'
 import SummarySheet from './SummarySheet'
+import CustomExportModal from './CustomExportModal'
 import { useSummaryEditorStore, calcSummary } from '../../stores/summaryEditorStore'
 import { exportSummary } from '../../api/summaryEstimate'
 import { EstimateRow } from '../../types'
@@ -36,6 +37,7 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [showCustomExport, setShowCustomExport] = useState(false)
 
   const [gridTabs, setGridTabs] = useState<GridTabState[]>(() =>
     sections.map(() => 'all' as GridTabState),
@@ -106,6 +108,19 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
         >
           {exporting ? <LumaSpin size="sm" color="#64748b" /> : <Download size={14} />}
           Экспорт xlsx
+        </button>
+
+        <button
+          onClick={() => setShowCustomExport(true)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
+            padding: '7px 14px', fontSize: '13px', fontWeight: 500,
+            borderRadius: '8px', border: '1px solid #e2e8f0',
+            background: '#fff', color: '#374151', cursor: 'pointer',
+          }}
+        >
+          <Table2 size={14} />
+          Сформировать выгрузку
         </button>
 
         {saveError && <span style={{ fontSize: '12px', color: '#dc2626' }}>{saveError}</span>}
@@ -198,6 +213,15 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
           ))
         )}
       </div>
+
+      {showCustomExport && (
+        <CustomExportModal
+          projectId={projectId}
+          projectName={projectName}
+          sections={sections}
+          onClose={() => setShowCustomExport(false)}
+        />
+      )}
     </div>
   )
 }
