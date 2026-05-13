@@ -82,18 +82,18 @@ editableRows: ExportRow[]          // строки для редактирова
 
 ## Фазы реализации
 
-### Фаза 1 — Backend [ ]
-- [ ] Схемы `CustomExportRow`, `CustomExportRequest` в `schemas/summary_estimate.py`
-- [ ] Функция `generate_custom_export_xlsx` в `utils/xlsx_summary.py`
-- [ ] Роут `POST /projects/{project_id}/summary/custom-export` в `routers/summary.py`
+### Фаза 1 — Backend [x]
+- [x] Схемы `CustomExportRow`, `CustomExportRequest` в `schemas/summary_estimate.py`
+- [x] Функция `generate_custom_export_xlsx` в `utils/xlsx_summary.py`
+- [x] Роут `POST /projects/{project_id}/summary/custom-export` в `routers/summary.py`
 
-### Фаза 2 — Frontend [ ]
-- [ ] API-функция `customExport` в `api/summaryEstimate.ts`
-- [ ] Компонент `CustomExportModal.tsx` — шаг Config
-- [ ] Компонент `CustomExportModal.tsx` — шаг Preview (inline editing)
-- [ ] Кнопка в `SummaryEditorTabs.tsx`
+### Фаза 2 — Frontend [x]
+- [x] API-функция `customExport` в `api/summaryEstimate.ts`
+- [x] Компонент `CustomExportModal.tsx` — шаг Config
+- [x] Компонент `CustomExportModal.tsx` — шаг Preview (inline editing)
+- [x] Кнопка в `SummaryEditorTabs.tsx`
 
 ## Итог
 
-- [ ] Реализован целиком
-- [ ] Что осталось: —
+- [x] Реализован целиком
+- Коммит: `39a8d89`

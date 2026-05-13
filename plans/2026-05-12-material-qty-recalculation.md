@@ -185,8 +185,8 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
   - `applyWorkQuantityChange` пропускает материалы без `qty_per_work_unit`
   - `applyWorkQuantityChange` пропускает материалы с другим `work_row_id`
   - `buildNormComment` формирует `«авто: 50 кг (норм. 0.5 на м²)»`
-  - `buildNormComment` возвращает `«задано вручную»` при `qty_overridden` и нет `qty_per_work_unit`
   - `buildNormComment` при `qty_per_work_unit = 0` → `«авто: 0 кг (норм. 0 на ед.)»`
+  - `buildNormComment` возвращает `''` при `qty_per_work_unit = null` (в т.ч. при `qty_overridden = true` без нормы — показывать «задано вручную» без нормы избыточно)
 
 ## Edge Cases (решены до имплементации)
 
