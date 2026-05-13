@@ -147,27 +147,25 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
 # далее сохранение EstimateVersion
 ```
 
-### [ ] Фаза 3 — Логика пересчёта (frontend)
+### [x] Фаза 3 — Логика пересчёта (frontend)
 
-- [ ] Создать `frontend/src/utils/estimateRecalc.ts`:
+- [x] Создать `frontend/src/utils/estimateRecalc.ts`:
   - `applyWorkQuantityChange(rows, changedWorkId, newQty)` — пересчёт **всех** связанных материалов, включая `qty_overridden = true`; для последних сохраняет `qty_manual_backup` (только если `qty_manual_backup` ещё не было — т.е. не перезатирает уже сохранённое)
-  - `buildNormComment(row, workQty)` — возвращает строку: `«авто: 50 кг (норм. 0.5 на м²)»`; если есть `norm_reference` — добавляет в title-атрибут ячейки: `«ГЭСН 08-01-003»`; при `qty_overridden` без `qty_per_work_unit` — `«задано вручную»`
+  - `buildNormComment(row, workUnit?)` — возвращает строку: `«авто: 50 кг (норм. 0.5 на м²)»`; `norm_reference` добавляется в `title` ячейки; при `qty_overridden` возвращает `«задано вручную»`
 
-- [ ] `frontend/src/components/estimate/EstimateGrid.tsx`:
-  - **Пересчёт в `handleRowsChange`** (не в `NumberEditor`): если изменилась строка с `type === 'work'` и поле `qty` → вызвать `applyWorkQuantityChange(fullRows, changedWorkId, newQty)` и смерджить результат перед сохранением. `fullRows` — полный массив (не `displayedRows`)
-  - `changedWorkId` извлекается из `rows` по индексу из `RowsChangeData`, проверяется `type === 'work'`
-  - В `NumberEditor.commit()` при `row.type === 'material'` → добавить `qty_overridden: true` (без удаления `qty_manual_backup`)
-  - Отображение `buildNormComment` как мелкий серый second-line текст в ячейке `qty` материала
-  - Кнопка ↩ на ячейке `qty` для материалов с `qty_manual_backup != null` и `work_row_id` в `activeRows`:
-    - `onMouseDown={(e) => e.preventDefault()}` + `onClick={(e) => { e.stopPropagation(); ... }}` — иначе `react-data-grid` перехватит клик и откроет редактор
-    - подсказка `title`: `«Вернуть ручной объём: {qty_manual_backup} {unit}»`
-  - Flash-анимация на ячейках пересчитанных материалов (1.5–2 сек, yellow fade)
-  - Цвет строки для материалов с `qty_overridden = true` — добавить в палитру и в компонент легенды цветов строк
-  - Однократный dismissable-баннер (localStorage-флаг `smeta_recalc_banner_seen`)
-  - Тост при пересчёте строк с `qty_overridden` (с кнопкой восстановления `qty_manual_backup`)
+- [x] `frontend/src/components/estimate/EstimateGrid.tsx`:
+  - **Пересчёт в `handleRowsChange`**: если изменилась работа → `applyWorkQuantityChange(fullRows, workId, newQty)`, результат мерджится перед сохранением
+  - В `NumberEditor.commit()` при `row.type === 'material'` → `qty_overridden: true` (без удаления `qty_manual_backup`)
+  - Отображение `buildNormComment` как мелкий серый second-line текст в ячейке `qty` материала (`QtyCell` через `GridContext`)
+  - Кнопка ↩ для материалов с `qty_manual_backup != null` — `e.preventDefault()` + `e.stopPropagation()`, title с конкретным значением
+  - Flash-анимация (row-класс `row-recalc-flash`, 1.8 сек, yellow fade)
+  - Цвет `row-qty-overridden` (amber) в палитре и в легенде
+  - Однократный баннер (localStorage `smeta_recalc_banner_seen`)
+  - Тост при пересчёте overridden-строк с кнопкой «↩ Вернуть»
+  - Тост при ручном изменении qty материала с нормой с кнопкой «↩ Вернуть авто»
+  - Undo/Redo: flash через useEffect с детектированием внешних изменений rows
 
-- [ ] `frontend/src/stores/estimateEditor.ts` (не `store/estimateStore.ts`):
-  - `updateRows()` сохраняет снапшот в `undoStack` до применения пересчёта — Undo откатит и работу, и материалы одновременно
+- [x] `frontend/src/stores/estimateEditor.ts` — без изменений: `updateRows()` уже корректно сохраняет снапшот до применения новых rows
 
 ### [ ] Фаза 4 — Тесты
 
@@ -238,7 +236,7 @@ rows = await self._enrich_rows_with_gesn_norms(rows)  # async — Claude ГЭС�
 ## Итог
 
 - [ ] Реализован целиком
-- [ ] Реализован частично
+- [x] Реализован частично
 - [ ] Не реализован
 
-**Что осталось:** —
+**Что осталось:** Фаза 4 — тесты (`backend/tests/test_estimate_norms.py` и `frontend/src/utils/estimateRecalc.test.ts`)

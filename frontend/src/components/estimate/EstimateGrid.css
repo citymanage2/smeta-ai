@@ -391,3 +391,161 @@
   background: #dbeafe;
   border-color: #2563eb;
 }
+
+/* Manually-overridden material row */
+.rdg-row.row-qty-overridden .rdg-cell {
+  background: #fef3c7;
+}
+
+/* Flash animation on recalculated rows */
+@keyframes recalc-flash {
+  0%   { background-color: #fef9c3; }
+  100% { background-color: transparent; }
+}
+
+.rdg-row.row-recalc-flash .rdg-cell {
+  animation: recalc-flash 1.8s ease-out forwards;
+}
+
+/* Qty cell: two-line layout for materials */
+.qty-cell-wrap {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+  padding: 2px 0;
+  overflow: hidden;
+}
+
+.qty-cell-top {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.qty-cell-comment {
+  font-size: 10px;
+  color: #94a3b8;
+  text-align: right;
+  padding-right: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+/* Restore button inside qty cell */
+.qty-restore-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.1s;
+}
+
+.qty-restore-btn:hover {
+  color: #2563eb;
+}
+
+/* One-time recalc info banner */
+.estimate-grid-recalc-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #15803d;
+}
+
+.estimate-grid-recalc-banner-dismiss {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #15803d;
+  background: #fff;
+  border: 1px solid #86efac;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.estimate-grid-recalc-banner-dismiss:hover {
+  background: #dcfce7;
+}
+
+/* Toast notifications */
+.estimate-grid-toasts {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.estimate-grid-toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #1e293b;
+  color: #f1f5f9;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  pointer-events: all;
+  white-space: nowrap;
+  animation: toast-in 0.2s ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.estimate-grid-toast-action {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+  transition: color 0.1s;
+}
+
+.estimate-grid-toast-action:hover {
+  color: #bfdbfe;
+}
+
+.estimate-grid-toast-dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.1s;
+}
+
+.estimate-grid-toast-dismiss:hover {
+  color: #94a3b8;
+}

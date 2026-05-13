@@ -1,8 +1,29 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import DataGrid, { Column, SelectColumn, RenderEditCellProps, RenderCellProps, RenderRowProps, RowsChangeData, Row } from 'react-data-grid';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import DataGrid, {
+  Column,
+  SelectColumn,
+  RenderEditCellProps,
+  RenderCellProps,
+  RenderRowProps,
+  RowsChangeData,
+  Row,
+} from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import './EstimateGrid.css';
 import { EstimateRow } from '../../types';
+import { applyWorkQuantityChange, buildNormComment } from '../../utils/estimateRecalc';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type GridTab = 'all' | 'works' | 'materials';
 
@@ -21,10 +42,39 @@ interface EstimateGridProps {
   onRedo?: () => void;
 }
 
+interface ToastItem {
+  id: number;
+  message: string;
+  action?: { label: string; onClick: () => void };
+}
+
+// ---------------------------------------------------------------------------
+// Context — позволяет QtyCell обращаться к актуальным rows и callbacks
+// без стейл-замыканий в колонках
+// ---------------------------------------------------------------------------
+
+interface GridContextValue {
+  rowsRef: React.MutableRefObject<EstimateRow[]>;
+  onQtyRestore: (rowId: string) => void;
+}
+
+const GridContext = createContext<GridContextValue>({
+  rowsRef: { current: [] },
+  onQtyRestore: () => {},
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
 
 const calcCost = (row: EstimateRow): number =>
   (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
+
+// ---------------------------------------------------------------------------
+// Cell editors
+// ---------------------------------------------------------------------------
 
 function NumberEditor({ row, column, onRowChange }: RenderEditCellProps<EstimateRow>) {
   const key = column.key as keyof EstimateRow;
@@ -34,13 +84,16 @@ function NumberEditor({ row, column, onRowChange }: RenderEditCellProps<Estimate
   const commit = useCallback(() => {
     const val = inputRef.current?.value ?? '';
     const parsed = val === '' ? null : parseFloat(val);
-    const updated = { ...row, [key]: parsed };
+    const updated: EstimateRow = { ...row, [key]: parsed };
+    // Помечаем ручное изменение qty материала
+    if (key === 'qty' && row.type === 'material') {
+      updated.qty_overridden = true;
+    }
     updated.cost = calcCost(updated);
     onRowChange(updated, true);
   }, [row, key, onRowChange]);
 
   const cancel = useCallback(() => {
-    // Restore original row — commits unchanged value, effectively a no-op
     onRowChange(row, true);
   }, [row, onRowChange]);
 
@@ -118,6 +171,10 @@ function ConfirmTextEditor({ row, column, onRowChange }: RenderEditCellProps<Est
   );
 }
 
+// ---------------------------------------------------------------------------
+// Cell renderers
+// ---------------------------------------------------------------------------
+
 function CostCell({ row }: RenderCellProps<EstimateRow>) {
   const cost = calcCost(row);
   return <span className="cell-cost">{cost > 0 ? fmt(cost) : '—'}</span>;
@@ -149,6 +206,55 @@ function NumericCell({ row, column }: RenderCellProps<EstimateRow>) {
   return <span className="cell-number">{val != null ? fmt(val) : '—'}</span>;
 }
 
+/**
+ * QtyCell — специализированная ячейка для колонки «Кол-во».
+ * Для материалов показывает norm-комментарий и кнопку ↩ возврата ручного объёма.
+ */
+function QtyCell({ row }: RenderCellProps<EstimateRow>) {
+  const { rowsRef, onQtyRestore } = useContext(GridContext);
+
+  const qty = row.qty;
+
+  if (row.type !== 'material') {
+    return <span className="cell-number">{qty != null ? fmt(qty) : '—'}</span>;
+  }
+
+  const currentRows = rowsRef.current;
+  const workRow = row.work_row_id
+    ? currentRows.find((r) => r.id === row.work_row_id)
+    : null;
+
+  const comment = buildNormComment(row, workRow?.unit);
+  const showRestoreBtn = row.qty_manual_backup != null && workRow != null;
+
+  return (
+    <div
+      className="qty-cell-wrap"
+      title={row.norm_reference || undefined}
+    >
+      <div className="qty-cell-top">
+        <span className="cell-number">{qty != null ? fmt(qty) : '—'}</span>
+        {showRestoreBtn && (
+          <button
+            className="qty-restore-btn"
+            title={`Вернуть ручной объём: ${row.qty_manual_backup} ${row.unit}`}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onQtyRestore(row.id);
+            }}
+          >↩</button>
+        )}
+      </div>
+      {comment && <div className="qty-cell-comment">{comment}</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Column definitions
+// ---------------------------------------------------------------------------
+
 const BASE_COLUMNS: Column<EstimateRow>[] = [
   { key: 'num', name: '№', width: 50, frozen: true, renderCell: NumericCell },
   { key: 'type', name: 'Тип', width: 90, renderCell: TypeBadgeCell },
@@ -169,9 +275,9 @@ const BASE_COLUMNS: Column<EstimateRow>[] = [
   {
     key: 'qty',
     name: 'Кол-во',
-    width: 80,
+    width: 120,
     renderEditCell: NumberEditor,
-    renderCell: NumericCell,
+    renderCell: QtyCell,
     editable: (row) => row.type !== 'section',
   },
 ];
@@ -234,8 +340,14 @@ const MATERIALS_COLUMNS: Column<EstimateRow>[] = [
 ];
 
 const SAVE_DEBOUNCE_MS = 500;
+const RECALC_BANNER_KEY = 'smeta_recalc_banner_seen';
+const FLASH_DURATION_MS = 1800;
 
 type SaveStatus = 'idle' | 'saving' | 'saved';
+
+// ---------------------------------------------------------------------------
+// EstimateGrid
+// ---------------------------------------------------------------------------
 
 const EstimateGrid: React.FC<EstimateGridProps> = ({
   rows,
@@ -254,6 +366,229 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [showOnlyAdded, setShowOnlyAdded] = useState(false);
+
+  // Flash animation state
+  const [flashingIds, setFlashingIds] = useState<Set<string>>(new Set());
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Toast state
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastIdRef = useRef(0);
+
+  // One-time recalc banner
+  const [bannerVisible, setBannerVisible] = useState(() => {
+    try { return !localStorage.getItem(RECALC_BANNER_KEY); } catch { return false; }
+  });
+
+  // Ref для актуального rows (QtyCell читает через контекст)
+  const rowsRef = useRef<EstimateRow[]>(rows);
+  rowsRef.current = rows;
+
+  // Флаг: изменение произошло через handleRowsChange (не undo/redo)
+  const didJustHandleChange = useRef(false);
+  // Предыдущее значение rows для undo/redo flash
+  const prevRowsRef = useRef<EstimateRow[] | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Utilities
+  // ---------------------------------------------------------------------------
+
+  const triggerSave = useCallback(() => {
+    setSaveStatus('saving');
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      await onSave();
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    }, SAVE_DEBOUNCE_MS);
+  }, [onSave]);
+
+  const showToast = useCallback(
+    (message: string, action?: { label: string; onClick: () => void }) => {
+      const id = ++toastIdRef.current;
+      setToasts((prev) => [...prev, { id, message, action }]);
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 6000);
+    },
+    [],
+  );
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const triggerFlash = useCallback((ids: Set<string>) => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlashingIds(ids);
+    flashTimerRef.current = setTimeout(() => setFlashingIds(new Set()), FLASH_DURATION_MS);
+  }, []);
+
+  // Stable restore callback для кнопки ↩ в ячейке
+  const handleQtyRestore = useCallback(
+    (rowId: string) => {
+      const currentRows = rowsRef.current;
+      const target = currentRows.find((r) => r.id === rowId);
+      if (!target || target.qty_manual_backup == null) return;
+      const restored = currentRows.map((r) =>
+        r.id === rowId
+          ? { ...r, qty: r.qty_manual_backup!, qty_overridden: true, qty_manual_backup: null }
+          : r,
+      );
+      onRowsChange(restored);
+      triggerSave();
+    },
+    [onRowsChange, triggerSave],
+  );
+
+  const dismissBanner = useCallback(() => {
+    try { localStorage.setItem(RECALC_BANNER_KEY, '1'); } catch { /* ignore */ }
+    setBannerVisible(false);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Context value (стабильный — handleQtyRestore не меняется)
+  // ---------------------------------------------------------------------------
+
+  const gridContextValue = useMemo(
+    () => ({ rowsRef, onQtyRestore: handleQtyRestore }),
+    [handleQtyRestore],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Effect: flash при undo/redo (внешнее изменение rows)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    const prev = prevRowsRef.current;
+    prevRowsRef.current = rows;
+
+    if (prev === null) return; // первичная загрузка
+    if (didJustHandleChange.current) {
+      didJustHandleChange.current = false;
+      return; // изменение пришло из handleRowsChange — не дублируем flash
+    }
+
+    // Undo/redo: выявляем материалы, у которых qty изменилось
+    const prevMap = new Map(prev.map((r) => [r.id, r]));
+    const changedQtyIds = new Set<string>();
+    for (const r of rows) {
+      const p = prevMap.get(r.id);
+      if (p && p.qty !== r.qty && r.type === 'material') {
+        changedQtyIds.add(r.id);
+      }
+    }
+    // Порог: не флэшим если изменилась половина всех строк (скорее всего смена версии)
+    if (changedQtyIds.size > 0 && changedQtyIds.size < rows.length * 0.5) {
+      triggerFlash(changedQtyIds);
+    }
+  }, [rows, triggerFlash]);
+
+  // ---------------------------------------------------------------------------
+  // Cleanup
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Rows change handler
+  // ---------------------------------------------------------------------------
+
+  const handleRowsChange = useCallback(
+    (newDisplayed: EstimateRow[], { indexes }: RowsChangeData<EstimateRow>) => {
+      const changedIds = new Set(indexes.map((i) => newDisplayed[i].id));
+      const changedMap = new Map(
+        newDisplayed.filter((r) => changedIds.has(r.id)).map((r) => [r.id, r]),
+      );
+      let merged: EstimateRow[] = rows.map((r) => {
+        const updated = changedMap.get(r.id);
+        if (!updated) return r;
+        return { ...updated, cost: calcCost(updated) };
+      });
+
+      const newFlashIds = new Set<string>();
+
+      for (const idx of indexes) {
+        const changed = newDisplayed[idx];
+        const original = rows.find((r) => r.id === changed.id);
+        if (!original) continue;
+
+        // --- Работа: изменился qty → пересчитать материалы ---
+        if (changed.type === 'work' && changed.qty !== original.qty) {
+          const result = applyWorkQuantityChange(merged, changed.id, changed.qty);
+          merged = result.rows;
+          result.recalcedIds.forEach((id) => newFlashIds.add(id));
+
+          if (result.overriddenIds.length > 0) {
+            const overriddenIds = result.overriddenIds;
+            showToast(
+              'Объём был задан вручную, сейчас пересчитан по нормативу.',
+              {
+                label: '↩ Вернуть',
+                onClick: () => {
+                  const currentRows = rowsRef.current;
+                  const restored = currentRows.map((r) => {
+                    if (!overriddenIds.includes(r.id) || r.qty_manual_backup == null) return r;
+                    return { ...r, qty: r.qty_manual_backup, qty_overridden: true, qty_manual_backup: null };
+                  });
+                  onRowsChange(restored);
+                  triggerSave();
+                },
+              },
+            );
+          }
+        }
+
+        // --- Материал: qty_overridden только что стал true → тост «задано вручную» ---
+        if (
+          changed.type === 'material' &&
+          changed.qty_overridden &&
+          !original.qty_overridden &&
+          changed.qty_per_work_unit != null
+        ) {
+          const workRow = rows.find((r) => r.id === changed.work_row_id);
+          const autoQty =
+            workRow != null ? (workRow.qty ?? 0) * changed.qty_per_work_unit! : null;
+          const rowId = changed.id;
+
+          showToast(
+            'Объём задан вручную, авто-расчёт отключён.',
+            autoQty != null
+              ? {
+                  label: '↩ Вернуть авто',
+                  onClick: () => {
+                    const currentRows = rowsRef.current;
+                    const restored = currentRows.map((r) =>
+                      r.id === rowId ? { ...r, qty: autoQty, qty_overridden: false } : r,
+                    );
+                    onRowsChange(restored);
+                    triggerSave();
+                  },
+                }
+              : undefined,
+          );
+        }
+      }
+
+      if (newFlashIds.size > 0) {
+        triggerFlash(newFlashIds);
+      }
+
+      didJustHandleChange.current = true;
+      onRowsChange(merged);
+      triggerSave();
+    },
+    [rows, onRowsChange, triggerSave, showToast, triggerFlash],
+  );
+
+  // ---------------------------------------------------------------------------
+  // Displayed rows
+  // ---------------------------------------------------------------------------
 
   const displayedRows = useMemo(() => {
     let filtered = rows;
@@ -274,6 +609,10 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     [rows],
   );
 
+  // ---------------------------------------------------------------------------
+  // Columns
+  // ---------------------------------------------------------------------------
+
   const columns = useMemo(() => {
     const cols =
       activeTab === 'works'
@@ -288,59 +627,32 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     return cols;
   }, [activeTab, isReadonly]);
 
-  const triggerSave = useCallback(() => {
-    setSaveStatus('saving');
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(async () => {
-      await onSave();
-      setSaveStatus('saved');
-      setTimeout(() => setSaveStatus('idle'), 2000);
-    }, SAVE_DEBOUNCE_MS);
-  }, [onSave]);
-
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, []);
-
-  const handleRowsChange = useCallback(
-    (newDisplayed: EstimateRow[], { indexes }: RowsChangeData<EstimateRow>) => {
-      const changedIds = new Set(indexes.map((i) => newDisplayed[i].id));
-      const changedMap = new Map(
-        newDisplayed.filter((r) => changedIds.has(r.id)).map((r) => [r.id, r]),
-      );
-      const merged = rows.map((r) => {
-        const updated = changedMap.get(r.id);
-        if (!updated) return r;
-        return { ...updated, cost: calcCost(updated) };
-      });
-      onRowsChange(merged);
-      triggerSave();
-    },
-    [rows, onRowsChange, triggerSave],
-  );
-
-  const handleUnfilledClick = useCallback(() => {
-    setShowOnlyAdded(true);
-  }, []);
-
-  const rowKeyGetter = useCallback((row: EstimateRow) => row.id, []);
+  // ---------------------------------------------------------------------------
+  // Row class
+  // ---------------------------------------------------------------------------
 
   const rowClass = useCallback(
     (row: EstimateRow) => {
-      if (row.is_excluded) return 'row-excluded';
-      if (row.optimization_confidence) return `row-proposal-${row.optimization_confidence}`;
+      const classes: string[] = [];
+      if (row.is_excluded) classes.push('row-excluded');
+      if (row.optimization_confidence) classes.push(`row-proposal-${row.optimization_confidence}`);
       if (
         row.type !== 'section' &&
         row.optimization_note != null &&
         (row.price_work == null || row.price_material == null)
       )
-        return 'row-unfilled';
-      return undefined;
+        classes.push('row-unfilled');
+      if (row.type === 'material' && row.qty_overridden && row.qty_per_work_unit != null)
+        classes.push('row-qty-overridden');
+      if (flashingIds.has(row.id)) classes.push('row-recalc-flash');
+      return classes.join(' ') || undefined;
     },
-    [],
+    [flashingIds],
   );
+
+  // ---------------------------------------------------------------------------
+  // Row renderer (section headers)
+  // ---------------------------------------------------------------------------
 
   const renderRow = useCallback(
     (key: React.Key, props: RenderRowProps<EstimateRow>) => {
@@ -363,6 +675,10 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     [],
   );
 
+  // ---------------------------------------------------------------------------
+  // Legend
+  // ---------------------------------------------------------------------------
+
   const hasExcluded = useMemo(() => rows.some((r) => r.is_excluded), [rows]);
   const hasProposalHigh = useMemo(() => rows.some((r) => r.optimization_confidence === 'high'), [rows]);
   const hasProposalMedium = useMemo(() => rows.some((r) => r.optimization_confidence === 'medium'), [rows]);
@@ -371,6 +687,11 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     () => rows.some((r) => r.type !== 'section' && r.optimization_note != null && (r.price_work == null || r.price_material == null)),
     [rows],
   );
+  const hasOverridden = useMemo(
+    () => rows.some((r) => r.type === 'material' && r.qty_overridden && r.qty_per_work_unit != null),
+    [rows],
+  );
+  const hasNorms = useMemo(() => rows.some((r) => r.qty_per_work_unit != null), [rows]);
 
   const legendItems = useMemo(() => {
     const items: { color: string; border?: string; label: string; strikethrough?: boolean }[] = [
@@ -381,8 +702,19 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     if (hasProposalHigh) items.push({ color: '#f0fdf4', border: '#22c55e', label: 'Высокая уверенность' });
     if (hasProposalMedium) items.push({ color: '#fefce8', border: '#eab308', label: 'Средняя уверенность' });
     if (hasProposalLow) items.push({ color: '#fff7ed', border: '#f97316', label: 'Низкая уверенность' });
+    if (hasOverridden) items.push({ color: '#fef3c7', border: '#f59e0b', label: 'Объём задан вручную' });
     return items;
-  }, [hasExcluded, hasProposalHigh, hasProposalMedium, hasProposalLow, hasUnfilled]);
+  }, [hasExcluded, hasProposalHigh, hasProposalMedium, hasProposalLow, hasUnfilled, hasOverridden]);
+
+  // ---------------------------------------------------------------------------
+  // Misc
+  // ---------------------------------------------------------------------------
+
+  const handleUnfilledClick = useCallback(() => {
+    setShowOnlyAdded(true);
+  }, []);
+
+  const rowKeyGetter = useCallback((row: EstimateRow) => row.id, []);
 
   const saveStatusLabel =
     saveStatus === 'saving'
@@ -391,115 +723,156 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
         ? 'Сохранено'
         : '';
 
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
   return (
-    <div className="estimate-grid-wrapper">
-      {/* Tab row */}
-      <div className="estimate-grid-tabs">
-        {(['all', 'works', 'materials'] as GridTab[]).map((tab) => (
-          <button
-            key={tab}
-            className={`estimate-grid-tab${activeTab === tab ? ' active' : ''}`}
-            onClick={() => onTabChange(tab)}
-          >
-            {tab === 'all' ? 'Полный перечень' : tab === 'works' ? 'Работы' : 'Материалы'}
-          </button>
-        ))}
-      </div>
-
-      {/* Header bar */}
-      <div className="estimate-grid-header">
-        <div style={{ fontSize: '13px', color: '#64748b' }}>
-          Строк: {displayedRows.length}
-          {selectedRowIds.size > 0 && (
-            <span style={{ marginLeft: 10, color: '#2563eb', fontWeight: 600 }}>
-              Выбрано: {selectedRowIds.size}
-            </span>
-          )}
-        </div>
-        <div className="estimate-grid-actions">
-          {/* Undo / Redo */}
-          <div className="estimate-grid-history-btns">
+    <GridContext.Provider value={gridContextValue}>
+      <div className="estimate-grid-wrapper">
+        {/* Tab row */}
+        <div className="estimate-grid-tabs">
+          {(['all', 'works', 'materials'] as GridTab[]).map((tab) => (
             <button
-              className="estimate-grid-history-btn"
-              disabled={!canUndo || isReadonly}
-              onClick={onUndo}
-              title="Отменить изменение"
-            >↩</button>
-            <button
-              className="estimate-grid-history-btn"
-              disabled={!canRedo || isReadonly}
-              onClick={onRedo}
-              title="Вернуть изменение"
-            >↪</button>
-          </div>
-          {saveStatusLabel && (
-            <span className={`estimate-grid-save-status ${saveStatus}`}>{saveStatusLabel}</span>
-          )}
-        </div>
-      </div>
-
-      {/* Legend */}
-      {legendItems.length > 0 && (
-        <div className="estimate-grid-legend">
-          <span className="estimate-grid-legend-title">Обозначения:</span>
-          {legendItems.map((item) => (
-            <span key={item.label} className="estimate-grid-legend-item">
-              <span
-                className="estimate-grid-legend-swatch"
-                style={{
-                  background: item.color,
-                  borderColor: item.border ?? '#e2e8f0',
-                }}
-              />
-              <span style={{ textDecoration: item.strikethrough ? 'line-through' : undefined }}>
-                {item.label}
-              </span>
-            </span>
+              key={tab}
+              className={`estimate-grid-tab${activeTab === tab ? ' active' : ''}`}
+              onClick={() => onTabChange(tab)}
+            >
+              {tab === 'all' ? 'Полный перечень' : tab === 'works' ? 'Работы' : 'Материалы'}
+            </button>
           ))}
         </div>
-      )}
 
-      {/* Unfilled warning */}
-      {unfilledCount > 0 && !showOnlyAdded && (
-        <div className="estimate-grid-warning" onClick={handleUnfilledClick}>
-          ⚠ {unfilledCount} {unfilledCount === 1 ? 'позиция требует' : 'позиции требуют'} заполнения цены — нажмите, чтобы перейти
-        </div>
-      )}
-
-      {/* Added-only filter active */}
-      {showOnlyAdded && (
-        <div className="estimate-grid-filter-active">
-          <span>Показаны только добавленные позиции ({displayedRows.length})</span>
-          <button className="estimate-grid-filter-reset" onClick={() => setShowOnlyAdded(false)}>
-            Показать всю смету
-          </button>
-        </div>
-      )}
-
-      {/* Optimization running banner */}
-      {isReadonly && (
-        <div className="estimate-grid-banner">
-          <div className="estimate-grid-banner-text">
-            <span>⏳</span>
-            <span>Анализ выполняется в фоне — редактирование недоступно. Вы можете закрыть страницу, результаты сохранятся.</span>
+        {/* Header bar */}
+        <div className="estimate-grid-header">
+          <div style={{ fontSize: '13px', color: '#64748b' }}>
+            Строк: {displayedRows.length}
+            {selectedRowIds.size > 0 && (
+              <span style={{ marginLeft: 10, color: '#2563eb', fontWeight: 600 }}>
+                Выбрано: {selectedRowIds.size}
+              </span>
+            )}
+          </div>
+          <div className="estimate-grid-actions">
+            <div className="estimate-grid-history-btns">
+              <button
+                className="estimate-grid-history-btn"
+                disabled={!canUndo || isReadonly}
+                onClick={onUndo}
+                title="Отменить изменение"
+              >↩</button>
+              <button
+                className="estimate-grid-history-btn"
+                disabled={!canRedo || isReadonly}
+                onClick={onRedo}
+                title="Вернуть изменение"
+              >↪</button>
+            </div>
+            {saveStatusLabel && (
+              <span className={`estimate-grid-save-status ${saveStatus}`}>{saveStatusLabel}</span>
+            )}
           </div>
         </div>
-      )}
 
-      {/* Grid */}
-      <DataGrid
-        columns={columns}
-        rows={displayedRows}
-        onRowsChange={handleRowsChange}
-        rowKeyGetter={rowKeyGetter}
-        selectedRows={selectedRowIds}
-        onSelectedRowsChange={onSelectedRowIdsChange}
-        rowClass={rowClass}
-        renderers={{ renderRow }}
-        style={{ blockSize: 'auto', minHeight: 300, maxHeight: 600 }}
-        enableVirtualization
-      />
-    </div>
+        {/* Legend */}
+        {legendItems.length > 0 && (
+          <div className="estimate-grid-legend">
+            <span className="estimate-grid-legend-title">Обозначения:</span>
+            {legendItems.map((item) => (
+              <span key={item.label} className="estimate-grid-legend-item">
+                <span
+                  className="estimate-grid-legend-swatch"
+                  style={{
+                    background: item.color,
+                    borderColor: item.border ?? '#e2e8f0',
+                  }}
+                />
+                <span style={{ textDecoration: item.strikethrough ? 'line-through' : undefined }}>
+                  {item.label}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Однократный баннер об авто-расчёте */}
+        {hasNorms && bannerVisible && (
+          <div className="estimate-grid-recalc-banner">
+            <span>
+              В этой смете работает авто-расчёт материалов. При изменении объёма работы материалы пересчитаются автоматически.
+            </span>
+            <button className="estimate-grid-recalc-banner-dismiss" onClick={dismissBanner}>
+              Понятно
+            </button>
+          </div>
+        )}
+
+        {/* Unfilled warning */}
+        {unfilledCount > 0 && !showOnlyAdded && (
+          <div className="estimate-grid-warning" onClick={handleUnfilledClick}>
+            ⚠ {unfilledCount} {unfilledCount === 1 ? 'позиция требует' : 'позиции требуют'} заполнения цены — нажмите, чтобы перейти
+          </div>
+        )}
+
+        {/* Added-only filter active */}
+        {showOnlyAdded && (
+          <div className="estimate-grid-filter-active">
+            <span>Показаны только добавленные позиции ({displayedRows.length})</span>
+            <button className="estimate-grid-filter-reset" onClick={() => setShowOnlyAdded(false)}>
+              Показать всю смету
+            </button>
+          </div>
+        )}
+
+        {/* Optimization running banner */}
+        {isReadonly && (
+          <div className="estimate-grid-banner">
+            <div className="estimate-grid-banner-text">
+              <span>⏳</span>
+              <span>Анализ выполняется в фоне — редактирование недоступно. Вы можете закрыть страницу, результаты сохранятся.</span>
+            </div>
+          </div>
+        )}
+
+        {/* Grid */}
+        <DataGrid
+          columns={columns}
+          rows={displayedRows}
+          onRowsChange={handleRowsChange}
+          rowKeyGetter={rowKeyGetter}
+          selectedRows={selectedRowIds}
+          onSelectedRowsChange={onSelectedRowIdsChange}
+          rowClass={rowClass}
+          renderers={{ renderRow }}
+          style={{ blockSize: 'auto', minHeight: 300, maxHeight: 600 }}
+          enableVirtualization
+        />
+
+        {/* Toasts */}
+        {toasts.length > 0 && (
+          <div className="estimate-grid-toasts">
+            {toasts.map((t) => (
+              <div key={t.id} className="estimate-grid-toast">
+                <span>{t.message}</span>
+                {t.action && (
+                  <button
+                    className="estimate-grid-toast-action"
+                    onClick={() => { t.action!.onClick(); dismissToast(t.id); }}
+                  >
+                    {t.action.label}
+                  </button>
+                )}
+                <button
+                  className="estimate-grid-toast-dismiss"
+                  onClick={() => dismissToast(t.id)}
+                  title="Закрыть"
+                >✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </GridContext.Provider>
   );
 };
 
