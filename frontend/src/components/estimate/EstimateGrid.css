@@ -97,6 +97,58 @@
   color: #94a3b8;
 }
 
+/* Search */
+.estimate-grid-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 3px 8px;
+  transition: border-color 0.15s;
+}
+
+.estimate-grid-search:focus-within {
+  border-color: #93c5fd;
+  background: #fff;
+}
+
+.estimate-grid-search-icon {
+  font-size: 12px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.estimate-grid-search-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  color: #1e293b;
+  width: 200px;
+  padding: 0;
+}
+
+.estimate-grid-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.estimate-grid-search-clear {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #94a3b8;
+  font-size: 11px;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.estimate-grid-search-clear:hover {
+  color: #374151;
+}
+
 .estimate-grid-save-status.saving {
   color: #f59e0b;
 }

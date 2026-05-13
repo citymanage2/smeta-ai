@@ -7,6 +7,7 @@ from datetime import datetime
 
 
 class SummaryOverrides(BaseModel):
+    coefficient: Decimal = Field(default=Decimal("1.0"))
     transport_pct: Decimal = Field(default=Decimal("1.0"))
     cleanup_pct: Decimal = Field(default=Decimal("1.5"))
     overhead_pct: Decimal = Field(default=Decimal("2.0"))
@@ -38,6 +39,27 @@ class SummaryEstimateUpdate(BaseModel):
     sections: Optional[list[Any]] = None
     overrides: Optional[SummaryOverrides] = None
     total_for_customer: Optional[Decimal] = None
+
+
+class CustomExportRow(BaseModel):
+    section_name: Optional[str] = None
+    num: Optional[int] = None
+    name: Optional[str] = None
+    unit: Optional[str] = None
+    qty: Optional[float] = None
+    price_work: Optional[float] = None
+    cost_work: Optional[float] = None
+    price_material: Optional[float] = None
+    cost_material: Optional[float] = None
+
+
+class CustomExportRequest(BaseModel):
+    selected_section_ids: list[str] = Field(default_factory=list)
+    row_types: list[str] = Field(default=["work", "material"])
+    visible_columns: list[str] = Field(
+        default=["num", "name", "unit", "qty", "price_work", "cost_work", "price_material", "cost_material"]
+    )
+    rows: list[CustomExportRow]
 
 
 class SummaryEstimateResponse(BaseModel):

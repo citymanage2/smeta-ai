@@ -1,6 +1,7 @@
 import { EstimateRow } from './index';
 
 export interface SummaryOverrides {
+  coefficient: number;
   transport_pct: number;
   cleanup_pct: number;
   overhead_pct: number;
@@ -17,6 +18,7 @@ export interface SummaryOverrides {
 }
 
 export const DEFAULT_OVERRIDES: SummaryOverrides = {
+  coefficient: 1.0,
   transport_pct: 1.0,
   cleanup_pct: 1.5,
   overhead_pct: 2.0,

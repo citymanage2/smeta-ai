@@ -366,6 +366,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [showOnlyAdded, setShowOnlyAdded] = useState(false);
+  const [filterText, setFilterText] = useState('');
 
   // Flash animation state
   const [flashingIds, setFlashingIds] = useState<Set<string>>(new Set());
@@ -593,10 +594,37 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const displayedRows = useMemo(() => {
     let filtered = rows;
     if (showOnlyAdded) filtered = filtered.filter((r) => r.optimization_note != null);
-    if (activeTab === 'works') return filtered.filter((r) => r.type === 'work');
-    if (activeTab === 'materials') return filtered.filter((r) => r.type === 'material');
+    if (activeTab === 'works') filtered = filtered.filter((r) => r.type === 'work');
+    else if (activeTab === 'materials') filtered = filtered.filter((r) => r.type === 'material');
+
+    if (filterText.trim()) {
+      const needle = filterText.trim().toLowerCase();
+      // When tabs filter to a single type, no section rows remain — simple filter
+      if (activeTab !== 'all') {
+        return filtered.filter((r) => (r.name ?? '').toLowerCase().includes(needle));
+      }
+      // In 'all' mode: include a section header only if ≥1 child row matches
+      const matchingIds = new Set(
+        filtered
+          .filter((r) => r.type !== 'section' && (r.name ?? '').toLowerCase().includes(needle))
+          .map((r) => r.id),
+      );
+      const neededSections = new Set<string>();
+      let currentSection: string | null = null;
+      for (const r of filtered) {
+        if (r.type === 'section') {
+          currentSection = r.id;
+        } else if (matchingIds.has(r.id) && currentSection) {
+          neededSections.add(currentSection);
+        }
+      }
+      return filtered.filter(
+        (r) => r.type === 'section' ? neededSections.has(r.id) : matchingIds.has(r.id),
+      );
+    }
+
     return filtered;
-  }, [rows, activeTab, showOnlyAdded]);
+  }, [rows, activeTab, showOnlyAdded, filterText]);
 
   const unfilledCount = useMemo(
     () =>
@@ -745,13 +773,32 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 
         {/* Header bar */}
         <div className="estimate-grid-header">
-          <div style={{ fontSize: '13px', color: '#64748b' }}>
-            Строк: {displayedRows.length}
-            {selectedRowIds.size > 0 && (
-              <span style={{ marginLeft: 10, color: '#2563eb', fontWeight: 600 }}>
-                Выбрано: {selectedRowIds.size}
-              </span>
-            )}
+          <div style={{ fontSize: '13px', color: '#64748b', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span>
+              Строк: {displayedRows.length}
+              {selectedRowIds.size > 0 && (
+                <span style={{ marginLeft: 10, color: '#2563eb', fontWeight: 600 }}>
+                  Выбрано: {selectedRowIds.size}
+                </span>
+              )}
+            </span>
+            <div className="estimate-grid-search">
+              <span className="estimate-grid-search-icon">🔍</span>
+              <input
+                className="estimate-grid-search-input"
+                type="text"
+                placeholder="Поиск по наименованию..."
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+              />
+              {filterText && (
+                <button
+                  className="estimate-grid-search-clear"
+                  onClick={() => setFilterText('')}
+                  title="Сбросить поиск"
+                >✕</button>
+              )}
+            </div>
           </div>
           <div className="estimate-grid-actions">
             <div className="estimate-grid-history-btns">

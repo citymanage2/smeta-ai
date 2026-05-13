@@ -21,6 +21,7 @@ export function calcSummary(
 ): SummaryCalcResult {
   let totalWorks = 0;
   let totalMaterials = 0;
+  const coeff = overrides.coefficient ?? 1.0;
 
   const section_totals: SectionCalcRow[] = sections.map((sec) => {
     let works = 0;
@@ -30,6 +31,8 @@ export function calcSummary(
       works += rowAmount(row.price_work, row.qty);
       materials += rowAmount(row.price_material, row.qty);
     }
+    works *= coeff;
+    materials *= coeff;
     totalWorks += works;
     totalMaterials += materials;
 
@@ -133,6 +136,7 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
   loadSummary: async (projectId: string) => {
     const summary = await getSummary(projectId);
     const overrides: SummaryOverrides = {
+      coefficient: Number(summary.overrides.coefficient ?? DEFAULT_OVERRIDES.coefficient),
       transport_pct: Number(summary.overrides.transport_pct ?? DEFAULT_OVERRIDES.transport_pct),
       cleanup_pct: Number(summary.overrides.cleanup_pct ?? DEFAULT_OVERRIDES.cleanup_pct),
       overhead_pct: Number(summary.overrides.overhead_pct ?? DEFAULT_OVERRIDES.overhead_pct),

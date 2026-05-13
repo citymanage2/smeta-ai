@@ -154,6 +154,23 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride }) =>
               </tr>
             </thead>
             <tbody>
+              <tr style={{ background: '#faf5ff' }}>
+                <td style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', fontSize: '12px' }} />
+                <td style={{ ...tdStyle, fontWeight: 600, color: '#7c3aed' }}>
+                  Коэффициент к ценам
+                  <span style={{ marginLeft: 6, fontSize: '11px', fontWeight: 400, color: '#9ca3af' }}>
+                    (×все цены)
+                  </span>
+                </td>
+                <td style={tdRight}>
+                  <NumberInput
+                    value={overrides.coefficient}
+                    onCommit={(v) => onUpdateOverride('coefficient', v)}
+                    min={0.01}
+                  />
+                </td>
+                <td style={tdRight} />
+              </tr>
               <Row num={1} label="Работы (с/с)" value={fmt(calc.works)} />
               <Row num={2} label="Материалы (с/с)" value={fmt(calc.materials)} />
               <Row
