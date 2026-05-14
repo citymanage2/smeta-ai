@@ -11,11 +11,21 @@ interface GenericGridProps {
   onSave: () => Promise<void>;
 }
 
+type Tab = 'all' | 'works' | 'materials';
+
 // Characters-to-pixels ratio for column width estimation
 const CHAR_PX = 8;
 const COL_MIN = 60;
-const COL_MAX = 220;
+const COL_MAX = 280;
 const COL_PAD = 24;
+const UNDO_LIMIT = 50;
+
+// Column keys that are auto-generated or need special handling
+const EXCLUDED_COLS = new Set(['№', '#']);
+
+// Type column key variants (case-insensitive match)
+const TYPE_COL = 'Тип';
+const NAME_COL = 'Наименование';
 
 function estimateColWidth(header: string, rows: GenericRow[]): number {
   let max = header.length;
@@ -27,13 +37,22 @@ function estimateColWidth(header: string, rows: GenericRow[]): number {
   return Math.min(COL_MAX, Math.max(COL_MIN, max * CHAR_PX + COL_PAD));
 }
 
+function getTypeClass(typeVal: string | null): string {
+  if (!typeVal) return '';
+  const v = String(typeVal).trim();
+  if (v === 'Работа') return 'gg-row-work';
+  if (v === 'Материал') return 'gg-row-material';
+  return '';
+}
+
 interface CellInputProps {
   value: string | number | null;
   readOnly: boolean;
   onChange: (val: string) => void;
+  isTypeBadge?: boolean;
 }
 
-const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange }) => {
+const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange, isTypeBadge }) => {
   const [localVal, setLocalVal] = useState(String(value ?? ''));
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -41,20 +60,38 @@ const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange }) => {
     setLocalVal(String(value ?? ''));
   }, [value]);
 
+  if (isTypeBadge) {
+    const v = String(value ?? '').trim();
+    const badgeClass = v === 'Работа' ? 'gg-badge-work' : v === 'Материал' ? 'gg-badge-material' : '';
+    if (readOnly || !badgeClass) {
+      return <span className={`gg-badge ${badgeClass}`}>{v || '—'}</span>;
+    }
+    return (
+      <input
+        ref={inputRef}
+        className="gg-cell-input"
+        value={localVal}
+        onChange={(e) => setLocalVal(e.target.value)}
+        onBlur={() => onChange(localVal)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') inputRef.current?.blur();
+          if (e.key === 'Escape') { setLocalVal(String(value ?? '')); inputRef.current?.blur(); }
+        }}
+      />
+    );
+  }
+
   return (
     <input
       ref={inputRef}
-      className="generic-grid-cell-input"
+      className="gg-cell-input"
       value={localVal}
       readOnly={readOnly}
       onChange={(e) => setLocalVal(e.target.value)}
       onBlur={() => onChange(localVal)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') inputRef.current?.blur();
-        if (e.key === 'Escape') {
-          setLocalVal(String(value ?? ''));
-          inputRef.current?.blur();
-        }
+        if (e.key === 'Escape') { setLocalVal(String(value ?? '')); inputRef.current?.blur(); }
       }}
     />
   );
@@ -68,19 +105,74 @@ const GenericGrid: React.FC<GenericGridProps> = ({
   onRowsChange,
   onSave,
 }) => {
-  const columns = useMemo(
+  const [activeTab, setActiveTab] = useState<Tab>('all');
+  const [searchText, setSearchText] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [undoStack, setUndoStack] = useState<GenericRow[][]>([]);
+  const [redoStack, setRedoStack] = useState<GenericRow[][]>([]);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Derive column list (no № / #)
+  const allColumns = useMemo(
     () =>
       rows.length > 0
-        ? Object.keys(rows[0].cells).filter((k) => k !== '№' && k !== '#')
+        ? Object.keys(rows[0].cells).filter((k) => !EXCLUDED_COLS.has(k))
         : [],
     [rows],
   );
+
+  const hasTypeCol = allColumns.includes(TYPE_COL);
+  const hasNameCol = allColumns.includes(NAME_COL);
+  const isEnhanced = hasTypeCol;
+
+  // Reorder columns: Тип first (if present), then Наименование, then rest
+  const columns = useMemo(() => {
+    if (!isEnhanced) return allColumns;
+    const rest = allColumns.filter((c) => c !== TYPE_COL && c !== NAME_COL);
+    const ordered: string[] = [];
+    if (hasTypeCol) ordered.push(TYPE_COL);
+    if (hasNameCol) ordered.push(NAME_COL);
+    return [...ordered, ...rest];
+  }, [allColumns, isEnhanced, hasTypeCol, hasNameCol]);
 
   const colWidths = useMemo(
     () => Object.fromEntries(columns.map((col) => [col, estimateColWidth(col, rows)])),
     [columns, rows],
   );
 
+  // Tab filtering
+  const tabFiltered = useMemo(() => {
+    if (!isEnhanced || activeTab === 'all') return rows;
+    const target = activeTab === 'works' ? 'Работа' : 'Материал';
+    return rows.filter((r) => String(r.cells[TYPE_COL] ?? '').trim() === target);
+  }, [rows, activeTab, isEnhanced]);
+
+  // Search filtering
+  const displayedRows = useMemo(() => {
+    if (!searchText.trim()) return tabFiltered;
+    const q = searchText.toLowerCase();
+    return tabFiltered.filter((r) => {
+      if (hasNameCol) {
+        return String(r.cells[NAME_COL] ?? '').toLowerCase().includes(q);
+      }
+      // Fallback: search all text values
+      return Object.values(r.cells).some(
+        (v) => v != null && String(v).toLowerCase().includes(q),
+      );
+    });
+  }, [tabFiltered, searchText, hasNameCol]);
+
+  // Row counts for tabs
+  const workCount = useMemo(
+    () => (isEnhanced ? rows.filter((r) => String(r.cells[TYPE_COL] ?? '').trim() === 'Работа').length : 0),
+    [rows, isEnhanced],
+  );
+  const materialCount = useMemo(
+    () => (isEnhanced ? rows.filter((r) => String(r.cells[TYPE_COL] ?? '').trim() === 'Материал').length : 0),
+    [rows, isEnhanced],
+  );
+
+  // Cell change handler — records undo history
   const handleCellChange = useCallback(
     (rowId: string, colKey: string, rawVal: string) => {
       const numericCandidate = rawVal.trim().replace(',', '.');
@@ -88,6 +180,10 @@ const GenericGrid: React.FC<GenericGridProps> = ({
         numericCandidate !== '' && !isNaN(Number(numericCandidate))
           ? Number(numericCandidate)
           : rawVal || null;
+
+      setUndoStack((prev) => [...prev.slice(-UNDO_LIMIT), rows]);
+      setRedoStack([]);
+
       const updated = rows.map((r) =>
         r.row_id === rowId ? { ...r, cells: { ...r.cells, [colKey]: parsed } } : r,
       );
@@ -96,43 +192,178 @@ const GenericGrid: React.FC<GenericGridProps> = ({
     [rows, onRowsChange],
   );
 
+  // Undo
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    setRedoStack((r) => [...r, rows]);
+    setUndoStack((u) => u.slice(0, -1));
+    onRowsChange(prev);
+  }, [undoStack, rows, onRowsChange]);
+
+  // Redo
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack((u) => [...u, rows]);
+    setRedoStack((r) => r.slice(0, -1));
+    onRowsChange(next);
+  }, [redoStack, rows, onRowsChange]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (isReadonly) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo(); }
+      if (mod && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); handleRedo(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleUndo, handleRedo, isReadonly]);
+
+  // Checkbox helpers
+  const allChecked =
+    displayedRows.length > 0 && displayedRows.every((r) => selectedIds.has(r.row_id));
+  const someChecked = displayedRows.some((r) => selectedIds.has(r.row_id));
+
+  const toggleAll = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allChecked) {
+        displayedRows.forEach((r) => next.delete(r.row_id));
+      } else {
+        displayedRows.forEach((r) => next.add(r.row_id));
+      }
+      return next;
+    });
+  };
+
+  const toggleRow = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
   if (rows.length === 0) {
-    return <div className="generic-grid-empty">Нет данных для отображения</div>;
+    return <div className="gg-empty">Нет данных для отображения</div>;
   }
 
   const saveDisabled = !isDirty || isSaving || isReadonly;
 
   return (
-    <div className="generic-grid-wrap">
-      {/* Toolbar */}
-      <div className="generic-grid-toolbar">
-        <button
-          className="generic-grid-save-btn"
-          onClick={onSave}
-          disabled={saveDisabled}
-        >
-          {isSaving ? 'Сохранение...' : 'Сохранить'}
-        </button>
+    <div className="gg-wrap">
+      {/* ── Tabs (enhanced mode only) ────────────────────────────────────── */}
+      {isEnhanced && (
+        <div className="gg-tabs">
+          <button
+            className={`gg-tab ${activeTab === 'all' ? 'active' : ''}`}
+            onClick={() => setActiveTab('all')}
+          >
+            Полный перечень
+          </button>
+          <button
+            className={`gg-tab ${activeTab === 'works' ? 'active' : ''}`}
+            onClick={() => setActiveTab('works')}
+          >
+            Работы
+            {workCount > 0 && <span className="gg-tab-count">{workCount}</span>}
+          </button>
+          <button
+            className={`gg-tab ${activeTab === 'materials' ? 'active' : ''}`}
+            onClick={() => setActiveTab('materials')}
+          >
+            Материалы
+            {materialCount > 0 && <span className="gg-tab-count">{materialCount}</span>}
+          </button>
+        </div>
+      )}
 
-        {isDirty && !isSaving && (
-          <span className="generic-grid-dirty">Несохранённые изменения</span>
+      {/* ── Toolbar ──────────────────────────────────────────────────────── */}
+      <div className="gg-toolbar">
+        {/* Row count */}
+        <span className="gg-row-count">Строк: {displayedRows.length}</span>
+
+        {/* Search */}
+        {(hasNameCol || !isEnhanced) && (
+          <div className="gg-search-wrap">
+            <svg className="gg-search-icon" viewBox="0 0 16 16" fill="none">
+              <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              ref={searchRef}
+              className="gg-search-input"
+              placeholder="Поиск по наименованию..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+            {searchText && (
+              <button className="gg-search-clear" onClick={() => setSearchText('')}>✕</button>
+            )}
+          </div>
         )}
 
-        <span className="generic-grid-meta">
-          {rows.length} строк · {columns.length} колонок
-        </span>
+        {/* Right side controls */}
+        <div className="gg-toolbar-right">
+          {/* Selection info */}
+          {selectedIds.size > 0 && (
+            <span className="gg-selection-count">Выбрано: {selectedIds.size}</span>
+          )}
+
+          {/* Undo / Redo */}
+          {!isReadonly && (
+            <div className="gg-history-btns">
+              <button
+                className="gg-history-btn"
+                onClick={handleUndo}
+                disabled={undoStack.length === 0}
+                title="Отменить (Ctrl+Z)"
+              >
+                ↩
+              </button>
+              <button
+                className="gg-history-btn"
+                onClick={handleRedo}
+                disabled={redoStack.length === 0}
+                title="Повторить (Ctrl+Y)"
+              >
+                ↪
+              </button>
+            </div>
+          )}
+
+          {/* Save */}
+          <button className="gg-save-btn" onClick={onSave} disabled={saveDisabled}>
+            {isSaving ? 'Сохранение...' : 'Сохранить'}
+          </button>
+        </div>
       </div>
 
-      {/* Table */}
-      <div className="generic-grid-scroll">
-        <table className="generic-grid-table">
+      {/* ── Table ────────────────────────────────────────────────────────── */}
+      <div className="gg-scroll">
+        <table className="gg-table">
           <thead>
             <tr>
-              <th className="generic-grid-th generic-grid-th-num">№</th>
+              {/* Checkbox */}
+              <th className="gg-th gg-th-check">
+                <input
+                  type="checkbox"
+                  className="gg-checkbox"
+                  checked={allChecked}
+                  ref={(el) => { if (el) el.indeterminate = someChecked && !allChecked; }}
+                  onChange={toggleAll}
+                />
+              </th>
+              {/* Row number */}
+              <th className="gg-th gg-th-num">№</th>
+              {/* Data columns */}
               {columns.map((col) => (
                 <th
                   key={col}
-                  className="generic-grid-th"
+                  className="gg-th"
                   style={{ width: colWidths[col], minWidth: colWidths[col] }}
                 >
                   {col}
@@ -141,22 +372,45 @@ const GenericGrid: React.FC<GenericGridProps> = ({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, idx) => (
-              <tr key={row.row_id} className="generic-grid-tr">
-                <td className="generic-grid-td generic-grid-td-num">{idx + 1}</td>
-                {columns.map((col) => (
-                  <td key={col} className="generic-grid-td">
-                    <CellInput
-                      value={row.cells[col]}
-                      readOnly={!!isReadonly}
-                      onChange={(val) => handleCellChange(row.row_id, col, val)}
+            {displayedRows.map((row, idx) => {
+              const typeVal = hasTypeCol ? String(row.cells[TYPE_COL] ?? '').trim() : '';
+              const rowClass = `gg-tr ${getTypeClass(typeVal)} ${selectedIds.has(row.row_id) ? 'gg-tr-selected' : ''}`;
+
+              return (
+                <tr key={row.row_id} className={rowClass}>
+                  {/* Checkbox */}
+                  <td className="gg-td gg-td-check">
+                    <input
+                      type="checkbox"
+                      className="gg-checkbox"
+                      checked={selectedIds.has(row.row_id)}
+                      onChange={() => toggleRow(row.row_id)}
                     />
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {/* Row number */}
+                  <td className="gg-td gg-td-num">{idx + 1}</td>
+                  {/* Data cells */}
+                  {columns.map((col) => (
+                    <td key={col} className="gg-td">
+                      <CellInput
+                        value={row.cells[col]}
+                        readOnly={!!isReadonly}
+                        isTypeBadge={isEnhanced && col === TYPE_COL}
+                        onChange={(val) => handleCellChange(row.row_id, col, val)}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+
+        {displayedRows.length === 0 && searchText && (
+          <div className="gg-no-results">
+            Ничего не найдено по запросу «{searchText}»
+          </div>
+        )}
       </div>
     </div>
   );

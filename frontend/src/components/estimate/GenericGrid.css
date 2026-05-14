@@ -1,20 +1,184 @@
-.generic-grid-wrap {
+/* ── Wrapper ───────────────────────────────────────────────────────── */
+.gg-wrap {
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
-.generic-grid-toolbar {
-  padding: 10px 16px;
-  border-bottom: 1px solid #e2e8f0;
+/* ── Tabs ──────────────────────────────────────────────────────────── */
+.gg-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.gg-tab {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.gg-tab:hover {
+  color: #2563eb;
+}
+
+.gg-tab.active {
+  color: #2563eb;
+  border-bottom-color: #2563eb;
+  font-weight: 600;
+}
+
+.gg-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e2e8f0;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 1px 7px;
+  min-width: 20px;
+}
+
+.gg-tab.active .gg-tab-count {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+/* ── Toolbar ───────────────────────────────────────────────────────── */
+.gg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #fff;
+  flex-wrap: wrap;
+}
+
+.gg-row-count {
+  font-size: 13px;
+  color: #64748b;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+/* ── Search ────────────────────────────────────────────────────────── */
+.gg-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 340px;
+}
+
+.gg-search-icon {
+  position: absolute;
+  left: 8px;
+  width: 14px;
+  height: 14px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.gg-search-input {
+  width: 100%;
+  padding: 5px 28px 5px 28px;
+  font-size: 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  outline: none;
+  color: #1e293b;
+  background: #f8fafc;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+}
+
+.gg-search-input:focus {
+  border-color: #2563eb;
   background: #fff;
 }
 
-.generic-grid-save-btn {
+.gg-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.gg-search-clear {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.gg-search-clear:hover {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+/* ── Right-side toolbar group ──────────────────────────────────────── */
+.gg-toolbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Undo / Redo ───────────────────────────────────────────────────── */
+.gg-history-btns {
+  display: flex;
+  gap: 2px;
+}
+
+.gg-history-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  border-radius: 5px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+}
+
+.gg-history-btn:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.gg-history-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── Save button ───────────────────────────────────────────────────── */
+.gg-save-btn {
+  flex-shrink: 0;
   padding: 6px 18px;
   border-radius: 6px;
   font-size: 13px;
@@ -22,54 +186,55 @@
   border: none;
   cursor: pointer;
   transition: background 0.15s;
+  white-space: nowrap;
 }
 
-.generic-grid-save-btn:disabled {
+.gg-save-btn:disabled {
   background: #e2e8f0;
   color: #94a3b8;
   cursor: not-allowed;
 }
 
-.generic-grid-save-btn:not(:disabled) {
+.gg-save-btn:not(:disabled) {
   background: #2563eb;
   color: #fff;
 }
 
-.generic-grid-save-btn:not(:disabled):hover {
+.gg-save-btn:not(:disabled):hover {
   background: #1d4ed8;
 }
 
-.generic-grid-dirty {
-  color: #f59e0b;
+/* ── Selection info ────────────────────────────────────────────────── */
+.gg-selection-count {
   font-size: 12px;
-  font-weight: 500;
+  color: #2563eb;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.generic-grid-meta {
-  margin-left: auto;
-  color: #94a3b8;
-  font-size: 12px;
-}
-
-.generic-grid-scroll {
+/* ── Scroll container ──────────────────────────────────────────────── */
+.gg-scroll {
   overflow-x: auto;
-  max-height: 65vh;
   overflow-y: auto;
+  max-height: 65vh;
+  flex: 1;
 }
 
-.generic-grid-table {
+/* ── Table ─────────────────────────────────────────────────────────── */
+.gg-table {
   border-collapse: collapse;
   font-size: 13px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  width: 100%;
 }
 
-.generic-grid-table thead {
+.gg-table thead {
   position: sticky;
   top: 0;
   z-index: 1;
 }
 
-.generic-grid-th {
+.gg-th {
   padding: 8px 10px;
   text-align: left;
   font-size: 12px;
@@ -81,26 +246,53 @@
   user-select: none;
 }
 
-.generic-grid-th-num {
+.gg-th-check {
+  width: 36px;
+  text-align: center;
+  padding: 8px 6px;
+}
+
+.gg-th-num {
   width: 44px;
   text-align: center;
   padding: 8px 6px;
 }
 
-.generic-grid-tr {
+/* ── Rows ──────────────────────────────────────────────────────────── */
+.gg-tr {
   border-bottom: 1px solid #f1f5f9;
+  transition: background 0.08s;
 }
 
-.generic-grid-tr:hover {
+.gg-tr:hover {
   background: #f8fafc;
 }
 
-.generic-grid-td {
+.gg-tr-selected {
+  background: #eff6ff !important;
+}
+
+/* Type-based row colors */
+.gg-row-work {
+  /* works: subtle blue tint on hover to differentiate */
+}
+
+.gg-row-material {
+  /* materials: subtle green tint */
+}
+
+/* ── Cells ─────────────────────────────────────────────────────────── */
+.gg-td {
   padding: 0;
   vertical-align: middle;
 }
 
-.generic-grid-td-num {
+.gg-td-check {
+  text-align: center;
+  padding: 4px 6px;
+}
+
+.gg-td-num {
   color: #94a3b8;
   text-align: center;
   font-size: 11px;
@@ -108,37 +300,74 @@
   white-space: nowrap;
 }
 
-.generic-grid-cell-input {
+.gg-cell-input {
   width: 100%;
   border: none;
   background: transparent;
   font-size: 13px;
-  padding: 6px 10px;
+  padding: 7px 10px;
   outline: none;
   color: #1e293b;
   font-family: inherit;
   box-sizing: border-box;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.generic-grid-cell-input:not([readonly]):focus {
+.gg-cell-input:not([readonly]):focus {
   background: #fff;
   outline: 2px solid #2563eb;
   outline-offset: -2px;
+  border-radius: 2px;
 }
 
-.generic-grid-cell-input[readonly] {
+.gg-cell-input[readonly] {
   cursor: default;
 }
 
-.generic-grid-empty {
-  padding: 32px;
+/* ── Type badges ───────────────────────────────────────────────────── */
+.gg-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 5px 10px;
+  white-space: nowrap;
+}
+
+.gg-badge-work {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.gg-badge-material {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+/* ── Checkbox ──────────────────────────────────────────────────────── */
+.gg-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: #2563eb;
+}
+
+/* ── Empty / No-results ────────────────────────────────────────────── */
+.gg-empty {
+  padding: 48px 32px;
   text-align: center;
   color: #94a3b8;
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 14px;
+}
+
+.gg-no-results {
+  padding: 32px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
 }
