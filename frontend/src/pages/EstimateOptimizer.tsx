@@ -106,8 +106,11 @@ const EstimateOptimizer: React.FC = () => {
   const [stepResultBanner, setStepResultBanner] = useState<StepResultBanner | null>(null);
   const [customRunning, setCustomRunning] = useState(false);
   const [processingMsg, setProcessingMsg] = useState<string | null>('Загрузка...');
+  const [processingTooLong, setProcessingTooLong] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialog | null>(null);
   const pollingRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const processingStartRef = React.useRef<number | null>(null);
+  const stuckTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Generic mode state
   const [genericVersions, setGenericVersions] = useState<ReturnType<typeof getVersions> extends Promise<infer T> ? T : never>([]);
@@ -122,11 +125,16 @@ const EstimateOptimizer: React.FC = () => {
     if (!taskId) return;
     reset();
     setProcessingMsg('Загрузка...');
+    setProcessingTooLong(false);
+    processingStartRef.current = Date.now();
     setTaskType(null);
     setGenericVersions([]);
     setActiveGenericVersionId(null);
     setGenericRows([]);
     setGenericDirty(false);
+
+    // Show "stuck" warning after 3 minutes of processing
+    stuckTimerRef.current = setTimeout(() => setProcessingTooLong(true), 3 * 60 * 1000);
 
     const tryLoad = async () => {
       try {
@@ -174,6 +182,8 @@ const EstimateOptimizer: React.FC = () => {
           setGenericRows(full.rows as unknown as GenericRow[]);
           setGenericDirty(false);
           setProcessingMsg(null);
+          setProcessingTooLong(false);
+          if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
           if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
         } else {
           // Estimate mode: existing logic
@@ -196,6 +206,8 @@ const EstimateOptimizer: React.FC = () => {
           });
 
           setProcessingMsg(null);
+          setProcessingTooLong(false);
+          if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
           if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
         }
       } catch {
@@ -208,6 +220,7 @@ const EstimateOptimizer: React.FC = () => {
 
     return () => {
       if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+      if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
     };
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -473,6 +486,32 @@ const EstimateOptimizer: React.FC = () => {
         }}>
           <LumaSpin size="sm" color="#3b82f6" />
           {processingMsg}
+        </div>
+      )}
+
+      {/* Stuck task warning */}
+      {processingTooLong && processingMsg && !error && (
+        <div style={{
+          padding: '12px 16px', marginBottom: '16px',
+          backgroundColor: '#fffbeb', border: '1px solid #fde68a',
+          borderRadius: '8px', color: '#92400e', fontSize: '13px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+        }}>
+          <span>
+            ⚠ Задача выполняется дольше обычного. Возможно, сервер был перезапущен в процессе.
+            Попробуйте обновить страницу или запустить задачу заново.
+          </span>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: '5px 12px', borderRadius: '6px', fontSize: '12px',
+              fontWeight: 600, border: '1px solid #fcd34d',
+              background: '#fef3c7', color: '#92400e', cursor: 'pointer',
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}
+          >
+            Обновить
+          </button>
         </div>
       )}
 
