@@ -118,6 +118,9 @@
   color: #1e293b;
   font-family: inherit;
   box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .generic-grid-cell-input:not([readonly]):focus {

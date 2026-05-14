@@ -14,7 +14,7 @@ interface GenericGridProps {
 // Characters-to-pixels ratio for column width estimation
 const CHAR_PX = 8;
 const COL_MIN = 60;
-const COL_MAX = 380;
+const COL_MAX = 220;
 const COL_PAD = 24;
 
 function estimateColWidth(header: string, rows: GenericRow[]): number {
