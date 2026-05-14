@@ -490,16 +490,18 @@ const EstimateOptimizer: React.FC = () => {
       {/* ── Generic mode ────────────────────────────────────────────────── */}
       {isGenericMode && visibleGenericVersions.length > 0 && taskId && (
         <>
-          <VersionTabs
-            taskId={taskId}
-            versions={visibleGenericVersions}
-            activeVersionId={activeGenericVersionId}
-            activeView="version"
-            isOptimizationRunning={false}
-            onSelectVersion={handleSelectGenericVersion}
-            onSelectComparison={() => {/* не поддерживается в generic-режиме */}}
-            onVersionsChange={handleGenericVersionsChange}
-          />
+          {!embed && (
+            <VersionTabs
+              taskId={taskId}
+              versions={visibleGenericVersions}
+              activeVersionId={activeGenericVersionId}
+              activeView="version"
+              isOptimizationRunning={false}
+              onSelectVersion={handleSelectGenericVersion}
+              onSelectComparison={() => {/* не поддерживается в generic-режиме */}}
+              onVersionsChange={handleGenericVersionsChange}
+            />
+          )}
 
           <GenericGrid
             rows={genericRows}
@@ -559,19 +561,21 @@ const EstimateOptimizer: React.FC = () => {
             />
           )}
 
-          <VersionTabs
-            taskId={taskId}
-            versions={visibleVersions}
-            activeVersionId={activeVersionId}
-            activeView={activeView}
-            isOptimizationRunning={isReadonly}
-            onSelectVersion={(id) => {
-              setActiveView('version');
-              setActiveVersion(id);
-            }}
-            onSelectComparison={() => setActiveView('comparison')}
-            onVersionsChange={handleVersionsChange}
-          />
+          {!embed && (
+            <VersionTabs
+              taskId={taskId}
+              versions={visibleVersions}
+              activeVersionId={activeVersionId}
+              activeView={activeView}
+              isOptimizationRunning={isReadonly}
+              onSelectVersion={(id) => {
+                setActiveView('version');
+                setActiveVersion(id);
+              }}
+              onSelectComparison={() => setActiveView('comparison')}
+              onVersionsChange={handleVersionsChange}
+            />
+          )}
 
           {activeView === 'comparison' && (
             <div style={{

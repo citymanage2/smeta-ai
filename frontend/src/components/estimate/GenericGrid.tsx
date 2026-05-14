@@ -69,7 +69,10 @@ const GenericGrid: React.FC<GenericGridProps> = ({
   onSave,
 }) => {
   const columns = useMemo(
-    () => (rows.length > 0 ? Object.keys(rows[0].cells) : []),
+    () =>
+      rows.length > 0
+        ? Object.keys(rows[0].cells).filter((k) => k !== '№' && k !== '#')
+        : [],
     [rows],
   );
 
