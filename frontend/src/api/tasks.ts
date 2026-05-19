@@ -284,6 +284,18 @@ export interface RepriceItemResponse {
   notes: string;
 }
 
+export interface FixEmptyPricesResponse {
+  empty_count: number;
+  status: 'started' | 'no_empty_items';
+}
+
+export async function fixEmptyPrices(taskId: string): Promise<FixEmptyPricesResponse> {
+  const res = await apiClient.post<FixEmptyPricesResponse>(
+    `/tasks/${taskId}/estimate-items/fix-empty-prices`,
+  );
+  return res.data;
+}
+
 export async function repriceEstimateItem(
   taskId: string,
   itemIndex: number,

@@ -290,6 +290,12 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
 Ты ОБЯЗАН вернуть результат для КАЖДОЙ позиции из списка, сохранив то же самое
 значение "id" без изменений. Пропуск любой позиции недопустим.
 
+АБСОЛЮТНЫЙ ЗАПРЕТ на null-цены:
+- Для позиции типа "Работа": поле work_price ОБЯЗАНО быть числом больше нуля. null и 0 недопустимы.
+- Для позиции типа "Материал": поле material_price ОБЯЗАНО быть числом больше нуля. null и 0 недопустимы.
+Если точная цена неизвестна — используй рыночную оценку из открытых источников г. Екатеринбург.
+Придумать число нельзя, но найти реальную рыночную цену — обязательно.
+
 Позиции для оценки:
 {unmatched_items_json}
 
@@ -1708,6 +1714,37 @@ class TaskProcessor:
                     names=[unmatched_by_gidx[gidx].get("name") for gidx in sorted(still_missing)],
                 )
 
+            # Retry items Claude returned but left with null/zero price.
+            null_price_ids = {
+                gidx for gidx, cr in claude_results.items()
+                if (unmatched_by_gidx[gidx].get("type") == "Работа" and not cr.get("work_price"))
+                or (unmatched_by_gidx[gidx].get("type") == "Материал" and not cr.get("material_price"))
+            }
+            if null_price_ids:
+                await self.update_progress(
+                    f"Повторная обработка {len(null_price_ids)} позиций с пустыми ценами..."
+                )
+                null_items = [unmatched_by_gidx[gidx] for gidx in sorted(null_price_ids)]
+                null_chunks = [null_items[i:i + 5] for i in range(0, len(null_items), 5)]
+                for j, null_chunk in enumerate(null_chunks):
+                    try:
+                        await self._check_cancelled()
+                    except TaskCancelledError:
+                        raise
+                    await _call_claude_chunk(null_chunk, chunk_label=f"null-price-{j + 1}/{len(null_chunks)}")
+                still_null = {
+                    gidx for gidx in null_price_ids
+                    if (unmatched_by_gidx[gidx].get("type") == "Работа" and not claude_results.get(gidx, {}).get("work_price"))
+                    or (unmatched_by_gidx[gidx].get("type") == "Материал" and not claude_results.get(gidx, {}).get("material_price"))
+                }
+                if still_null:
+                    logger.warning(
+                        "Some items still have null prices after null-price retry",
+                        task_id=self.task_id,
+                        count=len(still_null),
+                        names=[unmatched_by_gidx[gidx].get("name") for gidx in sorted(still_null)],
+                    )
+
         # ── Шаг 3: Сборка итогового результата в исходном порядке ───────────
         final_items: list[dict] = []
         for gidx, item in enumerate(items):
@@ -1934,3 +1971,157 @@ async def process_task(task_id: str, db: AsyncSession) -> None:
     """Wrapper function for backward compatibility with routers."""
     processor = TaskProcessor(task_id, db)
     await processor.process()
+
+
+async def fix_empty_prices_background(task_id: str, session_factory) -> None:
+    """Background runner: open own DB session, fix empty prices, save results."""
+    async with session_factory() as db:
+        processor = TaskProcessor(task_id, db)
+        await processor.fix_empty_prices()
+
+
+class _FixEmptyResult:
+    def __init__(self, fixed: int, still_empty: int, grand_total: float):
+        self.fixed = fixed
+        self.still_empty = still_empty
+        self.grand_total = grand_total
+
+
+# Attach fix_empty_prices to TaskProcessor
+async def _fix_empty_prices(self: "TaskProcessor") -> None:
+    """Find items with empty prices, send to Claude, merge back, regen xlsx."""
+    from datetime import date as _date
+    from decimal import Decimal as _Decimal
+    from app.utils.xlsx_exporter import generate_estimate_xlsx
+
+    task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
+    task = task_res.scalar_one_or_none()
+    if not task:
+        return
+
+    items: list[dict] = (task.progress_data or {}).get("items", [])
+    if not items:
+        task.status = "completed"
+        task.progress_message = None
+        task.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        return
+
+    def _has_empty_price(item: dict) -> bool:
+        if item.get("type") == "Работа":
+            return not item.get("work_price")
+        if item.get("type") == "Материал":
+            return not item.get("material_price")
+        return False
+
+    empty_indices = [i for i, it in enumerate(items) if _has_empty_price(it)]
+    if not empty_indices:
+        task.status = "completed"
+        task.progress_message = None
+        task.updated_at = datetime.now(timezone.utc)
+        await self.db.commit()
+        return
+
+    current_date = _date.today().strftime("%d.%m.%Y")
+    total_empty = len(empty_indices)
+    fixed_count = 0
+
+    batches = [empty_indices[i:i + 5] for i in range(0, len(empty_indices), 5)]
+    for batch_num, batch in enumerate(batches, 1):
+        await self.update_progress(
+            f"Исправление пустых цен: батч {batch_num}/{len(batches)}..."
+        )
+        batch_items = [
+            {
+                "id": idx,
+                "type": items[idx].get("type", ""),
+                "name": items[idx].get("name", ""),
+                "unit": items[idx].get("unit", ""),
+                "quantity": items[idx].get("quantity"),
+            }
+            for idx in batch
+        ]
+        unmatched_json = json.dumps(batch_items, ensure_ascii=False, indent=2)
+        prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
+            current_date=current_date,
+            unmatched_items_json=unmatched_json,
+        )
+        messages = [{"role": "user", "content": prompt_text}]
+        try:
+            data = await self._interruptible_claude_json_with_retry(
+                messages,
+                system_prompt=SYSTEM_BASE,
+                use_web_search=True,
+                processing_timeout=1200.0,
+            )
+        except TaskCancelledError:
+            raise
+        except Exception as e:
+            logger.warning(
+                "fix_empty_prices batch failed, skipping",
+                task_id=self.task_id,
+                batch=batch_num,
+                error=str(e),
+            )
+            continue
+
+        for result_item in data.get("items", []):
+            orig_idx = result_item.get("id")
+            if orig_idx is None or orig_idx not in batch:
+                continue
+            orig = items[orig_idx]
+            wp = result_item.get("work_price")
+            mp = result_item.get("material_price")
+            if orig.get("type") == "Работа" and wp:
+                items[orig_idx] = {**orig, "work_price": wp, "sources": result_item.get("sources", orig.get("sources", "")), "notes": result_item.get("notes", orig.get("notes", ""))}
+                fixed_count += 1
+            elif orig.get("type") == "Материал" and mp:
+                items[orig_idx] = {**orig, "material_price": mp, "sources": result_item.get("sources", orig.get("sources", "")), "notes": result_item.get("notes", orig.get("notes", ""))}
+                fixed_count += 1
+
+    await self.update_progress(
+        f"Исправлено {fixed_count} из {total_empty} пустых цен. Пересчёт сметы..."
+    )
+
+    # Regenerate xlsx and update cost
+    excel_data, grand_total = generate_estimate_xlsx(items)
+
+    existing_r = await self.db.execute(
+        select(TaskResult).where(TaskResult.task_id == self.task_id, TaskResult.slot == "estimate")
+    )
+    old_result = existing_r.scalar_one_or_none()
+    if old_result:
+        old_result.file_data = excel_data
+        old_result.size_bytes = len(excel_data)
+    else:
+        self.db.add(TaskResult(
+            task_id=self.task_id,
+            file_name="Смета_из_перечня.xlsx",
+            mime_type=_XLSX_MIME,
+            file_data=excel_data,
+            size_bytes=len(excel_data),
+            slot="estimate",
+        ))
+
+    task_res2 = await self.db.execute(select(Task).where(Task.id == self.task_id))
+    task2 = task_res2.scalar_one_or_none()
+    if task2:
+        task2.cost = _Decimal(str(round(grand_total, 2)))
+        task2.estimation_status = "estimated"
+        task2.status = "completed"
+        task2.progress_message = None
+        task2.progress_data = {**(task2.progress_data or {}), "items": items}
+        task2.updated_at = datetime.now(timezone.utc)
+    await self.db.commit()
+
+    logger.info(
+        "fix_empty_prices completed",
+        task_id=self.task_id,
+        fixed=fixed_count,
+        total_empty=total_empty,
+        grand_total=grand_total,
+    )
+
+
+# Attach as method
+TaskProcessor.fix_empty_prices = _fix_empty_prices

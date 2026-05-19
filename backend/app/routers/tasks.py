@@ -33,7 +33,7 @@ from app.models.history import TaskHistory
 from app.models.project import Project
 from app.utils.auth import get_current_user, get_download_user
 from app.config import settings
-from app.services.task_processor import process_task
+from app.services.task_processor import process_task, fix_empty_prices_background
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
@@ -1476,6 +1476,51 @@ async def optimize_run(
 
 class EstimateItemsUpdateRequest(BaseModel):
     items: list[dict]
+
+
+@router.post("/{task_id}/estimate-items/fix-empty-prices")
+async def fix_empty_prices(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Запустить фоновое исправление позиций с пустыми ценами.
+
+    Находит в progress_data.items позиции с null/0 ценой, отправляет в Claude
+    батчами по 5, сохраняет результат и пересоздаёт xlsx.
+    Возвращает 202 немедленно; задача переходит в status=processing на время работы.
+    """
+    task = await db.get(Task, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.task_type != "ESTIMATE_FROM_LIST":
+        raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
+    if task.status == "processing":
+        raise HTTPException(status_code=409, detail="Задача уже выполняется")
+
+    items: list[dict] = (task.progress_data or {}).get("items", [])
+
+    def _has_empty(it: dict) -> bool:
+        if it.get("type") == "Работа":
+            return not it.get("work_price")
+        if it.get("type") == "Материал":
+            return not it.get("material_price")
+        return False
+
+    empty_count = sum(1 for it in items if _has_empty(it))
+
+    if empty_count == 0:
+        return {"empty_count": 0, "status": "no_empty_items"}
+
+    task.status = "processing"
+    task.progress_message = f"Исправление {empty_count} пустых цен..."
+    task.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    background_tasks.add_task(fix_empty_prices_background, task_id, AsyncSessionLocal)
+
+    return {"empty_count": empty_count, "status": "started"}
 
 
 @router.patch("/{task_id}/estimate-items")

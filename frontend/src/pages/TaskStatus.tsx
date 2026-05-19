@@ -20,6 +20,7 @@ import {
   getRelatedChecks,
   patchEstimateItems,
   repriceEstimateItem,
+  fixEmptyPrices,
   regenerateTaskResult,
   TaskStatusResponse,
   ChatMessage,
@@ -128,6 +129,8 @@ const TaskStatusPage: React.FC = () => {
   const [savingEstimate, setSavingEstimate] = useState(false);
   const [estimateSaveError, setEstimateSaveError] = useState('');
   const [repricing, setRepricing] = useState<number | null>(null);
+  const [fixingPrices, setFixingPrices] = useState(false);
+  const [needsItemReload, setNeedsItemReload] = useState(false);
 
   useEffect(() => {
     if (!taskId || taskId === 'undefined') {
@@ -521,15 +524,17 @@ const TaskStatusPage: React.FC = () => {
     };
   }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling, stopCheckProjectPolling]);
 
-  // Load estimate items when ESTIMATE_FROM_LIST task completes
+  // Load estimate items when ESTIMATE_FROM_LIST task completes (or after fix-empty-prices)
   useEffect(() => {
     if (task?.task_type === 'ESTIMATE_FROM_LIST' && task.status === 'completed') {
       const items = (task.progress_data?.items as EstimateItem[] | undefined) ?? [];
-      if (items.length > 0 && estimateItems.length === 0) {
+      if (items.length > 0 && (estimateItems.length === 0 || needsItemReload)) {
         setEstimateItems(items);
+        setNeedsItemReload(false);
+        setFixingPrices(false);
       }
     }
-  }, [task, estimateItems.length]);
+  }, [task, estimateItems.length, needsItemReload]);
 
   // Restore check task state after page refresh
   useEffect(() => {
@@ -713,6 +718,33 @@ const TaskStatusPage: React.FC = () => {
       setEstimateSaveError('Ошибка при переопределении цены. Попробуйте ещё раз.');
     } finally {
       setRepricing(null);
+    }
+  };
+
+  const emptyPriceCount = React.useMemo(() => {
+    return estimateItems.filter((it) => {
+      if (it.type === 'Работа') return !it.work_price;
+      if (it.type === 'Материал') return !it.material_price;
+      return false;
+    }).length;
+  }, [estimateItems]);
+
+  const handleFixEmptyPrices = async () => {
+    if (!taskId) return;
+    setFixingPrices(true);
+    setEstimateSaveError('');
+    try {
+      const res = await fixEmptyPrices(taskId);
+      if (res.status === 'no_empty_items') {
+        setFixingPrices(false);
+        return;
+      }
+      // Task is now in processing state — existing polling will detect completion
+      // and needsItemReload will trigger item reload via useEffect
+      setNeedsItemReload(true);
+    } catch {
+      setEstimateSaveError('Не удалось запустить исправление цен. Попробуйте ещё раз.');
+      setFixingPrices(false);
     }
   };
 
@@ -1467,24 +1499,48 @@ const TaskStatusPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Save button */}
-            <button
-              onClick={handleSaveEstimate}
-              disabled={savingEstimate}
-              style={{
-                marginTop: '16px',
-                padding: '10px 24px',
-                backgroundColor: savingEstimate ? '#6ee7b7' : '#16a34a',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: savingEstimate ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                fontWeight: 600,
-              }}
-            >
-              {savingEstimate ? 'Сохранение...' : '💾 Сохранить изменения'}
-            </button>
+            {/* Action buttons row */}
+            <div style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                onClick={handleSaveEstimate}
+                disabled={savingEstimate || fixingPrices}
+                style={{
+                  padding: '10px 24px',
+                  backgroundColor: savingEstimate ? '#6ee7b7' : '#16a34a',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: (savingEstimate || fixingPrices) ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                }}
+              >
+                {savingEstimate ? 'Сохранение...' : '💾 Сохранить изменения'}
+              </button>
+
+              {emptyPriceCount > 0 && (
+                <button
+                  onClick={handleFixEmptyPrices}
+                  disabled={fixingPrices || savingEstimate || repricing != null}
+                  title={`Отправить ${emptyPriceCount} позиций с пустой ценой в Claude для получения рыночной цены`}
+                  style={{
+                    padding: '10px 20px',
+                    backgroundColor: fixingPrices ? '#fef3c7' : '#fffbeb',
+                    color: fixingPrices ? '#92400e' : '#d97706',
+                    border: `1px solid ${fixingPrices ? '#fcd34d' : '#fde68a'}`,
+                    borderRadius: '8px',
+                    cursor: (fixingPrices || savingEstimate || repricing != null) ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {fixingPrices
+                    ? '⏳ Исправляем цены...'
+                    : `🔧 Исправить пустые цены (${emptyPriceCount})`}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
