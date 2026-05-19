@@ -1709,7 +1709,7 @@ class TaskProcessor:
         if unmatched_by_gidx:
             unmatched_list = list(unmatched_by_gidx.values())
             current_date = _date.today().strftime("%d.%m.%Y")
-            chunks = _chunk_by_work_boundaries(unmatched_list, max_chunk_size=25)
+            chunks = _chunk_by_work_boundaries(unmatched_list, max_chunk_size=10)
             total_chunks = len(chunks)
 
             await self.update_progress(
