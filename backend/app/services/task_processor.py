@@ -718,6 +718,8 @@ class TaskProcessor:
             except asyncio.TimeoutError:
                 raise
             except Exception as e:
+                if "баланс api" in str(e).lower() or "credit balance" in str(e).lower():
+                    raise
                 last_error = e
                 if attempt < max_chunk_retries - 1:
                     wait = chunk_retry_delays[attempt]
@@ -760,6 +762,8 @@ class TaskProcessor:
             except asyncio.TimeoutError:
                 raise
             except Exception as e:
+                if "баланс api" in str(e).lower() or "credit balance" in str(e).lower():
+                    raise
                 last_error = e
                 if attempt < max_chunk_retries - 1:
                     wait = chunk_retry_delays[attempt]

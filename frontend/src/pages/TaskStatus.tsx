@@ -429,8 +429,9 @@ const TaskStatusPage: React.FC = () => {
 
       if (data.status === 'processing' || data.status === 'pending') {
         if (!startTimeRef.current) {
-          startTimeRef.current = Date.now();
+          startTimeRef.current = new Date(data.created_at).getTime();
         }
+        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
         if (!timerRef.current) {
           timerRef.current = setInterval(() => {
             setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current!) / 1000));
@@ -507,6 +508,9 @@ const TaskStatusPage: React.FC = () => {
     // messages freeze while the tab is hidden)
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return;
+      if (startTimeRef.current && timerRef.current) {
+        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
       if (pollingRef.current) fetchStatusRef.current();
       const cid = checkTaskIdRef.current;
       if (checkPollingRef.current && cid) fetchCheckStatusRef.current(cid);
