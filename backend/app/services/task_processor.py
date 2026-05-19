@@ -1798,6 +1798,9 @@ class TaskProcessor:
         # Save items to progress_data for future use (Path B)
         await self._save_progress_data({"items": final_items})
 
+        # Create generic editor version so the result can be opened in the online editor
+        await self._create_initial_generic_version(excel_data, task.task_type)
+
         logger.info(
             "Estimate from list completed",
             task_id=self.task_id,

@@ -170,7 +170,13 @@ const EstimateOptimizer: React.FC = () => {
           }
 
           if (versionList.length === 0) {
-            // Задача ещё не завершена — ждём следующего poll
+            if (taskData.status === 'completed') {
+              // Задача завершена, но версии так и не загружены — показываем ошибку
+              setProcessingMsg(null);
+              setError('Не удалось загрузить данные для редактора. Попробуйте закрыть и открыть снова.');
+              if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+              if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
+            }
             return;
           }
 
@@ -188,7 +194,15 @@ const EstimateOptimizer: React.FC = () => {
         } else {
           // Estimate mode: existing logic
           const versionList = await getVersions(taskId);
-          if (versionList.length === 0) return;
+          if (versionList.length === 0) {
+            if (taskData.status === 'completed') {
+              setProcessingMsg(null);
+              setError('Не удалось загрузить версии сметы. Попробуйте закрыть и открыть снова.');
+              if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+              if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
+            }
+            return;
+          }
 
           const active = versionList.find((v) => !v.is_rolled_back) ?? versionList[0];
           const full = await getVersion(taskId, active.id);

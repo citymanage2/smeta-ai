@@ -11,6 +11,7 @@ export const GENERIC_EDITOR_TASK_TYPES: Set<TaskType> = new Set([
   'LIST_FROM_PROJECT',
   'CHECK_LIST_COMPLETENESS',
   'CHECK_PROJECT_COMPLETENESS',
+  'ESTIMATE_FROM_LIST',
 ]);
 
 export interface GenericRow {
