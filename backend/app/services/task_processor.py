@@ -608,7 +608,7 @@ class TaskProcessor:
         use_web_search: bool = False,
         image_data: Optional[list] = None,
         processing_timeout: Optional[float] = None,
-        cancel_check_interval: float = 30.0,
+        cancel_check_interval: float = 10.0,
         max_tokens: int = 32000,
     ) -> dict:
         """Like _call_claude_json but checks for task cancellation every cancel_check_interval seconds.
@@ -641,6 +641,15 @@ class TaskProcessor:
             except (asyncio.CancelledError, Exception):
                 pass
             raise
+        finally:
+            # Guarantee api_task is cancelled regardless of what exception propagated.
+            # Prevents orphaned API calls when _check_cancelled() raises a non-cancel error.
+            if not api_task.done():
+                api_task.cancel()
+                try:
+                    await api_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     async def _call_claude_json(
         self,
@@ -780,6 +789,7 @@ class TaskProcessor:
                         error=str(e),
                     )
                     await asyncio.sleep(wait)
+                    await self._check_cancelled()
         raise last_error  # type: ignore[misc]
 
     async def process(self) -> None:
@@ -2145,6 +2155,8 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
     task_res2 = await self.db.execute(select(Task).where(Task.id == self.task_id))
     task2 = task_res2.scalar_one_or_none()
     if task2:
+        if task2.status == "cancelled":
+            return
         task2.cost = _Decimal(str(round(grand_total, 2)))
         task2.estimation_status = "estimated"
         task2.status = "completed"
