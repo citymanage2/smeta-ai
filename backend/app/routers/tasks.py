@@ -102,6 +102,7 @@ class TaskStatusResponse(BaseModel):
     task_type: str
     status: str
     progress_message: Optional[str]
+    progress_log: list[str] = []
     error_message: Optional[str]
     estimation_status: str
     cost: Optional[float]
@@ -364,6 +365,7 @@ async def get_task_status(
         task_type=task.task_type,
         status=task.status,
         progress_message=task.progress_message,
+        progress_log=list(task.progress_log or []),
         error_message=task.error_message,
         estimation_status=task.estimation_status,
         cost=float(task.cost) if task.cost is not None else None,

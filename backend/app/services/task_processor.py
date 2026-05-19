@@ -417,6 +417,10 @@ class TaskProcessor:
         task = result.scalar_one_or_none()
         if task:
             task.progress_message = message
+            current_log = list(task.progress_log or [])
+            if not current_log or current_log[-1] != message:
+                current_log.append(message)
+                task.progress_log = current_log
             task.updated_at = datetime.now(timezone.utc)
             await self.db.commit()
         logger.info("Task progress", task_id=self.task_id, message=message)

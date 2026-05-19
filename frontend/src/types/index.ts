@@ -88,6 +88,7 @@ export interface Task {
   status: TaskStatus;
   user_prompt?: string;
   progress_message?: string;
+  progress_log?: string[];
   error_message?: string;
   estimation_status: EstimationStatus;
   cost?: number | null;

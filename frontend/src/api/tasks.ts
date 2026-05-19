@@ -12,6 +12,7 @@ export interface TaskStatusResponse {
   status: Task['status'];
   task_type: Task['task_type'];
   progress_message?: string;
+  progress_log?: string[];
   error_message?: string;
   estimation_status: string;
   cost?: number | null;

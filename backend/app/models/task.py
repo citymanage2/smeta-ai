@@ -33,6 +33,7 @@ class Task(Base):
     user_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     chat_history: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     progress_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    progress_log: Mapped[list] = mapped_column(JSON, default=list, nullable=False, server_default="[]")
     progress_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     project_id: Mapped[Optional[str]] = mapped_column(

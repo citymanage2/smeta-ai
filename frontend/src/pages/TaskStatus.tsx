@@ -419,7 +419,9 @@ const TaskStatusPage: React.FC = () => {
       setTaskProjectId(data.project_id ?? null);
       setTaskName(prev => prev === null ? (data.name ?? null) : prev);
 
-      if (data.progress_message) {
+      if (data.progress_log && data.progress_log.length > 0) {
+        setProgressLog(data.progress_log);
+      } else if (data.progress_message) {
         setProgressLog((prev) => {
           const last = prev[prev.length - 1];
           if (last === data.progress_message) return prev;
