@@ -55,7 +55,7 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
 
       await Promise.all(
         eligibleCards.map(async (card) => {
-          const taskId = card.optimization_task_id ?? card.estimate_task_id
+          const taskId = card.estimate_task_id
           if (!taskId) return
           try {
             const versions = await getVersions(taskId)
