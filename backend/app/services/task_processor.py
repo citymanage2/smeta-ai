@@ -1691,11 +1691,14 @@ class TaskProcessor:
             except TaskCancelledError:
                 raise
             except Exception as chunk_error:
+                err_str = str(chunk_error)
+                if "баланс" in err_str.lower() or "credit balance" in err_str.lower():
+                    raise
                 logger.warning(
                     "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
                     task_id=self.task_id,
                     chunk_label=chunk_label,
-                    error=str(chunk_error),
+                    error=err_str,
                 )
                 return
             for result_item in data.get("items", []):
