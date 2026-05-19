@@ -745,9 +745,12 @@ const TaskStatusPage: React.FC = () => {
         setFixingPrices(false);
         return;
       }
-      // Task is now in processing state — existing polling will detect completion
-      // and needsItemReload will trigger item reload via useEffect
+      // Task is now in processing state — restart polling (was stopped on completion)
       setNeedsItemReload(true);
+      if (!pollingRef.current) {
+        pollingRef.current = setInterval(fetchStatus, 3000);
+      }
+      fetchStatus();
     } catch {
       setEstimateSaveError('Не удалось запустить исправление цен. Попробуйте ещё раз.');
       setFixingPrices(false);
