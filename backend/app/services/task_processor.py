@@ -1577,6 +1577,12 @@ class TaskProcessor:
         matched_by_gidx: dict[int, dict] = {}
         unmatched_by_gidx: dict[int, dict] = {}  # gidx -> enriched item with "_id" = gidx
 
+        # Списки позиций, не нашедшихся по exact-матчу — пойдут в батч-эмбеддинг.
+        need_emb_works: list[tuple[int, str]] = []      # (gidx, name)
+        need_emb_materials: list[tuple[int, str]] = []  # (gidx, name)
+        enriched_map: dict[int, dict] = {}
+
+        # ── Проход 1: точное совпадение (sync, in-memory) ────────────────────
         for gidx, item in enumerate(items):
             item_type = str(item.get("type", "")).strip()
             name = str(item.get("name", "")).strip()
@@ -1586,42 +1592,61 @@ class TaskProcessor:
             enriched.setdefault("material_price", None)
             enriched.setdefault("price_list_name", None)
             enriched.setdefault("sources", None)
+            enriched_map[gidx] = enriched
 
-            found = False
             if item_type == "Работа":
                 work_info = _price_svc._exact_match_work(name)
-                match_method = "exact" if work_info is not None else None
-                if work_info is None:
-                    work_info = await _price_svc._embedding_match_work(name)
-                    if work_info is not None:
-                        match_method = "embedding"
                 if work_info is not None and work_info.get("min_price") is not None:
                     enriched["work_price"] = work_info.get("min_price")
                     enriched["price_list_name"] = work_info.get("name")
-                    found = True
-                    logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method=match_method, price_entry=work_info.get("name"))
+                    matched_by_gidx[gidx] = enriched
+                    logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method="exact", price_entry=work_info.get("name"))
                 else:
-                    logger.info("Item NOT matched in price list", task_id=self.task_id, name=name, work_info_found=(work_info is not None))
+                    need_emb_works.append((gidx, name))
 
             elif item_type == "Материал":
                 mat_price = _price_svc._exact_match_material(name)
-                match_method = "exact" if mat_price is not None else None
-                if mat_price is None:
-                    mat_price = await _price_svc._embedding_match_material(name)
-                    if mat_price is not None:
-                        match_method = "embedding"
                 if mat_price is not None:
                     enriched["material_price"] = mat_price
                     enriched["price_list_name"] = name
-                    found = True
-                    logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method=match_method)
+                    matched_by_gidx[gidx] = enriched
+                    logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method="exact")
                 else:
-                    logger.info("Material NOT matched in price list", task_id=self.task_id, name=name)
+                    need_emb_materials.append((gidx, name))
 
-            if found:
-                matched_by_gidx[gidx] = enriched
             else:
+                # Неизвестный тип → сразу в unmatched (как и раньше)
                 unmatched_by_gidx[gidx] = enriched
+
+        # ── Проход 2: батч-эмбеддинг для работ (1 вызов Cohere) ─────────────
+        if need_emb_works:
+            work_names = [n for _, n in need_emb_works]
+            work_results = await _price_svc.batch_embedding_match_works(work_names)
+            for (gidx, name), work_info in zip(need_emb_works, work_results):
+                enriched = enriched_map[gidx]
+                if work_info is not None and work_info.get("min_price") is not None:
+                    enriched["work_price"] = work_info.get("min_price")
+                    enriched["price_list_name"] = work_info.get("name")
+                    matched_by_gidx[gidx] = enriched
+                    logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method="embedding", price_entry=work_info.get("name"))
+                else:
+                    unmatched_by_gidx[gidx] = enriched
+                    logger.info("Item NOT matched in price list", task_id=self.task_id, name=name, work_info_found=(work_info is not None))
+
+        # ── Проход 3: батч-эмбеддинг для материалов (1 вызов Cohere) ────────
+        if need_emb_materials:
+            mat_names = [n for _, n in need_emb_materials]
+            mat_results = await _price_svc.batch_embedding_match_materials(mat_names)
+            for (gidx, name), mat_price in zip(need_emb_materials, mat_results):
+                enriched = enriched_map[gidx]
+                if mat_price is not None:
+                    enriched["material_price"] = mat_price
+                    enriched["price_list_name"] = name
+                    matched_by_gidx[gidx] = enriched
+                    logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method="embedding")
+                else:
+                    unmatched_by_gidx[gidx] = enriched
+                    logger.info("Material NOT matched in price list", task_id=self.task_id, name=name)
 
         n_matched = len(matched_by_gidx)
         n_unmatched = len(unmatched_by_gidx)

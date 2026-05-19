@@ -132,6 +132,89 @@ async def _embedding_match_material(name: str) -> Optional[float]:
         return None
 
 
+async def batch_embedding_match_works(names: list[str]) -> "list[Optional[dict]]":
+    """Batch cosine-similarity search for works — one Cohere call for all names."""
+    if not names:
+        return []
+    if not _numpy_available or _works_embeddings is None or _works_row_norms is None:
+        return [None] * len(names)
+
+    try:
+        from app.services.embedding_service import normalize_name, generate_embeddings_batch
+
+        normalized = [normalize_name(n) for n in names]
+        query_vecs = await asyncio.to_thread(generate_embeddings_batch, normalized, "search_query")
+        query_arr = np.array(query_vecs, dtype=np.float32)          # (M, 1024)
+        query_norms = np.linalg.norm(query_arr, axis=1)             # (M,)
+
+        # scores[n, m] = cosine(_works_embeddings[n], query_arr[m])
+        raw = np.dot(_works_embeddings, query_arr.T)                 # (N, M)
+        safe_qnorms = np.where(query_norms == 0, 1.0, query_norms)  # avoid /0
+        scores = raw / (_works_row_norms[:, np.newaxis] * safe_qnorms[np.newaxis, :])  # (N, M)
+
+        best_idx = np.argmax(scores, axis=0)                        # (M,)
+        best_scores = scores[best_idx, np.arange(len(names))]       # (M,)
+
+        results: list[Optional[dict]] = []
+        for i, (bidx, bscore) in enumerate(zip(best_idx.tolist(), best_scores.tolist())):
+            if query_norms[i] == 0:
+                results.append(None)
+                continue
+            cache_idx = _works_index_map[bidx]
+            matched_name = _works_cache[cache_idx]["name"] if _works_cache else "?"
+            if bscore >= SIMILARITY_THRESHOLD:
+                logger.info("Batch emb work HIT", query=names[i], matched=matched_name, score=bscore)
+                results.append(_works_cache[cache_idx])
+            else:
+                logger.debug("Batch emb work MISS", query=names[i], best=matched_name, score=bscore)
+                results.append(None)
+        return results
+    except Exception as e:
+        logger.error("Batch embedding work match failed", error=str(e))
+        return [None] * len(names)
+
+
+async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[float]]":
+    """Batch cosine-similarity search for materials — one Cohere call for all names."""
+    if not names:
+        return []
+    if not _numpy_available or _materials_embeddings is None or _materials_row_norms is None:
+        return [None] * len(names)
+
+    try:
+        from app.services.embedding_service import normalize_name, generate_embeddings_batch
+
+        normalized = [normalize_name(n) for n in names]
+        query_vecs = await asyncio.to_thread(generate_embeddings_batch, normalized, "search_query")
+        query_arr = np.array(query_vecs, dtype=np.float32)               # (M, 1024)
+        query_norms = np.linalg.norm(query_arr, axis=1)                  # (M,)
+
+        raw = np.dot(_materials_embeddings, query_arr.T)                  # (N, M)
+        safe_qnorms = np.where(query_norms == 0, 1.0, query_norms)
+        scores = raw / (_materials_row_norms[:, np.newaxis] * safe_qnorms[np.newaxis, :])  # (N, M)
+
+        best_idx = np.argmax(scores, axis=0)                             # (M,)
+        best_scores = scores[best_idx, np.arange(len(names))]            # (M,)
+
+        results: list[Optional[float]] = []
+        for i, (bidx, bscore) in enumerate(zip(best_idx.tolist(), best_scores.tolist())):
+            if query_norms[i] == 0:
+                results.append(None)
+                continue
+            cache_idx = _materials_index_map[bidx]
+            matched_name = _materials_cache[cache_idx]["name"] if _materials_cache else "?"
+            if bscore >= SIMILARITY_THRESHOLD:
+                logger.info("Batch emb material HIT", query=names[i], matched=matched_name, score=bscore)
+                results.append(_materials_cache[cache_idx].get("price"))
+            else:
+                logger.debug("Batch emb material MISS", query=names[i], best=matched_name, score=bscore)
+                results.append(None)
+        return results
+    except Exception as e:
+        logger.error("Batch embedding material match failed", error=str(e))
+        return [None] * len(names)
+
+
 async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
     """Use Claude with web search to find lower price for the same work item."""
     extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
