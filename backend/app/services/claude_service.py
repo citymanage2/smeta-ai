@@ -201,13 +201,25 @@ async def call_claude(
                     "Ответ слишком большой, разбейте выполнение на подэтапы"
                 )
 
-            # Extract all text blocks; skip tool_use / tool_result blocks
+            # Extract all text blocks; skip tool_use / tool_result blocks.
+            # When web_search is used, Claude produces multiple text blocks
+            # (intermediate reasoning + final JSON). Joining them all makes
+            # JSON parsing fail because the intermediate blocks may contain
+            # prose or partial JSON. We prefer the LAST text block that
+            # contains "{" (the final structured answer); fall back to
+            # joining all blocks only if no single block has a "{".
             text_parts = [
                 block.text
                 for block in response.content
                 if hasattr(block, "text") and isinstance(block.text, str)
             ]
-            result = "".join(text_parts)
+            # Find last block that looks like it contains JSON
+            json_candidate = None
+            for part in reversed(text_parts):
+                if "{" in part:
+                    json_candidate = part
+                    break
+            result = json_candidate if json_candidate is not None else "".join(text_parts)
 
             input_t = getattr(response.usage, "input_tokens", 0) or 0
             output_t = getattr(response.usage, "output_tokens", 0) or 0

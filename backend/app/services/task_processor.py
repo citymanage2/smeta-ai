@@ -2114,9 +2114,22 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
             )
             continue
 
+        returned_ids = [r.get("id") for r in data.get("items", [])]
+        logger.info(
+            "fix_empty_prices batch result",
+            task_id=self.task_id,
+            batch=batch_num,
+            expected_ids=batch,
+            returned_ids=returned_ids,
+            items_count=len(data.get("items", [])),
+        )
         for result_item in data.get("items", []):
-            orig_idx = result_item.get("id")
-            if orig_idx is None or orig_idx not in batch:
+            raw_id = result_item.get("id")
+            try:
+                orig_idx = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if orig_idx not in batch:
                 continue
             orig = items[orig_idx]
             wp = result_item.get("work_price")
