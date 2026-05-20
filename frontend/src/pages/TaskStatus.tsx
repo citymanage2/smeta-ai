@@ -1553,6 +1553,46 @@ const TaskStatusPage: React.FC = () => {
           </div>
         )}
 
+        {/* Editor card — shown after LIST_FROM_GRAND or LIST_FROM_PROJECT completes */}
+        {task && task.status === 'completed' && (task.task_type === 'LIST_FROM_GRAND' || task.task_type === 'LIST_FROM_PROJECT') && (
+          <div style={{
+            backgroundColor: '#f0fdf4',
+            border: '1px solid #86efac',
+            borderRadius: '12px',
+            padding: '24px 28px',
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+          }}>
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 700, color: '#15803d', marginBottom: '4px' }}>
+                Перечень готов — редактор доступен
+              </div>
+              <div style={{ fontSize: '14px', color: '#166534' }}>
+                Откройте онлайн-редактор чтобы просматривать и редактировать перечень с историей изменений
+              </div>
+            </div>
+            <button
+              onClick={() => navigate(`/tasks/${taskId}/estimate`)}
+              style={{
+                flexShrink: 0,
+                padding: '12px 28px',
+                backgroundColor: '#16a34a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '15px',
+                fontWeight: 700,
+              }}
+            >
+              Открыть редактор →
+            </button>
+          </div>
+        )}
+
         {/* Check completeness card — shown after LIST_FROM_GRAND completes */}
         {task && task.status === 'completed' && task.task_type === 'LIST_FROM_GRAND' && (
           <div
