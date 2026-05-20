@@ -16,13 +16,24 @@ logger = structlog.get_logger()
 _NAME_KEYWORDS = ["наимен"]
 _UNIT_KEYWORDS = ["ед", "изм", "мер"]  # ед. изм. / единица измерения
 _QTY_KEYWORDS = ["колич", "объем", "объём", "кол-во", "кол.", "кол "]
+# Ключевое слово для колонки "всего с учётом коэффициентов" (итоговое кол-во)
+_QTY_TOTAL_KEYWORDS = ["всего с учет", "всего с коэф"]
 
-# Слова в строке-наименовании, указывающие на итоговую строку (пропускаем)
+# Слова в строке-наименовании, указывающие на итоговую/служебную строку (пропускаем)
 _TOTAL_KEYWORDS = re.compile(
     r"итого|всего|в том числе|накладные|сметная прибыль|нр\b|сп\b|зп\b|"
-    r"поправочн|индекс|лимитир|непредвиден|ндс|налог",
+    r"поправочн|индекс|лимитир|непредвиден|ндс|налог|фот\b",
     re.IGNORECASE,
 )
+
+# Паттерны мусорных строк Гранд-Сметы: нормо-часы труда и машин (3Т, 3ТМ, ЗТ, ЗТМ)
+_LABOR_ROW = re.compile(r"^[3з]\s*[тТ][мМ]?\s*$", re.IGNORECASE)
+# Одиночные цифры 1-15 (строка с номерами колонок в заголовке Гранд-Сметы)
+_COLNUM_ROW = re.compile(r"^\d{1,2}$")
+# Нормативные коды расценок (ФЕР, ТЕР, ГЭСН и т.п.) — строки-наименования позиций
+_NORM_CODE = re.compile(r"^(фер|тер|гэсн|фсн|фснб|пр/|ерер|гэснр|фсем)", re.IGNORECASE)
+# Заголовки разделов/глав сметы
+_SECTION_HEADER = re.compile(r"^(раздел|глава|отдел|часть|узел|блок)\s", re.IGNORECASE)
 
 
 def _col_score(header: str, keywords: list[str]) -> int:
@@ -31,12 +42,13 @@ def _col_score(header: str, keywords: list[str]) -> int:
     return sum(1 for kw in keywords if kw in h)
 
 
-def _find_header_row(ws) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
+def _find_header_row(ws) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]]:
     """
     Сканируем первые 40 строк листа в поиске строки с заголовками колонок.
-    Возвращает (header_row_idx, name_col, unit_col, qty_col) — 0-based индексы.
-    header_row_idx — 0-based номер строки с заголовками.
-    Если не нашли — возвращает (None, None, None, None).
+    Также сканируем следующие строки после найденного заголовка, чтобы найти
+    колонку «всего с учётом коэффициентов» (в Гранд-Смете она в строке подзаголовков).
+    Возвращает (header_row_idx, name_col, unit_col, qty_col, qty_total_col) — 0-based.
+    qty_total_col — колонка итогового количества (или None если не найдена).
     """
     all_rows = list(ws.iter_rows(values_only=True))
     scan_limit = min(40, len(all_rows))
@@ -77,9 +89,24 @@ def _find_header_row(ws) -> Tuple[Optional[int], Optional[int], Optional[int], O
             best_row_idx = row_idx
             best_cols = (name_col, unit_col, qty_col)
 
-    if best_row_idx is not None:
-        return (best_row_idx, *best_cols)
-    return (None, None, None, None)
+    if best_row_idx is None:
+        return (None, None, None, None, None)
+
+    name_col, unit_col, qty_col = best_cols
+
+    # Ищем колонку итогового количества в строках подзаголовков после основного заголовка
+    # В Гранд-Смете строка подзаголовков содержит «всего с учётом коэффициентов»
+    qty_total_col = None
+    for sub_idx in range(best_row_idx + 1, min(best_row_idx + 5, len(all_rows))):
+        sub_cells = [str(c).strip().lower() if c is not None else "" for c in all_rows[sub_idx]]
+        for col_idx, cell in enumerate(sub_cells):
+            if any(kw in cell for kw in _QTY_TOTAL_KEYWORDS):
+                qty_total_col = col_idx
+                break
+        if qty_total_col is not None:
+            break
+
+    return (best_row_idx, name_col, unit_col, qty_col, qty_total_col)
 
 
 def _is_total_row(name: str) -> bool:
@@ -99,12 +126,18 @@ def _parse_quantity(value) -> Optional[float]:
         return None
 
 
+def _is_trash_row(name: str) -> bool:
+    """True для мусорных строк Гранд-Сметы: нормо-часы труда/машин и номера колонок."""
+    return bool(_LABOR_ROW.match(name) or _COLNUM_ROW.match(name))
+
+
 def parse_xlsx_grand(data: bytes) -> "list[dict]":
     """
     Умный парсинг Excel-файла гранд-сметы.
 
-    Возвращает список словарей {name, unit, quantity} — только значимые строки
-    с работами и материалами, без итоговых строк, заголовков и пустых строк.
+    Возвращает список словарей {name, unit, quantity, is_section} — только
+    значимые строки с работами/материалами и заголовки разделов.
+    Без итоговых строк, строк НР/СП/ФОТ, нормо-часов и пустых строк.
 
     Если колонки определить не удалось — возвращает весь текст построчно
     в поле name (fallback-режим).
@@ -114,17 +147,20 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
         ws = wb.active  # берём первый лист
 
         all_rows = list(ws.iter_rows(values_only=True))
-        header_row_idx, name_col, unit_col, qty_col = _find_header_row(ws)
+        header_row_idx, name_col, unit_col, qty_col, qty_total_col = _find_header_row(ws)
 
         rows: list[dict] = []
 
         if header_row_idx is not None and name_col is not None:
+            # Используем колонку итогового количества если найдена, иначе базовую
+            effective_qty_col = qty_total_col if qty_total_col is not None else qty_col
             logger.info(
                 "Grand-смета: заголовок найден",
                 header_row=header_row_idx,
                 name_col=name_col,
                 unit_col=unit_col,
                 qty_col=qty_col,
+                qty_total_col=qty_total_col,
             )
             data_rows = all_rows[header_row_idx + 1:]
             for row in data_rows:
@@ -132,17 +168,34 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
 
                 name = cells[name_col] if name_col < len(cells) else ""
                 if not name or name == "None":
+                    # Проверяем col 0 — там могут быть заголовки разделов (объединённые ячейки)
+                    col0 = cells[0] if cells else ""
+                    if col0 and col0 != "None" and _SECTION_HEADER.match(col0):
+                        rows.append({"name": col0, "unit": "", "quantity": None, "is_section": True})
                     continue
+
                 if _is_total_row(name):
                     continue
+                if _is_trash_row(name):
+                    continue
 
+                # Заголовки разделов: нет единицы и количества, текст похож на раздел
                 unit = cells[unit_col] if unit_col is not None and unit_col < len(cells) else ""
                 unit = unit if unit != "None" else ""
-
-                qty_raw = row[qty_col] if qty_col is not None and qty_col < len(row) else None
+                qty_raw = row[effective_qty_col] if effective_qty_col is not None and effective_qty_col < len(row) else None
                 qty = _parse_quantity(qty_raw)
 
-                rows.append({"name": name, "unit": unit, "quantity": qty})
+                # Пропускаем строки с процентными единицами (НР/СП не отфильтрованные по имени)
+                if unit.strip() == "%":
+                    continue
+
+                # Пропускаем строки с единицами нормо-часов (остатки труда/машин)
+                unit_lower = unit.lower().replace(".", "").replace("-", "").strip()
+                if unit_lower in ("челч", "чч", "мчч", "машч"):
+                    continue
+
+                is_section = bool(_SECTION_HEADER.match(name))
+                rows.append({"name": name, "unit": unit, "quantity": qty, "is_section": is_section})
         else:
             # Fallback: не нашли заголовок — берём все непустые строки,
             # первая непустая ячейка = наименование
@@ -153,9 +206,9 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
                 if not non_empty:
                     continue
                 name = non_empty[0]
-                if _is_total_row(name):
+                if _is_total_row(name) or _is_trash_row(name):
                     continue
-                rows.append({"name": name, "unit": "", "quantity": None})
+                rows.append({"name": name, "unit": "", "quantity": None, "is_section": False})
 
         logger.info("Grand-смета: строк извлечено", count=len(rows))
         return rows
@@ -200,9 +253,12 @@ def rows_to_text(rows: list[dict]) -> str:
     """Компактное текстовое представление строк для отправки в Claude."""
     lines = []
     for r in rows:
-        qty = str(r["quantity"]) if r["quantity"] is not None else ""
-        unit = r.get("unit", "")
-        lines.append(f"{r['name']}\t{unit}\t{qty}")
+        if r.get("is_section"):
+            lines.append(f"\n=== {r['name']} ===")
+        else:
+            qty = str(r["quantity"]) if r["quantity"] is not None else ""
+            unit = r.get("unit", "")
+            lines.append(f"{r['name']}\t{unit}\t{qty}")
     return "\n".join(lines)
 
 
