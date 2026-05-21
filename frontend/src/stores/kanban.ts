@@ -26,7 +26,7 @@ interface KanbanStore {
   pendingListTasks: Record<string, PendingListTask>
 
   fetchCards: (projectId: string, signal?: AbortSignal) => Promise<void>
-  createCard: (projectId: string, name: string) => Promise<WorkflowCard>
+  createCard: (projectId: string, name: string, stage?: string) => Promise<WorkflowCard>
   moveCard: (cardId: string, toStage: KanbanStage, bypassSoft?: boolean) => Promise<GuardResult>
   startTask: (cardId: string, payload: StartTaskPayload) => Promise<WorkflowCard>
   deleteCard: (cardId: string) => Promise<void>
@@ -82,8 +82,8 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
     }
   },
 
-  createCard: async (projectId, name) => {
-    const card = await createWorkflowCard(projectId, name)
+  createCard: async (projectId, name, stage) => {
+    const card = await createWorkflowCard(projectId, name, stage)
     set((s) => ({ cards: [...s.cards, card] }))
     return card
   },

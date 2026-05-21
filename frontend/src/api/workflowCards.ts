@@ -48,8 +48,8 @@ export async function getWorkflowCards(projectId: string): Promise<WorkflowCard[
   return resp.data
 }
 
-export async function createWorkflowCard(projectId: string, name: string): Promise<WorkflowCard> {
-  const resp = await apiClient.post<WorkflowCard>(`/api/projects/${projectId}/workflow-cards`, { name })
+export async function createWorkflowCard(projectId: string, name: string, stage?: string): Promise<WorkflowCard> {
+  const resp = await apiClient.post<WorkflowCard>(`/api/projects/${projectId}/workflow-cards`, { name, ...(stage ? { stage } : {}) })
   return resp.data
 }
 

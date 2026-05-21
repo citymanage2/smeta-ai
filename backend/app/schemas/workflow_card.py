@@ -23,6 +23,7 @@ class TaskBrief(BaseModel):
 
 class WorkflowCardCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    stage: Literal["list", "completeness", "estimate", "optimization"] = "list"
 
     @field_validator("name", mode="before")
     @classmethod

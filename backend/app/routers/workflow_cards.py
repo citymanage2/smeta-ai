@@ -162,7 +162,7 @@ async def create_workflow_card(
         id=str(uuid.uuid4()),
         project_id=project_id,
         name=body.name,
-        stage="list",
+        stage=body.stage,
     )
     db.add(card)
     await db.commit()
