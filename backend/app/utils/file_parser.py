@@ -51,7 +51,7 @@ def _find_header_row(ws) -> Tuple[Optional[int], Optional[int], Optional[int], O
     qty_total_col — колонка итогового количества (или None если не найдена).
     """
     all_rows = list(ws.iter_rows(values_only=True))
-    scan_limit = min(40, len(all_rows))
+    scan_limit = min(80, len(all_rows))
 
     best_row_idx = None
     best_score = 0
