@@ -16,7 +16,7 @@ _NAME_KW = ("наименование", "наименов", "name", "описа�
 _UNIT_KW = ("ед", "unit", "ед.изм", "единица")
 _QTY_KW = ("кол", "qty", "количество", "объем", "объём")
 _PRICE_WORK_KW = ("цена работ", "стоимость работ", "стоим. работ", "стоим работ", "стоим.работ",
-                  "труд", "labor", "работа", "price_work", "цр")
+                  "труд", "labor", "работа", "price_work", "цр", "работ")
 _PRICE_MAT_KW = ("цена матер", "стоимость матер", "стоим. матер", "стоим матер", "стоим.матер",
                  "матер", "material", "price_material", "цм")
 _SKIP_KW = ("сумма", "итого", "total", "cost", "всего")
@@ -72,6 +72,8 @@ def _detect_columns(header_row: list) -> dict:
             cols["price_work"] = idx
         elif "price_material" not in cols and _header_matches(v, _PRICE_MAT_KW):
             cols["price_material"] = idx
+        elif "price_material_total" not in cols and _header_matches(v, _PRICE_MAT_KW):
+            cols["price_material_total"] = idx
 
     # Fallback: bare "цена" / "стоимость" column → assign to whichever price slot is missing.
     # In estimates where work and materials sit on separate rows the single unqualified
@@ -218,10 +220,14 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
 
         pw_val = row[cols["price_work"]].value if "price_work" in cols and cols["price_work"] < len(row) else None
         pm_val = row[cols["price_material"]].value if "price_material" in cols and cols["price_material"] < len(row) else None
+        pm_total_val = row[cols["price_material_total"]].value if "price_material_total" in cols and cols["price_material_total"] < len(row) else None
         price_work = _to_float(pw_val)
         price_material = _to_float(pm_val)
+        price_material_total = _to_float(pm_total_val)
 
-        has_prices = price_work is not None or price_material is not None
+        # For type detection use either unit price or total (unit price preferred)
+        mat_price_signal = price_material if price_material is not None else price_material_total
+        has_prices = price_work is not None or mat_price_signal is not None
         has_qty = qty is not None
         has_unit = bool(unit)
 
@@ -253,13 +259,20 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
                 elif "матер" in raw_type or raw_type in ("material", "m", "м"):
                     row_type = "material"
                 else:
-                    row_type = _infer_type(price_work, price_material)
+                    row_type = _infer_type(price_work, mat_price_signal)
             else:
-                row_type = _infer_type(price_work, price_material)
+                row_type = _infer_type(price_work, mat_price_signal)
 
             # If infer returned "section" but row has unit/qty, keep it as work
             if row_type == "section" and (has_qty or has_unit):
                 row_type = "work"
+
+        # Recover material unit price from total when unit price column is empty
+        if row_type == "material" and price_material is None and price_material_total is not None:
+            if qty and qty > 0:
+                price_material = round(price_material_total / qty, 2)
+            else:
+                price_material = price_material_total
 
         # Row number
         num_val = row[cols["num"]].value if "num" in cols and cols["num"] < len(row) else None

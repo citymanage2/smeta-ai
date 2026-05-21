@@ -210,6 +210,61 @@
   color: #475569;
 }
 
+.type-badge-clickable {
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+
+.type-badge-clickable:hover {
+  opacity: 0.75;
+}
+
+.type-editor-select {
+  width: 100%;
+  height: 100%;
+  min-width: 80px;
+  padding: 1px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  outline: none;
+  background: #fff;
+  cursor: pointer;
+}
+
+/* Move column buttons */
+.move-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 0 2px;
+}
+
+.move-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 14px;
+  padding: 0;
+  font-size: 9px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.move-btn:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+  border-color: #94a3b8;
+}
+
 /* Section header: full-width merged-cell appearance.
    grid-row-start picks up --rdg-grid-row-start from the parent display:contents div.
    grid-column:1/-1 spans all DataGrid columns. */

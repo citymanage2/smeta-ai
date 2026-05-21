@@ -55,12 +55,20 @@ interface ToastItem {
 
 interface GridContextValue {
   rowsRef: React.MutableRefObject<EstimateRow[]>;
+  displayedRowsRef: React.MutableRefObject<EstimateRow[]>;
+  isReadonly: boolean;
   onQtyRestore: (rowId: string) => void;
+  onMoveRow: (rowId: string, direction: 'up' | 'down') => void;
+  onTypeChange: (rowId: string, newType: EstimateRow['type']) => void;
 }
 
 const GridContext = createContext<GridContextValue>({
   rowsRef: { current: [] },
+  displayedRowsRef: { current: [] },
+  isReadonly: false,
   onQtyRestore: () => {},
+  onMoveRow: () => {},
+  onTypeChange: () => {},
 });
 
 // ---------------------------------------------------------------------------
@@ -186,18 +194,76 @@ function CommentCell({ row }: RenderCellProps<EstimateRow>) {
   return <span className="cell-comment" title={note}>{note}</span>;
 }
 
-function TypeBadgeCell({ row }: RenderCellProps<EstimateRow>) {
-  const map: Record<string, string> = {
-    work: 'Работа',
-    material: 'Материал',
-    section: 'Раздел',
-  };
-  const cls: Record<string, string> = {
-    work: 'type-badge type-badge-work',
-    material: 'type-badge type-badge-material',
-    section: 'type-badge type-badge-section',
-  };
-  return <span className={cls[row.type] ?? 'type-badge'}>{map[row.type] ?? row.type}</span>;
+const TYPE_LABELS: Record<string, string> = {
+  work: 'Работа',
+  material: 'Материал',
+  section: 'Раздел',
+};
+const TYPE_CLASSES: Record<string, string> = {
+  work: 'type-badge type-badge-work',
+  material: 'type-badge type-badge-material',
+  section: 'type-badge type-badge-section',
+};
+
+function TypeCell({ row }: RenderCellProps<EstimateRow>) {
+  const { isReadonly, onTypeChange } = useContext(GridContext);
+  const [open, setOpen] = useState(false);
+  const selectRef = useRef<HTMLSelectElement>(null);
+
+  useEffect(() => {
+    if (open) selectRef.current?.focus();
+  }, [open]);
+
+  if (open && !isReadonly) {
+    return (
+      <select
+        ref={selectRef}
+        className="type-editor-select"
+        value={row.type}
+        onChange={(e) => {
+          onTypeChange(row.id, e.target.value as EstimateRow['type']);
+          setOpen(false);
+        }}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
+      >
+        <option value="work">Работа</option>
+        <option value="material">Материал</option>
+        <option value="section">Раздел</option>
+      </select>
+    );
+  }
+
+  return (
+    <span
+      className={`${TYPE_CLASSES[row.type] ?? 'type-badge'}${!isReadonly ? ' type-badge-clickable' : ''}`}
+      onClick={() => { if (!isReadonly) setOpen(true); }}
+      title={isReadonly ? undefined : 'Нажмите для изменения типа'}
+    >
+      {TYPE_LABELS[row.type] ?? row.type}
+    </span>
+  );
+}
+
+function MoveCell({ row }: RenderCellProps<EstimateRow>) {
+  const { isReadonly, onMoveRow } = useContext(GridContext);
+  if (isReadonly) return null;
+  return (
+    <div className="move-cell">
+      <button
+        className="move-btn"
+        title="Переместить вверх"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); onMoveRow(row.id, 'up'); }}
+      >▲</button>
+      <button
+        className="move-btn"
+        title="Переместить вниз"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); onMoveRow(row.id, 'down'); }}
+      >▼</button>
+    </div>
+  );
 }
 
 function NumericCell({ row, column }: RenderCellProps<EstimateRow>) {
@@ -255,9 +321,17 @@ function QtyCell({ row }: RenderCellProps<EstimateRow>) {
 // Column definitions
 // ---------------------------------------------------------------------------
 
+const MOVE_COL: Column<EstimateRow> = {
+  key: '__move',
+  name: '',
+  width: 52,
+  frozen: true,
+  renderCell: MoveCell,
+};
+
 const BASE_COLUMNS: Column<EstimateRow>[] = [
   { key: 'num', name: '№', width: 50, frozen: true, renderCell: NumericCell },
-  { key: 'type', name: 'Тип', width: 90, renderCell: TypeBadgeCell },
+  { key: 'type', name: 'Тип', width: 90, renderCell: TypeCell },
   {
     key: 'name',
     name: 'Наименование',
@@ -385,6 +459,9 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const rowsRef = useRef<EstimateRow[]>(rows);
   rowsRef.current = rows;
 
+  // Ref для отображаемых строк (MoveCell использует для порядка при фильтрации)
+  const displayedRowsRef = useRef<EstimateRow[]>([]);
+
   // Флаг: изменение произошло через handleRowsChange (не undo/redo)
   const didJustHandleChange = useRef(false);
   // Предыдущее значение rows для undo/redo flash
@@ -442,6 +519,42 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     [onRowsChange, triggerSave],
   );
 
+  const handleMoveRow = useCallback(
+    (rowId: string, direction: 'up' | 'down') => {
+      const displayed = displayedRowsRef.current;
+      const dispIdx = displayed.findIndex((r) => r.id === rowId);
+      if (dispIdx === -1) return;
+      const targetDispIdx = direction === 'up' ? dispIdx - 1 : dispIdx + 1;
+      if (targetDispIdx < 0 || targetDispIdx >= displayed.length) return;
+      const targetId = displayed[targetDispIdx].id;
+      const currentRows = rowsRef.current;
+      const fromIdx = currentRows.findIndex((r) => r.id === rowId);
+      const toIdx = currentRows.findIndex((r) => r.id === targetId);
+      if (fromIdx === -1 || toIdx === -1) return;
+      const reordered = [...currentRows];
+      [reordered[fromIdx], reordered[toIdx]] = [reordered[toIdx], reordered[fromIdx]];
+      onRowsChange(reordered);
+      triggerSave();
+    },
+    [onRowsChange, triggerSave],
+  );
+
+  const handleTypeChange = useCallback(
+    (rowId: string, newType: EstimateRow['type']) => {
+      const currentRows = rowsRef.current;
+      const updated = currentRows.map((r) => {
+        if (r.id !== rowId) return r;
+        const next: EstimateRow = { ...r, type: newType };
+        if (newType !== 'material') next.work_row_id = null;
+        next.cost = calcCost(next);
+        return next;
+      });
+      onRowsChange(updated);
+      triggerSave();
+    },
+    [onRowsChange, triggerSave],
+  );
+
   const dismissBanner = useCallback(() => {
     try { localStorage.setItem(RECALC_BANNER_KEY, '1'); } catch { /* ignore */ }
     setBannerVisible(false);
@@ -452,8 +565,15 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   // ---------------------------------------------------------------------------
 
   const gridContextValue = useMemo(
-    () => ({ rowsRef, onQtyRestore: handleQtyRestore }),
-    [handleQtyRestore],
+    () => ({
+      rowsRef,
+      displayedRowsRef,
+      isReadonly,
+      onQtyRestore: handleQtyRestore,
+      onMoveRow: handleMoveRow,
+      onTypeChange: handleTypeChange,
+    }),
+    [isReadonly, handleQtyRestore, handleMoveRow, handleTypeChange],
   );
 
   // ---------------------------------------------------------------------------
@@ -626,6 +746,9 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     return filtered;
   }, [rows, activeTab, showOnlyAdded, filterText]);
 
+  // Keep displayedRowsRef in sync for move operations
+  displayedRowsRef.current = displayedRows;
+
   const unfilledCount = useMemo(
     () =>
       rows.filter(
@@ -642,7 +765,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   // ---------------------------------------------------------------------------
 
   const columns = useMemo(() => {
-    const cols =
+    const base =
       activeTab === 'works'
         ? WORKS_COLUMNS
         : activeTab === 'materials'
@@ -650,9 +773,10 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
           : ALL_COLUMNS;
 
     if (isReadonly) {
-      return cols.map((c) => ({ ...c, editable: false, renderEditCell: undefined }));
+      return base.map((c) => ({ ...c, editable: false, renderEditCell: undefined }));
     }
-    return cols;
+    // Insert MOVE_COL after SelectColumn (index 0)
+    return [base[0], MOVE_COL, ...base.slice(1)];
   }, [activeTab, isReadonly]);
 
   // ---------------------------------------------------------------------------
