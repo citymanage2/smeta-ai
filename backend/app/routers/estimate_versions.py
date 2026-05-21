@@ -9,9 +9,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import base64
+import json as _json_top
+
 from app.database import get_db, AsyncSessionLocal
 from app.models.estimate_version import EstimateVersion
 from app.models.task import Task
+from app.models.task_input_file import TaskInputFile
+from app.utils.file_parser import parse_file as _parse_file
 from app.schemas.estimate_version import (
     EstimateVersionResponse,
     EstimateVersionSummary,
@@ -472,6 +477,81 @@ def _auto_apply_proposals(source_rows: list[dict], proposals: list[dict]) -> lis
     return rows
 
 
+_CONTEXT_FILE_TYPES = {"Проект", "ТЗ", "Другое"}
+_CONTEXT_TEXT_LIMIT = 8000  # chars per file — protect against context overflow
+
+
+async def _load_client_context(
+    task: Task, db: AsyncSession
+) -> tuple[str, list[dict]]:
+    """Load non-Смета client files and return (text_context, image_blocks).
+
+    text_context — formatted string to inject into the prompt.
+    image_blocks — list of Claude content block dicts (PDF / images).
+    """
+    user_prompt_meta: dict = {}
+    if task.user_prompt:
+        try:
+            user_prompt_meta = _json_top.loads(task.user_prompt)
+        except (ValueError, TypeError):
+            pass
+
+    client_files_meta: list[dict] = user_prompt_meta.get("client_files", [])
+    if not client_files_meta:
+        return "", []
+
+    # Build index → type mapping for non-"Смета" files
+    context_indices: dict[int, str] = {}
+    for cf in client_files_meta:
+        idx = cf.get("index")
+        ftype = cf.get("type", "")
+        if isinstance(idx, int) and ftype in _CONTEXT_FILE_TYPES:
+            context_indices[idx] = ftype
+
+    if not context_indices:
+        return "", []
+
+    result = await db.execute(
+        select(TaskInputFile)
+        .where(TaskInputFile.task_id == task.id)
+        .order_by(TaskInputFile.file_index)
+    )
+    input_files = result.scalars().all()
+
+    text_parts: list[str] = []
+    image_blocks: list[dict] = []
+
+    for f in input_files:
+        ftype = context_indices.get(f.file_index)
+        if ftype is None:
+            continue
+        content_b64 = base64.b64encode(f.content).decode("utf-8")
+        try:
+            parsed = _parse_file(f.file_name, f.mime_type, content_b64)
+        except Exception:
+            continue
+
+        if isinstance(parsed, str):
+            text = parsed
+            if len(text) > _CONTEXT_TEXT_LIMIT:
+                text = text[:_CONTEXT_TEXT_LIMIT] + "\n...(обрезано)"
+            text_parts.append(f"[{ftype}: {f.file_name}]\n{text}")
+        elif isinstance(parsed, dict):
+            # PDF or image block for Claude Vision
+            image_blocks.append(parsed)
+            text_parts.append(f"[{ftype}: {f.file_name}] — передан как документ/изображение")
+
+    text_context = ""
+    if text_parts:
+        text_context = (
+            "\n\n=== ДОКУМЕНТАЦИЯ ЗАКАЗЧИКА ===\n"
+            + "\n\n".join(text_parts)
+            + "\n=== КОНЕЦ ДОКУМЕНТАЦИИ ===\n"
+        )
+
+    return text_context, image_blocks
+
+
 async def _run_optimization_step(
     task_id: str,
     step: str,  # "completeness" | "redundancy" | "technology" | "materials"
@@ -499,12 +579,18 @@ async def _run_optimization_step(
         '"new_value": {name,type,unit,qty,price_work,price_material}_или_null}]}'
     )
 
+    _CONTEXT_HINT = (
+        "\nЕсли выше передана документация заказчика (Проект, ТЗ, спецификации) — "
+        "используй её при анализе: границы работ, требования, ограничения.\n"
+    )
+
     step_prompts = {
         "completeness": (
             "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
             "Для каждой работы в смете проверь:\n"
             "1. Все ли нормативно необходимые материалы учтены (по ГЭСН/ФСНБ для данного вида работ).\n"
             "2. Соответствуют ли объёмы материалов расходным нормам ГЭСН, исходя из объёма работы.\n\n"
+            "Если передана проектная документация или ТЗ — используй её для уточнения видов работ и объёмов.\n"
             "Добавляй в результат только реальные несоответствия. "
             "Если не уверен в коде ГЭСН — не называй его, напиши описание работы.\n"
             "Для каждого предложения:\n"
@@ -513,6 +599,7 @@ async def _run_optimization_step(
             "- new_value ОБЯЗАТЕЛЕН: {\"name\": название, \"type\": \"material\", \"unit\": ед.изм., "
             "\"qty\": количество_число_или_null, \"price_work\": null, \"price_material\": цена_или_null}\n"
             "Если количество или цена неизвестны — ставь null, но поле name и unit обязательны.\n"
+            + _CONTEXT_HINT
         ),
         "redundancy": (
             "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
@@ -521,9 +608,11 @@ async def _run_optimization_step(
             "   Важно: материал для разных работ — НЕ дубль. Дубль — только если совпадают и материал/работа, И назначение.\n\n"
             "2. НОРМАТИВНОЕ ВКЛЮЧЕНИЕ — позиция входит в состав другой расценки по ГЭСН (double-counting).\n"
             "   Пример: «Очистка поверхности» входит в расценку грунтования (ГЭСН 15-04).\n\n"
-            "3. ВНЕ ПРОЕКТА — позиция явно не применима к данному типу работ/объекту.\n\n"
+            "3. ВНЕ ПРОЕКТА — позиция явно не применима к данному типу работ/объекту.\n"
+            "   Если передана проектная документация — опирайся на неё для определения границ работ.\n\n"
             "4. Правило точности: не добавляй позиции, в которых не уверен.\n\n"
             "Для каждого предложения: proposal_type='remove', row_id=id строки, economy_rub=стоимость позиции.\n"
+            + _CONTEXT_HINT
         ),
         "technology": (
             "Ты — опытный инженер-сметчик со знанием ГЭСН-2017/ФСНБ-2022.\n\n"
@@ -537,10 +626,11 @@ async def _run_optimization_step(
             "  1. Конечный результат для заказчика не изменится\n"
             "  2. Расценка есть в ФСНБ/ГЭСН\n"
             "  3. Экономия > 5% от стоимости позиции\n"
-            "  4. Технология реализуема\n"
+            "  4. Технология реализуема (учти ограничения объекта из проектной документации если передана)\n"
             "  5. Учти все доп. затраты (аренда оборудования)\n"
             "Если не уверен в коде ГЭСН — не называй его, напиши описание.\n\n"
             "proposal_type='replace_tech', new_value={name,price_work} если известно.\n"
+            + _CONTEXT_HINT
         ),
         "materials": (
             "Ты — опытный инженер-сметчик и снабженец.\n\n"
@@ -549,6 +639,7 @@ async def _run_optimization_step(
             "Два направления:\n"
             "1. Замена материала — другой материал с теми же характеристиками и функцией.\n"
             "   Примеры: Knauf Rotband → Волма Слой (ГОСТ Р 57957), Импортная арматура → Отечественная А500\n"
+            "   Если в документации заказчика указаны ограничения на замену материалов — учти их.\n"
             "2. Закупочная оптимизация — тот же материал, но дешевле за счёт условий закупки.\n"
             "   (укажи в explanation, proposal_type='replace_material', economy_rub=null)\n\n"
             "Для каждого предложения по замене проверь:\n"
@@ -557,6 +648,7 @@ async def _run_optimization_step(
             "  3. Экономия > 5%\n"
             "  4. Материал реально доступен\n\n"
             "proposal_type='replace_material', new_value={name,price_material} если известно.\n"
+            + _CONTEXT_HINT
         ),
     }
 
@@ -603,7 +695,17 @@ async def _run_optimization_step(
                 await db.commit()
 
             rows_json = _json.dumps(rows_for_claude, ensure_ascii=False)
-            prompt = step_prompts[step] + "\nСтроки сметы (JSON):\n" + rows_json + RESPONSE_FORMAT
+
+            # Load client context files (Проект, ТЗ, Другое)
+            client_text, image_blocks = await _load_client_context(task, db)
+
+            prompt = (
+                step_prompts[step]
+                + client_text
+                + "\nСтроки сметы (JSON):\n"
+                + rows_json
+                + RESPONSE_FORMAT
+            )
 
             # Update progress: running
             task.progress_message = f"Анализ '{step}' выполняется..."
@@ -617,6 +719,7 @@ async def _run_optimization_step(
 
             response_text = await call_claude(
                 messages=[{"role": "user", "content": prompt}],
+                image_data=image_blocks if image_blocks else None,
                 use_web_search=False,
                 processing_timeout=180.0,
             )
