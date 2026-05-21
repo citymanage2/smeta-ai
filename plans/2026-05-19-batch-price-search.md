@@ -30,7 +30,7 @@
 
 ## Фазы
 
-### Фаза 1: price_service.py — batch функции [ ]
+### Фаза 1: price_service.py — batch функции [x]
 
 Добавить две модульные функции:
 
@@ -48,7 +48,7 @@ async def batch_embedding_match_materials(names: list[str]) -> list[Optional[flo
 6. Для каждого: если score >= SIMILARITY_THRESHOLD → вернуть `_works_cache[_works_index_map[best_idx]]`, иначе None
 7. При нулевой норме запроса → None
 
-### Фаза 2: task_processor.py — рефакторинг цикла [ ]
+### Фаза 2: task_processor.py — рефакторинг цикла [x]
 
 Было: 1 проход, awaits внутри цикла.
 
@@ -62,7 +62,7 @@ async def batch_embedding_match_materials(names: list[str]) -> list[Optional[flo
 
 Items с типом не "Работа" и не "Материал" → сразу в unmatched (как и раньше).
 
-### Фаза 3: Gates [ ]
+### Фаза 3: Gates [x]
 
 - `python -m py_compile backend/app/services/price_service.py`
 - `python -m py_compile backend/app/services/task_processor.py`
@@ -70,5 +70,5 @@ Items с типом не "Работа" и не "Материал" → сраз�
 
 ## Итог
 
-- [ ] Реализован целиком
-- [ ] Что осталось: —
+- [x] Реализован целиком
+- Коммит: e84de85
