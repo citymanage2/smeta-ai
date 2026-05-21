@@ -32,3 +32,6 @@ class Project(Base):
     summary_total: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2), nullable=True, default=None
     )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )

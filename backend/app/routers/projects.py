@@ -51,6 +51,8 @@ class ProjectCardResponse(BaseModel):
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
     summary_total: Optional[float] = None
+    task_type_counts: dict[str, int] = {}
+    total_tasks: int = 0
 
 
 class TaskBrief(BaseModel):
@@ -79,6 +81,8 @@ class ProjectDetailResponse(BaseModel):
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
     summary_total: Optional[float] = None
+    task_type_counts: dict[str, int] = {}
+    total_tasks: int = 0
     tasks: list[TaskBrief]
 
 
@@ -93,7 +97,7 @@ def _project_to_response(p: Project) -> ProjectResponse:
 
 
 async def _get_project_or_404(project_id: str, db: AsyncSession) -> Project:
-    result = await db.execute(select(Project).where(Project.id == project_id))
+    result = await db.execute(select(Project).where(Project.id == project_id, Project.deleted_at.is_(None)))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
@@ -130,6 +134,23 @@ async def _aggregate(project_id: str, db: AsyncSession) -> dict:
     }
 
 
+async def _get_task_type_counts(project_ids: list[str], db: AsyncSession) -> dict[str, dict[str, int]]:
+    """Возвращает {project_id: {task_type: count}}"""
+    if not project_ids:
+        return {}
+    stmt = (
+        select(Task.project_id, Task.task_type, func.count().label("cnt"))
+        .where(Task.project_id.in_(project_ids), Task.deleted_at.is_(None))
+        .group_by(Task.project_id, Task.task_type)
+    )
+    rows = (await db.execute(stmt)).all()
+    result: dict[str, dict[str, int]] = {}
+    for row in rows:
+        pid = str(row.project_id)
+        result.setdefault(pid, {})[row.task_type] = row.cnt
+    return result
+
+
 @router.post("", response_model=ProjectResponse)
 async def create_project(
     body: ProjectCreate,
@@ -160,6 +181,7 @@ async def list_projects(
             func.count(case((Task.estimation_status == "estimated", 1), else_=None)).label("estimated"),
             func.count(case((Task.estimation_status == "optimized", 1), else_=None)).label("optimized"),
             func.count(case((Task.estimation_status == "not_applicable", 1), else_=None)).label("other"),
+            func.count(Task.id).label("total_tasks"),
             func.sum(
                 case(
                     (Task.estimation_status.in_(["estimated", "optimized"]), Task.cost),
@@ -174,6 +196,7 @@ async def list_projects(
             ).label("optimized_cost"),
         )
         .outerjoin(Task, (Task.project_id == Project.id) & Task.deleted_at.is_(None))
+        .where(Project.deleted_at.is_(None))
         .group_by(
             Project.id,
             Project.name,
@@ -185,6 +208,10 @@ async def list_projects(
         .order_by(Project.created_at.desc())
     )
     rows = (await db.execute(stmt)).all()
+
+    project_ids = [str(row.id) for row in rows]
+    type_counts = await _get_task_type_counts(project_ids, db)
+
     return [
         ProjectCardResponse(
             id=str(row.id),
@@ -196,6 +223,7 @@ async def list_projects(
             estimated=row.estimated or 0,
             optimized=row.optimized or 0,
             other=row.other or 0,
+            total_tasks=row.total_tasks or 0,
             summary_total=float(row.summary_total) if row.summary_total is not None else None,
             total_cost=(
                 float(row.summary_total)
@@ -203,6 +231,7 @@ async def list_projects(
                 else (float(row.total_cost) if row.total_cost is not None else None)
             ),
             optimized_cost=float(row.optimized_cost) if row.optimized_cost is not None else None,
+            task_type_counts=type_counts.get(str(row.id), {}),
         )
         for row in rows
     ]
@@ -256,7 +285,6 @@ async def get_project(
     )
     tasks = tasks_result.all()
 
-    # Fetch slot file names for all tasks in one query
     slot_files_by_task: dict[str, dict[str, str]] = {}
     task_ids = [str(t.id) for t in tasks]
     if task_ids:
@@ -270,6 +298,8 @@ async def get_project(
             tid = str(row.task_id)
             slot_files_by_task.setdefault(tid, {})[row.slot] = row.file_name
 
+    type_counts = await _get_task_type_counts([project_id], db)
+
     return ProjectDetailResponse(
         id=str(project.id),
         name=project.name,
@@ -277,6 +307,8 @@ async def get_project(
         created_at=project.created_at.isoformat(),
         updated_at=project.updated_at.isoformat(),
         summary_total=summary_total,
+        task_type_counts=type_counts.get(project_id, {}),
+        total_tasks=len(tasks),
         tasks=[
             TaskBrief(
                 id=str(t.id),
@@ -317,18 +349,12 @@ async def update_project(
 async def delete_project(
     project_id: str,
     db: AsyncSession = Depends(get_db),
-    admin_user: dict = Depends(get_admin_user),
+    current_user: dict = Depends(get_current_user),
 ):
     project = await _get_project_or_404(project_id, db)
-    # Nullify project_id on tasks (explicit for SQLite test compatibility)
-    await db.execute(
-        Task.__table__.update()
-        .where(Task.project_id == project_id)
-        .values(project_id=None)
-    )
-    await db.delete(project)
+    project.deleted_at = datetime.now(timezone.utc)
     await db.commit()
-    logger.info("Project deleted", project_id=project_id)
+    logger.info("Project soft-deleted (moved to trash)", project_id=project_id)
     return {"project_id": project_id, "status": "deleted"}
 
 
