@@ -745,12 +745,15 @@ const TaskStatusPage: React.FC = () => {
         setFixingPrices(false);
         return;
       }
-      // Task is now in processing state — restart polling (was stopped on completion)
-      setNeedsItemReload(true);
+      // Task is now processing — restart polling first, then fetch to confirm
+      // 'processing' status before setting needsItemReload. If we set the flag
+      // before fetching, the useEffect fires with stale task.status='completed'
+      // and reloads old items, clearing the flag prematurely.
       if (!pollingRef.current) {
         pollingRef.current = setInterval(fetchStatus, 3000);
       }
-      fetchStatus();
+      await fetchStatus();
+      setNeedsItemReload(true);
     } catch {
       setEstimateSaveError('Не удалось запустить исправление цен. Попробуйте ещё раз.');
       setFixingPrices(false);

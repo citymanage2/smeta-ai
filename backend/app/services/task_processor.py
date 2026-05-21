@@ -2170,11 +2170,13 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
     if task2:
         if task2.status == "cancelled":
             return
+        from sqlalchemy.orm.attributes import flag_modified
         task2.cost = _Decimal(str(round(grand_total, 2)))
         task2.estimation_status = "estimated"
         task2.status = "completed"
         task2.progress_message = None
         task2.progress_data = {**(task2.progress_data or {}), "items": items}
+        flag_modified(task2, "progress_data")
         task2.updated_at = datetime.now(timezone.utc)
     await self.db.commit()
 

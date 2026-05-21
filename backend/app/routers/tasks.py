@@ -1628,6 +1628,45 @@ async def reprice_estimate_item(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка при обращении к Claude: {e}")
 
+    new_price = data.get("work_price") if item.get("type") == "Работа" else data.get("material_price")
+    if new_price is not None:
+        from sqlalchemy.orm.attributes import flag_modified
+        from app.utils.xlsx_exporter import generate_estimate_xlsx
+        from decimal import Decimal as _Decimal
+        updated_item = {
+            **item,
+            "work_price": data.get("work_price"),
+            "material_price": data.get("material_price"),
+            "sources": data.get("sources", ""),
+            "notes": data.get("notes", ""),
+            "price_list_name": None,
+        }
+        items[item_index] = updated_item
+        task.progress_data = {**(task.progress_data or {}), "items": items}
+        flag_modified(task, "progress_data")
+        excel_data, grand_total = generate_estimate_xlsx(items)
+        existing_r = await db.execute(
+            select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
+        )
+        old_result = existing_r.scalar_one_or_none()
+        if old_result:
+            old_result.file_data = excel_data
+            old_result.size_bytes = len(excel_data)
+            old_result.file_name = "Смета_из_перечня.xlsx"
+        else:
+            db.add(TaskResult(
+                task_id=task_id,
+                file_name="Смета_из_перечня.xlsx",
+                mime_type=XLSX_MIME,
+                file_data=excel_data,
+                size_bytes=len(excel_data),
+                slot="estimate",
+            ))
+        task.cost = _Decimal(str(round(grand_total, 2)))
+        task.estimation_status = "estimated"
+        task.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+
     return {
         "item_index": item_index,
         "work_price": data.get("work_price"),
