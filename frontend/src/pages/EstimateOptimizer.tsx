@@ -72,6 +72,7 @@ const EstimateOptimizer: React.FC = () => {
   const [searchParams] = useSearchParams();
 
   const embed = searchParams.get('embed') === '1';
+  const urlReadOnly = searchParams.get('read_only') === '1';
   const fileSlot = searchParams.get('file_slot') ?? 'result';
   const fileIndex = parseInt(searchParams.get('file_index') ?? '0', 10);
 
@@ -402,7 +403,7 @@ const EstimateOptimizer: React.FC = () => {
     executeDeleteRows([...idsToDelete]);
   }, [selectedRowIds, activeRows, executeDeleteRows]);
 
-  const isReadonly = optimizationStatus === 'running';
+  const isReadonly = optimizationStatus === 'running' || urlReadOnly;
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
 
@@ -522,6 +523,7 @@ const EstimateOptimizer: React.FC = () => {
             rows={genericRows}
             isDirty={genericDirty}
             isSaving={genericSaving}
+            isReadonly={isReadonly}
             onRowsChange={(rows) => { setGenericRows(rows); setGenericDirty(true); }}
             onSave={handleGenericSave}
           />

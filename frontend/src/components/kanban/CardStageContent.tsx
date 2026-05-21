@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, ChevronDown, ChevronUp, Download, Edit3, ExternalLink, FileText } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, Download, Edit3, Eye, FileText } from 'lucide-react'
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
@@ -12,7 +12,6 @@ import {
   getCardFilesMeta,
 } from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
-import { TaskDetailModal } from '../TaskDetailModal'
 import { EstimateEditorModal } from '../card/EstimateEditorModal'
 import { LumaSpin } from '../ui/LumaSpin'
 
@@ -54,6 +53,7 @@ interface EditorModalState {
   title: string
   fileSlot?: string
   fileIndex?: number
+  readOnly?: boolean
 }
 
 function ActionButton({
@@ -81,7 +81,7 @@ function ActionButton({
   )
 }
 
-function ArrowBtn({ onClick, title = 'Посмотреть задачу' }: { onClick: () => void; title?: string }) {
+function ArrowBtn({ onClick, title = 'Открыть карточку' }: { onClick: () => void; title?: string }) {
   return (
     <button
       onClick={onClick}
@@ -147,7 +147,7 @@ function ManualEditWarning({ editedAt, prevStageName }: { editedAt: string; prev
 }
 
 // ---------------------------------------------------------------------------
-// FileRow (compact — для канбана)
+// FileRowCompact (compact — для канбана)
 // ---------------------------------------------------------------------------
 interface FileRowProps {
   name: string
@@ -156,10 +156,11 @@ interface FileRowProps {
   date: string
   onDownload: () => void
   onOpenEditor?: () => void
+  onOpenViewer?: () => void
   onOpenTask?: () => void
 }
 
-function FileRowCompact({ name, size, mime, date, onDownload, onOpenEditor, onOpenTask }: FileRowProps) {
+function FileRowCompact({ name, size, mime, date, onDownload, onOpenEditor, onOpenViewer, onOpenTask }: FileRowProps) {
   const isXlsx = mime.includes('spreadsheet') || mime.includes('excel') || name.endsWith('.xlsx') || name.endsWith('.xls')
   const [hover, setHover] = useState(false)
   return (
@@ -194,20 +195,29 @@ function FileRowCompact({ name, size, mime, date, onDownload, onOpenEditor, onOp
         </button>
         {onOpenTask && (
           <button
-            title="Открыть задачу"
+            title="Открыть карточку"
             onClick={onOpenTask}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px 4px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#64748b' }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#94a3b8' }}
           >
-            <ExternalLink size={11} />
+            ↗
+          </button>
+        )}
+        {onOpenViewer && isXlsx && (
+          <button
+            title="Просмотр (без редактирования)"
+            onClick={onOpenViewer}
+            style={{ background: '#64748b', border: 'none', cursor: 'pointer', color: '#fff', padding: '2px 5px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
+          >
+            <Eye size={11} />
           </button>
         )}
         {onOpenEditor && isXlsx && (
           <button
             title="Открыть в онлайн-редакторе"
             onClick={onOpenEditor}
-            style={{ background: '#3b82f6', border: 'none', cursor: 'pointer', color: '#fff', padding: '2px 5px', borderRadius: '4px', display: 'flex', alignItems: 'center', fontSize: '10px', fontWeight: 600 }}
+            style={{ background: '#3b82f6', border: 'none', cursor: 'pointer', color: '#fff', padding: '2px 5px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
           >
             <Edit3 size={11} />
           </button>
@@ -275,10 +285,108 @@ interface StageProps {
 }
 
 // ---------------------------------------------------------------------------
+// InputFilesSection — секция "Исходный файл" (read-only просмотр)
+// ---------------------------------------------------------------------------
+function InputFilesSection({
+  stage,
+  taskId,
+  navigateToCard,
+  onOpenEditor,
+  label = 'Исходный файл',
+  color = '#94a3b8',
+}: {
+  stage: StageDetail
+  taskId: string
+  navigateToCard: () => void
+  onOpenEditor: (state: EditorModalState) => void
+  label?: string
+  color?: string
+}) {
+  if (stage.input_files.length === 0) return null
+  return (
+    <CollapsibleSection color={color} label={label} defaultExpanded={false}>
+      {stage.input_files.map(f => (
+        <div key={f.index} style={{ marginBottom: '3px' }}>
+          <FileRowCompact
+            name={f.name}
+            size={f.size_bytes}
+            mime={f.mime_type}
+            date={formatDate(stage.task_created_at)}
+            onDownload={() => downloadInputFileById(taskId, f.index)}
+            onOpenTask={navigateToCard}
+            onOpenViewer={() => onOpenEditor({
+              taskId,
+              title: `${label} — ${f.name}`,
+              fileSlot: 'input',
+              fileIndex: f.index,
+              readOnly: true,
+            })}
+          />
+        </div>
+      ))}
+    </CollapsibleSection>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ResultFilesSection — секция с файлами результата (с редактором)
+// ---------------------------------------------------------------------------
+function ResultFilesSection({
+  stage,
+  taskId,
+  navigateToCard,
+  onOpenEditor,
+  label,
+  color,
+  fallbackSlot = 'result',
+  defaultExpanded = false,
+}: {
+  stage: StageDetail
+  taskId: string
+  navigateToCard: () => void
+  onOpenEditor: (state: EditorModalState) => void
+  label: string
+  color: string
+  fallbackSlot?: string
+  defaultExpanded?: boolean
+}) {
+  return (
+    <CollapsibleSection color={color} label={label} defaultExpanded={defaultExpanded}>
+      {stage.result_files.length > 0 ? (
+        stage.result_files.map(f => (
+          <div key={f.result_id} style={{ marginBottom: '3px' }}>
+            <FileRowCompact
+              name={f.file_name}
+              size={f.size_bytes}
+              mime={f.mime_type}
+              date={formatDate(f.created_at)}
+              onDownload={() => downloadSlotFileById(taskId, f.slot)}
+              onOpenTask={navigateToCard}
+              onOpenEditor={() => onOpenEditor({
+                taskId,
+                title: `${label} — ${f.file_name}`,
+                fileSlot: f.slot,
+              })}
+            />
+          </div>
+        ))
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+          <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+          <DownloadBtn onClick={() => safeDownload(taskId, fallbackSlot)} title={`Скачать ${label.toLowerCase()}`} />
+          <ArrowBtn onClick={navigateToCard} />
+        </div>
+      )}
+    </CollapsibleSection>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Stage: Перечень
 // ---------------------------------------------------------------------------
 function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
+  const navigate = useNavigate()
   const pending = pendingListTasks[card.id]
   const [taskType, setTaskType] = useState<'LIST_FROM_PROJECT' | 'LIST_FROM_GRAND'>(
     pending?.task_type ?? 'LIST_FROM_PROJECT'
@@ -286,10 +394,11 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const [files, setFiles] = useState<File[]>(pending?.files ?? [])
   const [fileError, setFileError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [taskModalOpen, setTaskModalOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
+
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
 
   useEffect(() => {
     if (pending && files.length === 0) {
@@ -345,7 +454,6 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
     ? wasEditedBefore(sourceStage.manually_edited_at, nextStage?.task_created_at ?? null)
     : false
 
-  // Задача не создана — форма запуска
   if (task === null) {
     return (
       <div>
@@ -375,7 +483,6 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
     )
   }
 
-  // В очереди / выполняется
   if (task.status === 'pending' || task.status === 'processing') {
     return (
       <div>
@@ -385,23 +492,21 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
           <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
             {task.progress_message || 'В очереди…'}
           </span>
-          <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+          <ArrowBtn onClick={navigateToCard} />
         </div>
-        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
       </div>
     )
   }
 
-  // Завершено
   if (task.status === 'completed') {
     return (
       <div>
         <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
 
-        {/* Исходные файлы */}
+        {/* Исходный файл */}
         {sourceStage && sourceStage.input_files.length > 0 && (
           <div style={{ marginBottom: '6px' }}>
-            <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>Исходные файлы:</div>
+            <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>Исходный файл:</div>
             {sourceStage.input_files.map(f => (
               <div key={f.index} style={{ marginBottom: '3px' }}>
                 <FileRowCompact
@@ -410,12 +515,13 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
                   mime={f.mime_type}
                   date={formatDate(sourceStage.task_created_at)}
                   onDownload={() => downloadInputFileById(task.id, f.index)}
-                  onOpenTask={() => setTaskModalOpen(true)}
-                  onOpenEditor={() => onOpenEditor({
+                  onOpenTask={navigateToCard}
+                  onOpenViewer={() => onOpenEditor({
                     taskId: task.id,
                     title: `Исходный файл — ${f.name}`,
                     fileSlot: 'input',
                     fileIndex: f.index,
+                    readOnly: true,
                   })}
                 />
               </div>
@@ -423,7 +529,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
           </div>
         )}
 
-        {/* Результат (перечень) */}
+        {/* Перечень (результат) */}
         {sourceStage && sourceStage.result_files.length > 0 ? (
           <div style={{ marginBottom: '4px' }}>
             <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>Перечень:</div>
@@ -435,7 +541,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
                   mime={f.mime_type}
                   date={formatDate(f.created_at)}
                   onDownload={() => downloadSlotFileById(task.id, f.slot)}
-                  onOpenTask={() => setTaskModalOpen(true)}
+                  onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
                     taskId: task.id,
                     title: `Перечень — ${f.file_name}`,
@@ -446,12 +552,11 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
             ))}
           </div>
         ) : (
-          // Fallback если filesMeta ещё не загружен
           !sourceStage && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
-              <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )
         )}
@@ -459,19 +564,17 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
         {showWarning && nextStage && (
           <ManualEditWarning editedAt={sourceStage!.manually_edited_at!} prevStageName="Перечень" />
         )}
-
-        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
       </div>
     )
   }
 
-  // Ошибка / отменено — форма повтора
+  // Ошибка / отменено
   return (
     <div>
       <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', marginBottom: '8px' }}>
         <TaskStatusBadge task={task} />
-        <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+        <ArrowBtn onClick={navigateToCard} />
       </div>
       <FileList />
       <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleAddFiles} />
@@ -493,7 +596,6 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
       >
         {submitting ? <><Spinner />Запускаю…</> : 'Повторить'}
       </ActionButton>
-      <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
     </div>
   )
 }
@@ -503,11 +605,12 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
 // ---------------------------------------------------------------------------
 function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
+  const navigate = useNavigate()
   const submitting = submittingCardIds.has(card.id)
   const task = card.completeness_task
   const listTask = card.list_task
-  const [listTaskModalOpen, setListTaskModalOpen] = useState(false)
-  const [taskModalOpen, setTaskModalOpen] = useState(false)
+
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
 
   const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
     ? 'Перечень из проекта'
@@ -539,7 +642,19 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
   return (
     <div>
-      {/* Итог стадии «Перечень» — сворачиваемый */}
+      {/* Исходный файл */}
+      {listTask !== null && listTask.status === 'completed' && sourceStage && sourceStage.input_files.length > 0 && (
+        <InputFilesSection
+          stage={sourceStage}
+          taskId={listTask.id}
+          navigateToCard={navigateToCard}
+          onOpenEditor={onOpenEditor}
+          label="Исходный файл"
+          color="#94a3b8"
+        />
+      )}
+
+      {/* Перечень */}
       {listTask !== null && listTask.status === 'completed' && (
         <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning}>
           {sourceStage && sourceStage.result_files.length > 0 ? (
@@ -551,7 +666,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
                   mime={f.mime_type}
                   date={formatDate(f.created_at)}
                   onDownload={() => downloadSlotFileById(listTask.id, f.slot)}
-                  onOpenTask={() => setListTaskModalOpen(true)}
+                  onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
                     taskId: listTask.id,
                     title: `Перечень — ${f.file_name}`,
@@ -564,7 +679,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
-              <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
           {listEditedWarning && (
@@ -590,14 +705,14 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
                 {task.progress_message}
               </span>
             )}
-            <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+            <ArrowBtn onClick={navigateToCard} />
           </div>
         </div>
       )}
 
       {task !== null && task.status === 'completed' && (
         <div>
-          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Полнота</div>
           {completenessStage && completenessStage.result_files.length > 0 ? (
             completenessStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -607,7 +722,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
                   mime={f.mime_type}
                   date={formatDate(f.created_at)}
                   onDownload={() => downloadSlotFileById(task.id, f.slot)}
-                  onOpenTask={() => setTaskModalOpen(true)}
+                  onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
                     taskId: task.id,
                     title: `Полнота — ${f.file_name}`,
@@ -620,7 +735,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
-              <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу проверки" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
           {completenessEditedWarning && (
@@ -634,7 +749,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
           <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <TaskStatusBadge task={task} />
-            <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+            <ArrowBtn onClick={navigateToCard} />
           </div>
           <ActionButton
             onClick={async () => { await startTask(card.id, { task_type: task.task_type ?? getCompletenessType() }) }}
@@ -643,13 +758,6 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
             {submitting ? 'Запускаю…' : 'Повторить'}
           </ActionButton>
         </div>
-      )}
-
-      {listTask !== null && (
-        <TaskDetailModal taskId={listTask.id} isOpen={listTaskModalOpen} onClose={() => setListTaskModalOpen(false)} />
-      )}
-      {task !== null && (
-        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
       )}
     </div>
   )
@@ -660,18 +768,18 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
 // ---------------------------------------------------------------------------
 function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
+  const navigate = useNavigate()
   const submitting = submittingCardIds.has(card.id)
   const task = card.estimate_task
   const listTask = card.list_task
   const completenessTask = card.completeness_task
 
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
+
   const listCompleted = listTask?.status === 'completed'
   const completenessCompleted = completenessTask?.status === 'completed'
 
   const [sourceStageNum, setSourceStageNum] = useState<1 | 2>(completenessCompleted ? 2 : 1)
-  const [listTaskModalOpen, setListTaskModalOpen] = useState(false)
-  const [completenessTaskModalOpen, setCompletenessTaskModalOpen] = useState(false)
-  const [taskModalOpen, setTaskModalOpen] = useState(false)
 
   const noSource = !listCompleted && !completenessCompleted
 
@@ -711,7 +819,19 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
   return (
     <div>
-      {/* Итог: Перечень — сворачиваемый */}
+      {/* Исходный файл */}
+      {listTask !== null && listTask.status === 'completed' && sourceMetaStage && sourceMetaStage.input_files.length > 0 && (
+        <InputFilesSection
+          stage={sourceMetaStage}
+          taskId={listTask.id}
+          navigateToCard={navigateToCard}
+          onOpenEditor={onOpenEditor}
+          label="Исходный файл"
+          color="#94a3b8"
+        />
+      )}
+
+      {/* Перечень */}
       {listTask !== null && listTask.status === 'completed' && (
         <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning}>
           {sourceMetaStage && sourceMetaStage.result_files.length > 0 ? (
@@ -723,7 +843,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
                   mime={f.mime_type}
                   date={formatDate(f.created_at)}
                   onDownload={() => downloadSlotFileById(listTask.id, f.slot)}
-                  onOpenTask={() => setListTaskModalOpen(true)}
+                  onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
                     taskId: listTask.id,
                     title: `Перечень — ${f.file_name}`,
@@ -736,7 +856,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
-              <ArrowBtn onClick={() => setListTaskModalOpen(true)} title="Открыть задачу перечня" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
           {listEditedWarning && (
@@ -745,9 +865,9 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
         </CollapsibleSection>
       )}
 
-      {/* Итог: Полнота — сворачиваемый */}
+      {/* Полнота (если есть) */}
       {completenessTask !== null && completenessTask.status === 'completed' && (
-        <CollapsibleSection color="#3b82f6" label="Проверка полноты" defaultExpanded={!!completenessEditedWarning}>
+        <CollapsibleSection color="#3b82f6" label="Полнота" defaultExpanded={!!completenessEditedWarning}>
           {completenessMetaStage && completenessMetaStage.result_files.length > 0 ? (
             completenessMetaStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -757,7 +877,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
                   mime={f.mime_type}
                   date={formatDate(f.created_at)}
                   onDownload={() => downloadSlotFileById(completenessTask.id, f.slot)}
-                  onOpenTask={() => setCompletenessTaskModalOpen(true)}
+                  onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
                     taskId: completenessTask.id,
                     title: `Полнота — ${f.file_name}`,
@@ -770,7 +890,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
-              <ArrowBtn onClick={() => setCompletenessTaskModalOpen(true)} title="Открыть задачу проверки" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
           {completenessEditedWarning && (
@@ -788,7 +908,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
           <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
             {task.progress_message || 'В очереди…'}
           </span>
-          <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+          <ArrowBtn onClick={navigateToCard} />
         </div>
       )}
 
@@ -802,7 +922,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
                 mime={f.mime_type}
                 date={formatDate(f.created_at)}
                 onDownload={() => downloadSlotFileById(task.id, f.slot)}
-                onOpenTask={() => setTaskModalOpen(true)}
+                onOpenTask={navigateToCard}
                 onOpenEditor={() => onOpenEditor({
                   taskId: task.id,
                   title: `Смета — ${f.file_name}`,
@@ -814,7 +934,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
             <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
             <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать смету" />
-            <ArrowBtn onClick={() => setTaskModalOpen(true)} title="Открыть задачу" />
+            <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
           </div>
         )
       )}
@@ -823,7 +943,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
         <div style={{ marginBottom: '6px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <TaskStatusBadge task={task} />
-            <ArrowBtn onClick={() => setTaskModalOpen(true)} />
+            <ArrowBtn onClick={navigateToCard} />
           </div>
         </div>
       )}
@@ -856,16 +976,6 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
           )}
         </div>
       )}
-
-      {listTask !== null && (
-        <TaskDetailModal taskId={listTask.id} isOpen={listTaskModalOpen} onClose={() => setListTaskModalOpen(false)} />
-      )}
-      {completenessTask !== null && (
-        <TaskDetailModal taskId={completenessTask.id} isOpen={completenessTaskModalOpen} onClose={() => setCompletenessTaskModalOpen(false)} />
-      )}
-      {task !== null && (
-        <TaskDetailModal taskId={task.id} isOpen={taskModalOpen} onClose={() => setTaskModalOpen(false)} />
-      )}
     </div>
   )
 }
@@ -878,16 +988,32 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.optimization_task
+  const listTask = card.list_task
+  const completenessTask = card.completeness_task
+  const estimateTask = card.estimate_task
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const [archiveExpanded, setArchiveExpanded] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const estimateCompleted = card.estimate_task?.status === 'completed'
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
+
+  const estimateCompleted = estimateTask?.status === 'completed'
   const optimizationMeta = filesMeta?.optimization_stage
+  const sourceMetaStage = filesMeta?.source_stage
+  const completenessMetaStage = filesMeta?.completeness_stage
+  const estimateMetaStage = filesMeta?.estimate_stage
 
   const mainFile = optimizationMeta?.result_files.find(f => f.slot === 'optimized') ?? optimizationMeta?.result_files[0]
   const archiveFiles = optimizationMeta?.result_files.filter(f => f.slot !== 'optimized' && f.slot !== 'source') ?? []
+
+  const hasSourcePipeline = !!(listTask && listTask.status === 'completed')
+
+  const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
+    ? 'Перечень из проекта'
+    : listTask?.task_type === 'LIST_FROM_GRAND'
+    ? 'Перечень из Гранд-сметы'
+    : 'Перечень'
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null
@@ -915,6 +1041,61 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
   return (
     <div>
+      {/* Исходный файл (если карточка пришла из перечня) */}
+      {hasSourcePipeline && sourceMetaStage && sourceMetaStage.input_files.length > 0 && (
+        <InputFilesSection
+          stage={sourceMetaStage}
+          taskId={listTask!.id}
+          navigateToCard={navigateToCard}
+          onOpenEditor={onOpenEditor}
+          label="Исходный файл"
+          color="#94a3b8"
+        />
+      )}
+
+      {/* Перечень */}
+      {hasSourcePipeline && sourceMetaStage && (
+        <ResultFilesSection
+          stage={sourceMetaStage}
+          taskId={listTask!.id}
+          navigateToCard={navigateToCard}
+          onOpenEditor={onOpenEditor}
+          label={listTypeLabel}
+          color="#7c3aed"
+          fallbackSlot="result"
+          defaultExpanded={false}
+        />
+      )}
+
+      {/* Полнота (если есть) */}
+      {completenessTask && completenessTask.status === 'completed' && completenessMetaStage && (
+        <ResultFilesSection
+          stage={completenessMetaStage}
+          taskId={completenessTask.id}
+          navigateToCard={navigateToCard}
+          onOpenEditor={onOpenEditor}
+          label="Полнота"
+          color="#3b82f6"
+          fallbackSlot="result"
+          defaultExpanded={false}
+        />
+      )}
+
+      {/* Смета (если есть из стадии Смета) */}
+      {estimateTask && estimateTask.status === 'completed' && estimateMetaStage && (
+        <ResultFilesSection
+          stage={estimateMetaStage}
+          taskId={estimateTask.id}
+          navigateToCard={navigateToCard}
+          onOpenEditor={onOpenEditor}
+          label="Смета"
+          color="#0f766e"
+          fallbackSlot="result"
+          defaultExpanded={false}
+        />
+      )}
+
+      {/* Оптимизация */}
       <TaskStatusBadge task={task} />
 
       {canStart && (
@@ -949,7 +1130,6 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
-          {/* Текущая версия */}
           {mainFile ? (
             <div style={{ marginBottom: '6px' }}>
               <FileRowCompact
@@ -958,16 +1138,17 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
                 mime={mainFile.mime_type}
                 date={formatDate(mainFile.created_at)}
                 onDownload={() => downloadSlotFileById(task.id, mainFile.slot)}
+                onOpenTask={navigateToCard}
                 onOpenEditor={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы' })}
               />
             </div>
           ) : (
-            <ActionButton variant="outline" onClick={() => navigate(`/tasks/${task.id}/estimate`)}>
-              Открыть смету
-            </ActionButton>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+            </div>
           )}
 
-          {/* Архив версий */}
           {archiveFiles.length > 0 && (
             <div>
               <button
@@ -989,6 +1170,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     mime={f.mime_type}
                     date={formatDate(f.created_at)}
                     onDownload={() => downloadSlotFileById(task.id, f.slot)}
+                    onOpenTask={navigateToCard}
                     onOpenEditor={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы' })}
                   />
                 </div>
@@ -1026,7 +1208,6 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
     fetchMeta()
   }, [fetchMeta])
 
-  // Обновляем метаданные после сохранения в редакторе
   useEffect(() => {
     const handler = (e: MessageEvent) => {
       if (e.data?.type === 'estimate-saved') {
@@ -1043,11 +1224,11 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
     <>
       {(() => {
         switch (card.stage) {
-          case 'list':        return <ListStage {...stageProps} />
+          case 'list':         return <ListStage {...stageProps} />
           case 'completeness': return <CompletenessStage {...stageProps} />
-          case 'estimate':    return <EstimateStage {...stageProps} />
+          case 'estimate':     return <EstimateStage {...stageProps} />
           case 'optimization': return <OptimizationStage {...stageProps} />
-          default:            return null
+          default:             return null
         }
       })()}
 
@@ -1057,6 +1238,7 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
           title={editorModal.title}
           fileSlot={editorModal.fileSlot}
           fileIndex={editorModal.fileIndex}
+          readOnly={editorModal.readOnly}
           onClose={() => setEditorModal(null)}
           onSaved={fetchMeta}
         />

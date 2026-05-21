@@ -9,12 +9,14 @@ interface Props {
   onSaved?: () => void
   fileSlot?: string
   fileIndex?: number
+  readOnly?: boolean
 }
 
-export function EstimateEditorModal({ taskId, title, onClose, onSaved, fileSlot, fileIndex }: Props) {
+export function EstimateEditorModal({ taskId, title, onClose, onSaved, fileSlot, fileIndex, readOnly }: Props) {
   const params = new URLSearchParams({ embed: '1' })
   if (fileSlot) params.set('file_slot', fileSlot)
   if (fileIndex !== undefined) params.set('file_index', String(fileIndex))
+  if (readOnly) params.set('read_only', '1')
   const url = `/tasks/${taskId}/estimate?${params.toString()}`
 
   useEffect(() => {
