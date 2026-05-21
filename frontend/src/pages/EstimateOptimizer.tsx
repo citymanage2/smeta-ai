@@ -238,19 +238,6 @@ const EstimateOptimizer: React.FC = () => {
     };
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Generic mode: switch version
-  const handleSelectGenericVersion = useCallback(async (versionId: string) => {
-    if (!taskId) return;
-    try {
-      const full = await getVersion(taskId, versionId);
-      setActiveGenericVersionId(versionId);
-      setGenericRows(full.rows as unknown as GenericRow[]);
-      setGenericDirty(false);
-    } catch {
-      // ignore
-    }
-  }, [taskId]);
-
   // Generic mode: save
   const handleGenericSave = useCallback(async () => {
     if (!taskId || !activeGenericVersionId) return;
@@ -264,18 +251,6 @@ const EstimateOptimizer: React.FC = () => {
     }
   }, [taskId, activeGenericVersionId, genericRows]);
 
-  // Generic mode: reload versions after save (for VersionTabs)
-  const handleGenericVersionsChange = useCallback(async () => {
-    if (!taskId) return;
-    const updated = await getVersions(taskId, fileSlot);
-    setGenericVersions(updated);
-    const still = updated.find((v) => v.id === activeGenericVersionId && !v.is_rolled_back);
-    if (!still) {
-      const notRolled = updated.filter((v) => !v.is_rolled_back);
-      const latest = notRolled[notRolled.length - 1];
-      if (latest) await handleSelectGenericVersion(latest.id);
-    }
-  }, [taskId, fileSlot, activeGenericVersionId, handleSelectGenericVersion]);
 
   // ─── Estimate mode callbacks ───────────────────────────────────────────────
 
@@ -543,19 +518,6 @@ const EstimateOptimizer: React.FC = () => {
       {/* ── Generic mode ────────────────────────────────────────────────── */}
       {isGenericMode && visibleGenericVersions.length > 0 && taskId && (
         <>
-          {!embed && (
-            <VersionTabs
-              taskId={taskId}
-              versions={visibleGenericVersions}
-              activeVersionId={activeGenericVersionId}
-              activeView="version"
-              isOptimizationRunning={false}
-              onSelectVersion={handleSelectGenericVersion}
-              onSelectComparison={() => {/* не поддерживается в generic-режиме */}}
-              onVersionsChange={handleGenericVersionsChange}
-            />
-          )}
-
           <GenericGrid
             rows={genericRows}
             isDirty={genericDirty}
