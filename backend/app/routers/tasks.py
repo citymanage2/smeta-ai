@@ -694,12 +694,14 @@ async def restart_task(
             detail="Нельзя перезапустить задачу, которая сейчас обрабатывается",
         )
 
+    now = datetime.now(timezone.utc)
     task.status = "pending"
     task.error_message = None
     task.progress_message = None
     task.progress_data = None
     task.progress_log = []
-    task.updated_at = datetime.now(timezone.utc)
+    task.created_at = now
+    task.updated_at = now
     await db.commit()
 
     background_tasks.add_task(_run_task_in_background, task_id)
