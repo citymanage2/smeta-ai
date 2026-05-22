@@ -5,12 +5,12 @@ interface Props {
   calc: SummaryCalcResult
   overrides: SummaryOverrides
   onUpdateOverride: <K extends keyof SummaryOverrides>(key: K, value: number) => void
+  onUpdateSectionTaxPct: (sectionIndex: number, taxPct: number) => void
 }
 
 const fmt = (n: number) =>
   Math.round(n).toLocaleString('ru-RU') + ' ₽'
 
-const pct = (n: number) => n + '%'
 
 interface NumberInputProps {
   value: number
@@ -125,7 +125,7 @@ const tdBold: React.CSSProperties = {
 
 const tdBoldRight: React.CSSProperties = { ...tdBold, textAlign: 'right' }
 
-const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride }) => {
+const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUpdateSectionTaxPct }) => {
   return (
     <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
 
@@ -353,47 +353,49 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride }) =>
           }}>
             Разбивка по разделам
           </div>
+          <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px' }}>
+            Налог: 0 — подрядчик с НДС (ничего не добавляется), 22 — самозанятый (+22% к стоимости)
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
                   <th style={thStyle}>Раздел</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Работы (с/с)</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>НДС {pct(overrides.vat_works_pct)}</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Работы с НДС</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Материалы (с/с)</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>НДС {pct(overrides.vat_materials_pct)}</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Материалы с НДС</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Налог %</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Работы (итого)</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Материалы (итого)</th>
                 </tr>
               </thead>
               <tbody>
-                {calc.section_totals.map((sec) => (
+                {calc.section_totals.map((sec, idx) => (
                   <tr key={sec.card_id}>
                     <td style={tdStyle}>{sec.card_name}</td>
                     <td style={tdRight}>{fmt(sec.works)}</td>
-                    <td style={tdRight}>{fmt(sec.vat_works)}</td>
-                    <td style={tdRight}>{fmt(sec.works_with_vat)}</td>
                     <td style={tdRight}>{fmt(sec.materials)}</td>
-                    <td style={tdRight}>{fmt(sec.vat_materials)}</td>
-                    <td style={tdRight}>{fmt(sec.materials_with_vat)}</td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      <NumberInput
+                        value={sec.tax_pct}
+                        onCommit={(v) => onUpdateSectionTaxPct(idx, v)}
+                        suffix="%"
+                      />
+                    </td>
+                    <td style={{ ...tdRight, color: sec.tax_pct > 0 ? '#059669' : undefined }}>
+                      {fmt(sec.works_effective)}
+                    </td>
+                    <td style={{ ...tdRight, color: sec.tax_pct > 0 ? '#059669' : undefined }}>
+                      {fmt(sec.materials_effective)}
+                    </td>
                   </tr>
                 ))}
                 <tr style={{ background: '#f8fafc' }}>
                   <td style={tdBold}>ИТОГО</td>
+                  <td style={tdBoldRight}>{fmt(calc.section_totals.reduce((s, r) => s + r.works, 0))}</td>
+                  <td style={tdBoldRight}>{fmt(calc.section_totals.reduce((s, r) => s + r.materials, 0))}</td>
+                  <td style={tdBold} />
                   <td style={tdBoldRight}>{fmt(calc.works)}</td>
-                  <td style={tdBoldRight}>
-                    {fmt((calc.works * overrides.vat_works_pct) / 100)}
-                  </td>
-                  <td style={tdBoldRight}>
-                    {fmt(calc.works + (calc.works * overrides.vat_works_pct) / 100)}
-                  </td>
                   <td style={tdBoldRight}>{fmt(calc.materials)}</td>
-                  <td style={tdBoldRight}>
-                    {fmt((calc.materials * overrides.vat_materials_pct) / 100)}
-                  </td>
-                  <td style={tdBoldRight}>
-                    {fmt(calc.materials + (calc.materials * overrides.vat_materials_pct) / 100)}
-                  </td>
                 </tr>
               </tbody>
             </table>

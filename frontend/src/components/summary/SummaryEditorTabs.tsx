@@ -28,6 +28,7 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
     redoStack,
     setActiveTabIndex,
     updateSectionRows,
+    updateSectionTaxPct,
     updateOverride,
     save,
     undo,
@@ -185,6 +186,7 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
             calc={calc}
             overrides={summaryOverrides}
             onUpdateOverride={updateOverride}
+            onUpdateSectionTaxPct={updateSectionTaxPct}
           />
         ) : (
           sections.map((sec, idx) => (

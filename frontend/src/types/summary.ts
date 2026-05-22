@@ -30,7 +30,7 @@ export const DEFAULT_OVERRIDES: SummaryOverrides = {
   contingency_pct: 2.0,
   profit_pct: 16.0,
   vat_works_pct: 22.0,
-  vat_materials_pct: 20.0,
+  vat_materials_pct: 22.0,
   tax_pct: 3.0,
 };
 
@@ -40,6 +40,7 @@ export interface SectionTab {
   version_id: string;
   version_display_name: string;
   rows: EstimateRow[];
+  tax_pct?: number; // налог подрядчика по разделу (0 = НДС уже в цене, 22 = самозанятый)
 }
 
 export interface SummaryEstimate {
@@ -73,12 +74,11 @@ export interface SummaryEstimateUpdate {
 export interface SectionCalcRow {
   card_id: string;
   card_name: string;
+  tax_pct: number;
   works: number;
   materials: number;
-  vat_works: number;
-  works_with_vat: number;
-  vat_materials: number;
-  materials_with_vat: number;
+  works_effective: number;   // works * (1 + tax_pct/100)
+  materials_effective: number; // materials * (1 + tax_pct/100)
 }
 
 export interface SummaryCalcResult {

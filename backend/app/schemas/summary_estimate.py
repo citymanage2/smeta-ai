@@ -19,7 +19,7 @@ class SummaryOverrides(BaseModel):
     contingency_pct: Decimal = Field(default=Decimal("2.0"))
     profit_pct: Decimal = Field(default=Decimal("16.0"))
     vat_works_pct: Decimal = Field(default=Decimal("22.0"))
-    vat_materials_pct: Decimal = Field(default=Decimal("20.0"))
+    vat_materials_pct: Decimal = Field(default=Decimal("22.0"))
     tax_pct: Decimal = Field(default=Decimal("3.0"))
 
 

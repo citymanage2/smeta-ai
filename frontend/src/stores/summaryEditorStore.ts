@@ -33,20 +33,19 @@ export function calcSummary(
     }
     works *= coeff;
     materials *= coeff;
-    totalWorks += works;
-    totalMaterials += materials;
-
-    const vat_works = (works * overrides.vat_works_pct) / 100;
-    const vat_materials = (materials * overrides.vat_materials_pct) / 100;
+    const tax_pct = sec.tax_pct ?? 0;
+    const works_effective = works * (1 + tax_pct / 100);
+    const materials_effective = materials * (1 + tax_pct / 100);
+    totalWorks += works_effective;
+    totalMaterials += materials_effective;
     return {
       card_id: sec.card_id,
       card_name: sec.card_name,
+      tax_pct,
       works,
       materials,
-      vat_works,
-      works_with_vat: works + vat_works,
-      vat_materials,
-      materials_with_vat: materials + vat_materials,
+      works_effective,
+      materials_effective,
     };
   });
 
@@ -115,6 +114,7 @@ interface SummaryEditorState {
 
   loadSummary: (projectId: string) => Promise<void>;
   updateSectionRows: (sectionIndex: number, rows: EstimateRow[]) => void;
+  updateSectionTaxPct: (sectionIndex: number, taxPct: number) => void;
   updateOverride: <K extends keyof SummaryOverrides>(key: K, value: number) => void;
   setActiveTabIndex: (index: number) => void;
   save: () => Promise<void>;
@@ -166,7 +166,7 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       summaryId: summary.id,
       sections: summary.sections,
       summaryOverrides: overrides,
-      activeTabIndex: 0,
+      activeTabIndex: summary.sections.length > 0 ? 0 : -1,
       isDirty: false,
       undoStack: [],
       redoStack: [],
@@ -190,6 +190,14 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     } else {
       set({ sections: newSections, isDirty: true });
     }
+  },
+
+  updateSectionTaxPct: (sectionIndex: number, taxPct: number) => {
+    const { sections } = get();
+    const newSections = sections.map((sec, i) =>
+      i === sectionIndex ? { ...sec, tax_pct: taxPct } : sec,
+    );
+    set({ sections: newSections, isDirty: true });
   },
 
   updateOverride: <K extends keyof SummaryOverrides>(key: K, value: number) => {
