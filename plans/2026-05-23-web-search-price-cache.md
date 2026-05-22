@@ -144,7 +144,7 @@ DELETE FROM price_cache_materials WHERE updated_at < now() - interval '30 days';
 
 ---
 
-### Фаза 6: API эндпоинты для управления кешем [ ]
+### Фаза 6: API эндпоинты для управления кешем [x]
 
 В `backend/app/routers/admin.py` добавить (только для admin):
 

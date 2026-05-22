@@ -16,6 +16,7 @@ from app.database import get_db
 from app.models.task import Task
 from app.models.price import PriceWork, PriceMaterial
 from app.models.price_list import PriceList
+from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
 from app.utils.auth import get_admin_user
 from app.services import price_service
 from app.services.embedding_service import (
@@ -96,6 +97,37 @@ class GenerateEmbeddingsResponse(BaseModel):
     status: str
     updated: int = 0
     error: Optional[str] = None
+
+
+class PriceCacheItem(BaseModel):
+    id: str
+    name: str
+    unit: Optional[str]
+    price: float
+    sources: Optional[str]
+    updated_at: datetime
+    expires_in_days: int
+
+
+class PriceCacheListResponse(BaseModel):
+    items: list[PriceCacheItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class PriceCacheCreateRequest(BaseModel):
+    name: str
+    unit: Optional[str] = None
+    price: float
+    sources: Optional[str] = None
+
+
+class PriceCachePatchRequest(BaseModel):
+    name: Optional[str] = None
+    unit: Optional[str] = None
+    price: Optional[float] = None
+    sources: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +777,212 @@ async def generate_price_embeddings(
         await db.commit()
         logger.warning("Embeddings generation failed via endpoint", type=pl_type, error=str(e))
         return GenerateEmbeddingsResponse(status="failed", error=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Legacy combined upload (kept for backward compatibility)
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Price cache endpoints
+# ---------------------------------------------------------------------------
+
+def _expires_in_days(updated_at: datetime) -> int:
+    now = datetime.now(timezone.utc)
+    updated = updated_at if updated_at.tzinfo else updated_at.replace(tzinfo=timezone.utc)
+    return 30 - (now - updated).days
+
+
+def _cache_item(row) -> PriceCacheItem:
+    return PriceCacheItem(
+        id=str(row.id),
+        name=row.name,
+        unit=row.unit,
+        price=float(row.price),
+        sources=row.sources,
+        updated_at=row.updated_at,
+        expires_in_days=_expires_in_days(row.updated_at),
+    )
+
+
+async def _list_cache(
+    model_cls,
+    db: AsyncSession,
+    page: int,
+    page_size: int,
+    search: Optional[str],
+) -> PriceCacheListResponse:
+    conditions = []
+    if search:
+        conditions.append(model_cls.name.ilike(f"%{search}%"))
+
+    count_q = select(func.count(model_cls.id))
+    data_q = select(model_cls)
+    if conditions:
+        count_q = count_q.where(*conditions)
+        data_q = data_q.where(*conditions)
+
+    total = (await db.execute(count_q)).scalar() or 0
+    rows = (
+        await db.execute(
+            data_q.order_by(model_cls.updated_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+
+    return PriceCacheListResponse(
+        items=[_cache_item(r) for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/price-cache/works", response_model=PriceCacheListResponse)
+async def list_cache_works(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    return await _list_cache(PriceCacheWork, db, page, page_size, search)
+
+
+@router.get("/price-cache/materials", response_model=PriceCacheListResponse)
+async def list_cache_materials(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    return await _list_cache(PriceCacheMaterial, db, page, page_size, search)
+
+
+@router.post("/price-cache/works", response_model=PriceCacheItem, status_code=status.HTTP_201_CREATED)
+async def create_cache_work(
+    body: PriceCacheCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    now = datetime.now(timezone.utc)
+    obj = PriceCacheWork(name=body.name, unit=body.unit, price=body.price, sources=body.sources, updated_at=now)
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    await price_service.load_cache(db)
+    logger.info("Cache work created by admin", name=body.name)
+    return _cache_item(obj)
+
+
+@router.post("/price-cache/materials", response_model=PriceCacheItem, status_code=status.HTTP_201_CREATED)
+async def create_cache_material(
+    body: PriceCacheCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    now = datetime.now(timezone.utc)
+    obj = PriceCacheMaterial(name=body.name, unit=body.unit, price=body.price, sources=body.sources, updated_at=now)
+    db.add(obj)
+    await db.commit()
+    await db.refresh(obj)
+    await price_service.load_cache(db)
+    logger.info("Cache material created by admin", name=body.name)
+    return _cache_item(obj)
+
+
+@router.patch("/price-cache/works/{item_id}", response_model=PriceCacheItem)
+async def update_cache_work(
+    item_id: str,
+    body: PriceCachePatchRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    res = await db.execute(select(PriceCacheWork).where(PriceCacheWork.id == item_id))
+    obj = res.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+
+    now = datetime.now(timezone.utc)
+    if body.name is not None:
+        obj.name = body.name
+    if body.unit is not None:
+        obj.unit = body.unit
+    if body.price is not None:
+        obj.price = body.price
+    if body.sources is not None:
+        obj.sources = body.sources
+    obj.updated_at = now
+
+    await db.commit()
+    await db.refresh(obj)
+    await price_service.load_cache(db)
+    logger.info("Cache work updated by admin", id=item_id)
+    return _cache_item(obj)
+
+
+@router.patch("/price-cache/materials/{item_id}", response_model=PriceCacheItem)
+async def update_cache_material(
+    item_id: str,
+    body: PriceCachePatchRequest,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    res = await db.execute(select(PriceCacheMaterial).where(PriceCacheMaterial.id == item_id))
+    obj = res.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+
+    now = datetime.now(timezone.utc)
+    if body.name is not None:
+        obj.name = body.name
+    if body.unit is not None:
+        obj.unit = body.unit
+    if body.price is not None:
+        obj.price = body.price
+    if body.sources is not None:
+        obj.sources = body.sources
+    obj.updated_at = now
+
+    await db.commit()
+    await db.refresh(obj)
+    await price_service.load_cache(db)
+    logger.info("Cache material updated by admin", id=item_id)
+    return _cache_item(obj)
+
+
+@router.delete("/price-cache/works/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_cache_work(
+    item_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    res = await db.execute(select(PriceCacheWork).where(PriceCacheWork.id == item_id))
+    obj = res.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+    await db.delete(obj)
+    await db.commit()
+    await price_service.load_cache(db)
+    logger.info("Cache work deleted by admin", id=item_id)
+
+
+@router.delete("/price-cache/materials/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_cache_material(
+    item_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    res = await db.execute(select(PriceCacheMaterial).where(PriceCacheMaterial.id == item_id))
+    obj = res.scalar_one_or_none()
+    if not obj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
+    await db.delete(obj)
+    await db.commit()
+    await price_service.load_cache(db)
+    logger.info("Cache material deleted by admin", id=item_id)
 
 
 # ---------------------------------------------------------------------------
