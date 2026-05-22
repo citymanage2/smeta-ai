@@ -40,6 +40,36 @@ export async function deleteProject(projectId: string): Promise<void> {
   await apiClient.delete(`/projects/${projectId}`);
 }
 
+export interface TrashProjectItem {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  deleted_at: string;
+}
+
+export interface TrashProjectsResponse {
+  items: TrashProjectItem[];
+  total: number;
+}
+
+export async function getTrashProjects(): Promise<TrashProjectsResponse> {
+  const resp = await apiClient.get<TrashProjectsResponse>('/projects/trash');
+  return resp.data;
+}
+
+export async function restoreProject(projectId: string): Promise<void> {
+  await apiClient.post(`/projects/${projectId}/restore`);
+}
+
+export async function permanentDeleteProject(projectId: string): Promise<void> {
+  await apiClient.delete(`/projects/${projectId}/permanent`);
+}
+
+export async function clearProjectTrash(): Promise<void> {
+  await apiClient.delete('/projects/trash');
+}
+
 export async function uploadFileToSlot(
   taskId: string,
   slot: 'source' | 'estimate' | 'optimized',

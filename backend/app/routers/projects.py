@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, case, delete
 from datetime import datetime, timezone
 import structlog
 
@@ -84,6 +84,19 @@ class ProjectDetailResponse(BaseModel):
     task_type_counts: dict[str, int] = {}
     total_tasks: int = 0
     tasks: list[TaskBrief]
+
+
+class TrashProjectItem(BaseModel):
+    id: str
+    name: str
+    description: Optional[str]
+    created_at: str
+    deleted_at: str
+
+
+class TrashProjectsResponse(BaseModel):
+    items: list[TrashProjectItem]
+    total: int
 
 
 def _project_to_response(p: Project) -> ProjectResponse:
@@ -265,6 +278,48 @@ async def list_unassigned_tasks(
     ]
 
 
+@router.get("/trash", response_model=TrashProjectsResponse)
+async def list_trash_projects(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Список удалённых проектов (корзина)."""
+    count_result = await db.execute(
+        select(func.count(Project.id)).where(Project.deleted_at.is_not(None))
+    )
+    total = count_result.scalar() or 0
+
+    data_result = await db.execute(
+        select(Project.id, Project.name, Project.description, Project.created_at, Project.deleted_at)
+        .where(Project.deleted_at.is_not(None))
+        .order_by(Project.deleted_at.desc())
+    )
+    rows = data_result.all()
+
+    items = [
+        TrashProjectItem(
+            id=str(row.id),
+            name=row.name,
+            description=row.description,
+            created_at=row.created_at.isoformat(),
+            deleted_at=row.deleted_at.isoformat(),
+        )
+        for row in rows
+    ]
+    return TrashProjectsResponse(items=items, total=total)
+
+
+@router.delete("/trash", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_project_trash(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """Удалить все проекты из корзины навсегда (только для администраторов)."""
+    await db.execute(delete(Project).where(Project.deleted_at.is_not(None)))
+    await db.commit()
+    logger.info("Project trash cleared")
+
+
 @router.get("/{project_id}", response_model=ProjectDetailResponse)
 async def get_project(
     project_id: str,
@@ -356,6 +411,40 @@ async def delete_project(
     await db.commit()
     logger.info("Project soft-deleted (moved to trash)", project_id=project_id)
     return {"project_id": project_id, "status": "deleted"}
+
+
+@router.post("/{project_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
+async def restore_project(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Восстановить проект из корзины."""
+    result = await db.execute(
+        select(Project).where(Project.id == project_id, Project.deleted_at.is_not(None))
+    )
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден или не удалён")
+    project.deleted_at = None
+    await db.commit()
+    logger.info("Project restored from trash", project_id=project_id)
+
+
+@router.delete("/{project_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+async def permanent_delete_project(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_admin_user),
+):
+    """Окончательное удаление проекта (только для администраторов)."""
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    await db.delete(project)
+    await db.commit()
+    logger.info("Project permanently deleted", project_id=project_id)
 
 
 @router.get("/{project_id}/export")
