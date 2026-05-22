@@ -250,6 +250,26 @@ const GenericGrid: React.FC<GenericGridProps> = ({
     [rows, isEnhanced],
   );
 
+  // Totals (only in enhanced mode where cost columns exist)
+  const computedTotals = useMemo(() => {
+    if (!isEnhanced) return null;
+    const costWorkCol = allColumns.find((c) => colMatches(c, COST_WORK_KEYWORDS)) ?? null;
+    const costMatCol = allColumns.find((c) => colMatches(c, COST_MAT_KEYWORDS)) ?? null;
+    if (!costWorkCol && !costMatCol) return null;
+    let sumWork = 0;
+    let sumMat = 0;
+    for (const r of rows) {
+      const type = String(r.cells[TYPE_COL] ?? '').trim();
+      if (costWorkCol && type === 'Работа') sumWork += Number(r.cells[costWorkCol] ?? 0);
+      if (costMatCol && type === 'Материал') sumMat += Number(r.cells[costMatCol] ?? 0);
+    }
+    const overhead = sumWork * 0.03;
+    const transport = sumMat * 0.03;
+    return { sumWork, overhead, sumMat, transport, grand: sumWork + overhead + sumMat + transport };
+  }, [rows, isEnhanced, allColumns]);
+
+  const fmtRub = (n: number) => Math.round(n).toLocaleString('ru-RU');
+
   // Cell change handler — records undo history
   const handleCellChange = useCallback(
     (rowId: string, colKey: string, rawVal: string) => {
@@ -430,6 +450,30 @@ const GenericGrid: React.FC<GenericGridProps> = ({
           </button>
         </div>
       </div>
+
+      {/* ── Totals block ─────────────────────────────────────────────────── */}
+      {computedTotals && (
+        <div className="gg-totals">
+          <div className="gg-totals-title">Итоги по смете</div>
+          <div className="gg-totals-rows">
+            {[
+              { label: 'Сумма по работам:', value: computedTotals.sumWork },
+              { label: 'Накладные расходы 3%:', value: computedTotals.overhead },
+              { label: 'Сумма по материалам:', value: computedTotals.sumMat },
+              { label: 'Транспортные расходы 3%:', value: computedTotals.transport },
+            ].map(({ label, value }) => (
+              <div key={label} className="gg-totals-row">
+                <span>{label}</span>
+                <span className="gg-totals-val">{fmtRub(value)} ₽</span>
+              </div>
+            ))}
+          </div>
+          <div className="gg-totals-grand">
+            <span>ИТОГО ПО СМЕТЕ:</span>
+            <span className="gg-totals-grand-val">{fmtRub(computedTotals.grand)} ₽</span>
+          </div>
+        </div>
+      )}
 
       {/* ── Table ────────────────────────────────────────────────────────── */}
       <div className="gg-scroll">
