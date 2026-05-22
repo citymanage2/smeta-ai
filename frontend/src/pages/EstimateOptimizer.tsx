@@ -19,6 +19,7 @@ import {
   runCustomOptimization,
   initVersionFromResult,
   initVersionFromInput,
+  initEstimateVersionFromResult,
   saveGenericRows,
 } from '../api/estimateVersions';
 import { getTaskStatus } from '../api/tasks';
@@ -194,13 +195,20 @@ const EstimateOptimizer: React.FC = () => {
           if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
         } else {
           // Estimate mode: existing logic
-          const versionList = await getVersions(taskId);
+          let versionList = await getVersions(taskId);
           if (versionList.length === 0) {
             if (taskData.status === 'completed') {
-              setProcessingMsg(null);
-              setError('Не удалось загрузить версии сметы. Попробуйте закрыть и открыть снова.');
-              if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-              if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
+              if (currentTaskType === 'ESTIMATE_FROM_LIST') {
+                // Auto-init structured EstimateVersion from the task result
+                try { await initEstimateVersionFromResult(taskId); } catch { /* idempotent */ }
+                versionList = await getVersions(taskId);
+              }
+              if (versionList.length === 0) {
+                setProcessingMsg(null);
+                setError('Не удалось загрузить версии сметы. Попробуйте закрыть и открыть снова.');
+                if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
+                if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
+              }
             }
             return;
           }

@@ -12,11 +12,11 @@ interface StepConfig {
 }
 
 const STEPS: StepConfig[] = [
-  { step: 'completeness', label: 'Проверить полноту по ГЭСН', requiredLabel: null, producedLabel: 'completeness_checked' },
-  { step: 'redundancy', label: 'Проверить лишнее', requiredLabel: 'completeness_checked', producedLabel: 'no_redundant' },
-  { step: 'technology', label: 'Оптимизация технологий', requiredLabel: 'no_redundant', producedLabel: 'tech_optimized' },
-  { step: 'materials', label: 'Оптимизация материалов', requiredLabel: 'tech_optimized', producedLabel: 'material_optimized' },
-  { step: 'fill_prices', label: 'Проставить цены', requiredLabel: 'material_optimized', producedLabel: 'prices_filled' },
+  { step: 'completeness', label: 'V1 — Полнота', requiredLabel: null, producedLabel: 'completeness_checked' },
+  { step: 'redundancy', label: 'V2 — Лишнее', requiredLabel: 'completeness_checked', producedLabel: 'no_redundant' },
+  { step: 'technology', label: 'V3 — Технологии', requiredLabel: 'no_redundant', producedLabel: 'tech_optimized' },
+  { step: 'materials', label: 'V4 — Материалы', requiredLabel: 'tech_optimized', producedLabel: 'material_optimized' },
+  { step: 'fill_prices', label: 'V5 — Цены', requiredLabel: 'material_optimized', producedLabel: 'prices_filled' },
 ];
 
 export interface AbcBreakdown {
