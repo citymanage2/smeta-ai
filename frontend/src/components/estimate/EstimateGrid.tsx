@@ -899,7 +899,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
         classes.push('row-qty-overridden');
       if (flashingIds.has(row.id)) classes.push('row-recalc-flash');
       if (draggingId === row.id) classes.push('row-dragging');
-      if (dropTarget?.id === row.id) classes.push(dropTarget.above ? 'row-drop-above' : 'row-drop-below');
+      if (dropTarget !== null && dropTarget.id === row.id) classes.push(dropTarget.above ? 'row-drop-above' : 'row-drop-below');
       return classes.join(' ') || undefined;
     },
     [flashingIds, draggingId, dropTarget],
