@@ -501,7 +501,7 @@ const ProjectCardPage: React.FC = () => {
             {source_stage && source_stage.result_files.length === 0 && source_stage.task_status !== 'completed' && (
               <div style={{ fontSize: '12px', color: '#94a3b8' }}>Задача ещё не завершена</div>
             )}
-            {source_stage && (source_stage.task_status === 'failed' || source_stage.task_status === 'cancelled') && (
+            {source_stage && (source_stage.task_status === 'failed' || source_stage.task_status === 'cancelled' || source_stage.task_status === 'completed') && (
               <RestartButton
                 taskId={source_stage.task_id}
                 restarting={restartingTaskId === source_stage.task_id}
@@ -552,7 +552,7 @@ const ProjectCardPage: React.FC = () => {
                     ✎ Изменён вручную: {formatDate(completeness_stage.manually_edited_at)}
                   </div>
                 )}
-                {(completeness_stage.task_status === 'failed' || completeness_stage.task_status === 'cancelled') && (
+                {(completeness_stage.task_status === 'failed' || completeness_stage.task_status === 'cancelled' || completeness_stage.task_status === 'completed') && (
                   <RestartButton
                     taskId={completeness_stage.task_id}
                     restarting={restartingTaskId === completeness_stage.task_id}
@@ -607,7 +607,7 @@ const ProjectCardPage: React.FC = () => {
                     ✎ Изменён вручную: {formatDate(estimate_stage.manually_edited_at)}
                   </div>
                 )}
-                {(estimate_stage.task_status === 'failed' || estimate_stage.task_status === 'cancelled') && (
+                {(estimate_stage.task_status === 'failed' || estimate_stage.task_status === 'cancelled' || estimate_stage.task_status === 'completed') && (
                   <RestartButton
                     taskId={estimate_stage.task_id}
                     restarting={restartingTaskId === estimate_stage.task_id}
@@ -652,7 +652,7 @@ const ProjectCardPage: React.FC = () => {
                     ✎ Изменён вручную: {formatDate(optimization_stage.manually_edited_at)}
                   </div>
                 )}
-                {(optimization_stage.task_status === 'failed' || optimization_stage.task_status === 'cancelled') && (
+                {(optimization_stage.task_status === 'failed' || optimization_stage.task_status === 'cancelled' || optimization_stage.task_status === 'completed') && (
                   <RestartButton
                     taskId={optimization_stage.task_id}
                     restarting={restartingTaskId === optimization_stage.task_id}
