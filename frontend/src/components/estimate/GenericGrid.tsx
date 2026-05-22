@@ -118,14 +118,16 @@ const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange, isType
   if (isTypeBadge) {
     const v = String(value ?? '').trim();
     const badgeClass = v === 'Работа' ? 'gg-badge-work' : v === 'Материал' ? 'gg-badge-material' : '';
+    const displayLabel = v === 'Работа' ? 'Р' : v === 'Материал' ? 'М' : v;
     if (readOnly || !badgeClass) {
-      return <span className={`gg-badge ${badgeClass}`}>{v || '—'}</span>;
+      return <span className={`gg-badge ${badgeClass}`} title={v || undefined}>{displayLabel || '—'}</span>;
     }
     return (
       <input
         ref={inputRef}
         className="gg-cell-input"
         value={localVal}
+        title={v}
         onChange={(e) => setLocalVal(e.target.value)}
         onBlur={() => onChange(localVal)}
         onKeyDown={(e) => {

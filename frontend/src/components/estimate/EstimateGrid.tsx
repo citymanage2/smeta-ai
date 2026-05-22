@@ -196,6 +196,11 @@ function CommentCell({ row }: RenderCellProps<EstimateRow>) {
 }
 
 const TYPE_LABELS: Record<string, string> = {
+  work: 'Р',
+  material: 'М',
+  section: 'Раздел',
+};
+const TYPE_LABELS_FULL: Record<string, string> = {
   work: 'Работа',
   material: 'Материал',
   section: 'Раздел',
@@ -239,7 +244,7 @@ function TypeCell({ row }: RenderCellProps<EstimateRow>) {
     <span
       className={`${TYPE_CLASSES[row.type] ?? 'type-badge'}${!isReadonly ? ' type-badge-clickable' : ''}`}
       onClick={() => { if (!isReadonly) setOpen(true); }}
-      title={isReadonly ? undefined : 'Нажмите для изменения типа'}
+      title={isReadonly ? (TYPE_LABELS_FULL[row.type] ?? row.type) : `${TYPE_LABELS_FULL[row.type] ?? row.type} — нажмите для изменения`}
     >
       {TYPE_LABELS[row.type] ?? row.type}
     </span>
@@ -331,7 +336,7 @@ const DRAG_COL: Column<EstimateRow> = {
 
 const BASE_COLUMNS: Column<EstimateRow>[] = [
   { key: 'num', name: '№', width: 50, frozen: true, renderCell: NumericCell },
-  { key: 'type', name: 'Тип', width: 90, renderCell: TypeCell },
+  { key: 'type', name: 'Тип', width: 52, renderCell: TypeCell },
   {
     key: 'name',
     name: 'Наименование',
@@ -526,6 +531,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const draggingIdRef = useRef<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; above: boolean } | null>(null);
+  const dropTargetRef = useRef<{ id: string; above: boolean } | null>(null);
 
   const handleDragRowStart = useCallback((rowId: string, e: React.DragEvent) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -544,6 +550,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const handleDragRowEnd = useCallback(() => {
     setDraggingId(null);
     draggingIdRef.current = null;
+    dropTargetRef.current = null;
     setDropTarget(null);
   }, []);
 
@@ -566,17 +573,21 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 
     const rect = rowEl.getBoundingClientRect();
     const above = e.clientY < rect.top + rect.height / 2;
-    setDropTarget((prev) =>
-      prev?.id === targetRow.id && prev?.above === above ? prev : { id: targetRow.id, above },
-    );
+    setDropTarget((prev) => {
+      const next = prev?.id === targetRow.id && prev?.above === above ? prev : { id: targetRow.id, above };
+      dropTargetRef.current = next;
+      return next;
+    });
   }, []);
 
   const handleContainerDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     const sourceId = draggingIdRef.current;
-    if (!sourceId || !dropTarget) {
+    const target = dropTargetRef.current;
+    if (!sourceId || !target) {
       setDraggingId(null);
       draggingIdRef.current = null;
+      dropTargetRef.current = null;
       setDropTarget(null);
       return;
     }
@@ -587,17 +598,18 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
 
     const reordered = [...currentRows];
     const [removed] = reordered.splice(fromIdx, 1);
-    const newTargetIdx = reordered.findIndex((r) => r.id === dropTarget.id);
+    const newTargetIdx = reordered.findIndex((r) => r.id === target.id);
     if (newTargetIdx === -1) return;
 
-    reordered.splice(dropTarget.above ? newTargetIdx : newTargetIdx + 1, 0, removed);
+    reordered.splice(target.above ? newTargetIdx : newTargetIdx + 1, 0, removed);
     onRowsChange(reordered);
     triggerSave();
 
     setDraggingId(null);
     draggingIdRef.current = null;
+    dropTargetRef.current = null;
     setDropTarget(null);
-  }, [dropTarget, onRowsChange, triggerSave]);
+  }, [onRowsChange, triggerSave]);
 
   const handleTypeChange = useCallback(
     (rowId: string, newType: EstimateRow['type']) => {
@@ -1072,7 +1084,12 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
         <div
           onDragOver={handleContainerDragOver}
           onDrop={handleContainerDrop}
-          onDragLeave={() => setDropTarget(null)}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              dropTargetRef.current = null;
+              setDropTarget(null);
+            }
+          }}
         >
           <DataGrid
             columns={columns}
