@@ -1667,6 +1667,68 @@ class TaskProcessor:
             f"Прайс: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций."
         )
 
+        # ── Проход 4: точное совпадение по price_cache ───────────────────────
+        need_cache_emb_works: list[tuple[int, str]] = []
+        need_cache_emb_materials: list[tuple[int, str]] = []
+
+        for gidx in list(unmatched_by_gidx.keys()):
+            enriched = enriched_map[gidx]
+            item_type = str(items[gidx].get("type", "")).strip()
+            name = str(items[gidx].get("name", "")).strip()
+
+            if item_type == "Работа":
+                cache_work_info = _price_svc._exact_match_cache_work(name)
+                if cache_work_info is not None and cache_work_info.get("price") is not None:
+                    enriched["work_price"] = cache_work_info.get("price")
+                    enriched["price_list_name"] = cache_work_info.get("name")
+                    enriched["sources"] = cache_work_info.get("sources")
+                    matched_by_gidx[gidx] = enriched
+                    del unmatched_by_gidx[gidx]
+                    logger.info("Item MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
+                else:
+                    need_cache_emb_works.append((gidx, name))
+
+            elif item_type == "Материал":
+                cache_mat_price = _price_svc._exact_match_cache_material(name)
+                if cache_mat_price is not None:
+                    enriched["material_price"] = cache_mat_price
+                    enriched["price_list_name"] = name
+                    matched_by_gidx[gidx] = enriched
+                    del unmatched_by_gidx[gidx]
+                    logger.info("Material MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
+                else:
+                    need_cache_emb_materials.append((gidx, name))
+
+        # ── Проход 5: батч-эмбеддинг для работ в price_cache ─────────────────
+        if need_cache_emb_works:
+            cache_work_names = [n for _, n in need_cache_emb_works]
+            cache_work_results = await _price_svc.batch_embedding_match_cache_works(cache_work_names)
+            for (gidx, name), cache_work_info in zip(need_cache_emb_works, cache_work_results):
+                enriched = enriched_map[gidx]
+                if cache_work_info is not None and cache_work_info.get("price") is not None:
+                    enriched["work_price"] = cache_work_info.get("price")
+                    enriched["price_list_name"] = cache_work_info.get("name")
+                    enriched["sources"] = cache_work_info.get("sources")
+                    matched_by_gidx[gidx] = enriched
+                    del unmatched_by_gidx[gidx]
+                    logger.info("Item MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache", price_entry=cache_work_info.get("name"))
+
+        # ── Проход 6: батч-эмбеддинг для материалов в price_cache ────────────
+        if need_cache_emb_materials:
+            cache_mat_names = [n for _, n in need_cache_emb_materials]
+            cache_mat_results = await _price_svc.batch_embedding_match_cache_materials(cache_mat_names)
+            for (gidx, name), cache_mat_price in zip(need_cache_emb_materials, cache_mat_results):
+                enriched = enriched_map[gidx]
+                if cache_mat_price is not None:
+                    enriched["material_price"] = cache_mat_price
+                    enriched["price_list_name"] = name
+                    matched_by_gidx[gidx] = enriched
+                    del unmatched_by_gidx[gidx]
+                    logger.info("Material MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache")
+
+        n_matched = len(matched_by_gidx)
+        n_unmatched = len(unmatched_by_gidx)
+
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
         # Results keyed by int _id (= global index), not by name string.
         claude_results: dict[int, dict] = {}
@@ -1708,6 +1770,28 @@ class TaskProcessor:
                 item_id = result_item.get("id")
                 if item_id is not None:
                     claude_results[int(item_id)] = result_item
+                    # Сохраняем в кеш только позиции с реальной ценой
+                    _item_type_str = result_item.get("type", "")
+                    _item_name = result_item.get("name", "")
+                    _item_unit = result_item.get("unit")
+                    _item_sources = result_item.get("sources")
+                    try:
+                        if _item_type_str == "Работа":
+                            _item_price = result_item.get("work_price")
+                            if _item_price is not None and float(_item_price) > 0:
+                                await _price_svc.save_to_cache(
+                                    self.db, "work", _item_name, _item_unit, float(_item_price), _item_sources
+                                )
+                                logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
+                        elif _item_type_str == "Материал":
+                            _item_price = result_item.get("material_price")
+                            if _item_price is not None and float(_item_price) > 0:
+                                await _price_svc.save_to_cache(
+                                    self.db, "material", _item_name, _item_unit, float(_item_price), _item_sources
+                                )
+                                logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
+                    except Exception as _cache_err:
+                        logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
 
         if unmatched_by_gidx:
             unmatched_list = list(unmatched_by_gidx.values())

@@ -87,7 +87,7 @@ updated_at  TIMESTAMP NOT NULL DEFAULT now()
 
 ---
 
-### Фаза 4: Обновление порядка поиска цен в task_processor [ ]
+### Фаза 4: Обновление порядка поиска цен в task_processor [x]
 
 В `ESTIMATE_FROM_LIST` поток поиска цены для каждой позиции изменить на 5 шагов:
 
