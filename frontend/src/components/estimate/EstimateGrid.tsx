@@ -277,6 +277,14 @@ function NumericCell({ row, column }: RenderCellProps<EstimateRow>) {
   return <span className="cell-number">{val != null ? fmt(val) : '—'}</span>;
 }
 
+function NameCell({ row }: RenderCellProps<EstimateRow>) {
+  return (
+    <span className="cell-name" title={row.name ?? undefined}>
+      {row.name || '—'}
+    </span>
+  );
+}
+
 /**
  * QtyCell — специализированная ячейка для колонки «Кол-во».
  * Для материалов показывает norm-комментарий и кнопку ↩ возврата ручного объёма.
@@ -335,12 +343,13 @@ const DRAG_COL: Column<EstimateRow> = {
 };
 
 const BASE_COLUMNS: Column<EstimateRow>[] = [
-  { key: 'num', name: '№', width: 50, frozen: true, renderCell: NumericCell },
+  { key: 'num', name: '№', width: 32, frozen: true, renderCell: NumericCell },
   { key: 'type', name: 'Тип', width: 52, renderCell: TypeCell },
   {
     key: 'name',
     name: 'Наименование',
-    width: 340,
+    width: 575,
+    renderCell: NameCell,
     renderEditCell: ConfirmTextEditor,
     editable: (row) => row.type !== 'section',
   },
@@ -364,7 +373,7 @@ const BASE_COLUMNS: Column<EstimateRow>[] = [
 const WORK_PRICE_COL: Column<EstimateRow> = {
   key: 'price_work',
   name: 'Цена работы, руб',
-  width: 140,
+  width: 70,
   renderEditCell: NumberEditor,
   renderCell: NumericCell,
   editable: (row) => row.type !== 'section',
@@ -373,7 +382,7 @@ const WORK_PRICE_COL: Column<EstimateRow> = {
 const MATERIAL_PRICE_COL: Column<EstimateRow> = {
   key: 'price_material',
   name: 'Цена материала, руб',
-  width: 155,
+  width: 78,
   renderEditCell: NumberEditor,
   renderCell: NumericCell,
   editable: (row) => row.type !== 'section',
@@ -382,7 +391,7 @@ const MATERIAL_PRICE_COL: Column<EstimateRow> = {
 const COST_COL: Column<EstimateRow> = {
   key: 'cost',
   name: 'Стоимость, руб',
-  width: 140,
+  width: 70,
   renderCell: CostCell,
 };
 

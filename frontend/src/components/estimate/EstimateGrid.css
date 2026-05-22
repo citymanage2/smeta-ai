@@ -310,6 +310,15 @@
   padding-right: 8px;
 }
 
+/* Name cell — truncate with ellipsis, full text via title tooltip */
+.cell-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 4px;
+}
+
 /* Cost cell */
 .cell-cost {
   text-align: right;

@@ -17,6 +17,8 @@ type Tab = 'all' | 'works' | 'materials';
 const CHAR_PX = 8;
 const COL_MIN = 60;
 const COL_MAX = 280;
+const COL_MAX_NAME = 500;
+const COL_MAX_PRICE = 90;
 const COL_PAD = 24;
 const UNDO_LIMIT = 50;
 
@@ -82,14 +84,21 @@ function applyRecalc(
   return result;
 }
 
-function estimateColWidth(header: string, rows: GenericRow[]): number {
+const PRICE_COST_KEYWORDS = [
+  ...PRICE_WORK_KEYWORDS,
+  ...PRICE_MAT_KEYWORDS,
+  ...COST_WORK_KEYWORDS,
+  ...COST_MAT_KEYWORDS,
+];
+
+function estimateColWidth(header: string, rows: GenericRow[], maxWidth = COL_MAX): number {
   let max = header.length;
   for (const row of rows) {
     const val = row.cells[header];
     const len = val == null ? 0 : String(val).length;
     if (len > max) max = len;
   }
-  return Math.min(COL_MAX, Math.max(COL_MIN, max * CHAR_PX + COL_PAD));
+  return Math.min(maxWidth, Math.max(COL_MIN, max * CHAR_PX + COL_PAD));
 }
 
 function getTypeClass(typeVal: string | null): string {
@@ -195,7 +204,17 @@ const GenericGrid: React.FC<GenericGridProps> = ({
   }, [allColumns, isEnhanced, hasTypeCol, hasNameCol]);
 
   const colWidths = useMemo(
-    () => Object.fromEntries(columns.map((col) => [col, estimateColWidth(col, rows)])),
+    () =>
+      Object.fromEntries(
+        columns.map((col) => {
+          const isName = col === NAME_COL;
+          const isPriceCost = PRICE_COST_KEYWORDS.some((kw) =>
+            col.trim().toLowerCase().startsWith(kw),
+          );
+          const maxWidth = isName ? COL_MAX_NAME : isPriceCost ? COL_MAX_PRICE : COL_MAX;
+          return [col, estimateColWidth(col, rows, maxWidth)];
+        }),
+      ),
     [columns, rows],
   );
 
@@ -461,7 +480,11 @@ const GenericGrid: React.FC<GenericGridProps> = ({
                   <td className="gg-td gg-td-num">{idx + 1}</td>
                   {/* Data cells */}
                   {columns.map((col) => (
-                    <td key={col} className="gg-td">
+                    <td
+                      key={col}
+                      className={`gg-td${col === NAME_COL ? ' gg-td-name' : ''}`}
+                      title={col === NAME_COL ? (String(row.cells[col] ?? '')) || undefined : undefined}
+                    >
                       <CellInput
                         value={row.cells[col]}
                         readOnly={!!isReadonly}

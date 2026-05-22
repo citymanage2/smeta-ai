@@ -253,9 +253,9 @@
 }
 
 .gg-th-num {
-  width: 44px;
+  width: 32px;
   text-align: center;
-  padding: 8px 6px;
+  padding: 8px 4px;
 }
 
 /* ── Rows ──────────────────────────────────────────────────────────── */
@@ -293,10 +293,18 @@
 }
 
 .gg-td-num {
+  width: 32px;
   color: #94a3b8;
   text-align: center;
   font-size: 11px;
-  padding: 6px;
+  padding: 4px;
+  white-space: nowrap;
+}
+
+/* Name column: truncate long text; full value via title tooltip */
+.gg-td-name .gg-cell-input {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
