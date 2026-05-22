@@ -5,7 +5,8 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  closestCorners,
+  pointerWithin,
+  closestCenter,
   DragStartEvent,
   DragEndEvent,
 } from '@dnd-kit/core'
@@ -185,7 +186,10 @@ export function KanbanBoard({ projectId }: Props) {
 
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCorners}
+        collisionDetection={(args) => {
+          const hits = pointerWithin(args)
+          return hits.length > 0 ? hits : closestCenter(args)
+        }}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
