@@ -120,6 +120,24 @@ function DownloadBtn({ onClick, title = 'Скачать' }: { onClick: () => voi
   )
 }
 
+function ViewBtn({ onClick, title = 'Открыть онлайн' }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: '#3b82f6', border: 'none', cursor: 'pointer',
+        color: '#fff', padding: '2px 5px', borderRadius: '4px',
+        display: 'flex', alignItems: 'center', flexShrink: 0,
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = '#2563eb' }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '#3b82f6' }}
+    >
+      <Eye size={11} />
+    </button>
+  )
+}
+
 function Spinner() {
   return (
     <span style={{
@@ -379,6 +397,7 @@ function ResultFilesSection({
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
           <DownloadBtn onClick={() => safeDownload(taskId, fallbackSlot)} title={`Скачать ${label.toLowerCase()}`} />
+          <ViewBtn onClick={() => onOpenEditor({ taskId, title: label, fileSlot: fallbackSlot, taskType: stage.task_type })} title="Открыть онлайн" />
           <ArrowBtn onClick={navigateToCard} />
         </div>
       )}
@@ -563,6 +582,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
+              <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Перечень', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )
@@ -687,6 +707,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
+              <ViewBtn onClick={() => onOpenEditor({ taskId: listTask.id, title: 'Перечень', fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
@@ -744,6 +765,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
+              <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Полнота', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
@@ -866,6 +888,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
+              <ViewBtn onClick={() => onOpenEditor({ taskId: listTask.id, title: 'Перечень', fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
@@ -901,6 +924,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
+              <ViewBtn onClick={() => onOpenEditor({ taskId: completenessTask.id, title: 'Полнота', fileSlot: 'result', taskType: completenessTask.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
@@ -947,6 +971,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
             <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
             <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать смету" />
+            <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Смета из перечня', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
             <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
           </div>
         )
@@ -1158,6 +1183,8 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
+              <DownloadBtn onClick={() => safeDownload(task.id, 'optimized')} title="Скачать оптимизацию" />
+              <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы', fileSlot: 'optimized', taskType: task.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
             </div>
           )}
