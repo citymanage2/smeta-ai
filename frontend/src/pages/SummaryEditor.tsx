@@ -41,6 +41,7 @@ const SummaryEditor: React.FC = () => {
         const axiosErr = err as { response?: { status?: number } }
         if (axiosErr?.response?.status === 404) {
           setHasSummary(false)
+          setShowSelector(true)
         } else {
           throw err
         }
