@@ -366,6 +366,79 @@ async def init_from_input(
 
 
 # ---------------------------------------------------------------------------
+# POST /tasks/{task_id}/estimate/init-from-estimate-result
+# ---------------------------------------------------------------------------
+
+@router.post("/{task_id}/estimate/init-from-estimate-result")
+async def init_from_estimate_result(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Idempotent: create EstimateVersion from ESTIMATE_FROM_LIST task result using estimate parser."""
+    from app.models.result import TaskResult
+    from app.services.estimate_parser import parse_estimate_excel
+
+    task = await _get_task_or_404(task_id, db)
+    if task.task_type != "ESTIMATE_FROM_LIST":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Endpoint доступен только для задач ESTIMATE_FROM_LIST",
+        )
+
+    existing = await db.execute(
+        select(EstimateVersion).where(
+            EstimateVersion.task_id == task_id,
+            EstimateVersion.file_slot == "estimate",
+            EstimateVersion.version_label == "original",
+        ).limit(1)
+    )
+    ev = existing.scalar_one_or_none()
+    if ev is not None:
+        return {"status": "already_exists", "version_id": str(ev.id)}
+
+    res = await db.execute(
+        select(TaskResult)
+        .where(TaskResult.task_id == task_id, TaskResult.slot.in_(["estimate", "result"]))
+        .order_by(TaskResult.id.desc())
+        .limit(1)
+    )
+    tr = res.scalar_one_or_none()
+    if tr is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Результат задачи не найден. Дождитесь завершения расчёта сметы.",
+        )
+
+    try:
+        rows = parse_estimate_excel(tr.file_data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Не удалось распарсить Excel-смету: {exc}",
+        )
+
+    count_res = await db.execute(select(EstimateVersion).where(EstimateVersion.task_id == task_id))
+    all_versions = count_res.scalars().all()
+    next_num = _next_version_number(all_versions)
+
+    version = EstimateVersion(
+        id=str(uuid.uuid4()),
+        task_id=task_id,
+        version_number=next_num,
+        version_label="original",
+        version_display_name="Исходная смета",
+        rows=rows,
+        file_slot="estimate",
+        task_type=task.task_type,
+    )
+    db.add(version)
+    await db.commit()
+    logger.info("EstimateVersion init-from-estimate-result", task_id=task_id, version_id=version.id, rows=len(rows))
+    return {"status": "created", "version_id": str(version.id)}
+
+
+# ---------------------------------------------------------------------------
 # Background optimization runner (shared by steps 1–4)
 # ---------------------------------------------------------------------------
 

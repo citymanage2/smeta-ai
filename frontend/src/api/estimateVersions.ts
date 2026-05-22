@@ -29,6 +29,13 @@ export async function initVersionFromResult(taskId: string): Promise<{ status: s
   return res.data;
 }
 
+export async function initEstimateVersionFromResult(taskId: string): Promise<{ status: string; version_id?: string }> {
+  const res = await apiClient.post<{ status: string; version_id?: string }>(
+    `/tasks/${taskId}/estimate/init-from-estimate-result`,
+  );
+  return res.data;
+}
+
 export async function initVersionFromInput(taskId: string, fileIndex: number): Promise<{ status: string; version_id?: string }> {
   const res = await apiClient.post<{ status: string; version_id?: string }>(
     `/tasks/${taskId}/estimate/init-from-input`,

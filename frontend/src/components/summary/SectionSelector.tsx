@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Star } from 'lucide-react'
 import { WorkflowCard } from '../../types/workflow'
 import { EstimateVersionSummary } from '../../types'
-import { getVersions } from '../../api/estimateVersions'
+import { getVersions, initEstimateVersionFromResult } from '../../api/estimateVersions'
 import { setPrimaryVersion } from '../../api/summaryEstimate'
 import { SectionInput } from '../../types/summary'
 import { LumaSpin } from '../ui/LumaSpin'
@@ -55,10 +55,23 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
 
       await Promise.all(
         eligibleCards.map(async (card) => {
-          const taskId = card.estimate_task_id
+          // Для карточек оптимизации — берём версии из optimization_task_id (создаются автоматически при обработке).
+          // Для смет-из-перечня — берём из estimate_task_id, при необходимости инициализируем из результата.
+          const taskId = card.optimization_task_id || card.estimate_task_id
           if (!taskId) return
           try {
-            const versions = await getVersions(taskId)
+            let versions = await getVersions(taskId)
+
+            // Если версий нет и это задача estimate (не оптимизация) — инициализируем из результата задачи
+            if (versions.length === 0 && !card.optimization_task_id && card.estimate_task_id) {
+              try {
+                await initEstimateVersionFromResult(card.estimate_task_id)
+                versions = await getVersions(card.estimate_task_id)
+              } catch {
+                // Задача ещё не завершена или файл недоступен — оставляем пустой список
+              }
+            }
+
             map[card.id] = versions
             const best = getBestVersionId(card, versions)
             if (best) initSel[card.id] = best
@@ -180,11 +193,15 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
                     <span style={{ fontWeight: 600, fontSize: '14px', color: '#1e293b', flex: 1 }}>
                       {card.name}
                     </span>
-                    {card.optimization_task_id && (
+                    {card.optimization_task_id ? (
                       <span style={{ fontSize: '11px', color: '#7c3aed', fontWeight: 600, background: '#f5f3ff', padding: '2px 7px', borderRadius: '6px' }}>
                         оптимизировано
                       </span>
-                    )}
+                    ) : card.estimate_task_id ? (
+                      <span style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, background: '#e0f2fe', padding: '2px 7px', borderRadius: '6px' }}>
+                        смета
+                      </span>
+                    ) : null}
                   </div>
 
                   {versions.length === 0 ? (
