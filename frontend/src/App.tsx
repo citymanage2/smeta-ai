@@ -99,7 +99,9 @@ const App: React.FC = () => {
           path="/projects/:projectId/summary"
           element={
             <ProtectedRoute>
-              <SummaryEditor />
+              <ErrorBoundary>
+                <SummaryEditor />
+              </ErrorBoundary>
             </ProtectedRoute>
           }
         />

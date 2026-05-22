@@ -188,18 +188,25 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
             onUpdateOverride={updateOverride}
             onUpdateSectionTaxPct={updateSectionTaxPct}
           />
+        ) : sections.length === 0 ? (
+          <SummarySheet
+            calc={calc}
+            overrides={summaryOverrides}
+            onUpdateOverride={updateOverride}
+            onUpdateSectionTaxPct={updateSectionTaxPct}
+          />
         ) : (
-          sections.map((sec, idx) => (
-            <div
-              key={sec.card_id}
-              style={{ display: activeTabIndex === idx ? 'block' : 'none', height: '100%' }}
-            >
+          (() => {
+            const idx = activeTabIndex >= 0 && activeTabIndex < sections.length ? activeTabIndex : 0
+            const sec = sections[idx]
+            return (
               <EstimateGrid
-                rows={sec.rows}
+                key={sec.card_id}
+                rows={sec.rows ?? []}
                 selectedRowIds={selectedRowIds[idx] ?? new Set()}
                 activeTab={gridTabs[idx] ?? 'all'}
-                canUndo={activeTabIndex === idx && undoStack.length > 0}
-                canRedo={activeTabIndex === idx && redoStack.length > 0}
+                canUndo={undoStack.length > 0}
+                canRedo={redoStack.length > 0}
                 onRowsChange={(rows: EstimateRow[]) => updateSectionRows(idx, rows)}
                 onSelectedRowIdsChange={(ids) => setSelectedRowIds((prev) => {
                   const next = [...prev]; next[idx] = ids; return next
@@ -208,11 +215,11 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
                   const next = [...prev]; next[idx] = tab; return next
                 })}
                 onSave={handleSave}
-                onUndo={activeTabIndex === idx ? undo : undefined}
-                onRedo={activeTabIndex === idx ? redo : undefined}
+                onUndo={undo}
+                onRedo={redo}
               />
-            </div>
-          ))
+            )
+          })()
         )}
       </div>
 
