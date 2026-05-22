@@ -233,36 +233,44 @@
   cursor: pointer;
 }
 
-/* Move column buttons */
-.move-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  padding: 0 2px;
-}
-
-.move-btn {
+/* Drag handle column */
+.drag-handle-cell {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 14px;
-  padding: 0;
-  font-size: 9px;
-  line-height: 1;
-  background: transparent;
-  border: 1px solid #cbd5e1;
-  border-radius: 3px;
-  color: #64748b;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  height: 100%;
+  cursor: grab;
+  color: #cbd5e1;
+  transition: color 0.1s;
+  user-select: none;
 }
 
-.move-btn:hover {
-  background: #e2e8f0;
-  color: #1e293b;
-  border-color: #94a3b8;
+.drag-handle-cell:hover {
+  color: #94a3b8;
+}
+
+.drag-handle-cell:active {
+  cursor: grabbing;
+}
+
+.drag-handle-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* Row being dragged */
+.rdg-row.row-dragging .rdg-cell {
+  opacity: 0.35;
+  background: #f1f5f9 !important;
+}
+
+/* Drop target indicators */
+.rdg-row.row-drop-above .rdg-cell {
+  box-shadow: inset 0 2px 0 0 #2563eb;
+}
+
+.rdg-row.row-drop-below .rdg-cell {
+  box-shadow: inset 0 -2px 0 0 #2563eb;
 }
 
 /* Section header: full-width merged-cell appearance.

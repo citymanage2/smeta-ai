@@ -58,8 +58,9 @@ interface GridContextValue {
   displayedRowsRef: React.MutableRefObject<EstimateRow[]>;
   isReadonly: boolean;
   onQtyRestore: (rowId: string) => void;
-  onMoveRow: (rowId: string, direction: 'up' | 'down') => void;
   onTypeChange: (rowId: string, newType: EstimateRow['type']) => void;
+  onDragRowStart: (rowId: string, e: React.DragEvent) => void;
+  onDragRowEnd: () => void;
 }
 
 const GridContext = createContext<GridContextValue>({
@@ -67,8 +68,9 @@ const GridContext = createContext<GridContextValue>({
   displayedRowsRef: { current: [] },
   isReadonly: false,
   onQtyRestore: () => {},
-  onMoveRow: () => {},
   onTypeChange: () => {},
+  onDragRowStart: () => {},
+  onDragRowEnd: () => {},
 });
 
 // ---------------------------------------------------------------------------
@@ -91,7 +93,7 @@ function NumberEditor({ row, column, onRowChange }: RenderEditCellProps<Estimate
 
   const commit = useCallback(() => {
     const val = inputRef.current?.value ?? '';
-    const parsed = val === '' ? null : parseFloat(val);
+    const parsed = val === '' ? null : parseFloat(val.replace(',', '.'));
     const updated: EstimateRow = { ...row, [key]: parsed };
     // Помечаем ручное изменение qty материала
     if (key === 'qty' && row.type === 'material') {
@@ -109,9 +111,8 @@ function NumberEditor({ row, column, onRowChange }: RenderEditCellProps<Estimate
     <div className="cell-editor-wrap">
       <input
         ref={inputRef}
-        type="number"
-        min="0"
-        step="0.01"
+        type="text"
+        inputMode="decimal"
         defaultValue={raw ?? ''}
         autoFocus
         onKeyDown={(e) => {
@@ -245,23 +246,22 @@ function TypeCell({ row }: RenderCellProps<EstimateRow>) {
   );
 }
 
-function MoveCell({ row }: RenderCellProps<EstimateRow>) {
-  const { isReadonly, onMoveRow } = useContext(GridContext);
-  if (isReadonly) return null;
+function DragHandleCell({ row }: RenderCellProps<EstimateRow>) {
+  const { isReadonly, onDragRowStart, onDragRowEnd } = useContext(GridContext);
+  if (isReadonly || row.type === 'section') return null;
   return (
-    <div className="move-cell">
-      <button
-        className="move-btn"
-        title="Переместить вверх"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => { e.stopPropagation(); onMoveRow(row.id, 'up'); }}
-      >▲</button>
-      <button
-        className="move-btn"
-        title="Переместить вниз"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => { e.stopPropagation(); onMoveRow(row.id, 'down'); }}
-      >▼</button>
+    <div
+      className="drag-handle-cell"
+      draggable
+      onDragStart={(e) => onDragRowStart(row.id, e)}
+      onDragEnd={onDragRowEnd}
+      title="Перетащите для перемещения строки"
+    >
+      <svg className="drag-handle-icon" viewBox="0 0 8 14" width="10" height="14" fill="currentColor">
+        <circle cx="2" cy="2.5" r="1.2" /><circle cx="6" cy="2.5" r="1.2" />
+        <circle cx="2" cy="7" r="1.2" /><circle cx="6" cy="7" r="1.2" />
+        <circle cx="2" cy="11.5" r="1.2" /><circle cx="6" cy="11.5" r="1.2" />
+      </svg>
     </div>
   );
 }
@@ -321,12 +321,12 @@ function QtyCell({ row }: RenderCellProps<EstimateRow>) {
 // Column definitions
 // ---------------------------------------------------------------------------
 
-const MOVE_COL: Column<EstimateRow> = {
-  key: '__move',
+const DRAG_COL: Column<EstimateRow> = {
+  key: '__drag',
   name: '',
-  width: 52,
+  width: 32,
   frozen: true,
-  renderCell: MoveCell,
+  renderCell: DragHandleCell,
 };
 
 const BASE_COLUMNS: Column<EstimateRow>[] = [
@@ -519,25 +519,85 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     [onRowsChange, triggerSave],
   );
 
-  const handleMoveRow = useCallback(
-    (rowId: string, direction: 'up' | 'down') => {
-      const displayed = displayedRowsRef.current;
-      const dispIdx = displayed.findIndex((r) => r.id === rowId);
-      if (dispIdx === -1) return;
-      const targetDispIdx = direction === 'up' ? dispIdx - 1 : dispIdx + 1;
-      if (targetDispIdx < 0 || targetDispIdx >= displayed.length) return;
-      const targetId = displayed[targetDispIdx].id;
-      const currentRows = rowsRef.current;
-      const fromIdx = currentRows.findIndex((r) => r.id === rowId);
-      const toIdx = currentRows.findIndex((r) => r.id === targetId);
-      if (fromIdx === -1 || toIdx === -1) return;
-      const reordered = [...currentRows];
-      [reordered[fromIdx], reordered[toIdx]] = [reordered[toIdx], reordered[fromIdx]];
-      onRowsChange(reordered);
-      triggerSave();
-    },
-    [onRowsChange, triggerSave],
-  );
+  // ---------------------------------------------------------------------------
+  // Drag-and-drop state
+  // ---------------------------------------------------------------------------
+
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const draggingIdRef = useRef<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; above: boolean } | null>(null);
+
+  const handleDragRowStart = useCallback((rowId: string, e: React.DragEvent) => {
+    e.dataTransfer.effectAllowed = 'move';
+    // Прозрачный ghost-образ — используем собственную визуализацию
+    const ghost = document.createElement('div');
+    ghost.style.position = 'absolute';
+    ghost.style.top = '-9999px';
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    setTimeout(() => document.body.removeChild(ghost), 0);
+
+    setDraggingId(rowId);
+    draggingIdRef.current = rowId;
+  }, []);
+
+  const handleDragRowEnd = useCallback(() => {
+    setDraggingId(null);
+    draggingIdRef.current = null;
+    setDropTarget(null);
+  }, []);
+
+  const handleContainerDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    if (!draggingIdRef.current) return;
+    e.dataTransfer.dropEffect = 'move';
+
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const rowEl = el?.closest('[role="row"]') as HTMLElement | null;
+    if (!rowEl) return;
+
+    const ariaRowIndex = parseInt(rowEl.getAttribute('aria-rowindex') || '0');
+    if (ariaRowIndex < 2) return; // заголовок таблицы
+
+    const displayIdx = ariaRowIndex - 2;
+    const displayed = displayedRowsRef.current;
+    const targetRow = displayed[displayIdx];
+    if (!targetRow || targetRow.id === draggingIdRef.current) return;
+
+    const rect = rowEl.getBoundingClientRect();
+    const above = e.clientY < rect.top + rect.height / 2;
+    setDropTarget((prev) =>
+      prev?.id === targetRow.id && prev?.above === above ? prev : { id: targetRow.id, above },
+    );
+  }, []);
+
+  const handleContainerDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const sourceId = draggingIdRef.current;
+    if (!sourceId || !dropTarget) {
+      setDraggingId(null);
+      draggingIdRef.current = null;
+      setDropTarget(null);
+      return;
+    }
+
+    const currentRows = rowsRef.current;
+    const fromIdx = currentRows.findIndex((r) => r.id === sourceId);
+    if (fromIdx === -1) return;
+
+    const reordered = [...currentRows];
+    const [removed] = reordered.splice(fromIdx, 1);
+    const newTargetIdx = reordered.findIndex((r) => r.id === dropTarget.id);
+    if (newTargetIdx === -1) return;
+
+    reordered.splice(dropTarget.above ? newTargetIdx : newTargetIdx + 1, 0, removed);
+    onRowsChange(reordered);
+    triggerSave();
+
+    setDraggingId(null);
+    draggingIdRef.current = null;
+    setDropTarget(null);
+  }, [dropTarget, onRowsChange, triggerSave]);
 
   const handleTypeChange = useCallback(
     (rowId: string, newType: EstimateRow['type']) => {
@@ -570,10 +630,11 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
       displayedRowsRef,
       isReadonly,
       onQtyRestore: handleQtyRestore,
-      onMoveRow: handleMoveRow,
       onTypeChange: handleTypeChange,
+      onDragRowStart: handleDragRowStart,
+      onDragRowEnd: handleDragRowEnd,
     }),
-    [isReadonly, handleQtyRestore, handleMoveRow, handleTypeChange],
+    [isReadonly, handleQtyRestore, handleTypeChange, handleDragRowStart, handleDragRowEnd],
   );
 
   // ---------------------------------------------------------------------------
@@ -775,8 +836,8 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     if (isReadonly) {
       return base.map((c) => ({ ...c, editable: false, renderEditCell: undefined }));
     }
-    // Insert MOVE_COL after SelectColumn (index 0)
-    return [base[0], MOVE_COL, ...base.slice(1)];
+    // Insert DRAG_COL after SelectColumn (index 0)
+    return [base[0], DRAG_COL, ...base.slice(1)];
   }, [activeTab, isReadonly]);
 
   // ---------------------------------------------------------------------------
@@ -797,9 +858,11 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
       if (row.type === 'material' && row.qty_overridden && row.qty_per_work_unit != null)
         classes.push('row-qty-overridden');
       if (flashingIds.has(row.id)) classes.push('row-recalc-flash');
+      if (draggingId === row.id) classes.push('row-dragging');
+      if (dropTarget?.id === row.id) classes.push(dropTarget.above ? 'row-drop-above' : 'row-drop-below');
       return classes.join(' ') || undefined;
     },
-    [flashingIds],
+    [flashingIds, draggingId, dropTarget],
   );
 
   // ---------------------------------------------------------------------------
@@ -1006,18 +1069,24 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
         )}
 
         {/* Grid */}
-        <DataGrid
-          columns={columns}
-          rows={displayedRows}
-          onRowsChange={handleRowsChange}
-          rowKeyGetter={rowKeyGetter}
-          selectedRows={selectedRowIds}
-          onSelectedRowsChange={onSelectedRowIdsChange}
-          rowClass={rowClass}
-          renderers={{ renderRow }}
-          style={{ blockSize: 'auto', minHeight: 300, maxHeight: 600 }}
-          enableVirtualization
-        />
+        <div
+          onDragOver={handleContainerDragOver}
+          onDrop={handleContainerDrop}
+          onDragLeave={() => setDropTarget(null)}
+        >
+          <DataGrid
+            columns={columns}
+            rows={displayedRows}
+            onRowsChange={handleRowsChange}
+            rowKeyGetter={rowKeyGetter}
+            selectedRows={selectedRowIds}
+            onSelectedRowsChange={onSelectedRowIdsChange}
+            rowClass={rowClass}
+            renderers={{ renderRow }}
+            style={{ blockSize: 'auto', minHeight: 300, maxHeight: 600 }}
+            enableVirtualization
+          />
+        </div>
 
         {/* Toasts */}
         {toasts.length > 0 && (
