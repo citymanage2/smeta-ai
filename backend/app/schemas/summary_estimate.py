@@ -8,19 +8,29 @@ from datetime import datetime
 
 class SummaryOverrides(BaseModel):
     coefficient: Decimal = Field(default=Decimal("1.0"))
-    transport_pct: Decimal = Field(default=Decimal("1.0"))
-    cleanup_pct: Decimal = Field(default=Decimal("1.5"))
-    overhead_pct: Decimal = Field(default=Decimal("2.0"))
-    daily_workers_cost: Decimal = Field(default=Decimal("0"))
-    bank_guarantee_cost: Decimal = Field(default=Decimal("0"))
+    transport_pct: Decimal = Field(default=Decimal("3.0"))
+    cleanup_pct: Decimal = Field(default=Decimal("3.0"))
+    overhead_pct: Decimal = Field(default=Decimal("3.0"))
+    daily_workers_cost: Decimal = Field(default=Decimal("0"))      # stores COUNT of workers
+    bank_guarantee_cost: Decimal = Field(default=Decimal("0"))     # stored as без НДС
     cleaning_cost: Decimal = Field(default=Decimal("0"))
     ppr_cost: Decimal = Field(default=Decimal("0"))
-    commissioning_cost: Decimal = Field(default=Decimal("0"))
+    commissioning_cost: Decimal = Field(default=Decimal("0"))      # row 10: Разнорабочие мусор
+    construction_control_cost: Decimal = Field(default=Decimal("0"))
+    author_supervision_cost: Decimal = Field(default=Decimal("0"))
+    passes_cost: Decimal = Field(default=Decimal("0"))
+    site_office_cost: Decimal = Field(default=Decimal("0"))
+    travel_cost: Decimal = Field(default=Decimal("0"))
+    rp_cost: Decimal = Field(default=Decimal("0"))
+    housing_rent_cost: Decimal = Field(default=Decimal("0"))
+    workers_transport_cost: Decimal = Field(default=Decimal("0"))
     contingency_pct: Decimal = Field(default=Decimal("2.0"))
-    profit_pct: Decimal = Field(default=Decimal("16.0"))
-    vat_works_pct: Decimal = Field(default=Decimal("22.0"))
-    vat_materials_pct: Decimal = Field(default=Decimal("22.0"))
-    tax_pct: Decimal = Field(default=Decimal("3.0"))
+    profit_pct: Decimal = Field(default=Decimal("20.0"))
+    vat_full_cost_pct: Decimal = Field(default=Decimal("22.0"))
+    tax_pct: Decimal = Field(default=Decimal("2.0"))
+    # legacy fields kept for backward compatibility (not used in new calc)
+    vat_works_pct: Optional[Decimal] = Field(default=None)
+    vat_materials_pct: Optional[Decimal] = Field(default=None)
 
 
 class SectionInput(BaseModel):

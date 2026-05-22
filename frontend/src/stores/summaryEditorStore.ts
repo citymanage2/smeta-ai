@@ -19,86 +19,141 @@ export function calcSummary(
   sections: SectionTab[],
   overrides: SummaryOverrides,
 ): SummaryCalcResult {
-  let totalWorks = 0;
-  let totalMaterials = 0;
   const coeff = overrides.coefficient ?? 1.0;
+  const toWithout = (v: number) => v / 1.22;
+  const toWith = (v: number) => v * 1.22;
 
+  // ── Section breakdown ──────────────────────────────────────────────────────
   const section_totals: SectionCalcRow[] = sections.map((sec) => {
-    let works = 0;
-    let materials = 0;
+    let works_raw = 0;
+    let materials_raw = 0;
     for (const row of sec.rows) {
       if (row.type === 'section') continue;
-      works += rowAmount(row.price_work, row.qty);
-      materials += rowAmount(row.price_material, row.qty);
+      works_raw += rowAmount(row.price_work, row.qty);
+      materials_raw += rowAmount(row.price_material, row.qty);
     }
-    works *= coeff;
-    materials *= coeff;
+    works_raw *= coeff;
+    materials_raw *= coeff;
     const tax_pct = sec.tax_pct ?? 0;
-    const works_effective = works * (1 + tax_pct / 100);
-    const materials_effective = materials * (1 + tax_pct / 100);
-    totalWorks += works_effective;
-    totalMaterials += materials_effective;
+    // Стоимость с НДС = себестоимость × (1.22 − already_included_vat%)
+    const multiplier = 1.22 - tax_pct / 100;
     return {
       card_id: sec.card_id,
       card_name: sec.card_name,
       tax_pct,
-      works,
-      materials,
-      works_effective,
-      materials_effective,
+      works_raw,
+      materials_raw,
+      works_with_vat: works_raw * multiplier,
+      materials_with_vat: materials_raw * multiplier,
     };
   });
 
-  const transport = (totalMaterials * overrides.transport_pct) / 100;
-  const cleanup = (totalWorks * overrides.cleanup_pct) / 100;
-  const overhead = (totalWorks * overrides.overhead_pct) / 100;
-  const daily_workers = overrides.daily_workers_cost;
-  const bank_guarantee = overrides.bank_guarantee_cost;
-  const cleaning = overrides.cleaning_cost;
-  const ppr = overrides.ppr_cost;
-  const commissioning = overrides.commissioning_cost;
+  // ── Rows 1–2: Работы / Материалы ──────────────────────────────────────────
+  const works_with_vat = section_totals.reduce((s, r) => s + r.works_with_vat, 0);
+  const materials_with_vat = section_totals.reduce((s, r) => s + r.materials_with_vat, 0);
+  const works_without_vat = toWithout(works_with_vat);
+  const materials_without_vat = toWithout(materials_with_vat);
 
-  const subtotal =
-    totalWorks +
-    totalMaterials +
-    transport +
-    cleanup +
-    overhead +
-    daily_workers +
-    bank_guarantee +
-    cleaning +
-    ppr +
-    commissioning;
+  const base_with_vat = works_with_vat + materials_with_vat;
 
-  const contingency = (subtotal * overrides.contingency_pct) / 100;
-  const profit = (subtotal * overrides.profit_pct) / 100;
-  const full_cost = subtotal + contingency + profit;
+  // ── Rows 3–5: процентные расходы от (Работы + Материалы) с НДС ───────────
+  const transport_with_vat = base_with_vat * (overrides.transport_pct ?? 3) / 100;
+  const cleanup_with_vat = base_with_vat * (overrides.cleanup_pct ?? 3) / 100;
+  const overhead_with_vat = base_with_vat * (overrides.overhead_pct ?? 3) / 100;
 
-  const vat =
-    (totalWorks * overrides.vat_works_pct) / 100 +
-    (totalMaterials * overrides.vat_materials_pct) / 100;
-  const tax = (full_cost * overrides.tax_pct) / 100;
-  const total_for_customer = full_cost + vat + tax;
+  // ── Row 6: Разнорабочие ежедневно (count × 5000) ─────────────────────────
+  const daily_workers_with_vat = (overrides.daily_workers_cost ?? 0) * 5000;
+
+  // ── Rows 7–18: ручные поля (хранятся как без НДС) ─────────────────────────
+  const bg_wout = overrides.bank_guarantee_cost ?? 0;
+  const cl_wout = overrides.cleaning_cost ?? 0;
+  const ppr_wout = overrides.ppr_cost ?? 0;
+  const com_wout = overrides.commissioning_cost ?? 0;
+  const cc_wout = overrides.construction_control_cost ?? 0;
+  const as_wout = overrides.author_supervision_cost ?? 0;
+  const pa_wout = overrides.passes_cost ?? 0;
+  const so_wout = overrides.site_office_cost ?? 0;
+  const tr_wout = overrides.travel_cost ?? 0;
+  const rp_wout = overrides.rp_cost ?? 0;
+  const hr_wout = overrides.housing_rent_cost ?? 0;
+  const wt_wout = overrides.workers_transport_cost ?? 0;
+
+  // ── Subtotal ──────────────────────────────────────────────────────────────
+  const subtotal_with_vat =
+    works_with_vat + materials_with_vat +
+    transport_with_vat + cleanup_with_vat + overhead_with_vat +
+    daily_workers_with_vat +
+    toWith(bg_wout) + toWith(cl_wout) + toWith(ppr_wout) + toWith(com_wout) +
+    toWith(cc_wout) + toWith(as_wout) + toWith(pa_wout) + toWith(so_wout) +
+    toWith(tr_wout) + toWith(rp_wout) + toWith(hr_wout) + toWith(wt_wout);
+  const subtotal_without_vat = toWithout(subtotal_with_vat);
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  const contingency_pct = overrides.contingency_pct ?? 2;
+  const profit_pct = overrides.profit_pct ?? 20;
+  const vat_full_cost_pct = overrides.vat_full_cost_pct ?? 22;
+  const other_tax_pct = overrides.tax_pct ?? 2;
+
+  const contingency_with_vat = subtotal_with_vat * contingency_pct / 100;
+  const contingency_without_vat = subtotal_without_vat * contingency_pct / 100;
+
+  // Плановая прибыль: profit_pct% × (1 + contingency%) × subtotal_без_НДС / (100% − profit_pct%)
+  const profit =
+    (profit_pct / 100) * (1 + contingency_pct / 100) * subtotal_without_vat /
+    (1 - profit_pct / 100);
+
+  const full_cost_without_vat = subtotal_without_vat + contingency_without_vat + profit;
+  const vat = full_cost_without_vat * vat_full_cost_pct / 100;
+  const other_tax = full_cost_without_vat * other_tax_pct / 100;
+  const total_for_customer = full_cost_without_vat + vat + other_tax;
 
   return {
-    works: totalWorks,
-    materials: totalMaterials,
-    transport,
-    cleanup,
-    overhead,
-    daily_workers,
-    bank_guarantee,
-    cleaning,
-    ppr,
-    commissioning,
-    subtotal,
-    contingency,
-    profit,
-    full_cost,
-    vat,
-    tax,
-    total_for_customer,
     section_totals,
+    works_with_vat,
+    works_without_vat,
+    materials_with_vat,
+    materials_without_vat,
+    transport_with_vat,
+    transport_without_vat: toWithout(transport_with_vat),
+    cleanup_with_vat,
+    cleanup_without_vat: toWithout(cleanup_with_vat),
+    overhead_with_vat,
+    overhead_without_vat: toWithout(overhead_with_vat),
+    daily_workers_with_vat,
+    daily_workers_without_vat: toWithout(daily_workers_with_vat),
+    bank_guarantee_without_vat: bg_wout,
+    bank_guarantee_with_vat: toWith(bg_wout),
+    cleaning_without_vat: cl_wout,
+    cleaning_with_vat: toWith(cl_wout),
+    ppr_without_vat: ppr_wout,
+    ppr_with_vat: toWith(ppr_wout),
+    commissioning_without_vat: com_wout,
+    commissioning_with_vat: toWith(com_wout),
+    construction_control_without_vat: cc_wout,
+    construction_control_with_vat: toWith(cc_wout),
+    author_supervision_without_vat: as_wout,
+    author_supervision_with_vat: toWith(as_wout),
+    passes_without_vat: pa_wout,
+    passes_with_vat: toWith(pa_wout),
+    site_office_without_vat: so_wout,
+    site_office_with_vat: toWith(so_wout),
+    travel_without_vat: tr_wout,
+    travel_with_vat: toWith(tr_wout),
+    rp_without_vat: rp_wout,
+    rp_with_vat: toWith(rp_wout),
+    housing_rent_without_vat: hr_wout,
+    housing_rent_with_vat: toWith(hr_wout),
+    workers_transport_without_vat: wt_wout,
+    workers_transport_with_vat: toWith(wt_wout),
+    subtotal_with_vat,
+    subtotal_without_vat,
+    contingency_with_vat,
+    contingency_without_vat,
+    profit,
+    full_cost_without_vat,
+    vat,
+    other_tax,
+    total_for_customer,
   };
 }
 
@@ -135,31 +190,31 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
 
   loadSummary: async (projectId: string) => {
     const summary = await getSummary(projectId);
+    const raw = summary.overrides;
+    const n = (key: keyof SummaryOverrides) =>
+      Number(raw[key] ?? DEFAULT_OVERRIDES[key]);
     const overrides: SummaryOverrides = {
-      coefficient: Number(summary.overrides.coefficient ?? DEFAULT_OVERRIDES.coefficient),
-      transport_pct: Number(summary.overrides.transport_pct ?? DEFAULT_OVERRIDES.transport_pct),
-      cleanup_pct: Number(summary.overrides.cleanup_pct ?? DEFAULT_OVERRIDES.cleanup_pct),
-      overhead_pct: Number(summary.overrides.overhead_pct ?? DEFAULT_OVERRIDES.overhead_pct),
-      daily_workers_cost: Number(
-        summary.overrides.daily_workers_cost ?? DEFAULT_OVERRIDES.daily_workers_cost,
-      ),
-      bank_guarantee_cost: Number(
-        summary.overrides.bank_guarantee_cost ?? DEFAULT_OVERRIDES.bank_guarantee_cost,
-      ),
-      cleaning_cost: Number(summary.overrides.cleaning_cost ?? DEFAULT_OVERRIDES.cleaning_cost),
-      ppr_cost: Number(summary.overrides.ppr_cost ?? DEFAULT_OVERRIDES.ppr_cost),
-      commissioning_cost: Number(
-        summary.overrides.commissioning_cost ?? DEFAULT_OVERRIDES.commissioning_cost,
-      ),
-      contingency_pct: Number(
-        summary.overrides.contingency_pct ?? DEFAULT_OVERRIDES.contingency_pct,
-      ),
-      profit_pct: Number(summary.overrides.profit_pct ?? DEFAULT_OVERRIDES.profit_pct),
-      vat_works_pct: Number(summary.overrides.vat_works_pct ?? DEFAULT_OVERRIDES.vat_works_pct),
-      vat_materials_pct: Number(
-        summary.overrides.vat_materials_pct ?? DEFAULT_OVERRIDES.vat_materials_pct,
-      ),
-      tax_pct: Number(summary.overrides.tax_pct ?? DEFAULT_OVERRIDES.tax_pct),
+      coefficient: n('coefficient'),
+      transport_pct: n('transport_pct'),
+      cleanup_pct: n('cleanup_pct'),
+      overhead_pct: n('overhead_pct'),
+      daily_workers_cost: n('daily_workers_cost'),
+      bank_guarantee_cost: n('bank_guarantee_cost'),
+      cleaning_cost: n('cleaning_cost'),
+      ppr_cost: n('ppr_cost'),
+      commissioning_cost: n('commissioning_cost'),
+      construction_control_cost: n('construction_control_cost'),
+      author_supervision_cost: n('author_supervision_cost'),
+      passes_cost: n('passes_cost'),
+      site_office_cost: n('site_office_cost'),
+      travel_cost: n('travel_cost'),
+      rp_cost: n('rp_cost'),
+      housing_rent_cost: n('housing_rent_cost'),
+      workers_transport_cost: n('workers_transport_cost'),
+      contingency_pct: n('contingency_pct'),
+      profit_pct: n('profit_pct'),
+      vat_full_cost_pct: n('vat_full_cost_pct'),
+      tax_pct: n('tax_pct'),
     };
     set({
       projectId,
@@ -179,7 +234,6 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     const newSections = sections.map((sec, i) =>
       i === sectionIndex ? { ...sec, rows } : sec,
     );
-    // Only track undo when editing the active section
     if (sectionIndex === activeTabIndex) {
       set({
         sections: newSections,
