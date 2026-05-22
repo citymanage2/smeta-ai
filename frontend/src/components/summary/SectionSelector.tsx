@@ -22,14 +22,23 @@ const VERSION_TYPES: { key: string; label: string }[] = [
   { key: 'prices_filled', label: 'V5 — Цены' },
 ]
 
-const selKey = (cardId: string, versionId: string) => `${cardId}__${versionId}`
+function versionLabel(v: EstimateVersionSummary): string {
+  return VERSION_TYPES.find((vt) => vt.key === v.version_label)?.label ?? v.version_display_name
+}
 
 const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
   const eligibleCards = cards.filter(
     (c) => c.estimate_task_id || c.optimization_task_id,
   )
 
-  const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({})
+  // which cards are included
+  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {}
+    eligibleCards.forEach((c) => { init[c.id] = true })
+    return init
+  })
+  // one selected version per card
+  const [selectedVersionIds, setSelectedVersionIds] = useState<Record<string, string>>({})
   const [versionMap, setVersionMap] = useState<VersionMap>({})
   const [loadingVersions, setLoadingVersions] = useState(true)
   const [creating, setCreating] = useState(false)
@@ -39,13 +48,13 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
     async function loadAll() {
       setLoadingVersions(true)
       const map: VersionMap = {}
-      const initSel: Record<string, boolean> = {}
+      const initSel: Record<string, string> = {}
 
       await Promise.all(
         eligibleCards.map(async (card) => {
           const allVersions: EstimateVersionSummary[] = []
 
-          // Load original (V0) from estimate task
+          // original (V0) from estimate task
           if (card.estimate_task_id) {
             try {
               let versions = await getVersions(card.estimate_task_id)
@@ -53,27 +62,21 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
                 try {
                   await initEstimateVersionFromResult(card.estimate_task_id)
                   versions = await getVersions(card.estimate_task_id)
-                } catch {
-                  // task not completed yet
-                }
+                } catch { /* task not completed */ }
               }
               allVersions.push(...versions.filter((v) => !v.is_rolled_back))
-            } catch {
-              // ignore
-            }
+            } catch { /* ignore */ }
           }
 
-          // Load V1–V5 from optimization task
+          // V1–V5 from optimization task
           if (card.optimization_task_id) {
             try {
               const versions = await getVersions(card.optimization_task_id)
               allVersions.push(...versions.filter((v) => !v.is_rolled_back))
-            } catch {
-              // ignore
-            }
+            } catch { /* ignore */ }
           }
 
-          // Deduplicate by version_label — keep highest version_number
+          // deduplicate by version_label — keep highest version_number
           const byLabel = new Map<string, EstimateVersionSummary>()
           for (const v of allVersions) {
             const existing = byLabel.get(v.version_label)
@@ -82,59 +85,52 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
             }
           }
 
-          // Order by VERSION_TYPES order
+          // order by VERSION_TYPES, unknowns at the end
           const ordered: EstimateVersionSummary[] = []
           for (const vt of VERSION_TYPES) {
             const found = byLabel.get(vt.key)
             if (found) ordered.push(found)
           }
-          // Append unknown labels at the end
           for (const v of byLabel.values()) {
-            if (!VERSION_TYPES.find((vt) => vt.key === v.version_label)) {
-              ordered.push(v)
-            }
+            if (!VERSION_TYPES.find((vt) => vt.key === v.version_label)) ordered.push(v)
           }
 
           map[card.id] = ordered
 
-          // Pre-select: if card has primary_version_id and it's in the list, select it
-          // otherwise pre-select the last available version
+          // pre-select: primary_version_id, else the last available version
           if (ordered.length > 0) {
-            let preselect: EstimateVersionSummary | undefined
-            if (card.primary_version_id) {
-              preselect = ordered.find((v) => v.id === card.primary_version_id)
-            }
-            if (!preselect) preselect = ordered[ordered.length - 1]
-            initSel[selKey(card.id, preselect.id)] = true
+            const preselect =
+              (card.primary_version_id && ordered.find((v) => v.id === card.primary_version_id))
+              || ordered[ordered.length - 1]
+            initSel[card.id] = preselect.id
           }
         }),
       )
 
       setVersionMap(map)
-      setSelectedItems(initSel)
+      setSelectedVersionIds(initSel)
       setLoadingVersions(false)
     }
     loadAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handleToggle = (cardId: string, versionId: string) => {
-    const k = selKey(cardId, versionId)
-    setSelectedItems((prev) => ({ ...prev, [k]: !prev[k] }))
+  const handleToggleCard = (cardId: string) => {
+    setChecked((prev) => ({ ...prev, [cardId]: !prev[cardId] }))
+  }
+
+  const handleVersionSelect = (cardId: string, versionId: string) => {
+    setSelectedVersionIds((prev) => ({ ...prev, [cardId]: versionId }))
   }
 
   const handleConfirm = async () => {
     setError('')
-    const sections: SectionInput[] = []
-    for (const card of eligibleCards) {
-      for (const version of versionMap[card.id] ?? []) {
-        if (selectedItems[selKey(card.id, version.id)]) {
-          sections.push({ card_id: card.id, version_id: version.id })
-        }
-      }
-    }
+    const sections: SectionInput[] = eligibleCards
+      .filter((c) => checked[c.id] && selectedVersionIds[c.id])
+      .map((c) => ({ card_id: c.id, version_id: selectedVersionIds[c.id] }))
+
     if (sections.length === 0) {
-      setError('Выберите хотя бы одну версию сметы')
+      setError('Выберите хотя бы один раздел')
       return
     }
     setCreating(true)
@@ -145,11 +141,6 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
     } finally {
       setCreating(false)
     }
-  }
-
-  const versionLabel = (v: EstimateVersionSummary) => {
-    const match = VERSION_TYPES.find((vt) => vt.key === v.version_label)
-    return match ? match.label : v.version_display_name
   }
 
   return (
@@ -178,7 +169,7 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
           Создать сводную себестоимость
         </h2>
         <p style={{ margin: '0 0 20px', fontSize: '13px', color: '#64748b' }}>
-          Выберите сметы для включения в сводную.
+          Выберите разделы и версию сметы для каждого.
         </p>
 
         {loadingVersions ? (
@@ -190,68 +181,80 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
             Нет карточек со сметами. Создайте расчёты в разделах проекта.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {eligibleCards.map((card) => {
               const versions = versionMap[card.id] ?? []
+              const isChecked = checked[card.id]
+
               return (
                 <div
                   key={card.id}
                   style={{
-                    border: '1px solid #e2e8f0',
+                    border: isChecked ? '1.5px solid #93c5fd' : '1px solid #e2e8f0',
                     borderRadius: '10px',
                     overflow: 'hidden',
+                    background: isChecked ? '#f0f9ff' : '#fafafa',
+                    transition: 'all 0.15s',
                   }}
                 >
-                  {/* Card header */}
-                  <div style={{
-                    padding: '10px 14px',
-                    background: '#f8fafc',
-                    borderBottom: versions.length > 0 ? '1px solid #e2e8f0' : 'none',
-                    fontWeight: 600,
-                    fontSize: '13px',
-                    color: '#1e293b',
+                  {/* Card header with include checkbox */}
+                  <label style={{
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    padding: '11px 14px',
+                    cursor: 'pointer',
+                    borderBottom: versions.length > 0 && isChecked ? '1px solid #e0f2fe' : 'none',
                   }}>
-                    {card.name}
-                  </div>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleToggleCard(card.id)}
+                      style={{ width: 15, height: 15, accentColor: '#3b82f6', cursor: 'pointer', flexShrink: 0 }}
+                    />
+                    <span style={{ fontWeight: 600, fontSize: '14px', color: isChecked ? '#1e293b' : '#94a3b8' }}>
+                      {card.name}
+                    </span>
+                  </label>
 
-                  {/* Version checkboxes */}
-                  {versions.length === 0 ? (
-                    <div style={{ padding: '12px 14px', fontSize: '12px', color: '#94a3b8' }}>
-                      Нет доступных версий
-                    </div>
-                  ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', padding: '8px' }}>
+                  {/* Version radio buttons — only visible when card is checked */}
+                  {isChecked && versions.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '10px 14px' }}>
                       {versions.map((v) => {
-                        const k = selKey(card.id, v.id)
-                        const isChecked = !!selectedItems[k]
+                        const isSelected = selectedVersionIds[card.id] === v.id
                         return (
                           <label
                             key={v.id}
                             style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '8px 10px',
-                              borderRadius: '7px',
+                              display: 'flex', alignItems: 'center', gap: '6px',
+                              padding: '5px 11px',
+                              borderRadius: '20px',
+                              border: isSelected ? '1.5px solid #3b82f6' : '1px solid #e2e8f0',
+                              background: isSelected ? '#eff6ff' : '#fff',
                               cursor: 'pointer',
-                              background: isChecked ? '#eff6ff' : 'transparent',
-                              border: isChecked ? '1px solid #bfdbfe' : '1px solid transparent',
+                              fontSize: '13px',
+                              color: isSelected ? '#1d4ed8' : '#475569',
+                              fontWeight: isSelected ? 600 : 400,
                               transition: 'all 0.13s',
                               userSelect: 'none',
                             }}
                           >
                             <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => handleToggle(card.id, v.id)}
-                              style={{ width: 15, height: 15, accentColor: '#3b82f6', cursor: 'pointer', flexShrink: 0 }}
+                              type="radio"
+                              name={`version-${card.id}`}
+                              value={v.id}
+                              checked={isSelected}
+                              onChange={() => handleVersionSelect(card.id, v.id)}
+                              style={{ display: 'none' }}
                             />
-                            <span style={{ fontSize: '13px', color: isChecked ? '#1d4ed8' : '#475569', fontWeight: isChecked ? 600 : 400 }}>
-                              {versionLabel(v)}
-                            </span>
+                            {versionLabel(v)}
                           </label>
                         )
                       })}
+                    </div>
+                  )}
+
+                  {isChecked && versions.length === 0 && (
+                    <div style={{ padding: '10px 14px', fontSize: '12px', color: '#94a3b8' }}>
+                      Нет доступных версий
                     </div>
                   )}
                 </div>
