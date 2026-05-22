@@ -1423,6 +1423,30 @@ const TaskStatusPage: React.FC = () => {
               Позиции сметы
             </h3>
 
+            {/* Totals block — top summary */}
+            <div style={{ marginBottom: '20px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px 20px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Итоги по смете
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 32px' }}>
+                {[
+                  { label: 'Сумма по работам:', value: computedTotals.sumWork },
+                  { label: 'Накладные расходы 3%:', value: computedTotals.overhead },
+                  { label: 'Сумма по материалам:', value: computedTotals.sumMat },
+                  { label: 'Транспортные расходы 3%:', value: computedTotals.transport },
+                ].map(({ label, value }) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#475569' }}>
+                    <span>{label}</span>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{fmtRub(value)} ₽</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 700, color: '#0f172a', marginTop: '10px', padding: '10px 0 0', borderTop: '2px solid #cbd5e1' }}>
+                <span>ИТОГО ПО СМЕТЕ:</span>
+                <span style={{ fontFamily: 'monospace', color: '#15803d' }}>{fmtRub(computedTotals.grand)} ₽</span>
+              </div>
+            </div>
+
             {estimateSaveError && (
               <div style={{ padding: '8px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '13px', color: '#dc2626', marginBottom: '12px' }}>
                 {estimateSaveError}
@@ -1545,25 +1569,6 @@ const TaskStatusPage: React.FC = () => {
                   })}
                 </tbody>
               </table>
-            </div>
-
-            {/* Totals block */}
-            <div style={{ marginTop: '20px', borderTop: '2px solid #e2e8f0', paddingTop: '16px' }}>
-              {[
-                { label: 'Сумма по работам:', value: computedTotals.sumWork },
-                { label: 'Накладные расходы 3%:', value: computedTotals.overhead },
-                { label: 'Сумма по материалам:', value: computedTotals.sumMat },
-                { label: 'Транспортные расходы 3%:', value: computedTotals.transport },
-              ].map(({ label, value }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#475569', marginBottom: '6px' }}>
-                  <span>{label}</span>
-                  <span style={{ fontFamily: 'monospace' }}>{fmtRub(value)} ₽</span>
-                </div>
-              ))}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 700, color: '#0f172a', marginTop: '8px', padding: '10px 0', borderTop: '2px solid #0f172a' }}>
-                <span>ИТОГО ПО СМЕТЕ:</span>
-                <span style={{ fontFamily: 'monospace', color: '#15803d' }}>{fmtRub(computedTotals.grand)} ₽</span>
-              </div>
             </div>
 
             {/* Action buttons row */}

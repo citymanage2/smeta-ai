@@ -288,9 +288,11 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
 4. Цена работ → в поле work_price (если тип "Работа")
 5. Цена материалов → в поле material_price (если тип "Материал")
 
-НДС (22%): для каждой позиции укажи в notes:
-  "Цена без НДС: X / НДС: Y / Цена с НДС: Z"
-  Для работ на УСН: НДС = 0, указать "УСН, НДС не облагается"
+ВАЖНО ПРО НДС: поля work_price и material_price ВСЕГДА должны содержать цену БЕЗ НДС.
+Если найденная рыночная цена включает НДС — раздели её на 1.22, чтобы получить цену без НДС.
+В поле notes обязательно укажи:
+  "Цена без НДС: X ₽ / Цена с НДС: Z ₽"  (где Z = X × 1.22)
+  Для работ на УСН: НДС = 0, указать "УСН, НДС не облагается. Цена без НДС: X ₽"
 
 КРИТИЧЕСКИ ВАЖНО: каждая входная позиция имеет числовое поле "id".
 Ты ОБЯЗАН вернуть результат для КАЖДОЙ позиции из списка, сохранив то же самое
@@ -315,11 +317,11 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
       "name": "Наименование позиции",
       "unit": "Ед. изм.",
       "quantity": число,
-      "work_price": число или null,
-      "material_price": число или null,
+      "work_price": число без НДС или null,
+      "material_price": число без НДС или null,
       "price_list_name": null,
       "sources": "Источник 1: цена; Источник 2: цена; Источник 3: цена",
-      "notes": "Примечание по НДС"
+      "notes": "Цена без НДС: X ₽ / Цена с НДС: Z ₽"
     }}
   ]
 }}"""
@@ -1783,10 +1785,22 @@ class TaskProcessor:
                     )
 
         # ── Шаг 3: Сборка итогового результата в исходном порядке ───────────
+        _VAT = 0.22
+
+        def _vat_notes(price: float | None) -> str:
+            if not price:
+                return ""
+            return f"Цена без НДС: {price:,.2f} ₽ / Цена с НДС: {price * (1 + _VAT):,.2f} ₽"
+
         final_items: list[dict] = []
         for gidx, item in enumerate(items):
             if gidx in matched_by_gidx:
-                final_items.append(matched_by_gidx[gidx])
+                matched = matched_by_gidx[gidx]
+                # Add VAT notes for price-list items if not already set
+                if not matched.get("notes"):
+                    price = matched.get("work_price") or matched.get("material_price")
+                    matched["notes"] = _vat_notes(price)
+                final_items.append(matched)
                 continue
             cr = claude_results.get(gidx)
             if cr:
