@@ -27,41 +27,59 @@ const EXCLUDED_COLS = new Set(['№', '#']);
 const TYPE_COL = 'Тип';
 const NAME_COL = 'Наименование';
 
-// Auto-recalc: detect cost-related columns by name (case-insensitive)
+// Auto-recalc: пары «цена → стоимость», умножаются на кол-во
+// Каждая пара: priceCol × qty = costCol
 const QTY_KEYWORDS = ['кол-во', 'количество', 'кол.', 'объем', 'объём', 'кол'];
-const PRICE_KEYWORDS = ['цена работы', 'цена материала', 'цена за ед', 'цена за единицу', 'расценка', 'цена ед', 'цена'];
-const COST_KEYWORDS = ['стоимость', 'сумма', 'итого', 'итог', 'стоим'];
+const PRICE_WORK_KEYWORDS = ['цена работ', 'цена работы'];
+const PRICE_MAT_KEYWORDS = ['цена материал'];
+const COST_WORK_KEYWORDS = ['стоимость работ'];
+const COST_MAT_KEYWORDS = ['стоимость материал'];
 
-function matchesKeywords(col: string, keywords: string[]): boolean {
+function colMatches(col: string, keywords: string[]): boolean {
   const lower = col.trim().toLowerCase();
-  return keywords.some((kw) => lower === kw || lower.startsWith(kw + ',') || lower.startsWith(kw + ' ') || lower.endsWith(' ' + kw));
+  return keywords.some((kw) => lower.startsWith(kw));
 }
 
-function findCostColumns(columns: string[]): { qtyCol: string | null; priceCols: string[]; costCol: string | null } {
+interface RecalcPair { priceCol: string; costCol: string }
+
+interface RecalcConfig {
+  qtyCol: string | null;
+  pairs: RecalcPair[];
+}
+
+function findRecalcConfig(columns: string[]): RecalcConfig {
   let qtyCol: string | null = null;
-  const priceCols: string[] = [];
-  let costCol: string | null = null;
+  let priceWorkCol: string | null = null;
+  let priceMatCol: string | null = null;
+  let costWorkCol: string | null = null;
+  let costMatCol: string | null = null;
 
   for (const col of columns) {
-    if (!qtyCol && matchesKeywords(col, QTY_KEYWORDS)) { qtyCol = col; continue; }
-    if (!costCol && matchesKeywords(col, COST_KEYWORDS)) { costCol = col; continue; }
-    if (matchesKeywords(col, PRICE_KEYWORDS)) priceCols.push(col);
+    if (!qtyCol && colMatches(col, QTY_KEYWORDS)) { qtyCol = col; continue; }
+    if (!priceWorkCol && colMatches(col, PRICE_WORK_KEYWORDS)) { priceWorkCol = col; continue; }
+    if (!priceMatCol && colMatches(col, PRICE_MAT_KEYWORDS)) { priceMatCol = col; continue; }
+    if (!costWorkCol && colMatches(col, COST_WORK_KEYWORDS)) { costWorkCol = col; continue; }
+    if (!costMatCol && colMatches(col, COST_MAT_KEYWORDS)) { costMatCol = col; continue; }
   }
 
-  return { qtyCol, priceCols, costCol };
+  const pairs: RecalcPair[] = [];
+  if (priceWorkCol && costWorkCol) pairs.push({ priceCol: priceWorkCol, costCol: costWorkCol });
+  if (priceMatCol && costMatCol) pairs.push({ priceCol: priceMatCol, costCol: costMatCol });
+
+  return { qtyCol, pairs };
 }
 
-function recalcCost(
+function applyRecalc(
   cells: Record<string, string | number | null>,
-  qtyCol: string | null,
-  priceCols: string[],
-  costCol: string | null,
+  config: RecalcConfig,
 ): Record<string, string | number | null> {
-  if (!qtyCol || priceCols.length === 0 || !costCol) return cells;
-  const qty = Number(cells[qtyCol] ?? 0);
-  const priceSum = priceCols.reduce((acc, pc) => acc + Number(cells[pc] ?? 0), 0);
-  const cost = Math.round(qty * priceSum);
-  return { ...cells, [costCol]: cost };
+  if (!config.qtyCol || config.pairs.length === 0) return cells;
+  const qty = Number(cells[config.qtyCol] ?? 0);
+  const result = { ...cells };
+  for (const { priceCol, costCol } of config.pairs) {
+    result[costCol] = Math.round(qty * Number(cells[priceCol] ?? 0));
+  }
+  return result;
 }
 
 function estimateColWidth(header: string, rows: GenericRow[]): number {
@@ -162,7 +180,7 @@ const GenericGrid: React.FC<GenericGridProps> = ({
   const hasNameCol = allColumns.includes(NAME_COL);
   const isEnhanced = hasTypeCol;
 
-  const { qtyCol, priceCols, costCol } = useMemo(() => findCostColumns(allColumns), [allColumns]);
+  const recalcConfig = useMemo(() => findRecalcConfig(allColumns), [allColumns]);
 
   // Reorder columns: Тип first (if present), then Наименование, then rest
   const columns = useMemo(() => {
@@ -223,21 +241,23 @@ const GenericGrid: React.FC<GenericGridProps> = ({
       setUndoStack((prev) => [...prev.slice(-UNDO_LIMIT), rows]);
       setRedoStack([]);
 
+      const { qtyCol, pairs } = recalcConfig;
+      const priceColsSet = new Set(pairs.map((p) => p.priceCol));
+      const costColsSet = new Set(pairs.map((p) => p.costCol));
       const shouldRecalc =
-        costCol != null &&
+        pairs.length > 0 &&
         qtyCol != null &&
-        priceCols.length > 0 &&
-        colKey !== costCol &&
-        (colKey === qtyCol || priceCols.includes(colKey));
+        !costColsSet.has(colKey) &&
+        (colKey === qtyCol || priceColsSet.has(colKey));
 
       const updated = rows.map((r) => {
         if (r.row_id !== rowId) return r;
         const newCells = { ...r.cells, [colKey]: parsed };
-        return { ...r, cells: shouldRecalc ? recalcCost(newCells, qtyCol, priceCols, costCol) : newCells };
+        return { ...r, cells: shouldRecalc ? applyRecalc(newCells, recalcConfig) : newCells };
       });
       onRowsChange(updated);
     },
-    [rows, onRowsChange, qtyCol, priceCols, costCol],
+    [rows, onRowsChange, recalcConfig],
   );
 
   // Undo
