@@ -27,9 +27,10 @@ const AdditionalExpenses: React.FC<AdditionalExpensesProps> = ({
     setContingency(String(contingency_pct));
   }, [overhead_pct, transport_pct, contingency_pct]);
 
-  const overheadVal = parseFloat(overhead) || 0;
-  const transportVal = parseFloat(transport) || 0;
-  const contingencyVal = parseFloat(contingency) || 0;
+  const parseDecimal = (s: string) => parseFloat(s.replace(',', '.')) || 0;
+  const overheadVal = parseDecimal(overhead);
+  const transportVal = parseDecimal(transport);
+  const contingencyVal = parseDecimal(contingency);
 
   const overheadRub = Math.round((baseTotal * overheadVal) / 100);
   const transportRub = Math.round((baseTotal * transportVal) / 100);
@@ -38,9 +39,9 @@ const AdditionalExpenses: React.FC<AdditionalExpensesProps> = ({
   const fmt = (n: number) => n.toLocaleString('ru-RU');
 
   const isDirty =
-    parseFloat(overhead) !== overhead_pct ||
-    parseFloat(transport) !== transport_pct ||
-    parseFloat(contingency) !== contingency_pct;
+    parseDecimal(overhead) !== overhead_pct ||
+    parseDecimal(transport) !== transport_pct ||
+    parseDecimal(contingency) !== contingency_pct;
 
   const handleSave = async () => {
     setSaving(true);
@@ -138,10 +139,8 @@ const ExpenseRow: React.FC<ExpenseRowProps> = ({ label, value, rub, onChange, fm
     <span style={{ fontSize: '13px', color: '#374151', width: 210, flexShrink: 0 }}>{label}</span>
     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
       <input
-        type="number"
-        min="0"
-        max="100"
-        step="0.1"
+        type="text"
+        inputMode="decimal"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         style={{
