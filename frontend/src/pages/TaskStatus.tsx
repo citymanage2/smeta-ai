@@ -449,7 +449,7 @@ const TaskStatusPage: React.FC = () => {
         const res = await getTaskResults(taskId);
         setResults(res);
         stopTimers();
-        if (data.task_type === 'ESTIMATE_OPTIMIZATION' || data.task_type === 'ESTIMATE_FROM_LIST') {
+        if (data.task_type === 'ESTIMATE_OPTIMIZATION') {
           navigate(`/tasks/${taskId}/estimate`);
           return;
         }
