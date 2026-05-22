@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatTaskError } from '../utils/formatError'
 import { createPortal } from 'react-dom'
-import { getTaskStatus, getTaskResults, downloadInputFile, downloadResult, cancelTask, TaskStatusResponse } from '../api/tasks'
+import { getTaskStatus, getTaskResults, downloadInputFile, downloadResult, cancelTask, restartTask, TaskStatusResponse } from '../api/tasks'
 import { TaskResult, TASK_TYPE_LABELS, STATUS_LABELS } from '../types'
 import { LumaSpin } from './ui/LumaSpin'
 
@@ -44,6 +44,7 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
   const [results, setResults] = useState<TaskResult[]>([])
   const [loading, setLoading] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const [downloadingInput, setDownloadingInput] = useState<number | null>(null)
   const [downloadingResult, setDownloadingResult] = useState<number | null>(null)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -200,6 +201,36 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
                     }}
                   >
                     {stopping ? 'Останавливаю…' : '⏹ Стоп'}
+                  </button>
+                )}
+                {(task.status === 'failed' || task.status === 'cancelled' || task.status === 'completed') && (
+                  <button
+                    onClick={async () => {
+                      setRestarting(true)
+                      try {
+                        await restartTask(taskId)
+                        pollingRef.current = setInterval(fetchData, 5000)
+                        await fetchData()
+                      } finally {
+                        setRestarting(false)
+                      }
+                    }}
+                    disabled={restarting}
+                    style={{
+                      background: restarting ? '#e0f2fe' : '#f0f9ff',
+                      color: '#0369a1',
+                      border: '1px solid #7dd3fc',
+                      borderRadius: '8px',
+                      padding: '4px 12px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      cursor: restarting ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                    }}
+                  >
+                    {restarting ? 'Запускаю…' : '↺ Перезапустить'}
                   </button>
                 )}
               </div>

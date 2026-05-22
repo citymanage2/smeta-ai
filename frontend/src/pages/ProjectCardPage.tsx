@@ -6,7 +6,7 @@ import { LumaSpin } from '../components/ui/LumaSpin'
 import { TaskDetailModal } from '../components/TaskDetailModal'
 import { EstimateEditorModal } from '../components/card/EstimateEditorModal'
 import { getCardDetail, downloadSlotFileById, downloadInputFileById, CardDetail, StageDetail } from '../api/workflowCards'
-import { downloadResult } from '../api/tasks'
+import { downloadResult, restartTask } from '../api/tasks'
 
 const TASK_TYPE_LABELS: Record<string, string> = {
   LIST_FROM_PROJECT: 'Перечень из проекта',
@@ -210,6 +210,34 @@ function StageArrow({ active }: { active: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// Restart button for failed/cancelled stages
+// ---------------------------------------------------------------------------
+function RestartButton({ taskId, restarting, onRestart }: { taskId: string; restarting: boolean; onRestart: (id: string) => void }) {
+  return (
+    <button
+      onClick={() => onRestart(taskId)}
+      disabled={restarting}
+      style={{
+        marginTop: '10px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        background: restarting ? '#e0f2fe' : '#f0f9ff',
+        color: '#0369a1',
+        border: '1px solid #7dd3fc',
+        borderRadius: '8px',
+        padding: '5px 12px',
+        fontSize: '12px',
+        fontWeight: 600,
+        cursor: restarting ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {restarting ? 'Запускаю…' : '↺ Перезапустить'}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Optimization stage — all version files + collapsible
 // ---------------------------------------------------------------------------
 function OptimizationStageContent({
@@ -291,6 +319,7 @@ const ProjectCardPage: React.FC = () => {
 
   const [taskModal, setTaskModal] = useState<string | null>(null)
   const [editorModal, setEditorModal] = useState<{ taskId: string; title: string; fileSlot?: string; fileIndex?: number } | null>(null)
+  const [restartingTaskId, setRestartingTaskId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!cardId) return
@@ -311,6 +340,16 @@ const ProjectCardPage: React.FC = () => {
   const handleEditorSaved = useCallback(() => {
     // Перезагружаем данные, чтобы показать обновлённый manually_edited_at
     load()
+  }, [load])
+
+  const handleRestart = useCallback(async (taskId: string) => {
+    setRestartingTaskId(taskId)
+    try {
+      await restartTask(taskId)
+      await load()
+    } finally {
+      setRestartingTaskId(null)
+    }
   }, [load])
 
   if (loading) {
@@ -462,6 +501,13 @@ const ProjectCardPage: React.FC = () => {
             {source_stage && source_stage.result_files.length === 0 && source_stage.task_status !== 'completed' && (
               <div style={{ fontSize: '12px', color: '#94a3b8' }}>Задача ещё не завершена</div>
             )}
+            {source_stage && (source_stage.task_status === 'failed' || source_stage.task_status === 'cancelled') && (
+              <RestartButton
+                taskId={source_stage.task_id}
+                restarting={restartingTaskId === source_stage.task_id}
+                onRestart={handleRestart}
+              />
+            )}
           </StageBlock>
 
           <StageArrow active={!!completeness_stage || !!estimate_stage} />
@@ -505,6 +551,13 @@ const ProjectCardPage: React.FC = () => {
                   <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '6px' }}>
                     ✎ Изменён вручную: {formatDate(completeness_stage.manually_edited_at)}
                   </div>
+                )}
+                {(completeness_stage.task_status === 'failed' || completeness_stage.task_status === 'cancelled') && (
+                  <RestartButton
+                    taskId={completeness_stage.task_id}
+                    restarting={restartingTaskId === completeness_stage.task_id}
+                    onRestart={handleRestart}
+                  />
                 )}
               </>
             )}
@@ -554,6 +607,13 @@ const ProjectCardPage: React.FC = () => {
                     ✎ Изменён вручную: {formatDate(estimate_stage.manually_edited_at)}
                   </div>
                 )}
+                {(estimate_stage.task_status === 'failed' || estimate_stage.task_status === 'cancelled') && (
+                  <RestartButton
+                    taskId={estimate_stage.task_id}
+                    restarting={restartingTaskId === estimate_stage.task_id}
+                    onRestart={handleRestart}
+                  />
+                )}
               </>
             )}
           </StageBlock>
@@ -591,6 +651,13 @@ const ProjectCardPage: React.FC = () => {
                   <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '8px' }}>
                     ✎ Изменён вручную: {formatDate(optimization_stage.manually_edited_at)}
                   </div>
+                )}
+                {(optimization_stage.task_status === 'failed' || optimization_stage.task_status === 'cancelled') && (
+                  <RestartButton
+                    taskId={optimization_stage.task_id}
+                    restarting={restartingTaskId === optimization_stage.task_id}
+                    onRestart={handleRestart}
+                  />
                 )}
               </>
             )}

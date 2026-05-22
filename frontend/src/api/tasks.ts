@@ -77,6 +77,11 @@ export async function resumeTask(taskId: string): Promise<TaskCreateResponse> {
   return response.data;
 }
 
+export async function restartTask(taskId: string): Promise<TaskCreateResponse> {
+  const response = await apiClient.post<TaskCreateResponse>(`/tasks/${taskId}/restart`);
+  return response.data;
+}
+
 export async function checkCompleteness(sourceTaskId: string): Promise<TaskCreateResponse> {
   const response = await apiClient.post<TaskCreateResponse>('/tasks/check-completeness', {
     source_task_id: sourceTaskId,

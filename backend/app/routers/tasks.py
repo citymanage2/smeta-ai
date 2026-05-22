@@ -671,6 +671,43 @@ async def resume_task(
     return TaskCreateResponse(task_id=task_id, status="pending")
 
 
+@router.post("/{task_id}/restart", response_model=TaskCreateResponse)
+async def restart_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Restart a task from scratch, clearing all progress and previous results."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
+
+    if task.status == "processing":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Нельзя перезапустить задачу, которая сейчас обрабатывается",
+        )
+
+    task.status = "pending"
+    task.error_message = None
+    task.progress_message = None
+    task.progress_data = None
+    task.progress_log = []
+    task.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    background_tasks.add_task(_run_task_in_background, task_id)
+
+    logger.info("Task restarted from scratch", task_id=task_id)
+    return TaskCreateResponse(task_id=task_id, status="pending")
+
+
 @router.post("/{task_id}/message")
 async def send_message(
     task_id: str,
