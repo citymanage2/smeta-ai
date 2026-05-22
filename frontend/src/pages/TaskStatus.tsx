@@ -129,6 +129,10 @@ const TaskStatusPage: React.FC = () => {
   const [savingEstimate, setSavingEstimate] = useState(false);
   const [estimateSaveError, setEstimateSaveError] = useState('');
   const [repricing, setRepricing] = useState<number | null>(null);
+  const [repricedResult, setRepricedResult] = useState<Record<number, {
+    oldWork: number | null; newWork: number | null;
+    oldMat: number | null; newMat: number | null;
+  }>>({});
   const [fixingPrices, setFixingPrices] = useState(false);
   const [needsItemReload, setNeedsItemReload] = useState(false);
 
@@ -497,7 +501,7 @@ const TaskStatusPage: React.FC = () => {
     fetchStatus();
 
     const style = document.createElement('style');
-    style.textContent = `@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }`;
+    style.textContent = `@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } } @keyframes spin { to { transform: rotate(360deg); } }`;
     document.head.appendChild(style);
 
     pollingRef.current = setInterval(fetchStatus, 3000);
@@ -705,6 +709,9 @@ const TaskStatusPage: React.FC = () => {
 
   const handleReprice = async (itemIdx: number) => {
     if (!taskId) return;
+    const oldItem = estimateItems[itemIdx];
+    const oldWork = oldItem?.work_price ?? null;
+    const oldMat = oldItem?.material_price ?? null;
     setRepricing(itemIdx);
     try {
       const res = await repriceEstimateItem(taskId, itemIdx);
@@ -720,6 +727,17 @@ const TaskStatusPage: React.FC = () => {
         };
         return next;
       });
+      setRepricedResult((prev) => ({
+        ...prev,
+        [itemIdx]: { oldWork, newWork: res.work_price, oldMat, newMat: res.material_price },
+      }));
+      setTimeout(() => {
+        setRepricedResult((prev) => {
+          const next = { ...prev };
+          delete next[itemIdx];
+          return next;
+        });
+      }, 5000);
     } catch {
       setEstimateSaveError('Ошибка при переопределении цены. Попробуйте ещё раз.');
     } finally {
@@ -1429,6 +1447,7 @@ const TaskStatusPage: React.FC = () => {
                     const mCost = item.material_price != null ? qty * item.material_price : null;
                     const isWork = item.type === 'Работа';
                     const isRepricing = repricing === idx;
+                    const repriceResult = repricedResult[idx];
                     return (
                       <tr key={idx} style={{ backgroundColor: isWork ? '#f0f9ff' : undefined }}>
                         <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: '#94a3b8' }}>{idx + 1}</td>
@@ -1437,6 +1456,17 @@ const TaskStatusPage: React.FC = () => {
                           {item.sources && (
                             <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }} title={item.sources}>
                               {item.sources.slice(0, 60)}{item.sources.length > 60 ? '…' : ''}
+                            </div>
+                          )}
+                          {repriceResult && (
+                            <div style={{ marginTop: '4px', fontSize: '11px', color: '#15803d', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '4px', padding: '2px 6px', whiteSpace: 'nowrap' }}>
+                              {repriceResult.oldWork !== repriceResult.newWork && repriceResult.newWork != null && (
+                                <span>работа: {repriceResult.oldWork != null ? fmtRub(repriceResult.oldWork) : '—'} → {fmtRub(repriceResult.newWork)} </span>
+                              )}
+                              {repriceResult.oldMat !== repriceResult.newMat && repriceResult.newMat != null && (
+                                <span>матер.: {repriceResult.oldMat != null ? fmtRub(repriceResult.oldMat) : '—'} → {fmtRub(repriceResult.newMat)} </span>
+                              )}
+                              · сохранено
                             </div>
                           )}
                         </td>
@@ -1488,9 +1518,26 @@ const TaskStatusPage: React.FC = () => {
                               borderRadius: '6px',
                               cursor: (isRepricing || repricing != null) ? 'not-allowed' : 'pointer',
                               whiteSpace: 'nowrap',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
                             }}
                           >
-                            {isRepricing ? '...' : '↺ Цена'}
+                            {isRepricing ? (
+                              <>
+                                <span style={{
+                                  display: 'inline-block',
+                                  width: '10px',
+                                  height: '10px',
+                                  border: '2px solid #93c5fd',
+                                  borderTopColor: '#1d4ed8',
+                                  borderRadius: '50%',
+                                  animation: 'spin 0.7s linear infinite',
+                                  flexShrink: 0,
+                                }} />
+                                Обновляю…
+                              </>
+                            ) : '↺ Цена'}
                           </button>
                         </td>
                       </tr>
