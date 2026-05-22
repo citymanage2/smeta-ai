@@ -78,6 +78,7 @@ const GridContext = createContext<GridContextValue>({
 // ---------------------------------------------------------------------------
 
 const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
+const fmtRub = (n: number) => Math.round(n).toLocaleString('ru-RU');
 
 const calcCost = (row: EstimateRow): number =>
   (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
@@ -480,6 +481,24 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const didJustHandleChange = useRef(false);
   // Предыдущее значение rows для undo/redo flash
   const prevRowsRef = useRef<EstimateRow[] | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // Totals
+  // ---------------------------------------------------------------------------
+
+  const computedTotals = useMemo(() => {
+    let sumWork = 0;
+    let sumMat = 0;
+    for (const r of rows) {
+      if (r.type === 'section') continue;
+      const qty = r.qty ?? 0;
+      sumWork += qty * (r.price_work ?? 0);
+      sumMat += qty * (r.price_material ?? 0);
+    }
+    const overhead = sumWork * 0.03;
+    const transport = sumMat * 0.03;
+    return { sumWork, overhead, sumMat, transport, grand: sumWork + overhead + sumMat + transport };
+  }, [rows]);
 
   // ---------------------------------------------------------------------------
   // Utilities
@@ -1088,6 +1107,28 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
             </div>
           </div>
         )}
+
+        {/* Totals summary block */}
+        <div className="estimate-grid-totals">
+          <div className="estimate-grid-totals-title">Итоги по смете</div>
+          <div className="estimate-grid-totals-rows">
+            {[
+              { label: 'Сумма по работам:', value: computedTotals.sumWork },
+              { label: 'Накладные расходы 3%:', value: computedTotals.overhead },
+              { label: 'Сумма по материалам:', value: computedTotals.sumMat },
+              { label: 'Транспортные расходы 3%:', value: computedTotals.transport },
+            ].map(({ label, value }) => (
+              <div key={label} className="estimate-grid-totals-row">
+                <span>{label}</span>
+                <span className="estimate-grid-totals-val">{fmtRub(value)} ₽</span>
+              </div>
+            ))}
+          </div>
+          <div className="estimate-grid-totals-grand">
+            <span>ИТОГО ПО СМЕТЕ:</span>
+            <span className="estimate-grid-totals-grand-val">{fmtRub(computedTotals.grand)} ₽</span>
+          </div>
+        </div>
 
         {/* Grid */}
         <div
