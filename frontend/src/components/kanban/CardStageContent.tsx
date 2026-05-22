@@ -13,7 +13,9 @@ import {
 } from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { EstimateEditorModal } from '../card/EstimateEditorModal'
+import { GenericEditorModal } from '../card/GenericEditorModal'
 import { LumaSpin } from '../ui/LumaSpin'
+import { GENERIC_EDITOR_TASK_TYPES } from '../../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -54,6 +56,7 @@ interface EditorModalState {
   fileSlot?: string
   fileIndex?: number
   readOnly?: boolean
+  taskType?: string
 }
 
 function ActionButton({
@@ -320,6 +323,7 @@ function InputFilesSection({
               fileSlot: 'input',
               fileIndex: f.index,
               readOnly: true,
+              taskType: stage.task_type,
             })}
           />
         </div>
@@ -366,6 +370,7 @@ function ResultFilesSection({
                 taskId,
                 title: `${label} — ${f.file_name}`,
                 fileSlot: f.slot,
+                taskType: stage.task_type,
               })}
             />
           </div>
@@ -398,7 +403,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
 
-  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
 
   useEffect(() => {
     if (pending && files.length === 0) {
@@ -522,6 +527,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     fileSlot: 'input',
                     fileIndex: f.index,
                     readOnly: true,
+                    taskType: task.task_type,
                   })}
                 />
               </div>
@@ -546,6 +552,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     taskId: task.id,
                     title: `Перечень — ${f.file_name}`,
                     fileSlot: 'result',
+                    taskType: task.task_type,
                   })}
                 />
               </div>
@@ -610,7 +617,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const task = card.completeness_task
   const listTask = card.list_task
 
-  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
 
   const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
     ? 'Перечень из проекта'
@@ -671,6 +678,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     taskId: listTask.id,
                     title: `Перечень — ${f.file_name}`,
                     fileSlot: 'result',
+                    taskType: listTask.task_type,
                   })}
                 />
               </div>
@@ -727,6 +735,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     taskId: task.id,
                     title: `Полнота — ${f.file_name}`,
                     fileSlot: 'result',
+                    taskType: task.task_type,
                   })}
                 />
               </div>
@@ -774,7 +783,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const listTask = card.list_task
   const completenessTask = card.completeness_task
 
-  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
 
   const listCompleted = listTask?.status === 'completed'
   const completenessCompleted = completenessTask?.status === 'completed'
@@ -848,6 +857,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     taskId: listTask.id,
                     title: `Перечень — ${f.file_name}`,
                     fileSlot: 'result',
+                    taskType: listTask.task_type,
                   })}
                 />
               </div>
@@ -882,6 +892,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
                     taskId: completenessTask.id,
                     title: `Полнота — ${f.file_name}`,
                     fileSlot: 'result',
+                    taskType: completenessTask.task_type,
                   })}
                 />
               </div>
@@ -926,6 +937,8 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
                 onOpenEditor={() => onOpenEditor({
                   taskId: task.id,
                   title: `Смета — ${f.file_name}`,
+                  fileSlot: f.slot,
+                  taskType: task.task_type,
                 })}
               />
             </div>
@@ -996,7 +1009,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
   const [archiveExpanded, setArchiveExpanded] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
 
   const estimateCompleted = estimateTask?.status === 'completed'
   const optimizationMeta = filesMeta?.optimization_stage
@@ -1233,15 +1246,29 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
       })()}
 
       {editorModal && (
-        <EstimateEditorModal
-          taskId={editorModal.taskId}
-          title={editorModal.title}
-          fileSlot={editorModal.fileSlot}
-          fileIndex={editorModal.fileIndex}
-          readOnly={editorModal.readOnly}
-          onClose={() => setEditorModal(null)}
-          onSaved={fetchMeta}
-        />
+        editorModal.taskType && GENERIC_EDITOR_TASK_TYPES.has(editorModal.taskType)
+          ? (
+            <GenericEditorModal
+              taskId={editorModal.taskId}
+              title={editorModal.title}
+              fileSlot={editorModal.fileSlot}
+              fileIndex={editorModal.fileIndex}
+              readOnly={editorModal.readOnly}
+              onClose={() => setEditorModal(null)}
+              onSaved={fetchMeta}
+            />
+          )
+          : (
+            <EstimateEditorModal
+              taskId={editorModal.taskId}
+              title={editorModal.title}
+              fileSlot={editorModal.fileSlot}
+              fileIndex={editorModal.fileIndex}
+              readOnly={editorModal.readOnly}
+              onClose={() => setEditorModal(null)}
+              onSaved={fetchMeta}
+            />
+          )
       )}
     </>
   )
