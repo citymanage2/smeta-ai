@@ -58,7 +58,7 @@ updated_at  TIMESTAMP NOT NULL DEFAULT now()
 
 ---
 
-### Фаза 3: Сервис — расширение price_service [ ]
+### Фаза 3: Сервис — расширение price_service [x]
 
 В `backend/app/services/price_service.py` добавить:
 
