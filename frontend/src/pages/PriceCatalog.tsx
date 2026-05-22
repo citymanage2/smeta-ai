@@ -15,13 +15,22 @@ import {
   CatalogItem,
   CatalogParams,
 } from '../api/catalog';
+import {
+  CacheItem,
+  getCacheWorks,
+  getCacheMaterials,
+  updateCacheWork,
+  updateCacheMaterial,
+  deleteCacheWork,
+  deleteCacheMaterial,
+} from '../api/priceCache';
 import apiClient from '../api/client';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type Tab = 'all' | 'works' | 'materials';
+type Tab = 'all' | 'works' | 'materials' | 'cache_works' | 'cache_materials';
 type SortKey = 'name_asc' | 'name_desc' | 'price_asc' | 'price_desc' | 'date_asc' | 'date_desc';
 
 interface FormState {
@@ -30,6 +39,13 @@ interface FormState {
   unit: string;
   price: string;
   contractors: { name: string; price: string }[];
+}
+
+interface CacheFormState {
+  name: string;
+  unit: string;
+  price: string;
+  sources: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -89,6 +105,26 @@ const COL_DEFS: Record<Tab, ColDef[]> = {
     { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
     { id: 'actions', label: '', defaultWidth: 90, noResize: true },
   ],
+  cache_works: [
+    { id: 'num', label: '№', defaultWidth: 50, noResize: true },
+    { id: 'name', label: 'Наименование', defaultWidth: 250 },
+    { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
+    { id: 'price', label: 'Цена, руб', defaultWidth: 110 },
+    { id: 'sources', label: 'Источник', defaultWidth: 200 },
+    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'expires', label: 'Истекает', defaultWidth: 90 },
+    { id: 'actions', label: '', defaultWidth: 80, noResize: true },
+  ],
+  cache_materials: [
+    { id: 'num', label: '№', defaultWidth: 50, noResize: true },
+    { id: 'name', label: 'Наименование', defaultWidth: 250 },
+    { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
+    { id: 'price', label: 'Цена, руб', defaultWidth: 110 },
+    { id: 'sources', label: 'Источник', defaultWidth: 200 },
+    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'expires', label: 'Истекает', defaultWidth: 90 },
+    { id: 'actions', label: '', defaultWidth: 80, noResize: true },
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -123,6 +159,12 @@ function buildPricesFromContractors(contractors: { name: string; price: string }
 function contractorsFromPrices(prices: Record<string, number> | null): { name: string; price: string }[] {
   if (!prices || Object.keys(prices).length === 0) return [{ name: '', price: '' }];
   return Object.entries(prices).map(([name, price]) => ({ name, price: String(price) }));
+}
+
+function renderExpires(days: number) {
+  if (days < 0) return <span style={{ color: '#ef4444', fontWeight: 500 }}>Устарело</span>;
+  if (days <= 7) return <span style={{ color: '#f97316', fontWeight: 500 }}>{days} дн.</span>;
+  return <span style={{ color: '#64748b' }}>{days} дн.</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +450,47 @@ const s = {
 };
 
 // ---------------------------------------------------------------------------
+// SourceTooltip
+// ---------------------------------------------------------------------------
+
+function SourceTooltip({ text }: { text: string | null }) {
+  const [show, setShow] = useState(false);
+  if (!text) return <span style={{ color: '#94a3b8' }}>—</span>;
+  const truncated = text.length > 40 ? text.slice(0, 40) + '…' : text;
+  return (
+    <span
+      style={{ position: 'relative', cursor: 'default' }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {truncated}
+      {show && text.length > 40 && (
+        <span
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 4px)',
+            left: 0,
+            background: '#1e293b',
+            color: '#fff',
+            fontSize: 11,
+            padding: '5px 10px',
+            borderRadius: 4,
+            whiteSpace: 'pre-line',
+            zIndex: 200,
+            maxWidth: 340,
+            lineHeight: 1.6,
+            pointerEvents: 'none',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+          }}
+        >
+          {text.replace(/; /g, '\n')}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Tooltip button (instant tooltip, no browser delay)
 // ---------------------------------------------------------------------------
 
@@ -489,7 +572,7 @@ function ResizableTh({ col, width, onResizeStart, children }: ResizableThProps) 
 }
 
 // ---------------------------------------------------------------------------
-// ItemFormModal — add / edit
+// ItemFormModal — add / edit (for catalog items)
 // ---------------------------------------------------------------------------
 
 interface ItemFormModalProps {
@@ -645,6 +728,104 @@ function ItemFormModal({ title, initial, onClose, onSave, allowKindChange }: Ite
 }
 
 // ---------------------------------------------------------------------------
+// CacheFormModal — edit cache items
+// ---------------------------------------------------------------------------
+
+interface CacheFormModalProps {
+  title: string;
+  initial: CacheFormState;
+  onClose: () => void;
+  onSave: (form: CacheFormState) => Promise<void>;
+}
+
+function CacheFormModal({ title, initial, onClose, onSave }: CacheFormModalProps) {
+  const [form, setForm] = useState<CacheFormState>(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const setField = (key: keyof CacheFormState, value: string) =>
+    setForm(f => ({ ...f, [key]: value }));
+
+  const handleSave = async () => {
+    if (!form.name.trim()) { setError('Введите название'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      await onSave(form);
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(formatApiDetail(detail, 'Не удалось сохранить. Попробуйте ещё раз.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={s.overlay} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={s.modal}>
+        <div style={s.modalTitle}>{title}</div>
+
+        {error && <div style={s.error}>{error}</div>}
+
+        <div style={s.field}>
+          <label style={s.label}>Наименование *</label>
+          <input
+            style={s.input}
+            value={form.name}
+            onChange={e => setField('name', e.target.value)}
+            autoFocus
+          />
+        </div>
+
+        <div style={s.field}>
+          <label style={s.label}>Ед. изм.</label>
+          <input
+            style={s.input}
+            value={form.unit}
+            onChange={e => setField('unit', e.target.value)}
+            placeholder="м², шт, т..."
+          />
+        </div>
+
+        <div style={s.field}>
+          <label style={s.label}>Цена</label>
+          <input
+            style={s.input}
+            type="number"
+            min="0"
+            step="0.01"
+            value={form.price}
+            onChange={e => setField('price', e.target.value)}
+            placeholder="0.00"
+          />
+        </div>
+
+        <div style={s.field}>
+          <label style={s.label}>Источник</label>
+          <input
+            style={s.input}
+            value={form.sources}
+            onChange={e => setField('sources', e.target.value)}
+            placeholder="Источник 1: X руб; Источник 2: Y руб"
+          />
+        </div>
+
+        <div style={s.modalFooter}>
+          <button style={s.btn} onClick={onClose} disabled={saving}>Отмена</button>
+          <button
+            style={{ ...s.btn, ...s.btnPrimary, opacity: saving ? 0.7 : 1 }}
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saving ? 'Сохранение...' : 'Сохранить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ConfirmModal
 // ---------------------------------------------------------------------------
 
@@ -749,6 +930,7 @@ export default function PriceCatalog() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
+  // Catalog state
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -756,6 +938,15 @@ export default function PriceCatalog() {
   const [showAdd, setShowAdd] = useState(false);
   const [editItem, setEditItem] = useState<CatalogItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<CatalogItem | null>(null);
+
+  // Cache state
+  const [cacheItems, setCacheItems] = useState<CacheItem[]>([]);
+  const [cacheTotal, setCacheTotal] = useState(0);
+  const [editCacheItem, setEditCacheItem] = useState<CacheItem | null>(null);
+  const [deleteCacheItem, setDeleteCacheItem] = useState<CacheItem | null>(null);
+
+  const isCacheTab = tab === 'cache_works' || tab === 'cache_materials';
+  const displayTotal = isCacheTab ? cacheTotal : total;
 
   // Column widths: keyed by `${tab}_${colId}`
   const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
@@ -806,26 +997,35 @@ export default function PriceCatalog() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const params: CatalogParams = { tab, sort, page, page_size: pageSize };
-      if (debouncedSearch) params.search = debouncedSearch;
-      const data = await getCatalog(params);
-      setItems(data.items);
-      setTotal(data.total);
+      if (isCacheTab) {
+        const params = { page, page_size: pageSize, ...(debouncedSearch ? { search: debouncedSearch } : {}) };
+        const data = tab === 'cache_works'
+          ? await getCacheWorks(params)
+          : await getCacheMaterials(params);
+        setCacheItems(data.items);
+        setCacheTotal(data.total);
+      } else {
+        const params: CatalogParams = { tab, sort, page, page_size: pageSize };
+        if (debouncedSearch) params.search = debouncedSearch;
+        const data = await getCatalog(params);
+        setItems(data.items);
+        setTotal(data.total);
+      }
     } catch {
       // silent
     } finally {
       setLoading(false);
     }
-  }, [tab, debouncedSearch, sort, page, pageSize]);
+  }, [tab, debouncedSearch, sort, page, pageSize, isCacheTab]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const totalPages = Math.max(1, Math.ceil(displayTotal / pageSize));
   const startIdx = (page - 1) * pageSize + 1;
-  const endIdx = Math.min(page * pageSize, total);
+  const endIdx = Math.min(page * pageSize, displayTotal);
 
   // ---------------------------------------------------------------------------
-  // Save handlers
+  // Save handlers — catalog
   // ---------------------------------------------------------------------------
 
   const handleAdd = async (form: FormState) => {
@@ -876,12 +1076,51 @@ export default function PriceCatalog() {
     fetchData();
   };
 
+  // ---------------------------------------------------------------------------
+  // Save handlers — cache
+  // ---------------------------------------------------------------------------
+
+  const handleEditCache = async (form: CacheFormState) => {
+    if (!editCacheItem) return;
+    const data = {
+      name: form.name,
+      unit: form.unit || undefined,
+      price: form.price ? parseFloat(form.price) : undefined,
+      sources: form.sources || undefined,
+    };
+    if (tab === 'cache_works') {
+      await updateCacheWork(editCacheItem.id, data);
+    } else {
+      await updateCacheMaterial(editCacheItem.id, data);
+    }
+    setEditCacheItem(null);
+    fetchData();
+  };
+
+  const handleDeleteCache = async () => {
+    if (!deleteCacheItem) return;
+    if (tab === 'cache_works') {
+      await deleteCacheWork(deleteCacheItem.id);
+    } else {
+      await deleteCacheMaterial(deleteCacheItem.id);
+    }
+    setDeleteCacheItem(null);
+    fetchData();
+  };
+
   const editFormFor = (item: CatalogItem): FormState => ({
     kind: item.kind,
     name: item.name,
     unit: item.unit || '',
     price: item.kind === 'material' ? String(item.price ?? '') : '',
     contractors: item.kind === 'work' ? contractorsFromPrices(item.prices) : [{ name: '', price: '' }],
+  });
+
+  const cacheEditFormFor = (item: CacheItem): CacheFormState => ({
+    name: item.name,
+    unit: item.unit || '',
+    price: String(item.price),
+    sources: item.sources || '',
   });
 
   // ---------------------------------------------------------------------------
@@ -953,7 +1192,7 @@ export default function PriceCatalog() {
       );
     }
 
-    // tab === 'all': № Тип Наименование Ед.изм Цена Обновлено
+    // tab === 'all'
     return (
       <tr key={item.id} style={rowBg}>
         <td style={{ ...s.td, color: '#94a3b8' }}>{rowNum}</td>
@@ -971,6 +1210,27 @@ export default function PriceCatalog() {
     );
   };
 
+  const renderCacheRow = (item: CacheItem, idx: number) => {
+    const rowNum = startIdx + idx;
+    const rowBg = { background: idx % 2 === 0 ? '#fff' : '#fafafa' };
+    return (
+      <tr key={item.id} style={rowBg}>
+        <td style={{ ...s.td, color: '#94a3b8' }}>{rowNum}</td>
+        <td style={s.td}>{item.name}</td>
+        <td style={{ ...s.td, color: '#64748b' }}>{item.unit || '—'}</td>
+        <td style={{ ...s.td, fontWeight: 500 }}>{formatPrice(item.price)}</td>
+        <td style={s.td}><SourceTooltip text={item.sources} /></td>
+        <td style={{ ...s.td, color: '#94a3b8' }}>{formatDate(item.updated_at)}</td>
+        <td style={s.td}>{renderExpires(item.expires_in_days)}</td>
+        <td style={{ ...s.td, whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
+          <TooltipBtn label="Редактировать" icon="✎" onClick={() => setEditCacheItem(item)} />
+          {' '}
+          <TooltipBtn label="Удалить" icon="✕" onClick={() => setDeleteCacheItem(item)} danger />
+        </td>
+      </tr>
+    );
+  };
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -981,25 +1241,27 @@ export default function PriceCatalog() {
         {/* Header */}
         <div style={s.header}>
           <h1 style={s.title}>Каталог расценок</h1>
-          <div style={s.headerActions}>
-            <ImportButton onDone={fetchData} />
-            <button
-              style={s.btn}
-              onClick={() => exportCatalog(tab, debouncedSearch || undefined)}
-            >
-              ↓ Экспорт
-            </button>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button style={s.btn} onClick={() => downloadTemplate('works')}>Шаблон работ</button>
-              <button style={s.btn} onClick={() => downloadTemplate('materials')}>Шаблон материалов</button>
+          {!isCacheTab && (
+            <div style={s.headerActions}>
+              <ImportButton onDone={fetchData} />
+              <button
+                style={s.btn}
+                onClick={() => exportCatalog(tab as 'all' | 'works' | 'materials', debouncedSearch || undefined)}
+              >
+                ↓ Экспорт
+              </button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button style={s.btn} onClick={() => downloadTemplate('works')}>Шаблон работ</button>
+                <button style={s.btn} onClick={() => downloadTemplate('materials')}>Шаблон материалов</button>
+              </div>
+              <button
+                style={{ ...s.btn, ...s.btnPrimary }}
+                onClick={() => setShowAdd(true)}
+              >
+                + Добавить позицию
+              </button>
             </div>
-            <button
-              style={{ ...s.btn, ...s.btnPrimary }}
-              onClick={() => setShowAdd(true)}
-            >
-              + Добавить позицию
-            </button>
-          </div>
+          )}
         </div>
 
         {/* Controls */}
@@ -1010,14 +1272,16 @@ export default function PriceCatalog() {
             onChange={e => setSearch(e.target.value)}
             placeholder="Поиск по названию..."
           />
-          <Select value={sort} onValueChange={v => setSort(v as SortKey)} size="sm">
-            <SelectTrigger style={{ width: 160, flexShrink: 0 }}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          {!isCacheTab && (
+            <Select value={sort} onValueChange={v => setSort(v as SortKey)} size="sm">
+              <SelectTrigger style={{ width: 160, flexShrink: 0 }}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SORT_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b', flexShrink: 0, whiteSpace: 'nowrap' }}>
             Строк:
             <Select value={String(pageSize)} onValueChange={v => setPageSize(Number(v))} size="sm">
@@ -1033,9 +1297,17 @@ export default function PriceCatalog() {
 
         {/* Tabs */}
         <div style={s.tabs}>
-          {(['all', 'works', 'materials'] as Tab[]).map(t => (
+          {(['all', 'works', 'materials', 'cache_works', 'cache_materials'] as Tab[]).map(t => (
             <button key={t} style={s.tab(tab === t)} onClick={() => setTab(t)}>
-              {t === 'all' ? 'Все' : t === 'works' ? 'Работы' : 'Материалы'}
+              {t === 'all'
+                ? 'Все'
+                : t === 'works'
+                  ? 'Работы'
+                  : t === 'materials'
+                    ? 'Материалы'
+                    : t === 'cache_works'
+                      ? 'Кеш работ'
+                      : 'Кеш материалов'}
             </button>
           ))}
         </div>
@@ -1043,29 +1315,49 @@ export default function PriceCatalog() {
         {/* Table */}
         {loading ? (
           <div style={s.emptyState}>Загрузка...</div>
-        ) : items.length === 0 ? (
-          <div style={s.emptyState}>
-            {debouncedSearch
-              ? `Ничего не найдено по запросу «${debouncedSearch}»`
-              : 'Нет позиций. Загрузите прайс или добавьте вручную.'}
-          </div>
+        ) : isCacheTab ? (
+          cacheItems.length === 0 ? (
+            <div style={s.emptyState}>
+              {debouncedSearch
+                ? `Ничего не найдено по запросу «${debouncedSearch}»`
+                : 'Кеш цен пуст. Записи появятся автоматически после web-поиска.'}
+            </div>
+          ) : (
+            <div style={s.tableWrap}>
+              <table style={s.table}>
+                {renderColgroup()}
+                <thead>{renderHead()}</thead>
+                <tbody>
+                  {cacheItems.map((item, idx) => renderCacheRow(item, idx))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : (
-          <div style={s.tableWrap}>
-            <table style={s.table}>
-              {renderColgroup()}
-              <thead>{renderHead()}</thead>
-              <tbody>
-                {items.map((item, idx) => renderRow(item, idx))}
-              </tbody>
-            </table>
-          </div>
+          items.length === 0 ? (
+            <div style={s.emptyState}>
+              {debouncedSearch
+                ? `Ничего не найдено по запросу «${debouncedSearch}»`
+                : 'Нет позиций. Загрузите прайс или добавьте вручную.'}
+            </div>
+          ) : (
+            <div style={s.tableWrap}>
+              <table style={s.table}>
+                {renderColgroup()}
+                <thead>{renderHead()}</thead>
+                <tbody>
+                  {items.map((item, idx) => renderRow(item, idx))}
+                </tbody>
+              </table>
+            </div>
+          )
         )}
 
         {/* Pagination */}
-        {total > 0 && (
+        {displayTotal > 0 && (
           <div style={s.pagination}>
             <span style={s.paginationInfo}>
-              {startIdx}–{endIdx} из {total}
+              {startIdx}–{endIdx} из {displayTotal}
             </span>
             <div style={s.paginationBtns}>
               <button
@@ -1103,7 +1395,7 @@ export default function PriceCatalog() {
           </div>
         )}
 
-        {/* Modals */}
+        {/* Catalog modals */}
         {showAdd && (
           <ItemFormModal
             title="Добавить позицию"
@@ -1129,6 +1421,24 @@ export default function PriceCatalog() {
             message={`Удалить позицию «${deleteItem.name}»? Это действие необратимо.`}
             onCancel={() => setDeleteItem(null)}
             onConfirm={handleDelete}
+          />
+        )}
+
+        {/* Cache modals */}
+        {editCacheItem && (
+          <CacheFormModal
+            title={`Редактировать запись кеша`}
+            initial={cacheEditFormFor(editCacheItem)}
+            onClose={() => setEditCacheItem(null)}
+            onSave={handleEditCache}
+          />
+        )}
+
+        {deleteCacheItem && (
+          <ConfirmModal
+            message={`Удалить запись кеша «${deleteCacheItem.name}»? Это действие необратимо.`}
+            onCancel={() => setDeleteCacheItem(null)}
+            onConfirm={handleDeleteCache}
           />
         )}
       </div>
