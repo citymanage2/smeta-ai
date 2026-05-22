@@ -51,7 +51,7 @@ export function GenericEditorModal({
             if (fileSlot === 'input') {
               await initVersionFromInput(taskId, fileIndex)
             } else {
-              await initVersionFromResult(taskId)
+              await initVersionFromResult(taskId, fileSlot)
             }
             versionList = await getVersions(taskId, fileSlot)
           } catch {

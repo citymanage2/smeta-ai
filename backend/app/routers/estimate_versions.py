@@ -257,32 +257,41 @@ async def save_expenses(
 @router.post("/{task_id}/estimate/init-from-result")
 async def init_from_result(
     task_id: str,
+    file_slot: str = Query(default="result", description="Слот файла результата: 'result' или 'estimate'"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Idempotent: create V0 EstimateVersion from TaskResult for LIST/COMPLETENESS tasks."""
     from app.models.result import TaskResult
     from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
-    from sqlalchemy.orm import defer
 
     task = await _get_task_or_404(task_id, db)
 
     existing = await db.execute(
         select(EstimateVersion).where(
             EstimateVersion.task_id == task_id,
-            EstimateVersion.file_slot == "result",
+            EstimateVersion.file_slot == file_slot,
         ).limit(1)
     )
     if existing.scalar_one_or_none() is not None:
         return {"status": "already_exists"}
 
-    res = await db.execute(
-        select(TaskResult)
-        .where(TaskResult.task_id == task_id, TaskResult.slot == "result")
-        .order_by(TaskResult.id.desc())
-        .limit(1)
-    )
-    tr = res.scalar_one_or_none()
+    # Look for TaskResult in requested slot, fallback to 'result' if 'estimate' not found
+    slots_to_try = [file_slot] if file_slot == "result" else [file_slot, "result"]
+    tr = None
+    found_slot = file_slot
+    for slot_candidate in slots_to_try:
+        res = await db.execute(
+            select(TaskResult)
+            .where(TaskResult.task_id == task_id, TaskResult.slot == slot_candidate)
+            .order_by(TaskResult.id.desc())
+            .limit(1)
+        )
+        tr = res.scalar_one_or_none()
+        if tr is not None:
+            found_slot = slot_candidate
+            break
+
     if tr is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TaskResult не найден")
 
@@ -298,7 +307,7 @@ async def init_from_result(
         version_label="original",
         version_display_name="V0 — Оригинал",
         rows=rows,
-        file_slot="result",
+        file_slot=file_slot,
         task_type=task.task_type,
     )
     db.add(version)

@@ -22,9 +22,11 @@ export async function getVersions(taskId: string, fileSlot?: string): Promise<Es
   return res.data;
 }
 
-export async function initVersionFromResult(taskId: string): Promise<{ status: string; version_id?: string }> {
+export async function initVersionFromResult(taskId: string, fileSlot?: string): Promise<{ status: string; version_id?: string }> {
   const res = await apiClient.post<{ status: string; version_id?: string }>(
     `/tasks/${taskId}/estimate/init-from-result`,
+    null,
+    fileSlot && fileSlot !== 'result' ? { params: { file_slot: fileSlot } } : undefined,
   );
   return res.data;
 }
