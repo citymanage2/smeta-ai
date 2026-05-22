@@ -48,7 +48,7 @@ updated_at  TIMESTAMP NOT NULL DEFAULT now()
 
 ---
 
-### Фаза 2: Модели SQLAlchemy [ ]
+### Фаза 2: Модели SQLAlchemy [x]
 
 Создать `backend/app/models/price_cache.py`:
 - `PriceCacheWork` — ORM-модель для `price_cache_works`
