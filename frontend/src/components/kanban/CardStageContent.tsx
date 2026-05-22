@@ -4,6 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, Download, Edit3, Eye, FileText }
 import { WorkflowCard } from '../../types/workflow'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
+import { restartTask } from '../../api/tasks'
 import {
   CardDetail,
   StageDetail,
@@ -303,6 +304,28 @@ interface StageProps {
   card: WorkflowCard
   filesMeta: CardDetail | null
   onOpenEditor: (state: EditorModalState) => void
+  onRestart: (taskId: string) => Promise<void>
+}
+
+function RestartBtn({ taskId, onRestart }: { taskId: string; onRestart: (id: string) => Promise<void> }) {
+  const [loading, setLoading] = useState(false)
+  return (
+    <button
+      onClick={async () => { setLoading(true); try { await onRestart(taskId) } finally { setLoading(false) } }}
+      disabled={loading}
+      style={{
+        marginTop: '6px',
+        display: 'inline-flex', alignItems: 'center', gap: '4px',
+        background: loading ? '#e0f2fe' : '#f0f9ff',
+        color: '#0369a1', border: '1px solid #7dd3fc',
+        borderRadius: '6px', padding: '4px 10px',
+        fontSize: '11px', fontWeight: 600,
+        cursor: loading ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {loading ? 'Запускаю…' : '↺ Перезапустить'}
+    </button>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +431,7 @@ function ResultFilesSection({
 // ---------------------------------------------------------------------------
 // Stage: Перечень
 // ---------------------------------------------------------------------------
-function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
+function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
   const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
   const navigate = useNavigate()
   const pending = pendingListTasks[card.id]
@@ -591,6 +614,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
         {showWarning && nextStage && (
           <ManualEditWarning editedAt={sourceStage!.manually_edited_at!} prevStageName="Перечень" />
         )}
+        <RestartBtn taskId={task.id} onRestart={onRestart} />
       </div>
     )
   }
@@ -630,7 +654,7 @@ function ListStage({ card, filesMeta, onOpenEditor }: StageProps) {
 // ---------------------------------------------------------------------------
 // Stage: Полнота
 // ---------------------------------------------------------------------------
-function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
+function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const navigate = useNavigate()
   const submitting = submittingCardIds.has(card.id)
@@ -772,6 +796,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
           {completenessEditedWarning && (
             <ManualEditWarning editedAt={completenessStage!.manually_edited_at!} prevStageName="Проверка полноты" />
           )}
+          <RestartBtn taskId={task.id} onRestart={onRestart} />
         </div>
       )}
 
@@ -797,7 +822,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor }: StageProps) {
 // ---------------------------------------------------------------------------
 // Stage: Смета
 // ---------------------------------------------------------------------------
-function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
+function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const navigate = useNavigate()
   const submitting = submittingCardIds.has(card.id)
@@ -990,6 +1015,10 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
         <ManualEditWarning editedAt={estimateMetaStage!.manually_edited_at!} prevStageName="Смета из перечня" />
       )}
 
+      {task !== null && task.status === 'completed' && (
+        <RestartBtn taskId={task.id} onRestart={onRestart} />
+      )}
+
       {canCreate && (
         <div style={{ marginTop: task !== null && (task.status === 'failed' || task.status === 'cancelled') ? '6px' : '4px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
           {noSource ? (
@@ -1021,7 +1050,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor }: StageProps) {
 // ---------------------------------------------------------------------------
 // Stage: Оптимизация
 // ---------------------------------------------------------------------------
-function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
+function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
   const navigate = useNavigate()
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
@@ -1168,6 +1197,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor }: StageProps) {
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
+          <RestartBtn taskId={task.id} onRestart={onRestart} />
           {mainFile ? (
             <div style={{ marginBottom: '6px' }}>
               <FileRowCompact
@@ -1258,7 +1288,12 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
     return () => window.removeEventListener('message', handler)
   }, [fetchMeta])
 
-  const stageProps: StageProps = { card, filesMeta, onOpenEditor: setEditorModal }
+  const handleRestart = useCallback(async (taskId: string) => {
+    await restartTask(taskId)
+    await fetchMeta()
+  }, [fetchMeta])
+
+  const stageProps: StageProps = { card, filesMeta, onOpenEditor: setEditorModal, onRestart: handleRestart }
 
   return (
     <>
