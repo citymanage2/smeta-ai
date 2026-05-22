@@ -28,6 +28,10 @@ class SummaryOverrides(BaseModel):
     profit_pct: Decimal = Field(default=Decimal("20.0"))
     vat_full_cost_pct: Decimal = Field(default=Decimal("22.0"))
     tax_pct: Decimal = Field(default=Decimal("2.0"))
+    # row management
+    hidden_fixed_rows: list[str] = Field(default_factory=list)
+    custom_rows_before: list[dict] = Field(default_factory=list)
+    custom_rows_after: list[dict] = Field(default_factory=list)
     # legacy fields kept for backward compatibility (not used in new calc)
     vat_works_pct: Optional[Decimal] = Field(default=None)
     vat_materials_pct: Optional[Decimal] = Field(default=None)

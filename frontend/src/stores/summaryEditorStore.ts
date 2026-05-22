@@ -22,6 +22,7 @@ export function calcSummary(
   const coeff = overrides.coefficient ?? 1.0;
   const toWithout = (v: number) => v / 1.22;
   const toWith = (v: number) => v * 1.22;
+  const hidden = new Set(overrides.hidden_fixed_rows ?? []);
 
   // ── Section breakdown ──────────────────────────────────────────────────────
   const section_totals: SectionCalcRow[] = sections.map((sec) => {
@@ -35,7 +36,6 @@ export function calcSummary(
     works_raw *= coeff;
     materials_raw *= coeff;
     const tax_pct = sec.tax_pct ?? 0;
-    // Стоимость с НДС = себестоимость × (1.22 − already_included_vat%)
     const multiplier = 1.22 - tax_pct / 100;
     return {
       card_id: sec.card_id,
@@ -48,23 +48,17 @@ export function calcSummary(
     };
   });
 
-  // ── Rows 1–2: Работы / Материалы ──────────────────────────────────────────
+  // ── Fixed row values ───────────────────────────────────────────────────────
   const works_with_vat = section_totals.reduce((s, r) => s + r.works_with_vat, 0);
   const materials_with_vat = section_totals.reduce((s, r) => s + r.materials_with_vat, 0);
-  const works_without_vat = toWithout(works_with_vat);
-  const materials_without_vat = toWithout(materials_with_vat);
 
   const base_with_vat = works_with_vat + materials_with_vat;
 
-  // ── Rows 3–5: процентные расходы от (Работы + Материалы) с НДС ───────────
   const transport_with_vat = base_with_vat * (overrides.transport_pct ?? 3) / 100;
   const cleanup_with_vat = base_with_vat * (overrides.cleanup_pct ?? 3) / 100;
   const overhead_with_vat = base_with_vat * (overrides.overhead_pct ?? 3) / 100;
-
-  // ── Row 6: Разнорабочие ежедневно (count × 5000) ─────────────────────────
   const daily_workers_with_vat = (overrides.daily_workers_cost ?? 0) * 5000;
 
-  // ── Rows 7–18: ручные поля (хранятся как без НДС) ─────────────────────────
   const bg_wout = overrides.bank_guarantee_cost ?? 0;
   const cl_wout = overrides.cleaning_cost ?? 0;
   const ppr_wout = overrides.ppr_cost ?? 0;
@@ -78,14 +72,32 @@ export function calcSummary(
   const hr_wout = overrides.housing_rent_cost ?? 0;
   const wt_wout = overrides.workers_transport_cost ?? 0;
 
-  // ── Subtotal ──────────────────────────────────────────────────────────────
-  const subtotal_with_vat =
-    works_with_vat + materials_with_vat +
-    transport_with_vat + cleanup_with_vat + overhead_with_vat +
-    daily_workers_with_vat +
-    toWith(bg_wout) + toWith(cl_wout) + toWith(ppr_wout) + toWith(com_wout) +
-    toWith(cc_wout) + toWith(as_wout) + toWith(pa_wout) + toWith(so_wout) +
-    toWith(tr_wout) + toWith(rp_wout) + toWith(hr_wout) + toWith(wt_wout);
+  // ── Subtotal: only include non-hidden fixed rows + custom before rows ──────
+  let subtotal_with_vat = 0;
+  if (!hidden.has('works'))              subtotal_with_vat += works_with_vat;
+  if (!hidden.has('materials'))          subtotal_with_vat += materials_with_vat;
+  if (!hidden.has('transport'))          subtotal_with_vat += transport_with_vat;
+  if (!hidden.has('cleanup'))            subtotal_with_vat += cleanup_with_vat;
+  if (!hidden.has('overhead'))           subtotal_with_vat += overhead_with_vat;
+  if (!hidden.has('daily_workers'))      subtotal_with_vat += daily_workers_with_vat;
+  if (!hidden.has('bank_guarantee'))     subtotal_with_vat += toWith(bg_wout);
+  if (!hidden.has('cleaning'))           subtotal_with_vat += toWith(cl_wout);
+  if (!hidden.has('ppr'))                subtotal_with_vat += toWith(ppr_wout);
+  if (!hidden.has('commissioning'))      subtotal_with_vat += toWith(com_wout);
+  if (!hidden.has('construction_control')) subtotal_with_vat += toWith(cc_wout);
+  if (!hidden.has('author_supervision')) subtotal_with_vat += toWith(as_wout);
+  if (!hidden.has('passes'))             subtotal_with_vat += toWith(pa_wout);
+  if (!hidden.has('site_office'))        subtotal_with_vat += toWith(so_wout);
+  if (!hidden.has('travel'))             subtotal_with_vat += toWith(tr_wout);
+  if (!hidden.has('rp'))                 subtotal_with_vat += toWith(rp_wout);
+  if (!hidden.has('housing_rent'))       subtotal_with_vat += toWith(hr_wout);
+  if (!hidden.has('workers_transport'))  subtotal_with_vat += toWith(wt_wout);
+
+  // Custom rows before separator contribute to subtotal
+  for (const cr of (overrides.custom_rows_before ?? [])) {
+    subtotal_with_vat += cr.without_vat * 1.22;
+  }
+
   const subtotal_without_vat = toWithout(subtotal_with_vat);
 
   // ── Footer ────────────────────────────────────────────────────────────────
@@ -97,7 +109,6 @@ export function calcSummary(
   const contingency_with_vat = subtotal_with_vat * contingency_pct / 100;
   const contingency_without_vat = subtotal_without_vat * contingency_pct / 100;
 
-  // Плановая прибыль: profit_pct% × (1 + contingency%) × subtotal_без_НДС / (100% − profit_pct%)
   const profit =
     (profit_pct / 100) * (1 + contingency_pct / 100) * subtotal_without_vat /
     (1 - profit_pct / 100);
@@ -110,9 +121,9 @@ export function calcSummary(
   return {
     section_totals,
     works_with_vat,
-    works_without_vat,
+    works_without_vat: toWithout(works_with_vat),
     materials_with_vat,
-    materials_without_vat,
+    materials_without_vat: toWithout(materials_with_vat),
     transport_with_vat,
     transport_without_vat: toWithout(transport_with_vat),
     cleanup_with_vat,
@@ -170,7 +181,7 @@ interface SummaryEditorState {
   loadSummary: (projectId: string) => Promise<void>;
   updateSectionRows: (sectionIndex: number, rows: EstimateRow[]) => void;
   updateSectionTaxPct: (sectionIndex: number, taxPct: number) => void;
-  updateOverride: <K extends keyof SummaryOverrides>(key: K, value: number) => void;
+  updateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => void;
   setActiveTabIndex: (index: number) => void;
   save: () => Promise<void>;
   undo: () => void;
@@ -190,31 +201,34 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
 
   loadSummary: async (projectId: string) => {
     const summary = await getSummary(projectId);
-    const raw = summary.overrides;
-    const n = (key: keyof SummaryOverrides) =>
-      Number(raw[key] ?? DEFAULT_OVERRIDES[key]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = summary.overrides as any as Record<string, unknown>;
+    const n = (key: string, fallback: number) => Number(raw[key] ?? fallback);
     const overrides: SummaryOverrides = {
-      coefficient: n('coefficient'),
-      transport_pct: n('transport_pct'),
-      cleanup_pct: n('cleanup_pct'),
-      overhead_pct: n('overhead_pct'),
-      daily_workers_cost: n('daily_workers_cost'),
-      bank_guarantee_cost: n('bank_guarantee_cost'),
-      cleaning_cost: n('cleaning_cost'),
-      ppr_cost: n('ppr_cost'),
-      commissioning_cost: n('commissioning_cost'),
-      construction_control_cost: n('construction_control_cost'),
-      author_supervision_cost: n('author_supervision_cost'),
-      passes_cost: n('passes_cost'),
-      site_office_cost: n('site_office_cost'),
-      travel_cost: n('travel_cost'),
-      rp_cost: n('rp_cost'),
-      housing_rent_cost: n('housing_rent_cost'),
-      workers_transport_cost: n('workers_transport_cost'),
-      contingency_pct: n('contingency_pct'),
-      profit_pct: n('profit_pct'),
-      vat_full_cost_pct: n('vat_full_cost_pct'),
-      tax_pct: n('tax_pct'),
+      coefficient: n('coefficient', DEFAULT_OVERRIDES.coefficient),
+      transport_pct: n('transport_pct', DEFAULT_OVERRIDES.transport_pct),
+      cleanup_pct: n('cleanup_pct', DEFAULT_OVERRIDES.cleanup_pct),
+      overhead_pct: n('overhead_pct', DEFAULT_OVERRIDES.overhead_pct),
+      daily_workers_cost: n('daily_workers_cost', DEFAULT_OVERRIDES.daily_workers_cost),
+      bank_guarantee_cost: n('bank_guarantee_cost', DEFAULT_OVERRIDES.bank_guarantee_cost),
+      cleaning_cost: n('cleaning_cost', DEFAULT_OVERRIDES.cleaning_cost),
+      ppr_cost: n('ppr_cost', DEFAULT_OVERRIDES.ppr_cost),
+      commissioning_cost: n('commissioning_cost', DEFAULT_OVERRIDES.commissioning_cost),
+      construction_control_cost: n('construction_control_cost', DEFAULT_OVERRIDES.construction_control_cost),
+      author_supervision_cost: n('author_supervision_cost', DEFAULT_OVERRIDES.author_supervision_cost),
+      passes_cost: n('passes_cost', DEFAULT_OVERRIDES.passes_cost),
+      site_office_cost: n('site_office_cost', DEFAULT_OVERRIDES.site_office_cost),
+      travel_cost: n('travel_cost', DEFAULT_OVERRIDES.travel_cost),
+      rp_cost: n('rp_cost', DEFAULT_OVERRIDES.rp_cost),
+      housing_rent_cost: n('housing_rent_cost', DEFAULT_OVERRIDES.housing_rent_cost),
+      workers_transport_cost: n('workers_transport_cost', DEFAULT_OVERRIDES.workers_transport_cost),
+      contingency_pct: n('contingency_pct', DEFAULT_OVERRIDES.contingency_pct),
+      profit_pct: n('profit_pct', DEFAULT_OVERRIDES.profit_pct),
+      vat_full_cost_pct: n('vat_full_cost_pct', DEFAULT_OVERRIDES.vat_full_cost_pct),
+      tax_pct: n('tax_pct', DEFAULT_OVERRIDES.tax_pct),
+      hidden_fixed_rows: Array.isArray(raw.hidden_fixed_rows) ? (raw.hidden_fixed_rows as string[]) : [],
+      custom_rows_before: Array.isArray(raw.custom_rows_before) ? (raw.custom_rows_before as import('../types/summary').CustomCostRow[]) : [],
+      custom_rows_after: Array.isArray(raw.custom_rows_after) ? (raw.custom_rows_after as import('../types/summary').CustomCostRow[]) : [],
     };
     set({
       projectId,
@@ -254,7 +268,7 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     set({ sections: newSections, isDirty: true });
   },
 
-  updateOverride: <K extends keyof SummaryOverrides>(key: K, value: number) => {
+  updateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => {
     const { summaryOverrides } = get();
     set({
       summaryOverrides: { ...summaryOverrides, [key]: value },
@@ -275,10 +289,7 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       overrides: summaryOverrides,
       total_for_customer: calc.total_for_customer,
     });
-    set({
-      summaryId: updated.id,
-      isDirty: false,
-    });
+    set({ summaryId: updated.id, isDirty: false });
   },
 
   undo: () => {

@@ -1,31 +1,51 @@
 import { EstimateRow } from './index';
 
+// Custom row that user manually adds
+export interface CustomCostRow {
+  id: string
+  label: string
+  qty_pct: string       // display text for the %/Кол-во column
+  without_vat: number   // canonical stored value; with_vat = without_vat × 1.22
+}
+
 export interface SummaryOverrides {
   coefficient: number;
   transport_pct: number;
   cleanup_pct: number;
   overhead_pct: number;
-  daily_workers_cost: number;       // stores COUNT of workers (×5000 = cost)
-  bank_guarantee_cost: number;      // stored as без НДС
-  cleaning_cost: number;            // stored as без НДС
-  ppr_cost: number;                 // stored as без НДС
-  commissioning_cost: number;       // stored as без НДС (row 10: Разнорабочие мусор)
-  construction_control_cost: number; // stored as без НДС
-  author_supervision_cost: number;  // stored as без НДС
-  passes_cost: number;              // stored as без НДС
-  site_office_cost: number;         // stored as без НДС
-  travel_cost: number;              // stored as без НДС
-  rp_cost: number;                  // stored as без НДС
-  housing_rent_cost: number;        // stored as без НДС
-  workers_transport_cost: number;   // stored as без НДС
+  daily_workers_cost: number;        // stores COUNT of workers (×5000 = cost)
+  bank_guarantee_cost: number;       // stored as без НДС
+  cleaning_cost: number;
+  ppr_cost: number;
+  commissioning_cost: number;        // row 10: Разнорабочие мусор
+  construction_control_cost: number;
+  author_supervision_cost: number;
+  passes_cost: number;
+  site_office_cost: number;
+  travel_cost: number;
+  rp_cost: number;
+  housing_rent_cost: number;
+  workers_transport_cost: number;
   contingency_pct: number;
   profit_pct: number;
-  vat_full_cost_pct: number;        // НДС от полной себестоимости
-  tax_pct: number;                  // Др. налоги от полной себестоимости
-  // legacy (kept for backward compat, unused in calc)
+  vat_full_cost_pct: number;
+  tax_pct: number;
+  // row management
+  hidden_fixed_rows: string[];       // keys of fixed rows removed by user
+  custom_rows_before: CustomCostRow[]; // user-added rows above separator (numbered, in subtotal)
+  custom_rows_after: CustomCostRow[];  // user-added rows below separator (unnumbered, informational)
+  // legacy (kept for backward compat, unused)
   vat_works_pct?: number;
   vat_materials_pct?: number;
 }
+
+// All 18 fixed row keys in display order
+export const FIXED_ROW_KEYS = [
+  'works', 'materials', 'transport', 'cleanup', 'overhead',
+  'daily_workers', 'bank_guarantee', 'cleaning', 'ppr', 'commissioning',
+  'construction_control', 'author_supervision', 'passes', 'site_office',
+  'travel', 'rp', 'housing_rent', 'workers_transport',
+] as const
 
 export const DEFAULT_OVERRIDES: SummaryOverrides = {
   coefficient: 1.0,
@@ -49,6 +69,9 @@ export const DEFAULT_OVERRIDES: SummaryOverrides = {
   profit_pct: 20.0,
   vat_full_cost_pct: 22.0,
   tax_pct: 2.0,
+  hidden_fixed_rows: [],
+  custom_rows_before: [],
+  custom_rows_after: [],
 };
 
 export interface SectionTab {
@@ -66,8 +89,8 @@ export interface SectionCalcRow {
   tax_pct: number;
   works_raw: number;
   materials_raw: number;
-  works_with_vat: number;      // works_raw × (1.22 − tax_pct/100)
-  materials_with_vat: number;  // materials_raw × (1.22 − tax_pct/100)
+  works_with_vat: number;
+  materials_with_vat: number;
 }
 
 export interface SummaryCalcResult {
@@ -91,7 +114,7 @@ export interface SummaryCalcResult {
   daily_workers_with_vat: number;
   daily_workers_without_vat: number;
 
-  // Rows 7–18 (pairs: with / without VAT)
+  // Rows 7–18
   bank_guarantee_with_vat: number;
   bank_guarantee_without_vat: number;
   cleaning_with_vat: number;
@@ -121,7 +144,7 @@ export interface SummaryCalcResult {
   subtotal_with_vat: number;
   subtotal_without_vat: number;
 
-  // Footer (merged cells — single values)
+  // Footer
   contingency_with_vat: number;
   contingency_without_vat: number;
   profit: number;
