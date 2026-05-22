@@ -768,6 +768,14 @@ const TaskStatusPage: React.FC = () => {
         {/* Page title */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '24px' }}>
           <div>
+            {taskProjectId && (
+              <button
+                onClick={() => navigate(`/projects/${taskProjectId}`)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', fontSize: '13px', padding: 0, marginBottom: '8px', display: 'block' }}
+              >
+                ← {projects.find(p => p.id === taskProjectId)?.name ?? 'Проект'}
+              </button>
+            )}
             <h2 style={{ margin: 0, fontSize: '26px', fontWeight: 700, color: '#0f172a' }}>
               {task ? (taskName || TASK_TYPE_LABELS[task.task_type] || 'Статус задачи') : 'Статус задачи'}
             </h2>

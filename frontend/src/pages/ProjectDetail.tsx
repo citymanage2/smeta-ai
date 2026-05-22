@@ -182,7 +182,7 @@ const ProjectDetailPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
   const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('kanban');
 
   useEffect(() => {
     if (projectId) loadProject();
