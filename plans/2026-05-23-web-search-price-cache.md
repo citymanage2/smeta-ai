@@ -114,7 +114,7 @@ if result_item.get("price") is not None:
 
 ---
 
-### Фаза 5: Автоудаление устаревших записей [ ]
+### Фаза 5: Автоудаление устаревших записей [x]
 
 Добавить зависимость: `apscheduler[asyncio]` в `backend/requirements.txt`.
 

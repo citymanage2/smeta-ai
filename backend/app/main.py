@@ -12,6 +12,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
 from app.database import AsyncSessionLocal
@@ -19,7 +20,7 @@ from app.models.user import User
 from app.models.task import Task
 from app.utils.auth import hash_password, verify_password
 from app.services import price_service
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from datetime import datetime, timedelta, timezone
 
 # Configure structlog
@@ -36,6 +37,29 @@ logger = structlog.get_logger()
 
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address)
+
+scheduler = AsyncIOScheduler()
+
+
+async def cleanup_price_cache() -> None:
+    """Delete expired price cache records (older than 30 days) and reload in-memory cache."""
+    async with AsyncSessionLocal() as db:
+        result_works = await db.execute(
+            text("DELETE FROM price_cache_works WHERE updated_at < now() - interval '30 days' RETURNING id")
+        )
+        deleted_works = len(result_works.fetchall())
+
+        result_materials = await db.execute(
+            text("DELETE FROM price_cache_materials WHERE updated_at < now() - interval '30 days' RETURNING id")
+        )
+        deleted_materials = len(result_materials.fetchall())
+
+        await db.commit()
+
+    logger.info("Price cache cleanup done", deleted_works=deleted_works, deleted_materials=deleted_materials)
+
+    async with AsyncSessionLocal() as db:
+        await price_service.load_cache(db)
 
 
 async def _initialize_users() -> None:
@@ -108,6 +132,9 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("Price cache loaded", works=works_count, materials=mats_count)
         await _recover_stuck_tasks()
+        await cleanup_price_cache()
+        scheduler.add_job(cleanup_price_cache, "interval", hours=24)
+        scheduler.start()
         logger.info("Startup complete")
     except Exception as e:
         logger.error("Startup failed", error=str(e))
@@ -116,6 +143,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down Smeta AI backend...")
+    scheduler.shutdown()
 
 
 def create_app() -> FastAPI:
