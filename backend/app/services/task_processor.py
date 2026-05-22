@@ -1541,25 +1541,10 @@ class TaskProcessor:
                     raise ValueError(f"Исходная задача {source_task_id} не найдена")
 
                 if source_stage == 2:
-                    # Find related check task
-                    check_type = (
-                        "CHECK_LIST_COMPLETENESS"
-                        if source_task.task_type == "LIST_FROM_GRAND"
-                        else "CHECK_PROJECT_COMPLETENESS"
-                    )
-                    from sqlalchemy import desc as _desc
-                    check_res = await self.db.execute(
-                        select(Task)
-                        .where(Task.user_prompt == str(source_task.id))
-                        .where(Task.task_type == check_type)
-                        .where(Task.status == "completed")
-                        .order_by(_desc(Task.created_at))
-                        .limit(1)
-                    )
-                    check_task_obj = check_res.scalar_one_or_none()
-                    if not check_task_obj:
+                    # source_task IS the completeness check task — use it directly
+                    if source_task.status != "completed":
                         raise ValueError("Задача проверки полноты не найдена или не завершена")
-                    items = (check_task_obj.progress_data or {}).get("items", [])
+                    items = (source_task.progress_data or {}).get("items", [])
                     if not items:
                         raise ValueError("В задаче проверки полноты нет позиций")
                 else:
