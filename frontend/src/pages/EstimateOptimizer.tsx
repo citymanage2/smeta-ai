@@ -451,7 +451,7 @@ const EstimateOptimizer: React.FC = () => {
       {/* Page header */}
       <div style={{ marginBottom: '16px' }}>
         <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#0f172a' }}>
-          {taskName || (isGenericMode ? genericTitle : 'Оптимизация сметы')}
+          {taskName || (isGenericMode ? genericTitle : taskType === 'ESTIMATE_FROM_LIST' ? 'Смета из перечня' : 'Оптимизация сметы')}
         </h2>
         {isGenericMode ? (
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
@@ -464,7 +464,7 @@ const EstimateOptimizer: React.FC = () => {
           </p>
         ) : (
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
-            {taskName && 'Оптимизация сметы'}
+            {taskName && (taskType === 'ESTIMATE_FROM_LIST' ? 'Просмотр и редактирование сметы' : 'Оптимизация сметы')}
             {isDirty && (
               <span style={{ marginLeft: taskName ? 10 : 0, color: '#f59e0b', fontWeight: 500 }}>
                 {taskName ? '• Несохранённые изменения' : 'Несохранённые изменения'}
@@ -541,14 +541,16 @@ const EstimateOptimizer: React.FC = () => {
       {/* ── Estimate mode ───────────────────────────────────────────────── */}
       {!isGenericMode && visibleVersions.length > 0 && taskId && (
         <>
-          <OptimizationToolbar
-            taskId={taskId}
-            versions={visibleVersions}
-            onStepComplete={handleStepComplete}
-            onViewStep={handleViewStep}
-          />
+          {taskType === 'ESTIMATE_OPTIMIZATION' && (
+            <OptimizationToolbar
+              taskId={taskId}
+              versions={visibleVersions}
+              onStepComplete={handleStepComplete}
+              onViewStep={handleViewStep}
+            />
+          )}
 
-          {stepResultBanner && (
+          {taskType === 'ESTIMATE_OPTIMIZATION' && stepResultBanner && (
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '10px 16px', marginBottom: '12px',
@@ -573,7 +575,7 @@ const EstimateOptimizer: React.FC = () => {
             </div>
           )}
 
-          {panel && (
+          {taskType === 'ESTIMATE_OPTIMIZATION' && panel && (
             <OptimizationProposalsPanel
               proposals={panel.proposals}
               step={panel.step}
