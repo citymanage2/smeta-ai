@@ -230,19 +230,26 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       custom_rows_before: Array.isArray(raw.custom_rows_before) ? (raw.custom_rows_before as import('../types/summary').CustomCostRow[]) : [],
       custom_rows_after: Array.isArray(raw.custom_rows_after) ? (raw.custom_rows_after as import('../types/summary').CustomCostRow[]) : [],
     };
-    // If total was never saved yet (summary freshly created by AI task), mark dirty
-    // so the Save button is enabled and user can persist the calculated total.
-    const needsInitialSave = !summary.total_for_customer;
     set({
       projectId,
       summaryId: summary.id,
       sections: summary.sections,
       summaryOverrides: overrides,
       activeTabIndex: summary.sections.length > 0 ? 0 : -1,
-      isDirty: needsInitialSave,
+      isDirty: false,
       undoStack: [],
       redoStack: [],
     });
+
+    // Auto-save total on first open so project card shows the sum immediately.
+    if (!summary.total_for_customer) {
+      const calc = calcSummary(summary.sections, overrides);
+      await updateSummary(projectId, {
+        sections: summary.sections,
+        overrides,
+        total_for_customer: calc.total_for_customer,
+      });
+    }
   },
 
   updateSectionRows: (sectionIndex: number, rows: EstimateRow[]) => {
