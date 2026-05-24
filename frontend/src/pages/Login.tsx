@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../api/auth';
 
@@ -6,7 +6,15 @@ const Login: React.FC = () => {
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (sessionStorage.getItem('sessionExpired')) {
+      setSessionExpired(true);
+      sessionStorage.removeItem('sessionExpired');
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,6 +80,23 @@ const Login: React.FC = () => {
             Автоматизация строительных смет
           </p>
         </div>
+
+        {/* Session expired banner */}
+        {sessionExpired && (
+          <div
+            style={{
+              padding: '10px 14px',
+              backgroundColor: '#fffbeb',
+              border: '1px solid #fcd34d',
+              borderRadius: '8px',
+              marginBottom: '20px',
+              fontSize: '14px',
+              color: '#92400e',
+            }}
+          >
+            Сессия истекла. Войдите снова.
+          </div>
+        )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} noValidate>

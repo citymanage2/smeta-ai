@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost/smeta_ai"
     JWT_SECRET: str = "changeme-use-strong-secret-in-production"
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_HOURS: int = 24
+    JWT_EXPIRE_HOURS: int = 168  # 7 days
     USER_PASSWORD: str = "user123"
     ADMIN_PASSWORD: str = "admin123"
     MAX_FILE_SIZE_MB: int = 20
