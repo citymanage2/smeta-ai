@@ -21,7 +21,7 @@ from app.models.task import Task
 from app.utils.auth import hash_password, verify_password
 from app.services import price_service
 from sqlalchemy import select, update, text
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 # Configure structlog
 structlog.configure(
@@ -95,22 +95,23 @@ async def _recover_stuck_tasks() -> None:
     When Render restarts the service (deploy or crash), any in-progress tasks
     are killed without status cleanup. This marks them failed so the frontend
     stops polling and shows an actionable error instead of hanging forever.
+    All processing tasks are reset immediately — there are no surviving workers
+    after a restart.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             update(Task)
-            .where(Task.status == "processing", Task.updated_at < cutoff)
+            .where(Task.status == "processing")
             .values(
                 status="failed",
-                error_message="Задача прервана: сервер был перезапущен во время обработки. Запустите задачу заново.",
+                error_message="Задача прервана: сервер был перезапущен во время обработки. Нажмите «Перезапустить».",
             )
             .returning(Task.id)
         )
         recovered = result.fetchall()
         await db.commit()
     if recovered:
-        logger.warning("Recovered stuck tasks", count=len(recovered))
+        logger.warning("Recovered stuck tasks on startup", count=len(recovered))
 
 
 @asynccontextmanager

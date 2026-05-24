@@ -688,11 +688,6 @@ async def restart_task(
             detail="Задача не найдена",
         )
 
-    if task.status == "processing":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Нельзя перезапустить задачу, которая сейчас обрабатывается",
-        )
 
     now = datetime.now(timezone.utc)
     task.status = "pending"

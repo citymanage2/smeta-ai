@@ -203,7 +203,7 @@ export function TaskDetailModal({ taskId, isOpen, onClose }: Props) {
                     {stopping ? 'Останавливаю…' : '⏹ Стоп'}
                   </button>
                 )}
-                {(task.status === 'failed' || task.status === 'cancelled' || task.status === 'completed') && (
+                {(task.status === 'failed' || task.status === 'cancelled' || task.status === 'completed' || task.status === 'processing') && (
                   <button
                     onClick={async () => {
                       setRestarting(true)
