@@ -15,13 +15,9 @@ import {
   downloadInputFile,
   updateTask,
   resumeTask,
-  checkCompleteness,
-  checkProjectCompleteness,
-  getRelatedChecks,
   patchEstimateItems,
   repriceEstimateItem,
   fixEmptyPrices,
-  regenerateTaskResult,
   TaskStatusResponse,
   ChatMessage,
   EstimateItem,
@@ -81,48 +77,13 @@ const TaskStatusPage: React.FC = () => {
   // Resume state
   const [resuming, setResuming] = useState(false);
 
-  // Check completeness state (LIST_FROM_GRAND)
-  const [checkTaskId, setCheckTaskId] = useState<string | null>(null);
-  const [checkTask, setCheckTask] = useState<TaskStatusResponse | null>(null);
-  const [checkResults, setCheckResults] = useState<TaskResult[]>([]);
-  const [checkStarting, setCheckStarting] = useState(false);
-  const [checkStartError, setCheckStartError] = useState('');
-  const [checkCancelling, setCheckCancelling] = useState(false);
-  const [checkResuming, setCheckResuming] = useState(false);
-  const [checkProgressLog, setCheckProgressLog] = useState<string[]>([]);
-  const [checkElapsed, setCheckElapsed] = useState(0);
-  const checkPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const checkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const checkStartTimeRef = useRef<number | null>(null);
-  const checkFetchErrorCount = useRef(0);
-
-  // Check project completeness state (LIST_FROM_PROJECT)
-  const [checkProjectTaskId, setCheckProjectTaskId] = useState<string | null>(null);
-  const [checkProjectTask, setCheckProjectTask] = useState<TaskStatusResponse | null>(null);
-  const [checkProjectResults, setCheckProjectResults] = useState<TaskResult[]>([]);
-  const [checkProjectStarting, setCheckProjectStarting] = useState(false);
-  const [checkProjectStartError, setCheckProjectStartError] = useState('');
-  const [checkProjectCancelling, setCheckProjectCancelling] = useState(false);
-  const [checkProjectResuming, setCheckProjectResuming] = useState(false);
-  const [checkProjectProgressLog, setCheckProjectProgressLog] = useState<string[]>([]);
-  const [checkProjectElapsed, setCheckProjectElapsed] = useState(0);
-  const checkProjectPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const checkProjectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const checkProjectStartTimeRef = useRef<number | null>(null);
-  const checkProjectFetchErrorCount = useRef(0);
-
-  const [regenerating, setRegenerating] = useState<string | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number | null>(null);
 
-  // Refs to latest fetch callbacks — used by visibilitychange handler to avoid stale closures
+  // Ref to latest fetch callback — used by visibilitychange handler to avoid stale closures
   const fetchStatusRef = useRef<() => void>(() => {});
-  const fetchCheckStatusRef = useRef<(cid: string) => void>(() => {});
-  const fetchCheckProjectStatusRef = useRef<(cid: string) => void>(() => {});
-  const checkTaskIdRef = useRef<string | null>(null);
-  const checkProjectTaskIdRef = useRef<string | null>(null);
 
   // Estimate items editing state (ESTIMATE_FROM_LIST)
   const [estimateItems, setEstimateItems] = useState<EstimateItem[]>([]);
@@ -142,240 +103,10 @@ const TaskStatusPage: React.FC = () => {
     }
   }, [taskId, navigate]);
 
-  // Keep refs in sync with latest callbacks and task IDs so the visibility handler
-  // always calls the current version without stale closures.
-  // (These refs are set after the callbacks are defined — effects run after render.)
-  useEffect(() => { checkTaskIdRef.current = checkTaskId; }, [checkTaskId]);
-  useEffect(() => { checkProjectTaskIdRef.current = checkProjectTaskId; }, [checkProjectTaskId]);
-
   const stopTimers = useCallback(() => {
     if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   }, []);
-
-  const stopCheckPolling = useCallback(() => {
-    if (checkPollingRef.current) { clearInterval(checkPollingRef.current); checkPollingRef.current = null; }
-    if (checkTimerRef.current) { clearInterval(checkTimerRef.current); checkTimerRef.current = null; }
-  }, []);
-
-  const startCheckTimer = useCallback(() => {
-    if (checkTimerRef.current) return;
-    checkStartTimeRef.current = Date.now();
-    checkTimerRef.current = setInterval(() => {
-      if (checkStartTimeRef.current) {
-        setCheckElapsed(Math.floor((Date.now() - checkStartTimeRef.current) / 1000));
-      }
-    }, 1000);
-  }, []);
-
-  const fetchCheckStatus = useCallback(async (cid: string) => {
-    try {
-      const data = await getTaskStatus(cid);
-      checkFetchErrorCount.current = 0;
-      setCheckTask(data);
-      if (data.status === 'pending' || data.status === 'processing') startCheckTimer();
-      if (data.progress_message) {
-        setCheckProgressLog((prev) => {
-          const last = prev[prev.length - 1];
-          return last === data.progress_message ? prev : [...prev, data.progress_message!];
-        });
-      }
-      if (data.status === 'completed') {
-        const res = await getTaskResults(cid);
-        setCheckResults(res);
-        stopCheckPolling();
-      } else if (data.status === 'failed' || data.status === 'cancelled') {
-        const res = await getTaskResults(cid);
-        setCheckResults(res);
-        stopCheckPolling();
-      }
-    } catch {
-      checkFetchErrorCount.current += 1;
-      // Stop polling only after 5 consecutive failures (~15 seconds of no response)
-      if (checkFetchErrorCount.current >= 5) {
-        stopCheckPolling();
-        setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
-      }
-    }
-  }, [stopCheckPolling, startCheckTimer]);
-
-  const handleCheckCompleteness = async () => {
-    if (!taskId || checkStarting) return;
-    setCheckStarting(true);
-    setCheckStartError('');
-    try {
-      const res = await checkCompleteness(taskId);
-      const cid = res.task_id;
-      setCheckTaskId(cid);
-      setCheckTask(null);
-      setCheckResults([]);
-      fetchCheckStatusRef.current = (id: string) => fetchCheckStatus(id);
-      fetchCheckStatus(cid);
-      checkPollingRef.current = setInterval(() => fetchCheckStatus(cid), 3000);
-    } catch {
-      setCheckStartError('Не удалось запустить проверку полноты.');
-    } finally {
-      setCheckStarting(false);
-    }
-  };
-
-  const stopCheckProjectPolling = useCallback(() => {
-    if (checkProjectPollingRef.current) { clearInterval(checkProjectPollingRef.current); checkProjectPollingRef.current = null; }
-    if (checkProjectTimerRef.current) { clearInterval(checkProjectTimerRef.current); checkProjectTimerRef.current = null; }
-  }, []);
-
-  const startCheckProjectTimer = useCallback(() => {
-    if (checkProjectTimerRef.current) return;
-    checkProjectStartTimeRef.current = Date.now();
-    checkProjectTimerRef.current = setInterval(() => {
-      if (checkProjectStartTimeRef.current) {
-        setCheckProjectElapsed(Math.floor((Date.now() - checkProjectStartTimeRef.current) / 1000));
-      }
-    }, 1000);
-  }, []);
-
-  const fetchCheckProjectStatus = useCallback(async (cid: string) => {
-    try {
-      const data = await getTaskStatus(cid);
-      checkProjectFetchErrorCount.current = 0;
-      setCheckProjectTask(data);
-      if (data.status === 'pending' || data.status === 'processing') startCheckProjectTimer();
-      if (data.progress_message) {
-        setCheckProjectProgressLog((prev) => {
-          const last = prev[prev.length - 1];
-          return last === data.progress_message ? prev : [...prev, data.progress_message!];
-        });
-      }
-      if (data.status === 'completed') {
-        const res = await getTaskResults(cid);
-        setCheckProjectResults(res);
-        stopCheckProjectPolling();
-      } else if (data.status === 'failed' || data.status === 'cancelled') {
-        const res = await getTaskResults(cid);
-        setCheckProjectResults(res);
-        stopCheckProjectPolling();
-      }
-    } catch {
-      checkProjectFetchErrorCount.current += 1;
-      // Stop polling only after 5 consecutive failures (~15 seconds of no response)
-      if (checkProjectFetchErrorCount.current >= 5) {
-        stopCheckProjectPolling();
-        setError('Проверка прервана: потеряно соединение с сервером. Попробуйте ещё раз.');
-      }
-    }
-  }, [stopCheckProjectPolling, startCheckProjectTimer]);
-
-  const handleCheckProjectCompleteness = async () => {
-    if (!taskId || checkProjectStarting) return;
-    setCheckProjectStarting(true);
-    setCheckProjectStartError('');
-    try {
-      const res = await checkProjectCompleteness(taskId);
-      const cid = res.task_id;
-      setCheckProjectTaskId(cid);
-      setCheckProjectTask(null);
-      setCheckProjectResults([]);
-      fetchCheckProjectStatusRef.current = (id: string) => fetchCheckProjectStatus(id);
-      fetchCheckProjectStatus(cid);
-      checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(cid), 3000);
-    } catch {
-      setCheckProjectStartError('Не удалось запустить проверку полноты.');
-    } finally {
-      setCheckProjectStarting(false);
-    }
-  };
-
-  const handleCheckCancel = async () => {
-    if (!checkTaskId || checkCancelling) return;
-    setCheckCancelling(true);
-    try {
-      await cancelTask(checkTaskId);
-      setCheckTask((prev) => prev ? { ...prev, status: 'cancelled' } : prev);
-      stopCheckPolling();
-    } catch {
-      setError('Не удалось остановить проверку.');
-    } finally {
-      setCheckCancelling(false);
-    }
-  };
-
-  const handleCheckResume = async () => {
-    if (!checkTaskId || checkResuming) return;
-    setCheckResuming(true);
-    try {
-      await resumeTask(checkTaskId);
-      setCheckTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
-      setCheckProgressLog([]);
-      setCheckElapsed(0);
-      checkStartTimeRef.current = null;
-      checkFetchErrorCount.current = 0;
-      fetchCheckStatusRef.current = (id: string) => fetchCheckStatus(id);
-      fetchCheckStatus(checkTaskId);
-      checkPollingRef.current = setInterval(() => fetchCheckStatus(checkTaskId), 3000);
-    } catch {
-      setError('Не удалось возобновить проверку.');
-    } finally {
-      setCheckResuming(false);
-    }
-  };
-
-  const handleCheckProjectCancel = async () => {
-    if (!checkProjectTaskId || checkProjectCancelling) return;
-    setCheckProjectCancelling(true);
-    try {
-      await cancelTask(checkProjectTaskId);
-      setCheckProjectTask((prev) => prev ? { ...prev, status: 'cancelled' } : prev);
-      stopCheckProjectPolling();
-    } catch {
-      setError('Не удалось остановить проверку.');
-    } finally {
-      setCheckProjectCancelling(false);
-    }
-  };
-
-  const handleCheckProjectResume = async () => {
-    if (!checkProjectTaskId || checkProjectResuming) return;
-    setCheckProjectResuming(true);
-    try {
-      await resumeTask(checkProjectTaskId);
-      setCheckProjectTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
-      setCheckProjectProgressLog([]);
-      setCheckProjectElapsed(0);
-      checkProjectStartTimeRef.current = null;
-      checkProjectFetchErrorCount.current = 0;
-      fetchCheckProjectStatusRef.current = (id: string) => fetchCheckProjectStatus(id);
-      fetchCheckProjectStatus(checkProjectTaskId);
-      checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(checkProjectTaskId), 3000);
-    } catch {
-      setError('Не удалось возобновить проверку.');
-    } finally {
-      setCheckProjectResuming(false);
-    }
-  };
-
-  const handleCheckRestart = () => {
-    stopCheckPolling();
-    setCheckTaskId(null);
-    setCheckTask(null);
-    setCheckResults([]);
-    setCheckProgressLog([]);
-    setCheckElapsed(0);
-    setCheckStartError('');
-    checkStartTimeRef.current = null;
-    checkFetchErrorCount.current = 0;
-  };
-
-  const handleCheckProjectRestart = () => {
-    stopCheckProjectPolling();
-    setCheckProjectTaskId(null);
-    setCheckProjectTask(null);
-    setCheckProjectResults([]);
-    setCheckProjectProgressLog([]);
-    setCheckProjectElapsed(0);
-    setCheckProjectStartError('');
-    checkProjectStartTimeRef.current = null;
-    checkProjectFetchErrorCount.current = 0;
-  };
 
   const handleResume = async () => {
     if (!taskId || resuming) return;
@@ -483,12 +214,6 @@ const TaskStatusPage: React.FC = () => {
     setEstimationStatus('not_applicable');
     setTaskCost(null);
     setTaskProjectId(null);
-    setCheckTaskId(null);
-    setCheckTask(null);
-    setCheckResults([]);
-    setCheckProjectTaskId(null);
-    setCheckProjectTask(null);
-    setCheckProjectResults([]);
     startTimeRef.current = null;
   }, [taskId]);
 
@@ -518,21 +243,15 @@ const TaskStatusPage: React.FC = () => {
         setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
       }
       if (pollingRef.current) fetchStatusRef.current();
-      const cid = checkTaskIdRef.current;
-      if (checkPollingRef.current && cid) fetchCheckStatusRef.current(cid);
-      const pcid = checkProjectTaskIdRef.current;
-      if (checkProjectPollingRef.current && pcid) fetchCheckProjectStatusRef.current(pcid);
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       stopTimers();
-      stopCheckPolling();
-      stopCheckProjectPolling();
       document.head.removeChild(style);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchStatus, taskId, navigate, stopTimers, stopCheckPolling, stopCheckProjectPolling]);
+  }, [fetchStatus, taskId, navigate, stopTimers]);
 
   // Load estimate items when ESTIMATE_FROM_LIST task completes (or after fix-empty-prices)
   useEffect(() => {
@@ -546,33 +265,6 @@ const TaskStatusPage: React.FC = () => {
     }
   }, [task, estimateItems.length, needsItemReload]);
 
-  // Restore check task state after page refresh
-  useEffect(() => {
-    if (!taskId || taskId === 'undefined') return;
-    getRelatedChecks(taskId).then((checks) => {
-      for (const check of checks) {
-        if (check.task_type === 'CHECK_LIST_COMPLETENESS') {
-          setCheckTaskId(check.task_id);
-          fetchCheckStatusRef.current = (id: string) => fetchCheckStatus(id);
-          fetchCheckStatus(check.task_id);
-          if (check.status === 'pending' || check.status === 'processing') {
-            if (!checkPollingRef.current) {
-              checkPollingRef.current = setInterval(() => fetchCheckStatus(check.task_id), 3000);
-            }
-          }
-        } else if (check.task_type === 'CHECK_PROJECT_COMPLETENESS') {
-          setCheckProjectTaskId(check.task_id);
-          fetchCheckProjectStatusRef.current = (id: string) => fetchCheckProjectStatus(id);
-          fetchCheckProjectStatus(check.task_id);
-          if (check.status === 'pending' || check.status === 'processing') {
-            if (!checkProjectPollingRef.current) {
-              checkProjectPollingRef.current = setInterval(() => fetchCheckProjectStatus(check.task_id), 3000);
-            }
-          }
-        }
-      }
-    }).catch(() => {});
-  }, [taskId, fetchCheckStatus, fetchCheckProjectStatus]);
 
   const handleSendMessage = async () => {
     if (!taskId || !message.trim()) return;
@@ -633,28 +325,6 @@ const TaskStatusPage: React.FC = () => {
     }
   };
 
-  const handleRegenerate = async (taskIdToRegen: string) => {
-    setRegenerating(taskIdToRegen);
-    try {
-      const updated = await regenerateTaskResult(taskIdToRegen);
-      // Refresh result lists so download uses the new file_id
-      if (taskIdToRegen === taskId) {
-        const fresh = await getTaskResults(taskIdToRegen);
-        setResults(fresh);
-      } else if (checkTaskId && taskIdToRegen === checkTaskId) {
-        const fresh = await getTaskResults(taskIdToRegen);
-        setCheckResults(fresh);
-      } else if (checkProjectTaskId && taskIdToRegen === checkProjectTaskId) {
-        const fresh = await getTaskResults(taskIdToRegen);
-        setCheckProjectResults(fresh);
-      }
-      await downloadResult(updated.file_id, updated.file_name);
-    } catch {
-      setError('Не удалось обновить файл. Попробуйте ещё раз.');
-    } finally {
-      setRegenerating(null);
-    }
-  };
 
   const handleDownloadInputFile = async (fileIndex: number, fileName: string) => {
     if (!taskId) return;
