@@ -179,7 +179,7 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
               <span style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>Удалить карточку?</span>
             </div>
             <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.6, margin: '0 0 20px' }}>
-              Карточка <strong>«{card.name}»</strong> и все связанные задачи будут удалены безвозвратно.
+              Карточка <strong>«{card.name}»</strong> и её задачи будут перемещены в корзину. Восстановить можно из раздела «Корзина».
             </p>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button

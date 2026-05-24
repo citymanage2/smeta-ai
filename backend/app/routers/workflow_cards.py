@@ -91,10 +91,15 @@ def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
     )
 
 
-async def _load_card_with_tasks(card_id: str, db: AsyncSession) -> Optional[WorkflowCard]:
+async def _load_card_with_tasks(
+    card_id: str, db: AsyncSession, include_deleted: bool = False
+) -> Optional[WorkflowCard]:
+    conditions = [WorkflowCard.id == card_id]
+    if not include_deleted:
+        conditions.append(WorkflowCard.deleted_at.is_(None))
     stmt = (
         select(WorkflowCard)
-        .where(WorkflowCard.id == card_id)
+        .where(*conditions)
         .options(
             selectinload(WorkflowCard.list_task),
             selectinload(WorkflowCard.completeness_task),
@@ -130,7 +135,7 @@ async def get_workflow_cards(
 
     stmt = (
         select(WorkflowCard)
-        .where(WorkflowCard.project_id == project_id)
+        .where(WorkflowCard.project_id == project_id, WorkflowCard.deleted_at.is_(None))
         .options(
             selectinload(WorkflowCard.list_task),
             selectinload(WorkflowCard.completeness_task),
@@ -209,10 +214,16 @@ async def delete_workflow_card(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    result = await db.execute(select(WorkflowCard).where(WorkflowCard.id == card_id))
+    """Soft delete: перемещает карточку и её задачи в корзину."""
+    result = await db.execute(
+        select(WorkflowCard).where(WorkflowCard.id == card_id, WorkflowCard.deleted_at.is_(None))
+    )
     card = result.scalar_one_or_none()
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+
+    now = datetime.now(timezone.utc)
+    card.deleted_at = now
 
     task_ids = [tid for tid in [
         card.list_task_id,
@@ -220,9 +231,122 @@ async def delete_workflow_card(
         card.estimate_task_id,
         card.optimization_task_id,
     ] if tid is not None]
+    for task_id in task_ids:
+        task = await db.get(Task, task_id)
+        if task is not None and task.deleted_at is None:
+            task.deleted_at = now
 
-    # Удаляем задачи первыми — FK на карточке обнуляется SET NULL,
-    # CASCADE чистит TaskResult / TaskInputFile / TaskHistory
+    await db.commit()
+    logger.info("WorkflowCard soft-deleted", card_id=card_id, task_count=len(task_ids))
+
+
+class TrashCardItem(BaseModel):
+    id: str
+    name: str
+    stage: str
+    project_id: str
+    project_name: str
+    deleted_at: str
+    task_count: int
+
+
+class TrashCardsResponse(BaseModel):
+    items: list[TrashCardItem]
+    total: int
+
+
+@router.get("/workflow-cards/trash", response_model=TrashCardsResponse)
+async def get_trash_cards(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Список soft-deleted карточек текущего пользователя."""
+    stmt = (
+        select(WorkflowCard)
+        .where(WorkflowCard.deleted_at.is_not(None))
+        .order_by(WorkflowCard.deleted_at.desc())
+    )
+    result = await db.execute(stmt)
+    cards = result.scalars().all()
+
+    items = []
+    for card in cards:
+        proj = await db.get(Project, card.project_id)
+        task_count = sum(1 for tid in [
+            card.list_task_id,
+            card.completeness_task_id,
+            card.estimate_task_id,
+            card.optimization_task_id,
+        ] if tid is not None)
+        items.append(TrashCardItem(
+            id=card.id,
+            name=card.name,
+            stage=card.stage,
+            project_id=card.project_id,
+            project_name=proj.name if proj else "—",
+            deleted_at=card.deleted_at.isoformat(),
+            task_count=task_count,
+        ))
+
+    return TrashCardsResponse(items=items, total=len(items))
+
+
+@router.post("/workflow-cards/{card_id}/restore", status_code=200)
+async def restore_workflow_card(
+    card_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Восстанавливает карточку из корзины в исходную стадию канбана."""
+    result = await db.execute(
+        select(WorkflowCard).where(WorkflowCard.id == card_id, WorkflowCard.deleted_at.is_not(None))
+    )
+    card = result.scalar_one_or_none()
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
+
+    proj = await db.get(Project, card.project_id)
+    if proj is None or proj.deleted_at is not None:
+        raise HTTPException(status_code=400, detail="Проект удалён — восстановление невозможно")
+
+    card.deleted_at = None
+
+    task_ids = [tid for tid in [
+        card.list_task_id,
+        card.completeness_task_id,
+        card.estimate_task_id,
+        card.optimization_task_id,
+    ] if tid is not None]
+    for task_id in task_ids:
+        task = await db.get(Task, task_id)
+        if task is not None and task.deleted_at is not None:
+            task.deleted_at = None
+
+    await db.commit()
+    logger.info("WorkflowCard restored", card_id=card_id)
+    return {"ok": True}
+
+
+@router.delete("/workflow-cards/{card_id}/permanent", status_code=204)
+async def permanent_delete_workflow_card(
+    card_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Перманентное удаление карточки и всех её задач из БД."""
+    result = await db.execute(
+        select(WorkflowCard).where(WorkflowCard.id == card_id, WorkflowCard.deleted_at.is_not(None))
+    )
+    card = result.scalar_one_or_none()
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
+
+    task_ids = [tid for tid in [
+        card.list_task_id,
+        card.completeness_task_id,
+        card.estimate_task_id,
+        card.optimization_task_id,
+    ] if tid is not None]
     for task_id in task_ids:
         task = await db.get(Task, task_id)
         if task is not None:
@@ -231,7 +355,7 @@ async def delete_workflow_card(
     await db.flush()
     await db.delete(card)
     await db.commit()
-    logger.info("WorkflowCard deleted with tasks", card_id=card_id, task_count=len(task_ids))
+    logger.info("WorkflowCard permanently deleted", card_id=card_id, task_count=len(task_ids))
 
 
 class _PrimaryVersionBody(BaseModel):

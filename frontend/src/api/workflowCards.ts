@@ -65,6 +65,38 @@ export async function deleteWorkflowCard(cardId: string): Promise<void> {
   await apiClient.delete(`/api/workflow-cards/${cardId}`)
 }
 
+// ---------------------------------------------------------------------------
+// Trash (корзина карточек)
+// ---------------------------------------------------------------------------
+
+export interface TrashCardItem {
+  id: string
+  name: string
+  stage: string
+  project_id: string
+  project_name: string
+  deleted_at: string
+  task_count: number
+}
+
+export interface TrashCardsResponse {
+  items: TrashCardItem[]
+  total: number
+}
+
+export async function getTrashCards(): Promise<TrashCardsResponse> {
+  const resp = await apiClient.get<TrashCardsResponse>('/api/workflow-cards/trash')
+  return resp.data
+}
+
+export async function restoreCard(cardId: string): Promise<void> {
+  await apiClient.post(`/api/workflow-cards/${cardId}/restore`)
+}
+
+export async function permanentDeleteCard(cardId: string): Promise<void> {
+  await apiClient.delete(`/api/workflow-cards/${cardId}/permanent`)
+}
+
 export async function getCardDetail(cardId: string): Promise<CardDetail> {
   const resp = await apiClient.get<CardDetail>(`/api/workflow-cards/${cardId}/detail`)
   return resp.data

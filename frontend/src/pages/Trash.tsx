@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trash2, RotateCcw, X, Eraser, FolderOpen } from 'lucide-react';
+import { Trash2, RotateCcw, X, Eraser, FolderOpen, LayoutDashboard } from 'lucide-react';
 import Layout from '../components/Layout';
 import { LumaSpin } from '../components/ui/LumaSpin';
 import { TASK_TYPE_LABELS, TaskType } from '../types';
 import { TrashTaskItem, getMyTrashTasks, restoreMyTask, permanentDeleteMyTask, clearMyTrash } from '../api/tasks';
 import { TrashProjectItem, getTrashProjects, restoreProject, permanentDeleteProject, clearProjectTrash } from '../api/projects';
+import { TrashCardItem, getTrashCards, restoreCard, permanentDeleteCard } from '../api/workflowCards';
 import { useTaskSync } from '../stores/taskSync';
 import { useAuthStore } from '../stores/auth';
 
@@ -27,7 +28,14 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: 'Отменена',
 };
 
-type Tab = 'tasks' | 'projects';
+type Tab = 'tasks' | 'projects' | 'cards';
+
+const STAGE_LABELS: Record<string, string> = {
+  list: 'Перечень',
+  completeness: 'Полнота',
+  estimate: 'Смета',
+  optimization: 'Оптимизация',
+};
 
 const Trash: React.FC = () => {
   const navigate = useNavigate();
@@ -52,6 +60,14 @@ const Trash: React.FC = () => {
   const [restoringProjectId, setRestoringProjectId] = useState<string | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [clearingProjects, setClearingProjects] = useState(false);
+
+  // Cards state
+  const [cards, setCards] = useState<TrashCardItem[]>([]);
+  const [cardsTotal, setCardsTotal] = useState(0);
+  const [cardsLoading, setCardsLoading] = useState(true);
+  const [cardsError, setCardsError] = useState('');
+  const [restoringCardId, setRestoringCardId] = useState<string | null>(null);
+  const [deletingCardId, setDeletingCardId] = useState<string | null>(null);
 
   const loadTasks = useCallback(async () => {
     setTasksLoading(true);
@@ -81,8 +97,23 @@ const Trash: React.FC = () => {
     }
   }, []);
 
+  const loadCards = useCallback(async () => {
+    setCardsLoading(true);
+    setCardsError('');
+    try {
+      const data = await getTrashCards();
+      setCards(data.items);
+      setCardsTotal(data.total);
+    } catch {
+      setCardsError('Не удалось загрузить удалённые карточки');
+    } finally {
+      setCardsLoading(false);
+    }
+  }, []);
+
   useEffect(() => { loadTasks(); }, [loadTasks, taskSyncVersion]);
   useEffect(() => { loadProjects(); }, [loadProjects]);
+  useEffect(() => { loadCards(); }, [loadCards]);
 
   async function handleRestoreTask(taskId: string) {
     setRestoringTaskId(taskId);
@@ -168,7 +199,34 @@ const Trash: React.FC = () => {
     }
   }
 
-  const totalAll = tasksTotal + projectsTotal;
+  async function handleRestoreCard(cardId: string) {
+    setRestoringCardId(cardId);
+    try {
+      await restoreCard(cardId);
+      setCards(prev => prev.filter(c => c.id !== cardId));
+      setCardsTotal(prev => prev - 1);
+    } catch {
+      setCardsError('Не удалось восстановить карточку');
+    } finally {
+      setRestoringCardId(null);
+    }
+  }
+
+  async function handlePermanentDeleteCard(cardId: string) {
+    if (!window.confirm('Удалить карточку и все её задачи навсегда? Это действие нельзя отменить.')) return;
+    setDeletingCardId(cardId);
+    try {
+      await permanentDeleteCard(cardId);
+      setCards(prev => prev.filter(c => c.id !== cardId));
+      setCardsTotal(prev => prev - 1);
+    } catch {
+      setCardsError('Не удалось удалить карточку');
+    } finally {
+      setDeletingCardId(null);
+    }
+  }
+
+  const totalAll = tasksTotal + projectsTotal + cardsTotal;
 
   return (
     <Layout>
@@ -198,6 +256,7 @@ const Trash: React.FC = () => {
           {([
             { key: 'tasks' as Tab, label: 'Задачи', count: tasksTotal },
             { key: 'projects' as Tab, label: 'Проекты', count: projectsTotal },
+            { key: 'cards' as Tab, label: 'Карточки', count: cardsTotal },
           ]).map(({ key, label, count }) => (
             <button
               key={key}
@@ -493,7 +552,111 @@ const Trash: React.FC = () => {
           </div>
         )}
 
-        {(tab === 'tasks' ? tasks.length : projects.length) > 0 && !(tab === 'tasks' ? tasksLoading : projectsLoading) && (
+        {/* Cards tab */}
+        {tab === 'cards' && (
+          <div>
+            {cardsError && (
+              <div style={{
+                padding: '10px 14px', backgroundColor: '#fef2f2', color: '#dc2626',
+                borderRadius: 8, fontSize: 13, marginBottom: 16,
+                border: '1px solid #fecaca',
+              }}>
+                {cardsError}
+              </div>
+            )}
+
+            {cardsLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
+                <LumaSpin size="md" />
+              </div>
+            ) : cards.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 14 }}>
+                <LayoutDashboard size={40} color="#e2e8f0" style={{ marginBottom: 12 }} />
+                <div>Нет удалённых карточек</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Удалённые карточки канбана будут отображаться здесь</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {cards.map(card => {
+                  const isRestoring = restoringCardId === card.id;
+                  const isDeleting = deletingCardId === card.id;
+                  const stageLabel = STAGE_LABELS[card.stage] ?? card.stage;
+
+                  return (
+                    <div
+                      key={card.id}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        padding: '12px 16px',
+                        backgroundColor: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 8,
+                        opacity: isRestoring || isDeleting ? 0.6 : 1,
+                        transition: 'opacity 0.15s',
+                      }}
+                    >
+                      <div style={{
+                        width: 32, height: 32, borderRadius: 7,
+                        backgroundColor: '#f8fafc',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        <LayoutDashboard size={14} color="#94a3b8" />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600, color: '#1e293b',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {card.name}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                          {card.project_name} · {stageLabel} · {card.task_count} {card.task_count === 1 ? 'задача' : 'задач'} · удалено {formatDate(card.deleted_at)}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          onClick={() => handleRestoreCard(card.id)}
+                          disabled={isRestoring || isDeleting}
+                          title="Восстановить карточку"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 5,
+                            padding: '6px 10px',
+                            backgroundColor: '#f0fdf4', color: '#15803d',
+                            border: '1px solid #bbf7d0', borderRadius: 6,
+                            cursor: 'pointer', fontSize: 12, fontWeight: 500,
+                            opacity: isRestoring ? 0.6 : 1,
+                          }}
+                        >
+                          <RotateCcw size={12} />
+                          {isRestoring ? '...' : 'Восстановить'}
+                        </button>
+                        <button
+                          onClick={() => handlePermanentDeleteCard(card.id)}
+                          disabled={isRestoring || isDeleting}
+                          title="Удалить навсегда"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 5,
+                            padding: '6px 10px',
+                            backgroundColor: '#fef2f2', color: '#dc2626',
+                            border: '1px solid #fecaca', borderRadius: 6,
+                            cursor: 'pointer', fontSize: 12, fontWeight: 500,
+                            opacity: isDeleting ? 0.6 : 1,
+                          }}
+                        >
+                          <X size={12} />
+                          {isDeleting ? '...' : 'Удалить'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(tab === 'tasks' ? tasks.length : tab === 'projects' ? projects.length : cards.length) > 0 && !(tab === 'tasks' ? tasksLoading : tab === 'projects' ? projectsLoading : cardsLoading) && (
           <div style={{ marginTop: 16, textAlign: 'center' }}>
             <button
               onClick={() => navigate(-1)}

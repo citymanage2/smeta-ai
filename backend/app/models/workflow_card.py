@@ -68,6 +68,11 @@ class WorkflowCard(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     # lazy="raise" запрещает случайные N+1; загрузка только через selectinload
     list_task = relationship(
