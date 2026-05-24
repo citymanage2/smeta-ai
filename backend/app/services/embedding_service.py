@@ -1,22 +1,26 @@
 """
-Сервис для генерации embedding-векторов через Cohere.
+Сервис для генерации embedding-векторов через FastEmbed (intfloat/multilingual-e5-base).
 
 Используется для семантического поиска по прайс-листу.
 Векторы генерируются один раз при загрузке прайса и хранятся в БД.
 """
 import re
+import threading
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "embed-multilingual-v3.0"
-EMBEDDING_DIMENSION = 1024
-COHERE_BATCH_LIMIT = 96  # максимум текстов за один API-вызов для v3 моделей
+EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
+EMBEDDING_DIMENSION = 768
+
+# Singleton с thread-safe reload
+_model = None
+_model_lock = threading.Lock()
+_current_model_path: str = EMBEDDING_MODEL
 
 
 class EmbeddingUnavailableError(Exception):
-    """Cohere недоступен или ключ не настроен."""
+    """FastEmbed недоступен или модель не загружена."""
 
 
 def normalize_name(text: str) -> str:
@@ -51,20 +55,33 @@ def normalize_name(text: str) -> str:
     return result.lower()
 
 
-def _get_cohere_client():
-    """Создаёт Cohere клиент. Бросает EmbeddingUnavailableError если ключ не задан."""
-    try:
-        import cohere
-        from app.config import settings
+def _get_model():
+    global _model
+    if _model is not None:
+        return _model
+    with _model_lock:
+        if _model is not None:
+            return _model
+        try:
+            from fastembed import TextEmbedding
+            _model = TextEmbedding(_current_model_path)
+            return _model
+        except ImportError:
+            raise EmbeddingUnavailableError("Библиотека fastembed не установлена")
+        except Exception as e:
+            raise EmbeddingUnavailableError(f"Не удалось загрузить модель: {e}") from e
 
-        if not settings.COHERE_API_KEY:
-            raise EmbeddingUnavailableError("COHERE_API_KEY не настроен")
 
-        return cohere.Client(api_key=settings.COHERE_API_KEY)
-    except EmbeddingUnavailableError:
-        raise
-    except ImportError:
-        raise EmbeddingUnavailableError("Библиотека cohere не установлена")
+def reload_model(model_path: str) -> None:
+    """Перезагрузить модель после дообучения без рестарта сервера."""
+    global _model, _current_model_path
+    with _model_lock:
+        try:
+            from fastembed import TextEmbedding
+            _model = TextEmbedding(model_path)
+            _current_model_path = model_path
+        except Exception as e:
+            raise EmbeddingUnavailableError(f"Не удалось перезагрузить модель: {e}") from e
 
 
 def generate_embedding(text: str, input_type: str = "search_document") -> list[float]:
@@ -72,8 +89,8 @@ def generate_embedding(text: str, input_type: str = "search_document") -> list[f
     Генерирует embedding-вектор для одного текста.
 
     input_type: "search_document" при индексации, "search_query" при поиске.
-    Возвращает список из 1024 float.
-    Бросает EmbeddingUnavailableError при ошибке API.
+    Возвращает список из 768 float.
+    Бросает EmbeddingUnavailableError при ошибке.
     """
     results = generate_embeddings_batch([text], input_type=input_type)
     return results[0]
@@ -87,31 +104,21 @@ def generate_embeddings_batch(
     Генерирует embedding-векторы для списка текстов.
 
     input_type: "search_document" при индексации прайса, "search_query" при поиске запроса.
-    Автоматически разбивает на чанки по COHERE_BATCH_LIMIT (96).
+    multilingual-e5 требует префикс passage:/query: для точного матчинга.
     Возвращает список векторов в том же порядке что и входные тексты.
-    Бросает EmbeddingUnavailableError при ошибке API.
+    Бросает EmbeddingUnavailableError при ошибке.
     """
     if not texts:
         return []
 
     try:
-        client = _get_cohere_client()
-        all_embeddings: list[list[float]] = []
-
-        for chunk_start in range(0, len(texts), COHERE_BATCH_LIMIT):
-            chunk = texts[chunk_start: chunk_start + COHERE_BATCH_LIMIT]
-            response = client.embed(
-                texts=chunk,
-                model=EMBEDDING_MODEL,
-                input_type=input_type,
-                embedding_types=["float"],
-            )
-            all_embeddings.extend(response.embeddings.float_)
-
-        return all_embeddings
-
+        prefix = "passage: " if input_type == "search_document" else "query: "
+        prefixed = [prefix + normalize_name(t) for t in texts]
+        model = _get_model()
+        embeddings = list(model.embed(prefixed))
+        return [e.tolist() for e in embeddings]
     except EmbeddingUnavailableError:
         raise
     except Exception as e:
-        logger.error("Ошибка Cohere embeddings API: %s", e)
-        raise EmbeddingUnavailableError(f"Ошибка Cohere API: {e}") from e
+        logger.error("Ошибка FastEmbed: %s", e)
+        raise EmbeddingUnavailableError(f"Ошибка FastEmbed: {e}") from e

@@ -1,11 +1,7 @@
-"""Unit tests for embedding_service: normalize_name и generate_embeddings_batch (Cohere)."""
-import sys
+"""Unit tests for embedding_service: normalize_name и generate_embeddings_batch (FastEmbed)."""
 import pytest
+import numpy as np
 from unittest.mock import patch, MagicMock
-
-# Мокируем cohere до импорта embedding_service
-_cohere_mock = MagicMock()
-sys.modules.setdefault("cohere", _cohere_mock)
 
 from app.services.embedding_service import (
     normalize_name,
@@ -14,11 +10,11 @@ from app.services.embedding_service import (
     EmbeddingUnavailableError,
 )
 
-DIM = 1024
+DIM = 768
 
 
 # ---------------------------------------------------------------------------
-# normalize_name (без изменений — тесты должны пройти)
+# normalize_name
 # ---------------------------------------------------------------------------
 
 def test_normalize_m_defi_100():
@@ -47,46 +43,46 @@ def test_normalize_latin_m_to_cyrillic():
 
 
 # ---------------------------------------------------------------------------
-# generate_embeddings_batch (Cohere mock)
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _make_cohere_client_mock(count: int, dim: int = DIM) -> MagicMock:
-    """Возвращает mock клиента Cohere с правильным форматом ответа."""
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.embeddings.float_ = [
-        [float(i % 10) / 10.0 + 0.1] * dim for i in range(count)
-    ]
-    mock_client.embed.return_value = mock_response
-    return mock_client
+def _make_fastembed_mock(count: int, dim: int = DIM) -> MagicMock:
+    """Возвращает mock TextEmbedding с правильным форматом ответа."""
+    mock_model = MagicMock()
+    mock_model.embed.return_value = iter([
+        np.array([float(i % 10) / 10.0 + 0.1] * dim) for i in range(count)
+    ])
+    return mock_model
 
+
+# ---------------------------------------------------------------------------
+# generate_embeddings_batch (FastEmbed mock)
+# ---------------------------------------------------------------------------
 
 def test_generate_embeddings_batch_success():
     """Успешная генерация: возвращает вектор для каждого текста."""
     texts = ["кладка кирпичная", "штукатурка", "бетонирование"]
-    mock_client = _make_cohere_client_mock(len(texts))
+    mock_model = _make_fastembed_mock(len(texts))
 
-    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
         result = generate_embeddings_batch(texts)
 
     assert len(result) == 3
     assert all(len(v) == DIM for v in result)
-    mock_client.embed.assert_called_once()
+    mock_model.embed.assert_called_once()
 
 
 def test_generate_embeddings_batch_returns_in_order():
     """Векторы возвращаются в том же порядке, что входные тексты."""
     texts = ["первый", "второй", "третий"]
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.embeddings.float_ = [
-        [0.0] * DIM,
-        [1.0] * DIM,
-        [2.0] * DIM,
-    ]
-    mock_client.embed.return_value = mock_response
+    mock_model = MagicMock()
+    mock_model.embed.return_value = iter([
+        np.array([0.0] * DIM),
+        np.array([1.0] * DIM),
+        np.array([2.0] * DIM),
+    ])
 
-    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
         result = generate_embeddings_batch(texts)
 
     assert result[0][0] == 0.0
@@ -101,52 +97,64 @@ def test_generate_embeddings_batch_empty_input():
 
 
 def test_generate_embeddings_batch_api_error_raises():
-    """Любая ошибка Cohere API → EmbeddingUnavailableError."""
-    mock_client = MagicMock()
-    mock_client.embed.side_effect = RuntimeError("connection timeout")
+    """Любая ошибка FastEmbed → EmbeddingUnavailableError."""
+    mock_model = MagicMock()
+    mock_model.embed.side_effect = RuntimeError("модель не загружена")
 
-    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
         with pytest.raises(EmbeddingUnavailableError):
             generate_embeddings_batch(["тест"])
 
 
-def test_generate_embeddings_batch_passes_input_type():
-    """input_type передаётся в Cohere API."""
-    texts = ["запрос"]
-    mock_client = _make_cohere_client_mock(1)
+def test_generate_embeddings_batch_passage_prefix():
+    """search_document → 'passage: ' prefix передаётся в модель."""
+    texts = ["документ"]
+    mock_model = _make_fastembed_mock(1)
 
-    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
+        generate_embeddings_batch(texts, input_type="search_document")
+
+    call_args = mock_model.embed.call_args[0][0]
+    assert call_args[0].startswith("passage: ")
+
+
+def test_generate_embeddings_batch_query_prefix():
+    """search_query → 'query: ' prefix передаётся в модель."""
+    texts = ["запрос"]
+    mock_model = _make_fastembed_mock(1)
+
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
         generate_embeddings_batch(texts, input_type="search_query")
 
-    call_kwargs = mock_client.embed.call_args.kwargs
-    assert call_kwargs["input_type"] == "search_query"
+    call_args = mock_model.embed.call_args[0][0]
+    assert call_args[0].startswith("query: ")
 
 
-def test_generate_embeddings_batch_default_input_type_is_document():
-    """По умолчанию input_type='search_document'."""
-    texts = ["документ"]
-    mock_client = _make_cohere_client_mock(1)
+def test_generate_embeddings_batch_default_is_document():
+    """По умолчанию input_type='search_document' → passage: prefix."""
+    texts = ["текст"]
+    mock_model = _make_fastembed_mock(1)
 
-    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
         generate_embeddings_batch(texts)
 
-    call_kwargs = mock_client.embed.call_args.kwargs
-    assert call_kwargs["input_type"] == "search_document"
+    call_args = mock_model.embed.call_args[0][0]
+    assert call_args[0].startswith("passage: ")
 
 
-def test_generate_embedding_single_returns_first_vector():
+def test_generate_embedding_single_returns_vector():
     """generate_embedding возвращает первый вектор из батча."""
-    mock_client = _make_cohere_client_mock(1)
+    mock_model = _make_fastembed_mock(1)
 
-    with patch("app.services.embedding_service._get_cohere_client", return_value=mock_client):
+    with patch("app.services.embedding_service._get_model", return_value=mock_model):
         result = generate_embedding("тест", input_type="search_query")
 
     assert len(result) == DIM
 
 
-def test_no_api_key_raises():
-    """COHERE_API_KEY не задан → EmbeddingUnavailableError."""
-    with patch("app.services.embedding_service._get_cohere_client",
-               side_effect=EmbeddingUnavailableError("COHERE_API_KEY не настроен")):
-        with pytest.raises(EmbeddingUnavailableError, match="COHERE_API_KEY"):
+def test_model_unavailable_raises():
+    """Если fastembed не установлен → EmbeddingUnavailableError."""
+    with patch("app.services.embedding_service._get_model",
+               side_effect=EmbeddingUnavailableError("Библиотека fastembed не установлена")):
+        with pytest.raises(EmbeddingUnavailableError, match="fastembed"):
             generate_embedding("тест")

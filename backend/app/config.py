@@ -6,7 +6,6 @@ from typing import List
 class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
-    COHERE_API_KEY: str = ""
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost/smeta_ai"
     JWT_SECRET: str = "changeme-use-strong-secret-in-production"
     JWT_ALGORITHM: str = "HS256"
