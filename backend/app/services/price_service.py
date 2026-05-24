@@ -231,6 +231,76 @@ async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[fl
         return [None] * len(names)
 
 
+async def find_top_n_works(name: str, n: int = 3) -> list[dict]:
+    """Вернуть top-N кандидатов из прайса работ по cosine similarity."""
+    if not _numpy_available or _works_embeddings is None or _works_row_norms is None:
+        return []
+
+    try:
+        from app.services.embedding_service import normalize_name, generate_embedding
+
+        normalized = normalize_name(name)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized, "search_query")
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
+            return []
+
+        scores = np.dot(_works_embeddings, query_arr) / (_works_row_norms * query_norm)
+        top_indices = np.argsort(scores)[::-1][:n]
+
+        results = []
+        for idx in top_indices.tolist():
+            cache_idx = _works_index_map[idx]
+            item = _works_cache[cache_idx]
+            results.append({
+                "text": item["name"],
+                "score": float(scores[idx]),
+                "type": "work",
+                "unit": item.get("unit"),
+                "min_price": item.get("min_price"),
+            })
+        return results
+    except Exception as e:
+        logger.error("find_top_n_works failed", error=str(e))
+        return []
+
+
+async def find_top_n_materials(name: str, n: int = 3) -> list[dict]:
+    """Вернуть top-N кандидатов из прайса материалов по cosine similarity."""
+    if not _numpy_available or _materials_embeddings is None or _materials_row_norms is None:
+        return []
+
+    try:
+        from app.services.embedding_service import normalize_name, generate_embedding
+
+        normalized = normalize_name(name)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized, "search_query")
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
+            return []
+
+        scores = np.dot(_materials_embeddings, query_arr) / (_materials_row_norms * query_norm)
+        top_indices = np.argsort(scores)[::-1][:n]
+
+        results = []
+        for idx in top_indices.tolist():
+            cache_idx = _materials_index_map[idx]
+            item = _materials_cache[cache_idx]
+            results.append({
+                "text": item["name"],
+                "score": float(scores[idx]),
+                "type": "material",
+                "unit": item.get("unit"),
+                "min_price": item.get("price"),
+            })
+        return results
+    except Exception as e:
+        logger.error("find_top_n_materials failed", error=str(e))
+        return []
+
+
 async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
     """Use Claude with web search to find lower price for the same work item."""
     extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
