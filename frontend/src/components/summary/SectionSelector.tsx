@@ -54,14 +54,15 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
         eligibleCards.map(async (card) => {
           const allVersions: EstimateVersionSummary[] = []
 
-          // original (V0) from estimate task
+          // original (V0) from estimate task — filter by file_slot='estimate' to exclude
+          // generic-format versions (file_slot='result') created by _create_initial_generic_version
           if (card.estimate_task_id) {
             try {
-              let versions = await getVersions(card.estimate_task_id)
+              let versions = await getVersions(card.estimate_task_id, 'estimate')
               if (versions.length === 0) {
                 try {
                   await initEstimateVersionFromResult(card.estimate_task_id)
-                  versions = await getVersions(card.estimate_task_id)
+                  versions = await getVersions(card.estimate_task_id, 'estimate')
                 } catch { /* task not completed */ }
               }
               allVersions.push(...versions.filter((v) => !v.is_rolled_back))
