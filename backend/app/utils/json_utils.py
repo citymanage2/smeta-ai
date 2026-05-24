@@ -12,6 +12,7 @@ def extract_json(text: str) -> dict:
     - Preamble text before the JSON object
     - Trailing text / explanations after the JSON object
     - Mixed whitespace / newlines
+    - Minor JSON syntax errors (repaired via json-repair if available)
 
     Raises ValueError if no valid JSON object can be extracted.
     """
@@ -27,26 +28,22 @@ def extract_json(text: str) -> dict:
         pass
 
     # ── Step 2: extract content captured BETWEEN fence markers ───────────
-    # Uses a non-greedy group so we get exactly what's inside the first
-    # ```json ... ``` or ``` ... ``` block, ignoring everything outside.
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if fence_match:
         inner = fence_match.group(1).strip()
         try:
             return json.loads(inner)
         except json.JSONDecodeError:
-            # The fence content itself isn't valid JSON — fall through
-            # using inner as the search base for subsequent steps
             if inner:
                 text = inner
 
     # ── Step 3: slice from first { to last } ────────────────────────────
-    # Handles preamble/trailing prose that survived Step 2.
     start = text.find("{")
     end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
+    sliced = text[start : end + 1] if start != -1 and end != -1 and end > start else None
+    if sliced:
         try:
-            return json.loads(text[start : end + 1])
+            return json.loads(sliced)
         except json.JSONDecodeError:
             pass
 
@@ -58,9 +55,24 @@ def extract_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
+    # ── Step 5: json-repair — fixes trailing commas, unescaped chars, etc. ──
+    candidates = [c for c in [sliced, text] if c]
+    for candidate in candidates:
+        try:
+            from json_repair import repair_json  # type: ignore[import]
+            repaired = repair_json(candidate, return_objects=True)
+            if isinstance(repaired, dict) and repaired:
+                logger.warning(
+                    "extract_json: used json-repair fallback",
+                    preview=candidate[:200],
+                )
+                return repaired
+        except Exception:
+            pass
+
     logger.error(
         "extract_json: could not extract valid JSON from Claude response",
-        response_preview=text[:500],
+        response_preview=text[:1000],
     )
     raise ValueError(
         f"Could not extract valid JSON from response. First 200 chars: {text[:200]}"
