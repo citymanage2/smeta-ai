@@ -516,7 +516,7 @@ class TaskProcessor:
         """
         task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = task_res.scalar_one_or_none()
-        if not task or task.task_type not in ESTIMATE_TASK_TYPES or task.task_type == "OPTIMIZE_SMETA":
+        if not task or task.task_type not in ESTIMATE_TASK_TYPES or task.task_type in {"OPTIMIZE_SMETA", "ESTIMATE_OPTIMIZATION"}:
             return
 
         result_res = await self.db.execute(
@@ -2100,6 +2100,13 @@ class TaskProcessor:
                         task_id=str(task.id),
                         rows=len(client_rows),
                     )
+
+        # Set estimation_status = optimized — ESTIMATE_OPTIMIZATION manages its own status
+        task_res2 = await self.db.execute(select(Task).where(Task.id == self.task_id))
+        task2 = task_res2.scalar_one_or_none()
+        if task2:
+            task2.estimation_status = "optimized"
+            task2.updated_at = datetime.now(timezone.utc)
 
         await self.db.commit()
         await self.update_progress("Смета загружена. Редактор готов к работе.")

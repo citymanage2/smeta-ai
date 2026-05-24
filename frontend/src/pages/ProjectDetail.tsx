@@ -376,17 +376,21 @@ const ProjectDetailPage: React.FC = () => {
           </div>
 
           {/* Cost totals */}
-          {(project.summary_total != null || totalCost !== null || optimizedCost !== null) && (
+          {(project.has_summary || totalCost !== null || optimizedCost !== null) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #f1f5f9', alignItems: 'center' }}>
-              {project.summary_total != null ? (
+              {project.has_summary ? (
                 <>
                   <span style={{ padding: '3px 10px', backgroundColor: '#f5f3ff', color: '#7c3aed', borderRadius: '12px', fontSize: '12px', fontWeight: 500 }}>
                     Сводная сформирована
                   </span>
-                  <div>
-                    <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Итого для заказчика: </span>
-                    <span style={{ fontSize: '14px', fontWeight: 700, color: '#7c3aed' }}>{formatCost(project.summary_total)}</span>
-                  </div>
+                  {project.summary_total ? (
+                    <div>
+                      <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Итого для заказчика: </span>
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: '#7c3aed' }}>{formatCost(project.summary_total)}</span>
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: '12px', color: '#94a3b8' }}>Откройте сводную для сохранения итога</span>
+                  )}
                 </>
               ) : (
                 <>

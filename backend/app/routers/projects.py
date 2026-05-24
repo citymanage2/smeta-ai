@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models.project import Project
 from app.models.task import Task
 from app.models.result import TaskResult
+from app.models.summary_estimate import SummaryEstimate
 from app.utils.auth import get_current_user, get_admin_user
 
 logger = structlog.get_logger()
@@ -81,6 +82,7 @@ class ProjectDetailResponse(BaseModel):
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
     summary_total: Optional[float] = None
+    has_summary: bool = False
     task_type_counts: dict[str, int] = {}
     total_tasks: int = 0
     tasks: list[TaskBrief]
@@ -328,9 +330,19 @@ async def get_project(
 ):
     project = await _get_project_or_404(project_id, db)
     agg = await _aggregate(project_id, db)
-    summary_total = float(project.summary_total) if project.summary_total is not None else None
-    if summary_total is not None:
+
+    # Read summary state directly from SummaryEstimate (source of truth)
+    summary_res = await db.execute(
+        select(SummaryEstimate.id, SummaryEstimate.total_for_customer)
+        .where(SummaryEstimate.project_id == project_id)
+    )
+    summary_row = summary_res.one_or_none()
+    has_summary = summary_row is not None
+    if has_summary and summary_row.total_for_customer:
+        summary_total = float(summary_row.total_for_customer)
         agg["total_cost"] = summary_total
+    else:
+        summary_total = 0.0 if has_summary else None
 
     tasks_result = await db.execute(
         select(
@@ -362,6 +374,7 @@ async def get_project(
         created_at=project.created_at.isoformat(),
         updated_at=project.updated_at.isoformat(),
         summary_total=summary_total,
+        has_summary=has_summary,
         task_type_counts=type_counts.get(project_id, {}),
         total_tasks=len(tasks),
         tasks=[

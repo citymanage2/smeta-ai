@@ -161,6 +161,7 @@ export interface ProjectCard extends Project {
   total_cost: number | null;
   optimized_cost?: number | null;
   summary_total?: number | null;
+  has_summary?: boolean;
   task_type_counts?: Record<string, number>;
   total_tasks?: number;
 }
