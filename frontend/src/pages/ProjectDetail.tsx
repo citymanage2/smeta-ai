@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Pencil, Check, X } from 'lucide-react';
+import { Pencil, Check, X, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { PageLoader } from '../components/ui/LumaSpin';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
 import { getProject, updateProject, deleteProject } from '../api/projects';
-import { updateTask } from '../api/tasks';
+import { updateTask, softDeleteTask } from '../api/tasks';
 import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
@@ -183,6 +183,7 @@ const ProjectDetailPage: React.FC = () => {
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
   const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'kanban'>('kanban');
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
     if (projectId) loadProject();
@@ -226,6 +227,19 @@ const ProjectDetailPage: React.FC = () => {
       setError('Не удалось сохранить описание. Попробуйте ещё раз.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDeleteTask(taskId: string) {
+    if (!window.confirm('Удалить задачу? Она будет перемещена в корзину.')) return;
+    setDeletingTaskId(taskId);
+    try {
+      await softDeleteTask(taskId);
+      setProject(prev => prev ? { ...prev, tasks: prev.tasks.filter(t => t.id !== taskId) } : prev);
+    } catch {
+      setError('Не удалось удалить задачу. Попробуйте ещё раз.');
+    } finally {
+      setDeletingTaskId(null);
     }
   }
 
@@ -514,6 +528,14 @@ const ProjectDetailPage: React.FC = () => {
                           {ESTIMATION_LABELS[task.estimation_status]}
                         </span>
                       )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
+                        disabled={deletingTaskId === task.id}
+                        title="Удалить задачу"
+                        style={{ ...iconBtnStyle, color: '#dc2626', opacity: deletingTaskId === task.id ? 0.5 : 1, padding: '4px' }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </div>
                   </div>
 
