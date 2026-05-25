@@ -229,46 +229,14 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
     ws_works = wb.create_sheet("Работы")
-    headers_works = ["№", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
-    for col, h in enumerate(headers_works, start=1):
-        ws_works.cell(row=1, column=col, value=h)
-    _style_header_row(ws_works, 1, len(headers_works))
-    ws_works.row_dimensions[1].height = 30
-
-    for i, item in enumerate(works, start=1):
-        row = i + 1
-        ws_works.cell(row=row, column=1, value=i)
-        ws_works.cell(row=row, column=2, value=item.get("name", ""))
-        ws_works.cell(row=row, column=3, value=item.get("unit", ""))
-        ws_works.cell(row=row, column=4, value=item.get("quantity"))
-        ws_works.cell(row=row, column=5, value=item.get("notes", "") or "")
-        _style_data_row(ws_works, row, len(headers_works))
-        _apply_row_fill(ws_works, row, len(headers_works), _row_fill(item))
-
-    _auto_fit_columns(ws_works)
-    ws_works.freeze_panes = "A2"
+    _write_perechen_sheet(ws_works, works, with_sections=False)
+    ws_works.freeze_panes = "A3"
 
     # Sheet 3: Материалы
     materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
     ws_mats = wb.create_sheet("Материалы")
-    headers_mats = ["№", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
-    for col, h in enumerate(headers_mats, start=1):
-        ws_mats.cell(row=1, column=col, value=h)
-    _style_header_row(ws_mats, 1, len(headers_mats))
-    ws_mats.row_dimensions[1].height = 30
-
-    for i, item in enumerate(materials, start=1):
-        row = i + 1
-        ws_mats.cell(row=row, column=1, value=i)
-        ws_mats.cell(row=row, column=2, value=item.get("name", ""))
-        ws_mats.cell(row=row, column=3, value=item.get("unit", ""))
-        ws_mats.cell(row=row, column=4, value=item.get("quantity"))
-        ws_mats.cell(row=row, column=5, value=item.get("notes", "") or "")
-        _style_data_row(ws_mats, row, len(headers_mats))
-        _apply_row_fill(ws_mats, row, len(headers_mats), _row_fill(item))
-
-    _auto_fit_columns(ws_mats)
-    ws_mats.freeze_panes = "A2"
+    _write_perechen_sheet(ws_mats, materials, with_sections=False)
+    ws_mats.freeze_panes = "A3"
 
     # Sheet 4: Пояснительная записка
     ws_note = wb.create_sheet("Пояснительная записка")
@@ -313,48 +281,14 @@ def generate_list_project(items: list, changes_summary: Optional[str] = None) ->
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
     ws_works = wb.create_sheet("Работы")
-    headers_works = ["№", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
-    for col, h in enumerate(headers_works, start=1):
-        ws_works.cell(row=1, column=col, value=h)
-    _style_header_row(ws_works, 1, len(headers_works))
-    ws_works.row_dimensions[1].height = 30
-
-    for i, item in enumerate(works, start=1):
-        row = i + 1
-        ws_works.cell(row=row, column=1, value=i)
-        ws_works.cell(row=row, column=2, value=item.get("section", ""))
-        ws_works.cell(row=row, column=3, value=item.get("name", ""))
-        ws_works.cell(row=row, column=4, value=item.get("unit", ""))
-        ws_works.cell(row=row, column=5, value=item.get("quantity"))
-        ws_works.cell(row=row, column=6, value=item.get("notes", ""))
-        _style_data_row(ws_works, row, len(headers_works))
-        _apply_row_fill(ws_works, row, len(headers_works), _row_fill(item))
-
-    _auto_fit_columns(ws_works)
-    ws_works.freeze_panes = "A2"
+    _write_perechen_sheet(ws_works, works, with_sections=False)
+    ws_works.freeze_panes = "A3"
 
     # Sheet 3: Материалы
     materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
     ws_mats = wb.create_sheet("Материалы")
-    headers_mats = ["№", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
-    for col, h in enumerate(headers_mats, start=1):
-        ws_mats.cell(row=1, column=col, value=h)
-    _style_header_row(ws_mats, 1, len(headers_mats))
-    ws_mats.row_dimensions[1].height = 30
-
-    for i, item in enumerate(materials, start=1):
-        row = i + 1
-        ws_mats.cell(row=row, column=1, value=i)
-        ws_mats.cell(row=row, column=2, value=item.get("section", ""))
-        ws_mats.cell(row=row, column=3, value=item.get("name", ""))
-        ws_mats.cell(row=row, column=4, value=item.get("unit", ""))
-        ws_mats.cell(row=row, column=5, value=item.get("quantity"))
-        ws_mats.cell(row=row, column=6, value=item.get("notes", ""))
-        _style_data_row(ws_mats, row, len(headers_mats))
-        _apply_row_fill(ws_mats, row, len(headers_mats), _row_fill(item))
-
-    _auto_fit_columns(ws_mats)
-    ws_mats.freeze_panes = "A2"
+    _write_perechen_sheet(ws_mats, materials, with_sections=False)
+    ws_mats.freeze_panes = "A3"
 
     # Sheet 4: Пояснительная записка (two sections)
     ws_note = wb.create_sheet("Пояснительная записка")
