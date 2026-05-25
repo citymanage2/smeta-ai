@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { formatTaskError } from '../utils/formatError';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import Layout from '../components/Layout';
 import { LumaSpin } from '../components/ui/LumaSpin';
 import EstimateGrid from '../components/estimate/EstimateGrid';
@@ -71,6 +72,7 @@ function getMaterialsForWork(workId: string, allRows: EstimateRow[]): EstimateRo
 const EstimateOptimizer: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   const embed = searchParams.get('embed') === '1';
   const urlReadOnly = searchParams.get('read_only') === '1';
@@ -103,6 +105,7 @@ const EstimateOptimizer: React.FC = () => {
   const [error, setError] = useState('');
   const [taskName, setTaskName] = useState<string | null>(null);
   const [taskType, setTaskType] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<'version' | 'comparison'>('version');
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [stepResultBanner, setStepResultBanner] = useState<StepResultBanner | null>(null);
@@ -142,6 +145,7 @@ const EstimateOptimizer: React.FC = () => {
       try {
         const taskData = await getTaskStatus(taskId);
         if (taskData.name) setTaskName(taskData.name);
+        if (taskData.project_id) setProjectId(taskData.project_id);
         if (taskData.status === 'failed') {
           setProcessingMsg(null);
           setError(formatTaskError(taskData.error_message));
@@ -195,13 +199,16 @@ const EstimateOptimizer: React.FC = () => {
           if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
         } else {
           // Estimate mode: existing logic
-          let versionList = await getVersions(taskId);
+          // ESTIMATE_FROM_LIST stores its estimate version in file_slot='estimate' — filter
+          // explicitly so generic versions (file_slot='result') don't shadow it.
+          const estimateSlot = currentTaskType === 'ESTIMATE_FROM_LIST' ? 'estimate' : undefined;
+          let versionList = await getVersions(taskId, estimateSlot);
           if (versionList.length === 0) {
             if (taskData.status === 'completed') {
               if (currentTaskType === 'ESTIMATE_FROM_LIST') {
                 // Auto-init structured EstimateVersion from the task result
                 try { await initEstimateVersionFromResult(taskId); } catch { /* idempotent */ }
-                versionList = await getVersions(taskId);
+                versionList = await getVersions(taskId, estimateSlot);
               }
               if (versionList.length === 0) {
                 setProcessingMsg(null);
@@ -450,6 +457,22 @@ const EstimateOptimizer: React.FC = () => {
     <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
       {/* Page header */}
       <div style={{ marginBottom: '16px' }}>
+        {projectId && !embed && (
+          <button
+            onClick={() => navigate(`/projects/${projectId}`)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px',
+              background: 'none', border: '1px solid #e2e8f0', borderRadius: '8px',
+              padding: '6px 12px', cursor: 'pointer', color: '#64748b', fontSize: '13px',
+              marginBottom: '10px', transition: 'all 0.15s',
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#93c5fd'; (e.currentTarget as HTMLElement).style.color = '#3b82f6'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#e2e8f0'; (e.currentTarget as HTMLElement).style.color = '#64748b'; }}
+          >
+            <ArrowLeft size={14} />
+            К проекту
+          </button>
+        )}
         <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 700, color: '#0f172a' }}>
           {taskName || (isGenericMode ? genericTitle : taskType === 'ESTIMATE_FROM_LIST' ? 'Смета из перечня' : 'Оптимизация сметы')}
         </h2>

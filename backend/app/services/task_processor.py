@@ -1605,7 +1605,8 @@ class TaskProcessor:
                 work_info = _price_svc._exact_match_work(name)
                 if work_info is not None and work_info.get("min_price") is not None:
                     enriched["work_price"] = work_info.get("min_price")
-                    enriched["price_list_name"] = work_info.get("name")
+                    enriched["price_list_name"] = "Прайс"
+                    enriched["_price_source_name"] = work_info.get("name")
                     matched_by_gidx[gidx] = enriched
                     logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method="exact", price_entry=work_info.get("name"))
                 else:
@@ -1615,7 +1616,8 @@ class TaskProcessor:
                 mat_price = _price_svc._exact_match_material(name)
                 if mat_price is not None:
                     enriched["material_price"] = mat_price
-                    enriched["price_list_name"] = name
+                    enriched["price_list_name"] = "Прайс"
+                    enriched["_price_source_name"] = name
                     matched_by_gidx[gidx] = enriched
                     logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method="exact")
                 else:
@@ -1633,7 +1635,8 @@ class TaskProcessor:
                 enriched = enriched_map[gidx]
                 if work_info is not None and work_info.get("min_price") is not None:
                     enriched["work_price"] = work_info.get("min_price")
-                    enriched["price_list_name"] = work_info.get("name")
+                    enriched["price_list_name"] = "Прайс"
+                    enriched["_price_source_name"] = work_info.get("name")
                     matched_by_gidx[gidx] = enriched
                     logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method="embedding", price_entry=work_info.get("name"))
                 else:
@@ -1668,6 +1671,7 @@ class TaskProcessor:
         )
 
         # ── Проход 4: точное совпадение по price_cache ───────────────────────
+        await self.update_progress(f"Поиск {n_unmatched} ненайденных позиций в кеше предыдущих задач...")
         need_cache_emb_works: list[tuple[int, str]] = []
         need_cache_emb_materials: list[tuple[int, str]] = []
 
@@ -1728,6 +1732,9 @@ class TaskProcessor:
 
         n_matched = len(matched_by_gidx)
         n_unmatched = len(unmatched_by_gidx)
+        await self.update_progress(
+            f"Кеш: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций."
+        )
 
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
         # Results keyed by int _id (= global index), not by name string.
@@ -1932,9 +1939,6 @@ class TaskProcessor:
 
         # Save items to progress_data for future use (Path B)
         await self._save_progress_data({"items": final_items})
-
-        # Create generic editor version so the result can be opened in the online editor
-        await self._create_initial_generic_version(excel_data, task.task_type)
 
         logger.info(
             "Estimate from list completed",
