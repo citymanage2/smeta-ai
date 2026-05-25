@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+import { SpreadsheetTestEditor } from '../components/admin/SpreadsheetTestEditor';
 import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
@@ -247,7 +248,7 @@ const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
 
 const AdminPage: React.FC = () => {
   const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
-  const [activeTab, setActiveTab] = useState<'tasks' | 'trash' | 'prices'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'trash' | 'prices' | 'spreadsheet'>('tasks');
 
   // Tasks state
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -575,7 +576,7 @@ const AdminPage: React.FC = () => {
             marginBottom: '28px',
           }}
         >
-          {(['tasks', 'trash', 'prices'] as const).map((tab) => (
+          {(['tasks', 'trash', 'prices', 'spreadsheet'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -592,7 +593,13 @@ const AdminPage: React.FC = () => {
                 transition: 'all 0.15s',
               }}
             >
-              {tab === 'tasks' ? 'Задачи' : tab === 'trash' ? `Корзина${trashTotal > 0 ? ` (${trashTotal})` : ''}` : 'Прайс-листы'}
+              {tab === 'tasks'
+                ? 'Задачи'
+                : tab === 'trash'
+                ? `Корзина${trashTotal > 0 ? ` (${trashTotal})` : ''}`
+                : tab === 'prices'
+                ? 'Прайс-листы'
+                : 'Онлайн редактор ТЕСТ'}
             </button>
           ))}
         </div>
@@ -1130,6 +1137,13 @@ const AdminPage: React.FC = () => {
               onGenerateEmbeddings={handleMatsGenerateEmbeddings}
             />
           </div>
+        )}
+
+        {/* ---- SPREADSHEET TAB ---- */}
+        {activeTab === 'spreadsheet' && (
+          <Suspense fallback={<SectionLoader message="Загрузка редактора..." />}>
+            <SpreadsheetTestEditor />
+          </Suspense>
         )}
       </div>
 

@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ['@fortune-sheet/react', '@fortune-sheet/core'],
+  },
   build: {
     sourcemap: true,
   },
