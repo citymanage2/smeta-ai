@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { login } from '../api/auth';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? '/system';
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -27,7 +29,7 @@ const Login: React.FC = () => {
 
     try {
       await login(password);
-      navigate('/system');
+      navigate(from, { replace: true });
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string }; status?: number }; request?: unknown };
       if (axiosError.response?.status === 401) {
