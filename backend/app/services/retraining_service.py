@@ -78,12 +78,9 @@ async def parse_files_for_review(files: list[UploadFile]) -> list[dict]:
                 continue
 
             if row_type == "material":
-                candidates_raw = await price_service.find_top_n_materials(name, n=3)
+                candidates_raw = await price_service.find_top_n_materials_combined(name, n=3)
             else:
-                candidates_raw = await price_service.find_top_n_works(name, n=3)
-
-            if not candidates_raw:
-                continue
+                candidates_raw = await price_service.find_top_n_works_combined(name, n=3)
 
             candidates = [CandidateItem(**c) for c in candidates_raw]
             item = ReviewItem(

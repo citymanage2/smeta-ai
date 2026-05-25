@@ -597,8 +597,26 @@ const RetrainingPage: React.FC = () => {
                   <button
                     onClick={handleSkip}
                     disabled={savingPair}
+                    title="Это раздел или заголовок — не учитывать в обучении"
                     style={{
-                      padding: '12px 16px',
+                      padding: '12px 14px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      backgroundColor: '#f3f0ff',
+                      color: '#7c3aed',
+                      border: '1.5px solid #c4b5fd',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🏷 Раздел
+                  </button>
+                  <button
+                    onClick={handleSkip}
+                    disabled={savingPair}
+                    style={{
+                      padding: '12px 14px',
                       fontSize: '14px',
                       fontWeight: 500,
                       backgroundColor: '#f1f5f9',
@@ -656,22 +674,41 @@ const RetrainingPage: React.FC = () => {
                     </button>
                   ))}
                 </div>
-                <button
-                  onClick={handleSkip}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    fontSize: '13px',
-                    fontWeight: 500,
-                    backgroundColor: '#f1f5f9',
-                    color: '#64748b',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '7px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  → Нет подходящего варианта, пропустить
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={handleSkip}
+                    title="Это раздел или заголовок — не учитывать в обучении"
+                    style={{
+                      padding: '10px 16px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      backgroundColor: '#f3f0ff',
+                      color: '#7c3aed',
+                      border: '1px solid #c4b5fd',
+                      borderRadius: '7px',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🏷 Раздел
+                  </button>
+                  <button
+                    onClick={handleSkip}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      backgroundColor: '#f1f5f9',
+                      color: '#64748b',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '7px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    → Нет подходящего варианта, пропустить
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -301,6 +301,134 @@ async def find_top_n_materials(name: str, n: int = 3) -> list[dict]:
         return []
 
 
+def _query_cache_works(query_arr: "np.ndarray", query_norm: float, n: int) -> list[dict]:
+    """Поиск top-N по кешу работ (синхронный, вызывается внутри to_thread)."""
+    if not _numpy_available or _cache_works_embeddings is None or _cache_works_row_norms is None:
+        return []
+    scores = np.dot(_cache_works_embeddings, query_arr) / (_cache_works_row_norms * query_norm)
+    top_indices = np.argsort(scores)[::-1][:n]
+    results = []
+    for idx in top_indices.tolist():
+        cache_idx = _cache_works_index_map[idx]
+        item = _cache_works_cache[cache_idx]
+        results.append({
+            "text": item["name"],
+            "score": float(scores[idx]),
+            "type": "work",
+            "unit": item.get("unit"),
+            "min_price": item.get("min_price"),
+        })
+    return results
+
+
+def _query_cache_materials(query_arr: "np.ndarray", query_norm: float, n: int) -> list[dict]:
+    """Поиск top-N по кешу материалов (синхронный, вызывается внутри to_thread)."""
+    if not _numpy_available or _cache_materials_embeddings is None or _cache_materials_row_norms is None:
+        return []
+    scores = np.dot(_cache_materials_embeddings, query_arr) / (_cache_materials_row_norms * query_norm)
+    top_indices = np.argsort(scores)[::-1][:n]
+    results = []
+    for idx in top_indices.tolist():
+        cache_idx = _cache_materials_index_map[idx]
+        item = _cache_materials_cache[cache_idx]
+        results.append({
+            "text": item["name"],
+            "score": float(scores[idx]),
+            "type": "material",
+            "unit": item.get("unit"),
+            "min_price": item.get("price"),
+        })
+    return results
+
+
+async def find_top_n_works_combined(name: str, n: int = 3) -> list[dict]:
+    """Поиск top-N по прайсу работ + кешу работ, дедупликация по тексту."""
+    if not _numpy_available:
+        return []
+    try:
+        from app.services.embedding_service import normalize_name, generate_embedding
+        normalized = normalize_name(name)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized, "search_query")
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
+            return []
+
+        # Прайс
+        price_results: list[dict] = []
+        if _works_embeddings is not None and _works_row_norms is not None:
+            scores = np.dot(_works_embeddings, query_arr) / (_works_row_norms * query_norm)
+            for idx in np.argsort(scores)[::-1][:n].tolist():
+                cache_idx = _works_index_map[idx]
+                item = _works_cache[cache_idx]
+                price_results.append({
+                    "text": item["name"], "score": float(scores[idx]),
+                    "type": "work", "unit": item.get("unit"), "min_price": item.get("min_price"),
+                })
+
+        # Кеш
+        cache_results = _query_cache_works(query_arr, query_norm, n)
+
+        # Объединяем: приоритет прайсу, дедупликация по нижнему регистру текста
+        seen: set[str] = set()
+        merged: list[dict] = []
+        for r in sorted(price_results + cache_results, key=lambda x: x["score"], reverse=True):
+            key = r["text"].lower().strip()
+            if key not in seen:
+                seen.add(key)
+                merged.append(r)
+            if len(merged) >= n:
+                break
+        return merged
+    except Exception as e:
+        logger.error("find_top_n_works_combined failed", error=str(e))
+        return []
+
+
+async def find_top_n_materials_combined(name: str, n: int = 3) -> list[dict]:
+    """Поиск top-N по прайсу материалов + кешу материалов, дедупликация по тексту."""
+    if not _numpy_available:
+        return []
+    try:
+        from app.services.embedding_service import normalize_name, generate_embedding
+        normalized = normalize_name(name)
+        query_vec = await asyncio.to_thread(generate_embedding, normalized, "search_query")
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
+            return []
+
+        # Прайс
+        price_results: list[dict] = []
+        if _materials_embeddings is not None and _materials_row_norms is not None:
+            scores = np.dot(_materials_embeddings, query_arr) / (_materials_row_norms * query_norm)
+            for idx in np.argsort(scores)[::-1][:n].tolist():
+                cache_idx = _materials_index_map[idx]
+                item = _materials_cache[cache_idx]
+                price_results.append({
+                    "text": item["name"], "score": float(scores[idx]),
+                    "type": "material", "unit": item.get("unit"), "min_price": item.get("price"),
+                })
+
+        # Кеш
+        cache_results = _query_cache_materials(query_arr, query_norm, n)
+
+        # Объединяем
+        seen: set[str] = set()
+        merged: list[dict] = []
+        for r in sorted(price_results + cache_results, key=lambda x: x["score"], reverse=True):
+            key = r["text"].lower().strip()
+            if key not in seen:
+                seen.add(key)
+                merged.append(r)
+            if len(merged) >= n:
+                break
+        return merged
+    except Exception as e:
+        logger.error("find_top_n_materials_combined failed", error=str(e))
+        return []
+
+
 async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
     """Use Claude with web search to find lower price for the same work item."""
     extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
