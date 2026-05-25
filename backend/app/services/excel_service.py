@@ -34,6 +34,125 @@ THIN_BORDER = Border(
     bottom=Side(style="thin"),
 )
 
+# ── Перечень sheet style constants ───────────────────────────────────────────
+_P_FONT_BLACK = Font(name="Arial", size=9, color="000000")
+_P_FONT_BLACK_BOLD = Font(name="Arial", size=9, bold=True, color="000000")
+_P_FONT_BLUE_ITALIC = Font(name="Arial", size=9, italic=True, color="4284F3")
+_P_BORDER = Border(
+    left=Side(style="thin", color="000000"),
+    right=Side(style="thin", color="000000"),
+    top=Side(style="thin", color="000000"),
+    bottom=Side(style="thin", color="000000"),
+)
+_P_COL_WIDTHS = [6.5, 10.33, 67.33, 10.33, 10.33, 57.5]
+_P_HEADERS = ["№ п/п", "Тип", "Наименование", "Ед. изм", "Кол-во", "Примечание"]
+_P_QTY_FMT = "0.00"
+
+
+def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
+    """Fill worksheet with the standard Перечень format (6 columns)."""
+    for i, width in enumerate(_P_COL_WIDTHS, 1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    # Row 1: headers — bold, center, Arial 9
+    for col, h in enumerate(_P_HEADERS, 1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.font = _P_FONT_BLACK_BOLD
+        c.alignment = Alignment(horizontal="center", vertical="center",
+                                wrap_text=(col in (3, 6)))
+        c.border = _P_BORDER
+
+    # Row 2: column numbers 1..6 — center, Arial 9
+    for col in range(1, 7):
+        c = ws.cell(row=2, column=col, value=col)
+        c.font = _P_FONT_BLACK
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = _P_BORDER
+
+    data_row = 3
+    item_num = 0
+    current_section = object()  # sentinel — no section seen yet
+    section_num = 0
+
+    for item in items:
+        item_type = str(item.get("type", "")).strip()
+        is_material = item_type.lower() in ("материал", "material", "материалы")
+
+        # Section header row (only when with_sections and section changes)
+        if with_sections:
+            sec = item.get("section", "") or ""
+            if sec != current_section:
+                current_section = sec
+                section_num += 1
+                label = f"Раздел {section_num}. {sec}" if sec else f"Раздел {section_num}"
+                for col in range(1, 7):
+                    c = ws.cell(row=data_row, column=col,
+                                value=label if col == 3 else None)
+                    c.font = _P_FONT_BLACK_BOLD if col == 3 else _P_FONT_BLACK
+                    c.alignment = Alignment(horizontal="center", vertical="center",
+                                           wrap_text=(col == 3))
+                    c.border = _P_BORDER
+                data_row += 1
+
+        item_num += 1
+
+        # Col 1: порядковый номер — integer, center
+        c1 = ws.cell(row=data_row, column=1, value=item_num)
+        c1.font = _P_FONT_BLACK
+        c1.alignment = Alignment(horizontal="center", vertical="center")
+        c1.number_format = "0"
+        c1.border = _P_BORDER
+
+        # Col 2: тип — center; materials: blue italic
+        c2 = ws.cell(row=data_row, column=2, value=item_type)
+        c2.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c2.alignment = Alignment(horizontal="center", vertical="center")
+        c2.border = _P_BORDER
+
+        # Col 3: наименование — left (work) / right (material), wrap
+        name = str(item.get("name", "") or "")
+        c3 = ws.cell(row=data_row, column=3, value=name)
+        c3.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c3.alignment = Alignment(
+            horizontal="right" if is_material else "left",
+            vertical="center", wrap_text=True,
+        )
+        c3.border = _P_BORDER
+
+        # Col 4: ед. изм. — center (work) / right (material)
+        unit = str(item.get("unit", "") or "")
+        c4 = ws.cell(row=data_row, column=4, value=unit)
+        c4.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c4.alignment = Alignment(
+            horizontal="right" if is_material else "center",
+            vertical="center",
+        )
+        c4.border = _P_BORDER
+
+        # Col 5: кол-во — center (work) / right (material), 2 decimals
+        qty = item.get("quantity")
+        c5 = ws.cell(row=data_row, column=5, value=qty)
+        c5.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c5.alignment = Alignment(
+            horizontal="right" if is_material else "center",
+            vertical="center",
+        )
+        if qty is not None:
+            c5.number_format = _P_QTY_FMT
+        c5.border = _P_BORDER
+
+        # Col 6: примечание — left, black, wrap
+        notes_text = str(item.get("notes", "") or "")
+        if _is_calculated_from_drawing(item) and qty is not None:
+            notes_text = (f"рассчитано по чертежам | {notes_text}"
+                          if notes_text else "рассчитано по чертежам")
+        c6 = ws.cell(row=data_row, column=6, value=notes_text)
+        c6.font = _P_FONT_BLACK
+        c6.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        c6.border = _P_BORDER
+
+        data_row += 1
+
 
 def _is_calculated_from_drawing(item: dict) -> bool:
     """True если объём рассчитан по чертежам/документу (не взят из спецификации напрямую)."""
@@ -104,31 +223,8 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     # Sheet 1: Перечень (All items)
     ws_all = wb.active
     ws_all.title = "Перечень"
-
-    headers_all = ["№", "Тип", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
-    for col, h in enumerate(headers_all, start=1):
-        ws_all.cell(row=1, column=col, value=h)
-    _style_header_row(ws_all, 1, len(headers_all))
-
-    ws_all.row_dimensions[1].height = 30
-
-    for i, item in enumerate(items, start=1):
-        row = i + 1
-        ws_all.cell(row=row, column=1, value=i)
-        ws_all.cell(row=row, column=2, value=item.get("type", ""))
-        ws_all.cell(row=row, column=3, value=item.get("name", ""))
-        ws_all.cell(row=row, column=4, value=item.get("unit", ""))
-        qty = item.get("quantity")
-        ws_all.cell(row=row, column=5, value=qty)
-        notes_text = item.get("notes", "") or ""
-        if _is_calculated_from_drawing(item) and qty is not None:
-            notes_text = f"рассчитано по чертежам | {notes_text}" if notes_text else "рассчитано по чертежам"
-        ws_all.cell(row=row, column=6, value=notes_text)
-        _style_data_row(ws_all, row, len(headers_all))
-        _apply_row_fill(ws_all, row, len(headers_all), _row_fill(item))
-
-    _auto_fit_columns(ws_all)
-    ws_all.freeze_panes = "A2"
+    _write_perechen_sheet(ws_all, items, with_sections=False)
+    ws_all.freeze_panes = "A3"
 
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
@@ -208,30 +304,11 @@ def generate_list_project(items: list, changes_summary: Optional[str] = None) ->
     """
     wb = openpyxl.Workbook()
 
-    # Sheet 1: Перечень (All items) — includes section column
+    # Sheet 1: Перечень (All items) — sections shown as header rows
     ws_all = wb.active
     ws_all.title = "Перечень"
-
-    headers_all = ["№", "Тип", "Раздел", "Наименование", "Ед. изм.", "Кол-во", "Примечание"]
-    for col, h in enumerate(headers_all, start=1):
-        ws_all.cell(row=1, column=col, value=h)
-    _style_header_row(ws_all, 1, len(headers_all))
-    ws_all.row_dimensions[1].height = 30
-
-    for i, item in enumerate(items, start=1):
-        row = i + 1
-        ws_all.cell(row=row, column=1, value=i)
-        ws_all.cell(row=row, column=2, value=item.get("type", ""))
-        ws_all.cell(row=row, column=3, value=item.get("section", ""))
-        ws_all.cell(row=row, column=4, value=item.get("name", ""))
-        ws_all.cell(row=row, column=5, value=item.get("unit", ""))
-        ws_all.cell(row=row, column=6, value=item.get("quantity"))
-        ws_all.cell(row=row, column=7, value=item.get("notes", ""))
-        _style_data_row(ws_all, row, len(headers_all))
-        _apply_row_fill(ws_all, row, len(headers_all), _row_fill(item))
-
-    _auto_fit_columns(ws_all)
-    ws_all.freeze_panes = "A2"
+    _write_perechen_sheet(ws_all, items, with_sections=True)
+    ws_all.freeze_panes = "A3"
 
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
