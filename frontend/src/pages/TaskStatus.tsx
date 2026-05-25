@@ -15,6 +15,7 @@ import {
   downloadInputFile,
   updateTask,
   resumeTask,
+  restartTask,
   patchEstimateItems,
   repriceEstimateItem,
   fixEmptyPrices,
@@ -76,6 +77,7 @@ const TaskStatusPage: React.FC = () => {
 
   // Resume state
   const [resuming, setResuming] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -125,6 +127,26 @@ const TaskStatusPage: React.FC = () => {
       setError('Не удалось возобновить задачу.');
     } finally {
       setResuming(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    if (!taskId || restarting) return;
+    setRestarting(true);
+    try {
+      await restartTask(taskId);
+      setTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
+      setProgressLog([]);
+      setElapsedSeconds(0);
+      startTimeRef.current = null;
+      if (!pollingRef.current) {
+        pollingRef.current = setInterval(fetchStatus, 3000);
+      }
+      fetchStatus();
+    } catch {
+      setError('Не удалось перезапустить задачу.');
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -827,7 +849,7 @@ const TaskStatusPage: React.FC = () => {
                   )}
 
                   {/* Resume section for LIST_FROM_GRAND with saved progress */}
-                  {task.task_type === 'LIST_FROM_GRAND' && task.progress_data?.chunks_done != null && (
+                  {task.task_type === 'LIST_FROM_GRAND' && task.progress_data?.chunks_done != null ? (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
                         Обработано {String(task.progress_data.chunks_done)} из {String(task.progress_data.total_chunks ?? '?')} частей.
@@ -855,21 +877,56 @@ const TaskStatusPage: React.FC = () => {
                         ))}
                         <button
                           onClick={handleResume}
-                          disabled={resuming}
+                          disabled={resuming || restarting}
                           style={{
                             padding: '8px 20px',
                             backgroundColor: resuming ? '#fca5a5' : '#dc2626',
                             color: '#ffffff',
                             border: 'none',
                             borderRadius: '8px',
-                            cursor: resuming ? 'not-allowed' : 'pointer',
+                            cursor: (resuming || restarting) ? 'not-allowed' : 'pointer',
                             fontSize: '13px',
                             fontWeight: 700,
                           }}
                         >
                           {resuming ? 'Запуск...' : '▶ Продолжить'}
                         </button>
+                        <button
+                          onClick={handleRestart}
+                          disabled={restarting || resuming}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: restarting ? '#e2e8f0' : '#ffffff',
+                            color: '#64748b',
+                            border: '1.5px solid #cbd5e1',
+                            borderRadius: '8px',
+                            cursor: (restarting || resuming) ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {restarting ? 'Запуск...' : '↺ Перезапустить с начала'}
+                        </button>
                       </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
+                      <button
+                        onClick={handleRestart}
+                        disabled={restarting}
+                        style={{
+                          padding: '8px 20px',
+                          backgroundColor: restarting ? '#fca5a5' : '#dc2626',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '8px',
+                          cursor: restarting ? 'not-allowed' : 'pointer',
+                          fontSize: '13px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {restarting ? 'Запуск...' : '↺ Перезапустить'}
+                      </button>
                     </div>
                   )}
                 </div>
