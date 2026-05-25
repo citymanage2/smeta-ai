@@ -16,6 +16,7 @@ import Trash from './pages/Trash';
 import PriceCatalog from './pages/PriceCatalog';
 import System from './pages/System';
 import SummaryEditor from './pages/SummaryEditor';
+import Retraining from './pages/Retraining';
 import { useAuthStore } from './stores/auth';
 
 const App: React.FC = () => {
@@ -136,6 +137,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute requireAdmin>
               <Admin />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/retraining"
+          element={
+            <ProtectedRoute requireAdmin>
+              <Retraining />
             </ProtectedRoute>
           }
         />

@@ -85,6 +85,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               Администратор
             </button>
           )}
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/retraining')}
+              style={headerBtnStyle}
+            >
+              Дообучение
+            </button>
+          )}
           <button onClick={() => navigate('/task/create')} style={headerBtnStyle}>
             Создать задачу
           </button>
