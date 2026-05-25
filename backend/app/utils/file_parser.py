@@ -30,6 +30,9 @@ _TOTAL_KEYWORDS = re.compile(
 _LABOR_ROW = re.compile(r"^[3з]\s*[тТ][мМ]?\s*$", re.IGNORECASE)
 # Одиночные цифры 1-15 (строка с номерами колонок в заголовке Гранд-Сметы)
 _COLNUM_ROW = re.compile(r"^\d{1,2}$")
+# Составляющие затрат Гранд-Сметы: «1 ОТ», «2 ЭМ», «3 в т.ч. ОТм», «4 М» и аналогичные
+# (номер + аббревиатура или номер + «в т.ч.»)
+_COMPONENT_ROW = re.compile(r"^\d+\s+(ОТ|ЭМ|М|ОТм|в т\.ч\.)", re.IGNORECASE)
 # Нормативные коды расценок (ФЕР, ТЕР, ГЭСН и т.п.) — строки-наименования позиций
 _NORM_CODE = re.compile(r"^(фер|тер|гэсн|фсн|фснб|пр/|ерер|гэснр|фсем)", re.IGNORECASE)
 # Заголовки разделов/глав сметы
@@ -127,8 +130,8 @@ def _parse_quantity(value) -> Optional[float]:
 
 
 def _is_trash_row(name: str) -> bool:
-    """True для мусорных строк Гранд-Сметы: нормо-часы труда/машин и номера колонок."""
-    return bool(_LABOR_ROW.match(name) or _COLNUM_ROW.match(name))
+    """True для мусорных строк Гранд-Сметы: нормо-часы, номера колонок, составляющие затрат."""
+    return bool(_LABOR_ROW.match(name) or _COLNUM_ROW.match(name) or _COMPONENT_ROW.match(name))
 
 
 def parse_xlsx_grand(data: bytes) -> "list[dict]":
@@ -210,7 +213,22 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
                     continue
                 rows.append({"name": name, "unit": "", "quantity": None, "is_section": False})
 
-        logger.info("Grand-смета: строк извлечено", count=len(rows))
+        work_rows = sum(1 for r in rows if not r.get("is_section") and r.get("unit"))
+        logger.info(
+            "Grand-смета: строк извлечено",
+            count=len(rows),
+            work_rows=work_rows,
+            name_col=name_col,
+            unit_col=unit_col,
+            qty_col=qty_col,
+            qty_total_col=qty_total_col,
+        )
+        if rows and work_rows == 0:
+            logger.warning(
+                "Grand-смета: не найдено ни одной строки с работами/материалами — "
+                "возможно, неверно определена колонка наименования",
+                name_col=name_col,
+            )
         return rows
 
     except Exception as e:
