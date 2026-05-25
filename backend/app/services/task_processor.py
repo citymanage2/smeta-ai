@@ -1651,7 +1651,8 @@ class TaskProcessor:
                 enriched = enriched_map[gidx]
                 if mat_price is not None:
                     enriched["material_price"] = mat_price
-                    enriched["price_list_name"] = name
+                    enriched["price_list_name"] = "Прайс"
+                    enriched["_price_source_name"] = name
                     matched_by_gidx[gidx] = enriched
                     logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method="embedding")
                 else:
@@ -1684,7 +1685,8 @@ class TaskProcessor:
                 cache_work_info = _price_svc._exact_match_cache_work(name)
                 if cache_work_info is not None and cache_work_info.get("price") is not None:
                     enriched["work_price"] = cache_work_info.get("price")
-                    enriched["price_list_name"] = cache_work_info.get("name")
+                    enriched["price_list_name"] = "Кеш"
+                    enriched["_cache_updated_at"] = cache_work_info.get("updated_at")
                     enriched["sources"] = cache_work_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
@@ -1693,10 +1695,12 @@ class TaskProcessor:
                     need_cache_emb_works.append((gidx, name))
 
             elif item_type == "Материал":
-                cache_mat_price = _price_svc._exact_match_cache_material(name)
-                if cache_mat_price is not None:
-                    enriched["material_price"] = cache_mat_price
-                    enriched["price_list_name"] = name
+                cache_mat_info = _price_svc._exact_match_cache_material(name)
+                if cache_mat_info is not None:
+                    enriched["material_price"] = cache_mat_info.get("price")
+                    enriched["price_list_name"] = "Кеш"
+                    enriched["_cache_updated_at"] = cache_mat_info.get("updated_at")
+                    enriched["sources"] = cache_mat_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
                     logger.info("Material MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
@@ -1711,7 +1715,8 @@ class TaskProcessor:
                 enriched = enriched_map[gidx]
                 if cache_work_info is not None and cache_work_info.get("price") is not None:
                     enriched["work_price"] = cache_work_info.get("price")
-                    enriched["price_list_name"] = cache_work_info.get("name")
+                    enriched["price_list_name"] = "Кеш"
+                    enriched["_cache_updated_at"] = cache_work_info.get("updated_at")
                     enriched["sources"] = cache_work_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
@@ -1724,8 +1729,10 @@ class TaskProcessor:
             for (gidx, name), cache_mat_price in zip(need_cache_emb_materials, cache_mat_results):
                 enriched = enriched_map[gidx]
                 if cache_mat_price is not None:
-                    enriched["material_price"] = cache_mat_price
-                    enriched["price_list_name"] = name
+                    enriched["material_price"] = cache_mat_price.get("price")
+                    enriched["price_list_name"] = "Кеш"
+                    enriched["_cache_updated_at"] = cache_mat_price.get("updated_at")
+                    enriched["sources"] = cache_mat_price.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
                     logger.info("Material MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache")
@@ -1876,21 +1883,36 @@ class TaskProcessor:
                     )
 
         # ── Шаг 3: Сборка итогового результата в исходном порядке ───────────
-        _VAT = 0.22
 
-        def _vat_notes(price: float | None) -> str:
-            if not price:
+        def _fmt_cache_date(updated_at) -> str:
+            if updated_at is None:
                 return ""
-            return f"Цена без НДС: {price:,.2f} ₽ / Цена с НДС: {price * (1 + _VAT):,.2f} ₽"
+            try:
+                from datetime import datetime as _dt
+                if isinstance(updated_at, str):
+                    updated_at = _dt.fromisoformat(updated_at)
+                return updated_at.strftime("%d.%m.%Y")
+            except Exception:
+                return str(updated_at)
 
         final_items: list[dict] = []
         for gidx, item in enumerate(items):
             if gidx in matched_by_gidx:
                 matched = matched_by_gidx[gidx]
-                # Add VAT notes for price-list items if not already set
-                if not matched.get("notes"):
-                    price = matched.get("work_price") or matched.get("material_price")
-                    matched["notes"] = _vat_notes(price)
+                source = matched.get("price_list_name", "")
+                if source == "Прайс":
+                    matched["notes"] = matched.get("_price_source_name", "")
+                    matched["sources"] = ""
+                elif source == "Кеш":
+                    cache_date = _fmt_cache_date(matched.get("_cache_updated_at"))
+                    cache_sources = matched.get("sources") or ""
+                    parts = []
+                    if cache_date:
+                        parts.append(f"от {cache_date}")
+                    if cache_sources:
+                        parts.append(cache_sources)
+                    matched["notes"] = ", ".join(parts)
+                    matched["sources"] = ""
                 final_items.append(matched)
                 continue
             cr = claude_results.get(gidx)
@@ -1902,9 +1924,9 @@ class TaskProcessor:
                     "quantity": item.get("quantity"),
                     "work_price": cr.get("work_price"),
                     "material_price": cr.get("material_price"),
-                    "price_list_name": None,
-                    "sources": cr.get("sources", ""),
-                    "notes": cr.get("notes", ""),
+                    "price_list_name": "Интернет",
+                    "sources": "",
+                    "notes": cr.get("sources", "") or cr.get("notes", ""),
                 }
             else:
                 enriched = {

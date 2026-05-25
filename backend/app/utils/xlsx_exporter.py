@@ -120,9 +120,8 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
     Each item dict must have:
       type, name, unit, quantity,
       work_price, material_price,   (float | None)
-      price_list_name,              (str | None — matched name from price list)
-      sources,                      (str | None — Claude sources)
-      notes                         (str | None)
+      price_list_name,              (str | None — "Прайс" / "Кеш" / "Интернет")
+      notes                         (str | None — примечание: источники / дата кеша / наименование в прайсе)
 
     Appends totals block at the end.
     Returns raw xlsx bytes.
@@ -145,9 +144,8 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
         "Стоимость работ",
         "Цена матер.",
         "Стоимость матер.",
-        "Из прайса",
-        "Источники",
-        "Примечания",
+        "Источник цены",
+        "Примечание",
     ]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -155,7 +153,7 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
         cell.fill = HEADER_FILL_EST
 
     # Column widths
-    col_widths = [5, 50, 10, 10, 14, 18, 14, 18, 10, 45, 35]
+    col_widths = [5, 50, 10, 10, 14, 18, 14, 18, 12, 60]
     for i, w in enumerate(col_widths, 1):
         from openpyxl.utils import get_column_letter
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -177,7 +175,6 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
         if mat_cost is not None:
             total_materials += mat_cost
 
-        from_price_list = bool(item.get("price_list_name"))
         is_work = str(item.get("type", "")).strip() == "Работа"
 
         row_fill = WORK_ROW_FILL if is_work else None
@@ -191,8 +188,7 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
             work_cost,
             mat_price,
             mat_cost,
-            "Да" if from_price_list else "Нет",
-            item.get("sources", "") or "",
+            item.get("price_list_name", "") or "",
             item.get("notes", "") or "",
         ]
         for col, val in enumerate(values, 1):

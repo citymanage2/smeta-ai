@@ -538,11 +538,11 @@ def _exact_match_cache_work(name: str) -> Optional[dict]:
     return None
 
 
-def _exact_match_cache_material(name: str) -> Optional[float]:
+def _exact_match_cache_material(name: str) -> Optional[dict]:
     norm = normalize_text(name)
     for item in _cache_materials_cache:
         if normalize_text(item["name"]) == norm:
-            return item.get("price")
+            return item
     return None
 
 
@@ -587,7 +587,7 @@ async def batch_embedding_match_cache_works(names: list[str]) -> "list[Optional[
         return [None] * len(names)
 
 
-async def batch_embedding_match_cache_materials(names: list[str]) -> "list[Optional[float]]":
+async def batch_embedding_match_cache_materials(names: list[str]) -> "list[Optional[dict]]":
     """Batch cosine-similarity search in price_cache_materials — one Cohere call for all names."""
     if not names:
         return []
@@ -609,7 +609,7 @@ async def batch_embedding_match_cache_materials(names: list[str]) -> "list[Optio
         best_idx = np.argmax(scores, axis=0)
         best_scores = scores[best_idx, np.arange(len(names))]
 
-        results: list[Optional[float]] = []
+        results: list[Optional[dict]] = []
         for i, (bidx, bscore) in enumerate(zip(best_idx.tolist(), best_scores.tolist())):
             if query_norms[i] == 0:
                 results.append(None)
@@ -618,7 +618,7 @@ async def batch_embedding_match_cache_materials(names: list[str]) -> "list[Optio
             matched_name = _cache_materials_cache[cache_idx]["name"] if _cache_materials_cache else "?"
             if bscore >= SIMILARITY_THRESHOLD:
                 logger.info("Cache emb material HIT", query=names[i], matched=matched_name, score=bscore)
-                results.append(_cache_materials_cache[cache_idx].get("price"))
+                results.append(_cache_materials_cache[cache_idx])
             else:
                 logger.debug("Cache emb material MISS", query=names[i], best=matched_name, score=bscore)
                 results.append(None)

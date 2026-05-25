@@ -363,7 +363,7 @@ def generate_smeta_from_project(
         "Цена работы (за ед.)", "Цена материала (за ед.)",
         "Стоимость работ", "Стоимость материалов",
         "Итого без НДС", f"НДС ({int(settings.VAT_RATE * 100)}%)", "Итого с НДС",
-        "Наименование в прайсе", "Источники", "Примечание",
+        "Источник цены", "Примечание",
     ]
     for col, h in enumerate(smeta_headers, start=1):
         ws_smeta.cell(row=1, column=col, value=h)
@@ -394,8 +394,7 @@ def generate_smeta_from_project(
         ws_smeta.cell(row=row, column=11, value=vat if vat else None)
         ws_smeta.cell(row=row, column=12, value=total if total else None)
         ws_smeta.cell(row=row, column=13, value=item.get("price_list_name", "") or "")
-        ws_smeta.cell(row=row, column=14, value=item.get("sources", "") or "")
-        ws_smeta.cell(row=row, column=15, value=item.get("notes", ""))
+        ws_smeta.cell(row=row, column=14, value=item.get("notes", ""))
         _style_data_row(ws_smeta, row, len(smeta_headers))
 
     if smeta_items:
@@ -504,7 +503,7 @@ def generate_smeta_from_tz_project(
         "Цена работы (за ед.)", "Цена материала (за ед.)",
         "Стоимость работ", "Стоимость материалов",
         "Итого без НДС", f"НДС ({int(settings.VAT_RATE * 100)}%)", "Итого с НДС",
-        "Наименование в прайсе", "Источники", "Примечание",
+        "Источник цены", "Примечание",
     ]
     for col, h in enumerate(smeta_headers, start=1):
         ws_smeta.cell(row=1, column=col, value=h)
@@ -535,8 +534,7 @@ def generate_smeta_from_tz_project(
         ws_smeta.cell(row=row, column=11, value=vat if vat else None)
         ws_smeta.cell(row=row, column=12, value=total if total else None)
         ws_smeta.cell(row=row, column=13, value=item.get("price_list_name", "") or "")
-        ws_smeta.cell(row=row, column=14, value=item.get("sources", "") or "")
-        ws_smeta.cell(row=row, column=15, value=item.get("notes", ""))
+        ws_smeta.cell(row=row, column=14, value=item.get("notes", ""))
         _style_data_row(ws_smeta, row, len(smeta_headers))
 
     # Totals row
