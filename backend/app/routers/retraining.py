@@ -14,7 +14,7 @@ from app.database import get_db
 from app.services import retraining_service
 from app.utils.auth import get_admin_user
 
-router = APIRouter(prefix="/api/retraining", tags=["retraining"])
+router = APIRouter(prefix="/retraining", tags=["retraining"])
 
 
 # ── Схемы запросов / ответов ─────────────────────────────────────────────────
