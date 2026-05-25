@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
+import { useAuthStore } from '../stores/auth';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 import {
   getCatalog,
@@ -923,6 +925,8 @@ function ImportButton({ onDone }: ImportButtonProps) {
 // ---------------------------------------------------------------------------
 
 export default function PriceCatalog() {
+  const navigate = useNavigate();
+  const { isAdmin } = useAuthStore();
   const [tab, setTab] = useState<Tab>('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -1310,6 +1314,11 @@ export default function PriceCatalog() {
                       : 'Кеш материалов'}
             </button>
           ))}
+          {isAdmin && (
+            <button style={s.tab(false)} onClick={() => navigate('/retraining')}>
+              Дообучение
+            </button>
+          )}
         </div>
 
         {/* Table */}
