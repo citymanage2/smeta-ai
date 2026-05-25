@@ -15,6 +15,7 @@ EMBEDDING_DIMENSION = 768
 
 # Singleton с thread-safe reload
 _model = None
+_model_type: str = "fastembed"  # "fastembed" | "sentence_transformers"
 _model_lock = threading.Lock()
 _current_model_path: str = EMBEDDING_MODEL
 
@@ -56,7 +57,7 @@ def normalize_name(text: str) -> str:
 
 
 def _get_model():
-    global _model
+    global _model, _model_type
     if _model is not None:
         return _model
     with _model_lock:
@@ -65,6 +66,7 @@ def _get_model():
         try:
             from fastembed import TextEmbedding
             _model = TextEmbedding(_current_model_path)
+            _model_type = "fastembed"
             return _model
         except ImportError:
             raise EmbeddingUnavailableError("Библиотека fastembed не установлена")
@@ -72,14 +74,23 @@ def _get_model():
             raise EmbeddingUnavailableError(f"Не удалось загрузить модель: {e}") from e
 
 
-def reload_model(model_path: str) -> None:
-    """Перезагрузить модель после дообучения без рестарта сервера."""
-    global _model, _current_model_path
+def reload_model(model_path: str, model_type: str = "sentence_transformers") -> None:
+    """Перезагрузить модель после дообучения без рестарта сервера.
+
+    model_type: "sentence_transformers" — для дообученной модели из /tmp,
+                "fastembed" — для возврата на базовую ONNX-модель.
+    """
+    global _model, _current_model_path, _model_type
     with _model_lock:
         try:
-            from fastembed import TextEmbedding
-            _model = TextEmbedding(model_path)
+            if model_type == "sentence_transformers":
+                from sentence_transformers import SentenceTransformer
+                _model = SentenceTransformer(model_path)
+            else:
+                from fastembed import TextEmbedding
+                _model = TextEmbedding(model_path)
             _current_model_path = model_path
+            _model_type = model_type
         except Exception as e:
             raise EmbeddingUnavailableError(f"Не удалось перезагрузить модель: {e}") from e
 
@@ -115,10 +126,14 @@ def generate_embeddings_batch(
         prefix = "passage: " if input_type == "search_document" else "query: "
         prefixed = [prefix + normalize_name(t) for t in texts]
         model = _get_model()
-        embeddings = list(model.embed(prefixed))
-        return [e.tolist() for e in embeddings]
+        if _model_type == "sentence_transformers":
+            embeddings = model.encode(prefixed, normalize_embeddings=True, show_progress_bar=False)
+            return [e.tolist() for e in embeddings]
+        else:
+            embeddings = list(model.embed(prefixed))
+            return [e.tolist() for e in embeddings]
     except EmbeddingUnavailableError:
         raise
     except Exception as e:
-        logger.error("Ошибка FastEmbed: %s", e)
-        raise EmbeddingUnavailableError(f"Ошибка FastEmbed: {e}") from e
+        logger.error("Ошибка embedding: %s", e)
+        raise EmbeddingUnavailableError(f"Ошибка embedding: {e}") from e

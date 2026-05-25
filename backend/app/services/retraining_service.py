@@ -189,10 +189,44 @@ async def update_job_progress(
     await db.commit()
 
 
+# ── Перегенерация эмбеддингов прайса ────────────────────────────────────────
+
+async def regenerate_all_price_embeddings(db: AsyncSession) -> None:
+    """Перегенерирует эмбеддинги всех позиций прайса после смены модели."""
+    from app.models.price import PriceWork, PriceMaterial
+    from app.models.price_list import PriceList
+    from app.services.embedding_service import normalize_name, generate_embeddings_batch
+
+    for model_cls, pl_type in ((PriceWork, "works"), (PriceMaterial, "materials")):
+        rows_res = await db.execute(select(model_cls))
+        rows = rows_res.scalars().all()
+        if not rows:
+            continue
+
+        names = [normalize_name(r.name) for r in rows]
+        embeddings = generate_embeddings_batch(names, input_type="search_document")
+        for row, emb in zip(rows, embeddings):
+            row.embedding = emb
+
+        pl_res = await db.execute(
+            select(PriceList)
+            .where(PriceList.type == pl_type)
+            .order_by(PriceList.updated_at.desc())
+            .limit(1)
+        )
+        price_list = pl_res.scalar_one_or_none()
+        if price_list:
+            price_list.embedding_status = "ready"
+
+        await db.commit()
+
+    await price_service.load_cache(db)
+
+
 # ── Фоновое обучение (Фаза 4) ────────────────────────────────────────────────
 
 async def run_training_job(job_id: str, db: AsyncSession) -> None:
-    """Фоновая задача дообучения (реализуется в Фазе 4)."""
+    """Фоновая задача дообучения модели эмбеддингов."""
     result = await db.execute(
         select(TrainingJob).where(TrainingJob.id == uuid.UUID(job_id))
     )
@@ -204,7 +238,21 @@ async def run_training_job(job_id: str, db: AsyncSession) -> None:
     job.status = "running"
     job.started_at = datetime.now(timezone.utc)
     job.progress_message = "Подготовка данных..."
+    job.progress_pct = 5
     await db.commit()
+
+    # shared dict для передачи прогресса из sync-треда без async
+    shared: dict = {"pct": 5, "msg": "Подготовка данных..."}
+
+    async def _progress_updater() -> None:
+        try:
+            while True:
+                await asyncio.sleep(5)
+                job.progress_pct = shared["pct"]
+                job.progress_message = shared["msg"]
+                await db.commit()
+        except asyncio.CancelledError:
+            pass
 
     try:
         pairs_result = await db.execute(select(TrainingPair))
@@ -215,24 +263,43 @@ async def run_training_job(job_id: str, db: AsyncSession) -> None:
         if len(positives) < 10:
             raise ValueError(f"Слишком мало позитивных пар: {len(positives)} (нужно минимум 10)")
 
-        job.progress_message = f"Загружено {len(positives)} позитивных и {len(negatives)} негативных пар"
+        shared["msg"] = f"Загружено {len(positives)} позитивных, {len(negatives)} негативных пар"
+        shared["pct"] = 10
+        job.progress_message = shared["msg"]
         job.progress_pct = 10
         await db.commit()
 
         output_path = "/tmp/smeta-finetuned"
 
-        await asyncio.to_thread(
-            _train_model_sync,
-            positives, negatives, output_path,
-            job_id, db,
-        )
+        updater = asyncio.create_task(_progress_updater())
+        try:
+            await asyncio.to_thread(
+                _train_model_sync,
+                positives, negatives, output_path, shared,
+            )
+        finally:
+            updater.cancel()
+            try:
+                await updater
+            except asyncio.CancelledError:
+                pass
+
+        job.progress_pct = 90
+        job.progress_message = "Перезагрузка модели..."
+        await db.commit()
 
         from app.services.embedding_service import reload_model
-        reload_model(output_path)
+        reload_model(output_path, model_type="sentence_transformers")
+
+        job.progress_pct = 93
+        job.progress_message = "Перегенерация эмбеддингов прайса..."
+        await db.commit()
+
+        await regenerate_all_price_embeddings(db)
 
         job.status = "completed"
         job.progress_pct = 100
-        job.progress_message = "Обучение завершено. Модель загружена."
+        job.progress_message = "Обучение завершено. Модель и эмбеддинги обновлены."
         job.model_path = output_path
         job.finished_at = datetime.now(timezone.utc)
         await db.commit()
@@ -246,9 +313,79 @@ async def run_training_job(job_id: str, db: AsyncSession) -> None:
         await db.commit()
 
 
-def _train_model_sync(positives, negatives, output_path: str, job_id: str, db) -> None:
-    """Синхронная часть обучения (запускается в thread). Реализуется в Фазе 4."""
-    # Заглушка: Фаза 4 заполнит эту функцию полной логикой sentence-transformers
-    import time
-    logging.getLogger(__name__).info("Training placeholder — implement in Phase 4")
-    time.sleep(1)
+def _train_model_sync(positives: list, negatives: list, output_path: str, shared: dict) -> None:
+    """Синхронная часть дообучения (запускается в thread через asyncio.to_thread).
+
+    Обновляет shared["pct"]/shared["msg"] — async progress_updater читает их каждые 5 сек.
+    """
+    import random
+    from sentence_transformers import SentenceTransformer, InputExample, losses  # noqa: PLC0415
+    from torch.utils.data import DataLoader  # noqa: PLC0415
+
+    from app.services.embedding_service import EMBEDDING_MODEL
+
+    log = logging.getLogger(__name__)
+
+    shared["pct"] = 15
+    shared["msg"] = "Формирование обучающих пар..."
+
+    neg_pool = list(negatives)
+    examples: list = []
+
+    if neg_pool:
+        random.shuffle(neg_pool)
+        for i, pos in enumerate(positives):
+            neg = neg_pool[i % len(neg_pool)]
+            examples.append(InputExample(
+                texts=[pos.anchor_text, pos.candidate_text, neg.candidate_text]
+            ))
+    else:
+        # Нет негативных пар — обучаем на косинусном сходстве
+        for pos in positives:
+            examples.append(InputExample(
+                texts=[pos.anchor_text, pos.candidate_text],
+                label=1.0,
+            ))
+
+    if not examples:
+        raise ValueError("Нет обучающих примеров для дообучения")
+
+    num_epochs = 3
+    batch_size = min(16, len(examples))
+    warmup_steps = min(50, max(1, len(examples) // 4))
+
+    shared["pct"] = 20
+    shared["msg"] = f"Загрузка базовой модели ({len(examples)} примеров)..."
+    log.info("Loading base model for training, examples=%d", len(examples))
+
+    model = SentenceTransformer(EMBEDDING_MODEL)
+
+    shared["pct"] = 30
+    shared["msg"] = "Модель загружена. Начинаю дообучение..."
+
+    dataloader = DataLoader(examples, shuffle=True, batch_size=batch_size)
+    loss_fn = (
+        losses.TripletLoss(model=model) if neg_pool
+        else losses.CosineSimilarityLoss(model=model)
+    )
+
+    def _epoch_callback(score: float, epoch: int, steps: int) -> None:
+        pct = 30 + int((epoch / num_epochs) * 55)  # 30% → 85%
+        shared["pct"] = pct
+        shared["msg"] = f"Эпоха {epoch}/{num_epochs} завершена"
+        log.info("Training epoch %d/%d done", epoch, num_epochs)
+
+    model.fit(
+        train_objectives=[(dataloader, loss_fn)],
+        epochs=num_epochs,
+        warmup_steps=warmup_steps,
+        output_path=output_path,
+        show_progress_bar=False,
+        callback=_epoch_callback,
+    )
+    # Явное сохранение — страховка на случай если fit не записал
+    model.save(output_path)
+
+    shared["pct"] = 88
+    shared["msg"] = "Обучение завершено. Сохраняем модель..."
+    log.info("Training complete, model saved to %s", output_path)
