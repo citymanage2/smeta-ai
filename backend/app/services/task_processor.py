@@ -465,15 +465,28 @@ class TaskProcessor:
         return f"{safe}.xlsx"
 
     async def save_result(self, file_name: str, mime_type: str, file_data: bytes, slot: str = "result") -> None:
-        result_record = TaskResult(
-            task_id=self.task_id,
-            file_name=file_name,
-            mime_type=mime_type,
-            file_data=file_data,
-            size_bytes=len(file_data),
-            slot=slot,
+        existing = await self.db.execute(
+            select(TaskResult).where(
+                TaskResult.task_id == self.task_id,
+                TaskResult.slot == slot,
+            ).limit(1)
         )
-        self.db.add(result_record)
+        record = existing.scalar_one_or_none()
+        if record is not None:
+            record.file_name = file_name
+            record.mime_type = mime_type
+            record.file_data = file_data
+            record.size_bytes = len(file_data)
+        else:
+            record = TaskResult(
+                task_id=self.task_id,
+                file_name=file_name,
+                mime_type=mime_type,
+                file_data=file_data,
+                size_bytes=len(file_data),
+                slot=slot,
+            )
+            self.db.add(record)
         await self.db.commit()
 
     async def _create_initial_generic_version(self, file_data: bytes, task_type: str) -> None:
