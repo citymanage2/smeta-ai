@@ -852,6 +852,10 @@ class TaskProcessor:
             logger.info("Task was cancelled by user", task_id=self.task_id)
         except Exception as e:
             logger.error("Task processing failed", task_id=self.task_id, error=str(e))
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
             await self.update_status("failed", error=str(e))
             await self.update_progress(f"Ошибка: {str(e)[:400]}")
         finally:
@@ -1707,7 +1711,8 @@ class TaskProcessor:
                 if cache_work_info is not None and cache_work_info.get("price") is not None:
                     enriched["work_price"] = cache_work_info.get("price")
                     enriched["price_list_name"] = "Кеш"
-                    enriched["_cache_updated_at"] = cache_work_info.get("updated_at")
+                    _upd_at = cache_work_info.get("updated_at")
+                    enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
                     enriched["sources"] = cache_work_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
@@ -1720,7 +1725,8 @@ class TaskProcessor:
                 if cache_mat_info is not None:
                     enriched["material_price"] = cache_mat_info.get("price")
                     enriched["price_list_name"] = "Кеш"
-                    enriched["_cache_updated_at"] = cache_mat_info.get("updated_at")
+                    _upd_at = cache_mat_info.get("updated_at")
+                    enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
                     enriched["sources"] = cache_mat_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
@@ -1737,7 +1743,8 @@ class TaskProcessor:
                 if cache_work_info is not None and cache_work_info.get("price") is not None:
                     enriched["work_price"] = cache_work_info.get("price")
                     enriched["price_list_name"] = "Кеш"
-                    enriched["_cache_updated_at"] = cache_work_info.get("updated_at")
+                    _upd_at = cache_work_info.get("updated_at")
+                    enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
                     enriched["sources"] = cache_work_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
@@ -1752,7 +1759,8 @@ class TaskProcessor:
                 if cache_mat_price is not None:
                     enriched["material_price"] = cache_mat_price.get("price")
                     enriched["price_list_name"] = "Кеш"
-                    enriched["_cache_updated_at"] = cache_mat_price.get("updated_at")
+                    _upd_at = cache_mat_price.get("updated_at")
+                    enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
                     enriched["sources"] = cache_mat_price.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
