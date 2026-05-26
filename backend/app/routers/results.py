@@ -28,6 +28,7 @@ class ResultItem(BaseModel):
     file_id: int
     file_name: str
     mime_type: str
+    slot: str = "result"
 
 
 @router.get("/tasks/{task_id}/results", response_model=list[ResultItem])
@@ -51,13 +52,20 @@ async def list_task_results(
     )
     files = results.scalars().all()
 
+    has_estimate = any(f.slot == "estimate" for f in files)
+    visible = [
+        f for f in files
+        if f.slot != "result" or not has_estimate
+    ]
+
     return [
         ResultItem(
             file_id=f.id,
             file_name=f.file_name,
             mime_type=f.mime_type,
+            slot=f.slot,
         )
-        for f in files
+        for f in visible
     ]
 
 

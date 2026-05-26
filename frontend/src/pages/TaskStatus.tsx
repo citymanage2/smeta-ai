@@ -1167,9 +1167,20 @@ const TaskStatusPage: React.FC = () => {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '18px' }}>📊</span>
-                    <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
-                      {result.file_name}
-                    </span>
+                    <div>
+                      <span style={{ fontSize: '14px', color: '#1e293b', fontWeight: 500 }}>
+                        {result.file_name}
+                      </span>
+                      {result.slot === 'result' && (
+                        <span style={{ display: 'block', fontSize: '11px', color: '#64748b' }}>оригинал</span>
+                      )}
+                      {result.slot === 'estimate' && (
+                        <span style={{ display: 'block', fontSize: '11px', color: '#16a34a' }}>актуальная версия</span>
+                      )}
+                      {result.slot.startsWith('partial') && (
+                        <span style={{ display: 'block', fontSize: '11px', color: '#64748b' }}>частичный результат</span>
+                      )}
+                    </div>
                   </div>
                   <button
                     onClick={() => handleDownload(result.file_id, result.file_name)}
