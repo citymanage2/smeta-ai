@@ -234,9 +234,10 @@ async def call_claude(
                 cache_creation_tokens=cache_creation_t,
             )
 
-            if db is not None:
+            if db is not None and task_id is not None:
                 try:
                     from app.models.api_call_log import ApiCallLog
+                    from app.database import AsyncSessionLocal
                     cost = _calc_cost(CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t)
                     log_entry = ApiCallLog(
                         task_id=task_id,
@@ -247,8 +248,11 @@ async def call_claude(
                         cache_creation_tokens=cache_creation_t,
                         cost_usd=cost,
                     )
-                    db.add(log_entry)
-                    await db.flush()
+                    # Use an independent session to avoid concurrent use of the caller's session
+                    # (the caller may be using db concurrently for cancel checks)
+                    async with AsyncSessionLocal() as log_db:
+                        log_db.add(log_entry)
+                        await log_db.commit()
                 except Exception as log_err:
                     logger.warning("Failed to log API call", error=str(log_err))
 
