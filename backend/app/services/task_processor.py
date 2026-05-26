@@ -505,11 +505,22 @@ class TaskProcessor:
         self.db.add(version)
         await self.db.commit()
 
+    @staticmethod
+    def _json_safe(obj):
+        """Recursively convert non-JSON-serializable types (datetime, date, Decimal) to primitives."""
+        if isinstance(obj, dict):
+            return {k: TaskProcessor._json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [TaskProcessor._json_safe(v) for v in obj]
+        if hasattr(obj, "isoformat"):
+            return obj.isoformat()
+        return obj
+
     async def _save_progress_data(self, data: dict) -> None:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = result.scalar_one_or_none()
         if task:
-            task.progress_data = data
+            task.progress_data = TaskProcessor._json_safe(data)
             task.updated_at = datetime.now(timezone.utc)
             await self.db.commit()
 
@@ -1917,12 +1928,12 @@ class TaskProcessor:
         # остановить задачу и продолжить с этого чекпоинта.
         try:
             from app.database import AsyncSessionLocal as _ASL
-            _checkpoint = {
+            _checkpoint = TaskProcessor._json_safe({
                 "_stage": "pre_excel",
                 "items": items,
                 "matched": {str(k): v for k, v in matched_by_gidx.items()},
                 "claude_results": {str(k): v for k, v in claude_results.items()},
-            }
+            })
             async with _ASL() as _cp_db:
                 from sqlalchemy import update as _upd
                 await _cp_db.execute(
