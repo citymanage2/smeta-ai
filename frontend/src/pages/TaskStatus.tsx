@@ -806,6 +806,24 @@ const TaskStatusPage: React.FC = () => {
                       ))}
                     </div>
                   )}
+                  <div style={{ marginTop: '14px' }}>
+                    <button
+                      onClick={handleRestart}
+                      disabled={restarting}
+                      style={{
+                        padding: '8px 20px',
+                        backgroundColor: restarting ? '#e2e8f0' : '#2563eb',
+                        color: restarting ? '#94a3b8' : '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: restarting ? 'not-allowed' : 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {restarting ? 'Запуск...' : '↺ Перезапустить'}
+                    </button>
+                  </div>
                 </div>
               )}
 
