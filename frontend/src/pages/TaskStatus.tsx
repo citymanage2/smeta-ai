@@ -849,7 +849,48 @@ const TaskStatusPage: React.FC = () => {
                   )}
 
                   {/* Resume section for LIST_FROM_GRAND with saved progress */}
-                  {task.task_type === 'LIST_FROM_GRAND' && task.progress_data?.chunks_done != null ? (
+                  {task.task_type === 'ESTIMATE_FROM_LIST' && task.progress_data?._stage === 'pre_excel' ? (
+                    <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
+                      <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
+                        Данные от Claude сохранены. Задача зависла на этапе формирования Excel.
+                        Нажмите «Продолжить» — токены повторно тратиться не будут.
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={handleResume}
+                          disabled={resuming || restarting}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: resuming ? '#fca5a5' : '#dc2626',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: (resuming || restarting) ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {resuming ? 'Запуск...' : '▶ Продолжить'}
+                        </button>
+                        <button
+                          onClick={handleRestart}
+                          disabled={restarting || resuming}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: restarting ? '#e2e8f0' : '#ffffff',
+                            color: '#64748b',
+                            border: '1.5px solid #cbd5e1',
+                            borderRadius: '8px',
+                            cursor: (restarting || resuming) ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {restarting ? 'Запуск...' : '↺ Перезапустить с начала'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : task.task_type === 'LIST_FROM_GRAND' && task.progress_data?.chunks_done != null ? (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
                         Обработано {String(task.progress_data.chunks_done)} из {String(task.progress_data.total_chunks ?? '?')} частей.

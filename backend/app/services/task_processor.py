@@ -1516,8 +1516,24 @@ class TaskProcessor:
         Шаг 1: Поиск цен по прайсу (exact + embedding, без web search).
         Шаг 2: Claude для ненайденных позиций (чанки по границам «Работа»).
         Шаг 3: Сборка Excel сметы, расчёт итогов, сохранение task.cost.
+
+        Resume: если progress_data содержит _stage="pre_excel", шаги 0-2 пропускаются —
+        данные восстанавливаются из чекпоинта и выполняется только шаг 3.
         """
         from datetime import date as _date
+
+        # ── Resume: восстановление из чекпоинта ─────────────────────────────
+        _progress = task.progress_data or {}
+        if _progress.get("_stage") == "pre_excel":
+            await self.update_progress("Возобновление: данные Claude восстановлены из чекпоинта. Формирование Excel...")
+            _items_raw: list[dict] = _progress.get("items", [])
+            _matched_raw: dict = _progress.get("matched", {})
+            _claude_raw: dict = _progress.get("claude_results", {})
+            # JSON serializes int dict keys as strings — restore them
+            _matched_restored: dict[int, dict] = {int(k): v for k, v in _matched_raw.items()}
+            _claude_restored: dict[int, dict] = {int(k): v for k, v in _claude_raw.items()}
+            await self._run_estimate_step3(task, _items_raw, _matched_restored, _claude_restored)
+            return
 
         # ── Шаг 0: Получаем items ───────────────────────────────────────────
         items: list[dict] = []
@@ -1882,6 +1898,38 @@ class TaskProcessor:
                         names=[unmatched_by_gidx[gidx].get("name") for gidx in sorted(still_null)],
                     )
 
+        # ── Чекпоинт: сохранить данные перед генерацией Excel ──────────────
+        # Используем независимую сессию — основная сессия может быть в нестабильном состоянии
+        # после долгих Claude-вызовов.  При зависании на шаге 3 пользователь может
+        # остановить задачу и продолжить с этого чекпоинта.
+        try:
+            from app.database import AsyncSessionLocal as _ASL
+            _checkpoint = {
+                "_stage": "pre_excel",
+                "items": items,
+                "matched": {str(k): v for k, v in matched_by_gidx.items()},
+                "claude_results": {str(k): v for k, v in claude_results.items()},
+            }
+            async with _ASL() as _cp_db:
+                from sqlalchemy import update as _upd
+                await _cp_db.execute(
+                    _upd(Task).where(Task.id == self.task_id).values(progress_data=_checkpoint)
+                )
+                await _cp_db.commit()
+            logger.info("Checkpoint saved before Excel generation", task_id=self.task_id)
+        except Exception as _cp_err:
+            logger.warning("Failed to save pre_excel checkpoint", task_id=self.task_id, error=str(_cp_err))
+
+        await self._run_estimate_step3(task, items, matched_by_gidx, claude_results)
+
+    async def _run_estimate_step3(
+        self,
+        task: Task,
+        items: list[dict],
+        matched_by_gidx: dict,
+        claude_results: dict,
+    ) -> None:
+        """Шаг 3: сборка итогового Excel из уже полученных данных."""
         # ── Шаг 3: Сборка итогового результата в исходном порядке ───────────
 
         def _fmt_cache_date(updated_at) -> str:
@@ -1967,7 +2015,7 @@ class TaskProcessor:
             task_id=self.task_id,
             items=len(final_items),
             matched=len(matched_by_gidx),
-            unmatched=len(unmatched_by_gidx),
+            claude_priced=len(claude_results),
             grand_total=grand_total,
         )
 

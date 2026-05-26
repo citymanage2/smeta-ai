@@ -646,7 +646,7 @@ async def resume_task(
             detail=f"Возобновление невозможно: задача в статусе «{task.status}»",
         )
 
-    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"}
+    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS", "ESTIMATE_FROM_LIST"}
     if task.task_type.upper() not in RESUMABLE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -654,7 +654,8 @@ async def resume_task(
         )
 
     progress_data = task.progress_data or {}
-    if "chunks_done" not in progress_data:
+    has_checkpoint = "chunks_done" in progress_data or progress_data.get("_stage") == "pre_excel"
+    if not has_checkpoint:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Нет сохранённого прогресса для возобновления",
