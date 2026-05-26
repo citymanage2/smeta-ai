@@ -351,14 +351,19 @@ PROMPT_ENRICH_NORMS = """Ты — опытный инженер-сметчик �
 
 
 def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
-    """Split items into chunks, always starting a new chunk at a 'Работа' boundary."""
+    """Split items into chunks at 'Работа' boundaries when possible, or by hard size limit."""
     if not items:
         return []
     chunks = []
     current_chunk: list = []
     for item in items:
         is_work = item.get("type", "").strip() == "Работа"
+        # Split at Работа boundary when chunk is large enough
         if is_work and current_chunk and len(current_chunk) >= max_chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = []
+        # Hard limit: split even mid-block if chunk doubled the target size
+        elif len(current_chunk) >= max_chunk_size * 2:
             chunks.append(current_chunk)
             current_chunk = []
         current_chunk.append(item)
