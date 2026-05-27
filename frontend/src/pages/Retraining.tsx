@@ -530,6 +530,52 @@ const RetrainingPage: React.FC = () => {
               </div>
             </div>
 
+            {/* No candidates fallback */}
+            {!currentItem.candidates[0] && !showAlts && (
+              <>
+                <div style={{ padding: '14px 16px', backgroundColor: '#fef9c3', border: '1px solid #fde047', borderRadius: '8px', marginBottom: '20px', fontSize: '14px', color: '#854d0e' }}>
+                  Совпадений в прайсе не найдено
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    onClick={handleSkip}
+                    disabled={savingPair}
+                    title="Это раздел или заголовок — не учитывать в обучении"
+                    style={{
+                      padding: '12px 14px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      backgroundColor: '#f3f0ff',
+                      color: '#7c3aed',
+                      border: '1.5px solid #c4b5fd',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🏷 Раздел
+                  </button>
+                  <button
+                    onClick={handleSkip}
+                    disabled={savingPair}
+                    style={{
+                      flex: 1,
+                      padding: '12px 14px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      backgroundColor: '#f1f5f9',
+                      color: '#64748b',
+                      border: '1.5px solid #e2e8f0',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    → Пропустить
+                  </button>
+                </div>
+              </>
+            )}
+
             {/* Top-1 candidate (always shown) */}
             {currentItem.candidates[0] && !showAlts && (
               <>
