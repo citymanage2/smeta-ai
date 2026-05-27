@@ -39,10 +39,11 @@ export function KanbanBoard({ projectId }: Props) {
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval>
+    let intervalId: ReturnType<typeof setInterval> | undefined
     let controller = new AbortController()
 
     const startPolling = () => {
+      if (intervalId !== undefined) clearInterval(intervalId)
       controller = new AbortController()
       fetchCards(projectId)
       intervalId = setInterval(() => {
@@ -57,6 +58,7 @@ export function KanbanBoard({ projectId }: Props) {
     const handleVisibility = () => {
       if (document.hidden) {
         clearInterval(intervalId)
+        intervalId = undefined
       } else {
         startPolling()
       }

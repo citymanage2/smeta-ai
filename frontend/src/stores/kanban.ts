@@ -24,6 +24,7 @@ interface KanbanStore {
   movingCardId: string | null
   submittingCardIds: Set<string>
   pendingListTasks: Record<string, PendingListTask>
+  currentProjectId: string | null
 
   fetchCards: (projectId: string, signal?: AbortSignal) => Promise<void>
   createCard: (projectId: string, name: string, stage?: string) => Promise<WorkflowCard>
@@ -70,11 +71,15 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
   movingCardId: null,
   submittingCardIds: new Set(),
   pendingListTasks: {},
+  currentProjectId: null,
 
   fetchCards: async (projectId, _signal) => {
     if (get().movingCardId !== null) return
+    set({ currentProjectId: projectId })
     try {
       const cards = await getWorkflowCards(projectId)
+      // Игнорируем ответ, если пользователь уже перешёл на другой проект
+      if (get().currentProjectId !== projectId) return
       set({ cards })
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'CanceledError') return
@@ -138,7 +143,7 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
     })
   },
 
-  clearCards: () => set({ cards: [], movingCardId: null }),
+  clearCards: () => set({ cards: [], movingCardId: null, currentProjectId: null }),
 
   setPendingListTask: (cardId, info) => {
     set((s) => ({ pendingListTasks: { ...s.pendingListTasks, [cardId]: info } }))
