@@ -9,6 +9,7 @@ import { TaskType, ProjectCard, TASK_TYPE_LABELS, ClientFileType, ClientFileMeta
 import { createTask, getEstimateSources, EstimateSource } from '../api/tasks';
 import { listProjects } from '../api/projects';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel } from '../components/ui/Select';
+import { useNotificationStore } from '../stores/notificationStore';
 
 const CLIENT_FILE_TYPES: ClientFileType[] = ['Смета', 'Проект', 'ТЗ', 'Другое'];
 
@@ -19,6 +20,7 @@ interface ClientFileEntry {
 
 const TaskCreate: React.FC = () => {
   const navigate = useNavigate();
+  const addTask = useNotificationStore((state) => state.addTask);
   const [searchParams] = useSearchParams();
   const [taskType, setTaskType] = useState<TaskType>('LIST_FROM_GRAND');
   const [files, setFiles] = useState<File[]>([]);
@@ -247,6 +249,16 @@ const TaskCreate: React.FC = () => {
         setError('Задача создана, но ID не получен. Попробуйте обновить страницу.');
         return;
       }
+
+      // Регистрируем задачу для отслеживания уведомлений
+      const resolvedProjectName =
+        projectMode === 'existing'
+          ? (projects.find((p) => p.id === selectedProjectId)?.name ?? '')
+          : projectMode === 'new'
+          ? newProjectName.trim()
+          : '';
+      addTask(task.task_id, { projectName: resolvedProjectName, taskName: name.trim() });
+
       if (isEstimateOpt) {
         navigate(`/tasks/${task.task_id}/estimate`);
       } else {

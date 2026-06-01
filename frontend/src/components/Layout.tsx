@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import { useAuthStore } from '../stores/auth';
+import { useGlobalTaskPoller } from '../hooks/useGlobalTaskPoller';
 import ProjectsSidebar from './ProjectsSidebar';
 
 interface LayoutProps {
@@ -10,6 +12,7 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
+  useGlobalTaskPoller();
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     const stored = localStorage.getItem('sidebarOpen');
@@ -150,6 +153,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         </div>
       </div>
 
+      <Toaster position="bottom-right" richColors />
     </div>
   );
 };

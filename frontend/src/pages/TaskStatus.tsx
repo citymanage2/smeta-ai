@@ -28,6 +28,7 @@ import {
   listProjects,
 } from '../api/projects';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
+import { useNotificationStore } from '../stores/notificationStore';
 
 const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -51,6 +52,7 @@ function formatDate(iso: string): string {
 const TaskStatusPage: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
+  const addTask = useNotificationStore((state) => state.addTask);
 
   const [task, setTask] = useState<TaskStatusResponse | null>(null);
   const [results, setResults] = useState<TaskResult[]>([]);
@@ -287,6 +289,25 @@ const TaskStatusPage: React.FC = () => {
     }
   }, [task, estimateItems.length, needsItemReload]);
 
+  // Ref для чтения последнего task в cleanup без добавления task в deps —
+  // иначе cleanup вызывается при каждом poll (каждые 3 сек) пока пользователь на странице
+  const taskRef = useRef(task);
+  useEffect(() => { taskRef.current = task; }, [task]);
+
+  // Когда пользователь уходит со страницы и задача ещё активна —
+  // регистрируем её в notificationStore, чтобы глобальный поллер продолжил отслеживание
+  useEffect(() => {
+    return () => {
+      const t = taskRef.current;
+      if (!taskId || !t) return;
+      if (t.status === 'pending' || t.status === 'processing') {
+        addTask(taskId, {
+          projectName: '',
+          taskName: t.name ?? taskId,
+        });
+      }
+    };
+  }, [taskId, addTask]);
 
   const handleSendMessage = async () => {
     if (!taskId || !message.trim()) return;
