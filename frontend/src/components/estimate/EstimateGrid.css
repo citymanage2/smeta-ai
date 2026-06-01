@@ -725,3 +725,9 @@
   font-family: monospace;
   color: #15803d;
 }
+
+.rdg-cell.cell-name-wrap {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
+}

@@ -77,6 +77,19 @@ const GridContext = createContext<GridContextValue>({
 // Helpers
 // ---------------------------------------------------------------------------
 
+const CHAR_W = 8;
+const CELL_PAD = 24;
+
+function calcColWidth(values: (number | null | undefined)[], minPx: number): number {
+  let maxLen = 0;
+  for (const v of values) {
+    if (v == null) continue;
+    const len = Math.round(Math.abs(v)).toLocaleString('ru-RU').length;
+    if (len > maxLen) maxLen = len;
+  }
+  return Math.max(minPx, maxLen * CHAR_W + CELL_PAD);
+}
+
 const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
 const fmtRub = (n: number) => Math.round(n).toLocaleString('ru-RU');
 
@@ -350,6 +363,7 @@ const BASE_COLUMNS: Column<EstimateRow>[] = [
     key: 'name',
     name: 'Наименование',
     width: 575,
+    cellClass: 'cell-name-wrap',
     renderCell: NameCell,
     renderEditCell: ConfirmTextEditor,
     editable: (row) => row.type !== 'section',
@@ -364,68 +378,11 @@ const BASE_COLUMNS: Column<EstimateRow>[] = [
   {
     key: 'qty',
     name: 'Кол-во',
-    width: 120,
+    width: 84,
     renderEditCell: NumberEditor,
     renderCell: QtyCell,
     editable: (row) => row.type !== 'section',
   },
-];
-
-const WORK_PRICE_COL: Column<EstimateRow> = {
-  key: 'price_work',
-  name: 'Цена работы, руб',
-  width: 70,
-  renderEditCell: NumberEditor,
-  renderCell: NumericCell,
-  editable: (row) => row.type !== 'section',
-};
-
-const MATERIAL_PRICE_COL: Column<EstimateRow> = {
-  key: 'price_material',
-  name: 'Цена материала, руб',
-  width: 78,
-  renderEditCell: NumberEditor,
-  renderCell: NumericCell,
-  editable: (row) => row.type !== 'section',
-};
-
-const COST_COL: Column<EstimateRow> = {
-  key: 'cost',
-  name: 'Стоимость, руб',
-  width: 70,
-  renderCell: CostCell,
-};
-
-const COMMENT_COL: Column<EstimateRow> = {
-  key: 'optimization_note',
-  name: 'Комментарий',
-  width: 260,
-  renderCell: CommentCell,
-};
-
-const ALL_COLUMNS: Column<EstimateRow>[] = [
-  SelectColumn,
-  ...BASE_COLUMNS,
-  WORK_PRICE_COL,
-  MATERIAL_PRICE_COL,
-  COST_COL,
-  COMMENT_COL,
-];
-
-const WORKS_COLUMNS: Column<EstimateRow>[] = [
-  SelectColumn,
-  ...BASE_COLUMNS,
-  WORK_PRICE_COL,
-  COST_COL,
-  COMMENT_COL,
-];
-
-const MATERIALS_COLUMNS: Column<EstimateRow>[] = [
-  SelectColumn,
-  ...BASE_COLUMNS,
-  MATERIAL_PRICE_COL,
-  COST_COL,
-  COMMENT_COL,
 ];
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -473,6 +430,63 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   // Ref для актуального rows (QtyCell читает через контекст)
   const rowsRef = useRef<EstimateRow[]>(rows);
   rowsRef.current = rows;
+
+  // ---------------------------------------------------------------------------
+  // Dynamic column widths
+  // ---------------------------------------------------------------------------
+
+  const dynamicColWidths = useMemo(() => {
+    const priceWork = calcColWidth(rows.map(r => r.price_work), 110);
+    const priceMat  = calcColWidth(rows.map(r => r.price_material), 120);
+    const cost      = calcColWidth(rows.map(r => r.type !== 'section' ? calcCost(r) : null), 100);
+
+    const BASE_PW = 70, BASE_PM = 78, BASE_COST = 70;
+    const base   = activeTab === 'works'     ? BASE_PW + BASE_COST
+                 : activeTab === 'materials' ? BASE_PM + BASE_COST
+                 : BASE_PW + BASE_PM + BASE_COST;
+    const actual = activeTab === 'works'     ? priceWork + cost
+                 : activeTab === 'materials' ? priceMat + cost
+                 : priceWork + priceMat + cost;
+    const delta = actual - base;
+
+    const comment = Math.max(100, Math.min(260, 260 - delta));
+
+    const workPriceCol: Column<EstimateRow> = {
+      key: 'price_work',
+      name: 'Цена работы, руб',
+      width: priceWork,
+      renderEditCell: NumberEditor,
+      renderCell: NumericCell,
+      editable: (row) => row.type !== 'section',
+    };
+    const matPriceCol: Column<EstimateRow> = {
+      key: 'price_material',
+      name: 'Цена материала, руб',
+      width: priceMat,
+      renderEditCell: NumberEditor,
+      renderCell: NumericCell,
+      editable: (row) => row.type !== 'section',
+    };
+    const costCol: Column<EstimateRow> = {
+      key: 'cost',
+      name: 'Стоимость, руб',
+      width: cost,
+      renderCell: CostCell,
+    };
+    const commentCol: Column<EstimateRow> = {
+      key: 'optimization_note',
+      name: 'Комментарий',
+      width: comment,
+      renderCell: CommentCell,
+    };
+
+    return {
+      priceWork, priceMat, cost: cost, comment,
+      allCols: [SelectColumn, ...BASE_COLUMNS, workPriceCol, matPriceCol, costCol, commentCol],
+      worksCols: [SelectColumn, ...BASE_COLUMNS, workPriceCol, costCol, commentCol],
+      matCols: [SelectColumn, ...BASE_COLUMNS, matPriceCol, costCol, commentCol],
+    };
+  }, [rows, activeTab]);
 
   // Ref для отображаемых строк (MoveCell использует для порядка при фильтрации)
   const displayedRowsRef = useRef<EstimateRow[]>([]);
@@ -868,17 +882,17 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
   const columns = useMemo(() => {
     const base =
       activeTab === 'works'
-        ? WORKS_COLUMNS
+        ? dynamicColWidths.worksCols
         : activeTab === 'materials'
-          ? MATERIALS_COLUMNS
-          : ALL_COLUMNS;
+          ? dynamicColWidths.matCols
+          : dynamicColWidths.allCols;
 
     if (isReadonly) {
       return base.map((c) => ({ ...c, editable: false, renderEditCell: undefined }));
     }
     // Insert DRAG_COL after SelectColumn (index 0)
     return [base[0], DRAG_COL, ...base.slice(1)];
-  }, [activeTab, isReadonly]);
+  }, [activeTab, isReadonly, dynamicColWidths]);
 
   // ---------------------------------------------------------------------------
   // Row class
@@ -1150,6 +1164,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
             onSelectedRowsChange={onSelectedRowIdsChange}
             rowClass={rowClass}
             renderers={{ renderRow }}
+            rowHeight={(row) => row.type === 'section' ? 35 : 44}
             style={{ blockSize: 'auto', minHeight: 300, maxHeight: 600 }}
             enableVirtualization
           />
