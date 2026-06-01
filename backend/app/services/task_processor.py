@@ -21,6 +21,7 @@ from app.utils.pdf_text_extractor import chunk_project_pdf
 from app.utils.pdf_ocr_extractor import extract_pdf_with_ocr, chunk_pdf_pages, extract_single_page, get_pdf_page_count
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
+from app.utils.unit_normalizer import normalize_items
 from app.services import price_service as _price_svc
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -955,6 +956,7 @@ class TaskProcessor:
                     # Пользователь нажал «Стоп» — сохраняем накопленное если есть
                     if accumulated_items:
                         partial_count += 1
+                        accumulated_items = normalize_items(accumulated_items)
                         partial_excel = generate_list(accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
@@ -1006,6 +1008,7 @@ class TaskProcessor:
                     # Ошибка Claude — сохраняем частичный Excel
                     if accumulated_items:
                         partial_count += 1
+                        accumulated_items = normalize_items(accumulated_items)
                         partial_excel = generate_list(accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
@@ -1035,6 +1038,7 @@ class TaskProcessor:
         if not accumulated_items:
             raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое файла.")
 
+        accumulated_items = normalize_items(accumulated_items)
         await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
         excel_data = generate_list(accumulated_items)
         await self.save_result(
@@ -1125,6 +1129,7 @@ class TaskProcessor:
                 except TaskCancelledError:
                     if accumulated_items:
                         partial_count += 1
+                        accumulated_items = normalize_items(accumulated_items)
                         partial_excel = generate_list(accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
@@ -1174,6 +1179,7 @@ class TaskProcessor:
                 except Exception as chunk_error:
                     if accumulated_items:
                         partial_count += 1
+                        accumulated_items = normalize_items(accumulated_items)
                         partial_excel = generate_list(accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
@@ -1203,6 +1209,7 @@ class TaskProcessor:
         if not accumulated_items:
             raise ValueError("Не удалось извлечь позиции из PDF. Проверьте качество скана.")
 
+        accumulated_items = normalize_items(accumulated_items)
         await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
         excel_data = generate_list(accumulated_items)
         await self.save_result(
@@ -1283,6 +1290,7 @@ class TaskProcessor:
 
         changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
 
+        all_items = normalize_items(all_items)
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = generate_list(all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
@@ -1449,6 +1457,7 @@ class TaskProcessor:
         else:
             await self.update_progress(f"Найдено {len(items)} позиций. Формирование Excel...")
 
+        items = normalize_items(items)
         await self._save_progress_data({"items": items})
 
         excel_data = generate_list(items)
@@ -1531,6 +1540,7 @@ class TaskProcessor:
 
         changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
 
+        all_items = normalize_items(all_items)
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = generate_list(all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_по_проекту.xlsx"), _XLSX_MIME, excel_data)
