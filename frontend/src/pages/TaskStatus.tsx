@@ -29,6 +29,7 @@ import {
 } from '../api/projects';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 import { useNotificationStore } from '../stores/notificationStore';
+import { notify } from '../utils/notify';
 
 const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string }> = {
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -53,6 +54,7 @@ const TaskStatusPage: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
   const addTask = useNotificationStore((state) => state.addTask);
+  const removeTask = useNotificationStore((state) => state.removeTask);
 
   const [task, setTask] = useState<TaskStatusResponse | null>(null);
   const [results, setResults] = useState<TaskResult[]>([]);
@@ -204,12 +206,24 @@ const TaskStatusPage: React.FC = () => {
         const res = await getTaskResults(taskId);
         setResults(res);
         stopTimers();
+        const tracked = useNotificationStore.getState().trackedTasks.get(taskId);
+        if (tracked) {
+          notify('success', { taskId, projectName: tracked.projectName, taskName: tracked.taskName }, navigate);
+          removeTask(taskId);
+        }
         if (data.task_type === 'ESTIMATE_OPTIMIZATION') {
           navigate(`/tasks/${taskId}/estimate`);
           return;
         }
       } else if (data.status === 'failed' || data.status === 'cancelled') {
         stopTimers();
+        const tracked = useNotificationStore.getState().trackedTasks.get(taskId);
+        if (tracked) {
+          if (data.status === 'failed') {
+            notify('error', { taskId, projectName: tracked.projectName, taskName: tracked.taskName, errorText: data.error_message ?? undefined }, navigate);
+          }
+          removeTask(taskId);
+        }
         if (data.task_type === 'LIST_FROM_GRAND') {
           try { const res = await getTaskResults(taskId); setResults(res); } catch { /* нет результатов */ }
         }
