@@ -353,8 +353,43 @@ def _xml_to_text(element: ET.Element, indent: int = 0) -> str:
     return "\n".join(parts)
 
 
+# Claude Vision API отклоняет изображения, у которых любая сторона > 8000 px.
+# Берём с запасом для крупных сканов.
+_MAX_IMAGE_DIMENSION = 7500
+
+
+def _downscale_if_needed(data: bytes, mime_type: str) -> tuple[bytes, str]:
+    """Уменьшает изображение, если любая сторона превышает _MAX_IMAGE_DIMENSION px.
+
+    Возвращает (bytes, mime_type). При любой ошибке/неподдерживаемом формате —
+    отдаёт исходные данные без изменений.
+    """
+    if mime_type not in ("image/jpeg", "image/png"):
+        return data, mime_type
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        with Image.open(BytesIO(data)) as img:
+            if max(img.size) <= _MAX_IMAGE_DIMENSION:
+                return data, mime_type
+            scale = _MAX_IMAGE_DIMENSION / max(img.size)
+            new_size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+            resized = img.resize(new_size, Image.LANCZOS)
+            buf = BytesIO()
+            if mime_type == "image/png":
+                resized.save(buf, format="PNG")
+            else:
+                resized.convert("RGB").save(buf, format="JPEG", quality=90)
+            return buf.getvalue(), mime_type
+    except Exception:
+        return data, mime_type
+
+
 def file_to_base64(data: bytes, mime_type: str) -> dict:
     """Return a base64-encoded content block suitable for Claude Vision."""
+    data, mime_type = _downscale_if_needed(data, mime_type)
     encoded = base64.b64encode(data).decode("utf-8")
     return {
         "type": "image",
