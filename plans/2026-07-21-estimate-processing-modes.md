@@ -50,8 +50,8 @@
 | 1 | `progress_data` перезаписывается чекпоинтом — режим там хранить нельзя | Отдельная колонка `Task.processing_mode` (String(10), default `fast`) + миграция 029 | ✅ done |
 | 2 | fast: `_call_claude_chunk` мутирует общий `claude_results` из нескольких корутин | Каждый чанк пишет по своим `id` (без пересечения ключей); asyncio однопоточный — гонок на dict между await нет. Проверить пост-мерджем | pending |
 | 3 | fast: параллельные чанки могут выбить TPM/RPM | `asyncio.Semaphore(concurrency)`, дефолт 4, вынести в config; ретрай 429 уже есть | pending |
-| 4 | batch: web_search в batch | Поддерживается (все фичи Messages API); custom_id = индекс чанка; результаты в произвольном порядке → ключевать по custom_id | pending |
-| 5 | batch: стоимость логируется по полным тарифам sonnet | Отдельный расчёт с ×0.5 в `ApiCallLog` для batch-вызовов | pending |
+| 4 | batch: web_search в batch | `build_batch_request` переиспользует `_build_message_params` (web_search + кэш); `collect_claude_batch` ключует по custom_id | ✅ done (сервис); использование — Phase 4 |
+| 5 | batch: стоимость логируется по полным тарифам sonnet | `_calc_cost(batch=True)` ×0.5 + `_log_api_call(batch=True)` | ✅ done |
 | 6 | batch: `_recover_stuck_tasks` фейлит все `processing` при рестарте | Исключить задачи со «зависшим» batch (по `progress_data._stage == "batch_pending"`) | pending |
 | 7 | batch: шаг 3 (сборка Excel) сейчас вызывается сразу после шага 2 в одной корутине | Рефактор границы шаг2/шаг3 на re-entrant: batch-режим сохраняет состояние и выходит; поллер восстанавливает и вызывает `_run_estimate_step3` | pending |
 | 8 | batch: отмена задачи должна отменять batch | В `_check_cancelled`/обработчике отмены вызывать `client.messages.batches.cancel(batch_id)` | pending |
@@ -75,7 +75,7 @@
 - **Impact:** таблица `tasks` — аддитивно, обратно совместимо.
 
 ### Phase 2: Batch-инфраструктура в claude_service
-- **Status:** pending
+- **Status:** ✅ completed (2026-07-21)
 - **Files:** `backend/app/services/claude_service.py`
 - **Changes:**
   - `async def submit_claude_batch(requests) -> batch_id` — обёртка `client.messages.batches.create(...)`; каждый `Request` с `custom_id`, `params=MessageCreateParamsNonStreaming(...)` (та же модель/tools/web_search/prompt-caching, что в `call_claude`).
@@ -165,9 +165,10 @@
 |------|------|-----------|
 | 2026-07-21 | — | План создан |
 | 2026-07-21 | Phase 1 | `Task.processing_mode` VARCHAR(10) default `fast` + миграция 029 (IF NOT EXISTS); 3 теста зелёные; регрессия чистая (baseline 132→135 passed). Ветка `feature/estimate-processing-modes`, коммит 9d73489 |
+| 2026-07-21 | Phase 2 | `claude_service`: build/submit/poll/collect/cancel batch + `_calc_cost(batch=True)`; рефактор общих хелперов (`_build_message_params`/`_extract_result_text`/`_extract_usage`/`_log_api_call`), `call_claude` неизменен; 6 тестов; регрессия 135→141 passed. Коммит 4c82fa2 |
 
 ---
 
 ## Итоговый блок
-**Реализовано:** Phase 1 (БД: поле `processing_mode` + миграция 029).
-**Осталось:** Phase 2-7. Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
+**Реализовано:** Phase 1 (БД: поле `processing_mode` + миграция 029), Phase 2 (batch-инфраструктура в `claude_service`).
+**Осталось:** Phase 3-7. Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
