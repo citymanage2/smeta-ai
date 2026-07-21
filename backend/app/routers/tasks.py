@@ -186,6 +186,17 @@ async def _run_task_in_background(task_id: str) -> None:
     logger.error("Background task failed", task_id=task_id, error=str(last_exc))
 
 
+def _resolve_processing_mode(task_type: str, processing_mode: Optional[str]) -> str:
+    """Нормализовать режим обработки. 'batch' допустим только для ESTIMATE_FROM_LIST;
+    неизвестные значения → 'fast'."""
+    mode = (processing_mode or "fast").lower()
+    if mode not in ("fast", "batch"):
+        mode = "fast"
+    if mode == "batch" and task_type != "ESTIMATE_FROM_LIST":
+        mode = "fast"
+    return mode
+
+
 @router.post("", response_model=TaskCreateResponse)
 async def create_task(
     request: Request,
@@ -197,6 +208,7 @@ async def create_task(
     project_name: Optional[str] = Form(None),
     source_task_id: Optional[str] = Form(None),
     source_stage: Optional[int] = Form(None),
+    processing_mode: Optional[str] = Form("fast"),
     files: list[UploadFile] = File(default=[]),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -262,6 +274,9 @@ async def create_task(
     # Set estimation_status based on task type
     estimation_status = "unestimated" if task_type in ESTIMATE_TASK_TYPES else "not_applicable"
 
+    # Режим обработки: batch — только для ESTIMATE_FROM_LIST, иначе fast.
+    resolved_mode = _resolve_processing_mode(task_type, processing_mode)
+
     # For Path B: store source reference in user_prompt as JSON
     resolved_prompt: Optional[str]
     if is_path_b:
@@ -284,6 +299,7 @@ async def create_task(
         user_prompt=resolved_prompt,
         chat_history=[],
         estimation_status=estimation_status,
+        processing_mode=resolved_mode,
         name=name.strip() if name and name.strip() else None,
     )
     db.add(task)
