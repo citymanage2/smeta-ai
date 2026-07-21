@@ -47,7 +47,7 @@
 
 | # | Проблема | Решение | Статус |
 |---|---------|----------|--------|
-| 1 | `progress_data` перезаписывается чекпоинтом — режим там хранить нельзя | Отдельная колонка `Task.processing_mode` (String(10), default `fast`) + миграция 029 | pending |
+| 1 | `progress_data` перезаписывается чекпоинтом — режим там хранить нельзя | Отдельная колонка `Task.processing_mode` (String(10), default `fast`) + миграция 029 | ✅ done |
 | 2 | fast: `_call_claude_chunk` мутирует общий `claude_results` из нескольких корутин | Каждый чанк пишет по своим `id` (без пересечения ключей); asyncio однопоточный — гонок на dict между await нет. Проверить пост-мерджем | pending |
 | 3 | fast: параллельные чанки могут выбить TPM/RPM | `asyncio.Semaphore(concurrency)`, дефолт 4, вынести в config; ретрай 429 уже есть | pending |
 | 4 | batch: web_search в batch | Поддерживается (все фичи Messages API); custom_id = индекс чанка; результаты в произвольном порядке → ключевать по custom_id | pending |
@@ -61,7 +61,7 @@
 ## Phases
 
 ### Phase 1: БД — поле `processing_mode` + миграция 029
-- **Status:** pending
+- **Status:** ✅ completed (2026-07-21)
 - **Files:** `backend/app/models/task.py`, `backend/alembic/versions/029_add_processing_mode_to_tasks.py`
 - **Changes:**
   - В `Task` добавить: `processing_mode: Mapped[str] = mapped_column(String(10), default="fast", server_default="fast", nullable=False)` (по образцу `estimation_status`, [task.py:45-49](../backend/app/models/task.py#L45-L49)).
@@ -164,9 +164,10 @@
 | Дата | Фаза | Изменения |
 |------|------|-----------|
 | 2026-07-21 | — | План создан |
+| 2026-07-21 | Phase 1 | `Task.processing_mode` VARCHAR(10) default `fast` + миграция 029 (IF NOT EXISTS); 3 теста зелёные; регрессия чистая (baseline 132→135 passed). Ветка `feature/estimate-processing-modes`, коммит 9d73489 |
 
 ---
 
 ## Итоговый блок
-**Реализовано:** нет (стадия планирования).
-**Осталось:** все 7 фаз. Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
+**Реализовано:** Phase 1 (БД: поле `processing_mode` + миграция 029).
+**Осталось:** Phase 2-7. Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
