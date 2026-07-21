@@ -87,7 +87,7 @@
 - **Impact:** новый код рядом с `call_claude`; существующий путь не трогаем.
 
 ### Phase 3: Fast-режим — параллелизация всех чанк-циклов
-- **Status:** pending
+- **Status:** 🟡 частично (2026-07-21) — сделаны 3 цикла ESTIMATE_FROM_LIST; LIST_FROM_*/fix_empty_prices отложены (см. отклонение ниже)
 - **Files:** `backend/app/services/task_processor.py`
 - **Changes:**
   - Хелпер `_gather_chunks(coros, concurrency)` с `asyncio.Semaphore`; concurrency из config (дефолт 4).
@@ -166,6 +166,7 @@
 | 2026-07-21 | — | План создан |
 | 2026-07-21 | Phase 1 | `Task.processing_mode` VARCHAR(10) default `fast` + миграция 029 (IF NOT EXISTS); 3 теста зелёные; регрессия чистая (baseline 132→135 passed). Ветка `feature/estimate-processing-modes`, коммит 9d73489 |
 | 2026-07-21 | Phase 2 | `claude_service`: build/submit/poll/collect/cancel batch + `_calc_cost(batch=True)`; рефактор общих хелперов (`_build_message_params`/`_extract_result_text`/`_extract_usage`/`_log_api_call`), `call_claude` неизменен; 6 тестов; регрессия 135→141 passed. Коммит 4c82fa2 |
+| 2026-07-21 | Phase 3a | Примитив `_run_chunks_parallel` (db-free воркеры + cancel-watcher); `_fetch_chunk`/`_apply_chunk_items`; 3 цикла ESTIMATE_FROM_LIST → `_process_chunks` (concurrency по `processing_mode`). 5 тестов; регрессия 141→146. **Отклонение:** LIST_FROM_*/fix_empty_prices не тронуты. Коммит 08d2b2f |
 
 ---
 
