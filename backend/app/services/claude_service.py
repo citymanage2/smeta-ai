@@ -31,7 +31,14 @@ _COST_PER_TOKEN: dict[str, dict[str, float]] = {
 }
 
 
-def _calc_cost(model: str, input_t: int, output_t: int, cache_read_t: int, cache_creation_t: int) -> Decimal:
+def _calc_cost(
+    model: str,
+    input_t: int,
+    output_t: int,
+    cache_read_t: int,
+    cache_creation_t: int,
+    batch: bool = False,
+) -> Decimal:
     rates = _COST_PER_TOKEN.get(model, _COST_PER_TOKEN["default"])
     total = (
         input_t * rates["input"]
@@ -39,7 +46,70 @@ def _calc_cost(model: str, input_t: int, output_t: int, cache_read_t: int, cache
         + cache_read_t * rates["cache_read"]
         + cache_creation_t * rates["cache_creation"]
     )
+    # Batch API — 50% скидка на все токены.
+    if batch:
+        total *= 0.5
     return Decimal(str(round(total, 6)))
+
+
+def _extract_result_text(content) -> str:
+    """Извлечь итоговый текст из content-блоков ответа.
+
+    При web_search Claude выдаёт несколько text-блоков (рассуждения + финальный
+    JSON). Предпочитаем ПОСЛЕДНИЙ блок с '{'; иначе склеиваем все.
+    """
+    text_parts = [
+        block.text
+        for block in content
+        if hasattr(block, "text") and isinstance(block.text, str)
+    ]
+    for part in reversed(text_parts):
+        if "{" in part:
+            return part
+    return "".join(text_parts)
+
+
+def _extract_usage(usage) -> tuple[int, int, int, int]:
+    """(input, output, cache_read, cache_creation) из usage-объекта ответа."""
+    return (
+        getattr(usage, "input_tokens", 0) or 0,
+        getattr(usage, "output_tokens", 0) or 0,
+        getattr(usage, "cache_read_input_tokens", 0) or 0,
+        getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    )
+
+
+async def _log_api_call(
+    task_id: Optional[str],
+    db: Optional[AsyncSession],
+    input_t: int,
+    output_t: int,
+    cache_read_t: int,
+    cache_creation_t: int,
+    batch: bool = False,
+) -> None:
+    """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5."""
+    if db is None or task_id is None:
+        return
+    try:
+        from app.models.api_call_log import ApiCallLog
+        from app.database import AsyncSessionLocal
+        cost = _calc_cost(CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t, batch=batch)
+        log_entry = ApiCallLog(
+            task_id=task_id,
+            model=CLAUDE_MODEL,
+            input_tokens=input_t,
+            output_tokens=output_t,
+            cache_read_tokens=cache_read_t,
+            cache_creation_tokens=cache_creation_t,
+            cost_usd=cost,
+        )
+        # Независимая сессия — caller может параллельно использовать свою db (cancel-checks).
+        async with AsyncSessionLocal() as log_db:
+            log_db.add(log_entry)
+            await log_db.commit()
+    except Exception as log_err:
+        logger.warning("Failed to log API call", error=str(log_err))
 
 # Seconds to wait after a 429 when the API does not send a retry-after header.
 DEFAULT_RATE_LIMIT_DELAY = 60
@@ -103,6 +173,34 @@ def _build_messages(
     return result
 
 
+def _build_message_params(
+    messages: list[dict],
+    system_prompt: str = "",
+    use_web_search: bool = False,
+    image_data: Optional[list[dict]] = None,
+    max_tokens: int = 32000,
+) -> dict[str, Any]:
+    """Собрать params для Messages API (модель, tokens, temperature, messages,
+    закэшированный system, web_search tool). Общий код для call_claude и batch."""
+    params: dict[str, Any] = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "temperature": 0.1,
+        "messages": _build_messages(messages, image_data),
+    }
+    if system_prompt:
+        params["system"] = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    if use_web_search:
+        params["tools"] = [WEB_SEARCH_TOOL]
+    return params
+
+
 async def call_claude(
     messages: list[dict],
     system_prompt: str = "",
@@ -125,25 +223,13 @@ async def call_claude(
     on_rate_limit_wait — optional callback(wait_seconds) invoked just before each
         rate-limit sleep so callers can react (e.g. extend a batch deadline).
     """
-    tools = [WEB_SEARCH_TOOL] if use_web_search else []
-    built_messages = _build_messages(messages, image_data)
-
-    kwargs: dict[str, Any] = {
-        "model": CLAUDE_MODEL,
-        "max_tokens": max_tokens,
-        "temperature": 0.1,
-        "messages": built_messages,
-    }
-    if system_prompt:
-        kwargs["system"] = [
-            {
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-    if tools:
-        kwargs["tools"] = tools
+    kwargs = _build_message_params(
+        messages,
+        system_prompt=system_prompt,
+        use_web_search=use_web_search,
+        image_data=image_data,
+        max_tokens=max_tokens,
+    )
 
     # Retryable error delays for connection / 5xx errors (NOT used for rate limits).
     delays = [2, 8, 30, 60]
@@ -201,30 +287,10 @@ async def call_claude(
                     "Ответ слишком большой, разбейте выполнение на подэтапы"
                 )
 
-            # Extract all text blocks; skip tool_use / tool_result blocks.
-            # When web_search is used, Claude produces multiple text blocks
-            # (intermediate reasoning + final JSON). Joining them all makes
-            # JSON parsing fail because the intermediate blocks may contain
-            # prose or partial JSON. We prefer the LAST text block that
-            # contains "{" (the final structured answer); fall back to
-            # joining all blocks only if no single block has a "{".
-            text_parts = [
-                block.text
-                for block in response.content
-                if hasattr(block, "text") and isinstance(block.text, str)
-            ]
-            # Find last block that looks like it contains JSON
-            json_candidate = None
-            for part in reversed(text_parts):
-                if "{" in part:
-                    json_candidate = part
-                    break
-            result = json_candidate if json_candidate is not None else "".join(text_parts)
+            # Extract the final text (prefer last block containing JSON).
+            result = _extract_result_text(response.content)
 
-            input_t = getattr(response.usage, "input_tokens", 0) or 0
-            output_t = getattr(response.usage, "output_tokens", 0) or 0
-            cache_read_t = getattr(response.usage, "cache_read_input_tokens", 0) or 0
-            cache_creation_t = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+            input_t, output_t, cache_read_t, cache_creation_t = _extract_usage(response.usage)
 
             logger.info(
                 "Claude API call successful",
@@ -234,27 +300,7 @@ async def call_claude(
                 cache_creation_tokens=cache_creation_t,
             )
 
-            if db is not None and task_id is not None:
-                try:
-                    from app.models.api_call_log import ApiCallLog
-                    from app.database import AsyncSessionLocal
-                    cost = _calc_cost(CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t)
-                    log_entry = ApiCallLog(
-                        task_id=task_id,
-                        model=CLAUDE_MODEL,
-                        input_tokens=input_t,
-                        output_tokens=output_t,
-                        cache_read_tokens=cache_read_t,
-                        cache_creation_tokens=cache_creation_t,
-                        cost_usd=cost,
-                    )
-                    # Use an independent session to avoid concurrent use of the caller's session
-                    # (the caller may be using db concurrently for cancel checks)
-                    async with AsyncSessionLocal() as log_db:
-                        log_db.add(log_entry)
-                        await log_db.commit()
-                except Exception as log_err:
-                    logger.warning("Failed to log API call", error=str(log_err))
+            await _log_api_call(task_id, db, input_t, output_t, cache_read_t, cache_creation_t)
 
             return result
 
@@ -349,6 +395,99 @@ async def call_claude(
         last_error=str(last_error) or repr(last_error),
     )
     raise last_error or RuntimeError("Claude API call failed after all retries")
+
+
+# ---------------------------------------------------------------------------
+# Batch API — асинхронная пакетная обработка (Anthropic Message Batches).
+# −50% стоимости, устойчивость к рестартам (batch считается на серверах Anthropic).
+# ---------------------------------------------------------------------------
+
+
+def build_batch_request(
+    custom_id: str,
+    messages: list[dict],
+    system_prompt: str = "",
+    use_web_search: bool = False,
+    image_data: Optional[list[dict]] = None,
+    max_tokens: int = 32000,
+) -> dict:
+    """Собрать один Request для batch с тем же составом params, что call_claude."""
+    from anthropic.types.messages.batch_create_params import Request
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+
+    params = _build_message_params(
+        messages,
+        system_prompt=system_prompt,
+        use_web_search=use_web_search,
+        image_data=image_data,
+        max_tokens=max_tokens,
+    )
+    return Request(custom_id=custom_id, params=MessageCreateParamsNonStreaming(**params))
+
+
+async def submit_claude_batch(requests: list[dict]) -> str:
+    """Отправить пачку запросов. Возвращает batch_id (msgbatch_...)."""
+    batch = await _client.messages.batches.create(requests=requests)
+    logger.info("Claude batch submitted", batch_id=batch.id, count=len(requests))
+    return batch.id
+
+
+async def poll_claude_batch(batch_id: str) -> str:
+    """Вернуть processing_status пачки ('in_progress' | 'ended' | ...)."""
+    batch = await _client.messages.batches.retrieve(batch_id)
+    return batch.processing_status
+
+
+async def collect_claude_batch(
+    batch_id: str,
+    task_id: Optional[str] = None,
+    db: Optional[AsyncSession] = None,
+) -> dict[str, dict]:
+    """Собрать результаты пачки в {custom_id: {text, error, usage}}.
+
+    Порядок результатов произвольный — ключуем строго по custom_id.
+    Успешные вызовы логируются в ApiCallLog по уполовиненным (batch) тарифам.
+    """
+    import inspect
+
+    out: dict[str, dict] = {}
+    stream = _client.messages.batches.results(batch_id)
+    if inspect.isawaitable(stream):
+        stream = await stream
+
+    async for entry in stream:
+        cid = entry.custom_id
+        rtype = entry.result.type
+        if rtype == "succeeded":
+            msg = entry.result.message
+            text = _extract_result_text(msg.content)
+            input_t, output_t, cache_read_t, cache_creation_t = _extract_usage(msg.usage)
+            out[cid] = {
+                "text": text,
+                "error": None,
+                "usage": {
+                    "input": input_t,
+                    "output": output_t,
+                    "cache_read": cache_read_t,
+                    "cache_creation": cache_creation_t,
+                },
+            }
+            await _log_api_call(
+                task_id, db, input_t, output_t, cache_read_t, cache_creation_t, batch=True
+            )
+        else:
+            # errored | canceled | expired
+            out[cid] = {"text": None, "error": rtype, "usage": None}
+            logger.warning("Claude batch entry not succeeded", custom_id=cid, type=rtype)
+
+    logger.info("Claude batch collected", batch_id=batch_id, count=len(out))
+    return out
+
+
+async def cancel_claude_batch(batch_id: str) -> None:
+    """Отменить пачку (при отмене задачи)."""
+    await _client.messages.batches.cancel(batch_id)
+    logger.info("Claude batch cancelled", batch_id=batch_id)
 
 
 class ClaudeService:
