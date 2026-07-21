@@ -52,9 +52,9 @@
 | 3 | fast: параллельные чанки могут выбить TPM/RPM | `asyncio.Semaphore(concurrency)`, дефолт 4, вынести в config; ретрай 429 уже есть | pending |
 | 4 | batch: web_search в batch | `build_batch_request` переиспользует `_build_message_params` (web_search + кэш); `collect_claude_batch` ключует по custom_id | ✅ done (сервис); использование — Phase 4 |
 | 5 | batch: стоимость логируется по полным тарифам sonnet | `_calc_cost(batch=True)` ×0.5 + `_log_api_call(batch=True)` | ✅ done |
-| 6 | batch: `_recover_stuck_tasks` фейлит все `processing` при рестарте | Исключить задачи со «зависшим» batch (по `progress_data._stage == "batch_pending"`) | pending |
+| 6 | batch: `_recover_stuck_tasks` фейлит все `processing` при рестарте | `_recover_stuck_tasks` исключает `batch_pending` (`IS DISTINCT FROM`) | ✅ done |
 | 7 | batch: шаг 3 (сборка Excel) сейчас вызывается сразу после шага 2 в одной корутине | Переиспользован существующий `pre_excel` resume: `resume_from_batch` собирает результаты → pre_excel-чекпоинт → `_run_estimate_step3` | ✅ done |
-| 8 | batch: отмена задачи должна отменять batch | В `_check_cancelled`/обработчике отмены вызывать `client.messages.batches.cancel(batch_id)` | pending |
+| 8 | batch: отмена задачи должна отменять batch | Поллер: при `status=='cancelled'` → `cancel_claude_batch` + `_stage=batch_cancelled` | ✅ done |
 
 ---
 
@@ -116,7 +116,7 @@
 - **Impact:** граница шаг2/шаг3 — риск для существующего fast/sequential пути; покрыть тестом, что fast по-прежнему идёт end-to-end в одной корутине.
 
 ### Phase 5: Периодический batch-поллер
-- **Status:** pending
+- **Status:** ✅ completed (2026-07-21)
 - **Files:** `backend/app/main.py`, (возм.) новый `backend/app/services/batch_poller.py`
 - **Changes:**
   - Фоновая корутина, стартующая в lifespan `main.py` (рядом с текущими startup-хуками): каждые N сек (config, дефолт 60) выбирает задачи с `progress_data._stage == "batch_pending"`, для каждой `poll_claude_batch`; при `ended` → `collect_claude_batch` → `TaskProcessor(...).resume_from_batch(...)` → завершение.
@@ -169,9 +169,10 @@
 | 2026-07-21 | Phase 3a | Примитив `_run_chunks_parallel` (db-free воркеры + cancel-watcher); `_fetch_chunk`/`_apply_chunk_items`; 3 цикла ESTIMATE_FROM_LIST → `_process_chunks` (concurrency по `processing_mode`). 5 тестов; регрессия 141→146. Коммит 08d2b2f |
 | 2026-07-21 | Phase 3b | `fix_empty_prices` → `_fetch_batch` + `_run_chunks_parallel`. Согласовано: LIST_FROM_* остаются последовательными. Регрессия 146 passed. Коммит 403fd66 |
 | 2026-07-21 | Phase 4 | `_submit_estimate_batch` + `resume_from_batch` (через pre_excel resume) + диспетчеризация; общий `_cache_priced_item`. MVP без inline retry/null. 2 теста; регрессия 146→148. Коммит 6a0f850 |
+| 2026-07-21 | Phase 5 | `batch_poller.py` (poll/resume/cancel) + job в scheduler (60s); `_recover_stuck_tasks` исключает batch_pending. 5 тестов; регрессия 148→153. Backend batch end-to-end. Коммит 88c40eb |
 
 ---
 
 ## Итоговый блок
-**Реализовано:** Phase 1 (БД), Phase 2 (batch-инфраструктура), Phase 3 (fast-режим), Phase 4 (batch submit/resume в процессоре).
-**Осталось:** Phase 5 (поллер — дочитывание batch в рантайме + отмена + исключение из `_recover_stuck_tasks`), Phase 6 (роутер), Phase 7 (фронтенд). Примечания: LIST_FROM_* последовательны (согласовано); batch MVP без inline retry/null (возможен Phase 4b). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
+**Реализовано:** Phase 1-5 — backend полностью (БД, batch-инфраструктура, fast-режим, batch submit/resume, поллер). Batch работает end-to-end на бэкенде.
+**Осталось:** Phase 6 (роутер — приём `processing_mode`), Phase 7 (фронтенд — toggle). Примечания: LIST_FROM_* последовательны (согласовано); batch MVP без inline retry/null (возможен Phase 4b). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
