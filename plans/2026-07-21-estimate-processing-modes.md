@@ -128,7 +128,7 @@
 - **Impact:** новый долгоживущий фоновый компонент; проверить, что он не гоняет БД вхолостую и корректно останавливается при shutdown.
 
 ### Phase 6: Роутер — приём `processing_mode`
-- **Status:** pending
+- **Status:** ✅ completed (2026-07-22)
 - **Files:** `backend/app/routers/tasks.py`
 - **Changes:**
   - В `create_task` ([tasks.py:189-344](../backend/app/routers/tasks.py#L189-L344)) добавить `processing_mode: str = Form("fast")`; валидация `in {"fast","batch"}`; передать в конструктор `Task(...)` ([tasks.py:277-288](../backend/app/routers/tasks.py#L277-L288)).
@@ -170,6 +170,7 @@
 | 2026-07-21 | Phase 3b | `fix_empty_prices` → `_fetch_batch` + `_run_chunks_parallel`. Согласовано: LIST_FROM_* остаются последовательными. Регрессия 146 passed. Коммит 403fd66 |
 | 2026-07-21 | Phase 4 | `_submit_estimate_batch` + `resume_from_batch` (через pre_excel resume) + диспетчеризация; общий `_cache_priced_item`. MVP без inline retry/null. 2 теста; регрессия 146→148. Коммит 6a0f850 |
 | 2026-07-21 | Phase 5 | `batch_poller.py` (poll/resume/cancel) + job в scheduler (60s); `_recover_stuck_tasks` исключает batch_pending. 5 тестов; регрессия 148→153. Backend batch end-to-end. Коммит 88c40eb |
+| 2026-07-22 | Phase 6 | `create_task`: Form `processing_mode` + `_resolve_processing_mode` (batch только для ESTIMATE_FROM_LIST); передача в `Task`. 5 тестов; регрессия 153→158. Коммит 0e2e49e |
 
 ---
 
