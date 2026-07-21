@@ -11,7 +11,12 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.models.task_input_file import TaskInputFile
 from app.models.estimate_version import EstimateVersion
-from app.services.claude_service import call_claude
+from app.services.claude_service import (
+    call_claude,
+    build_batch_request,
+    submit_claude_batch,
+    collect_claude_batch,
+)
 from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES
@@ -896,6 +901,122 @@ class TaskProcessor:
             if isinstance(r, BaseException):
                 raise r
         return results
+
+    async def _cache_priced_item(self, result_item: dict) -> None:
+        """Сохранить цену позиции в кеш (self.db), если она валидна. Ошибки поглощает."""
+        _item_type_str = result_item.get("type", "")
+        _item_name = result_item.get("name", "")
+        _item_unit = result_item.get("unit")
+        _item_sources = result_item.get("sources")
+        try:
+            if _item_type_str == "Работа":
+                _item_price = result_item.get("work_price")
+                if _item_price is not None and float(_item_price) > 0:
+                    await _price_svc.save_to_cache(
+                        self.db, "work", _item_name, _item_unit, float(_item_price), _item_sources
+                    )
+                    logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
+            elif _item_type_str == "Материал":
+                _item_price = result_item.get("material_price")
+                if _item_price is not None and float(_item_price) > 0:
+                    await _price_svc.save_to_cache(
+                        self.db, "material", _item_name, _item_unit, float(_item_price), _item_sources
+                    )
+                    logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
+        except Exception as _cache_err:
+            logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
+
+    async def _submit_estimate_batch(
+        self,
+        task: Task,
+        items: list[dict],
+        matched_by_gidx: dict,
+        unmatched_by_gidx: dict,
+        current_date: str,
+        chunks: list[list[dict]],
+    ) -> None:
+        """Batch-режим: отправить чанки ненайденных позиций в Message Batches API,
+        сохранить состояние (_stage=batch_pending) и выйти. Смету достроит поллер
+        (Phase 5) через resume_from_batch после завершения пачки.
+        """
+        requests = []
+        for i, chunk in enumerate(chunks):
+            unmatched_json = json.dumps(
+                [{"id": it["_id"], "type": it["type"], "name": it["name"],
+                  "unit": it["unit"], "quantity": it.get("quantity")}
+                 for it in chunk],
+                ensure_ascii=False, indent=2,
+            )
+            prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
+                current_date=current_date,
+                unmatched_items_json=unmatched_json,
+            )
+            requests.append(
+                build_batch_request(
+                    custom_id=f"chunk-{i}",
+                    messages=[{"role": "user", "content": prompt_text}],
+                    system_prompt=SYSTEM_BASE,
+                    use_web_search=True,
+                )
+            )
+
+        batch_id = await submit_claude_batch(requests)
+        await self._save_progress_data({
+            "_stage": "batch_pending",
+            "batch_id": batch_id,
+            "items": items,
+            "matched": {str(k): v for k, v in matched_by_gidx.items()},
+            "unmatched": {str(k): v for k, v in unmatched_by_gidx.items()},
+            "current_date": current_date,
+        })
+        await self.update_progress(
+            f"Отправлено в пакетную обработку (Batch API): {len(chunks)} чанк(ов). "
+            f"Ожидание результатов (обычно до часа)..."
+        )
+        logger.info(
+            "Estimate batch submitted",
+            task_id=self.task_id, batch_id=batch_id, chunks=len(chunks),
+        )
+
+    async def resume_from_batch(self, task: Task) -> None:
+        """Вызывается поллером (Phase 5), когда пачка завершена: собрать результаты,
+        наполнить claude_results, сохранить pre_excel-чекпоинт и запустить step3.
+
+        MVP: одна проходка (без inline retry/null — их даёт fast-режим). Позиции,
+        которые Claude пропустил/оценил null, остаются без цены (step3 это допускает).
+        Идемпотентно: повторный вызов после рестарта повторно собирает ту же пачку.
+        """
+        _p = task.progress_data or {}
+        batch_id = _p.get("batch_id")
+        items: list[dict] = _p.get("items", [])
+        matched = {int(k): v for k, v in _p.get("matched", {}).items()}
+
+        await self.update_progress("Batch завершён. Сбор результатов и формирование сметы...")
+
+        claude_results: dict[int, dict] = {}
+        results_by_cid = await collect_claude_batch(batch_id, task_id=self.task_id, db=self.db)
+        for _cid, entry in results_by_cid.items():
+            if entry.get("error") or not entry.get("text"):
+                continue
+            try:
+                data = self._parse_json_response(entry["text"])
+            except ValueError:
+                logger.warning("Batch chunk JSON parse failed, skipping", task_id=self.task_id, custom_id=_cid)
+                continue
+            for result_item in data.get("items", []):
+                item_id = result_item.get("id")
+                if item_id is not None:
+                    claude_results[int(item_id)] = result_item
+                    await self._cache_priced_item(result_item)
+
+        # pre_excel-чекпоинт (тот же формат, что и fast-путь) — устойчивость к рестарту на step3.
+        await self._save_progress_data({
+            "_stage": "pre_excel",
+            "items": items,
+            "matched": {str(k): v for k, v in matched.items()},
+            "claude_results": {str(k): v for k, v in claude_results.items()},
+        })
+        await self._run_estimate_step3(task, items, matched, claude_results)
 
     async def process(self) -> None:
         """Main processing method."""
@@ -1925,28 +2046,7 @@ class TaskProcessor:
                 item_id = result_item.get("id")
                 if item_id is not None:
                     claude_results[int(item_id)] = result_item
-                    # Сохраняем в кеш только позиции с реальной ценой
-                    _item_type_str = result_item.get("type", "")
-                    _item_name = result_item.get("name", "")
-                    _item_unit = result_item.get("unit")
-                    _item_sources = result_item.get("sources")
-                    try:
-                        if _item_type_str == "Работа":
-                            _item_price = result_item.get("work_price")
-                            if _item_price is not None and float(_item_price) > 0:
-                                await _price_svc.save_to_cache(
-                                    self.db, "work", _item_name, _item_unit, float(_item_price), _item_sources
-                                )
-                                logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
-                        elif _item_type_str == "Материал":
-                            _item_price = result_item.get("material_price")
-                            if _item_price is not None and float(_item_price) > 0:
-                                await _price_svc.save_to_cache(
-                                    self.db, "material", _item_name, _item_unit, float(_item_price), _item_sources
-                                )
-                                logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
-                    except Exception as _cache_err:
-                        logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
+                    await self._cache_priced_item(result_item)
 
         async def _process_chunks(chunk_list: list[list[dict]], label_prefix: str, concurrency: int) -> None:
             """fast → параллельно (Semaphore) с общим cancel-watcher; иначе последовательно.
@@ -1966,12 +2066,19 @@ class TaskProcessor:
             chunks = _chunk_by_work_boundaries(unmatched_list, max_chunk_size=10)
             total_chunks = len(chunks)
 
+            mode = getattr(task, "processing_mode", "fast")
+            if mode == "batch":
+                # Долгий режим: отправить пачку и выйти; смету достроит поллер (Phase 5).
+                await self._submit_estimate_batch(
+                    task, items, matched_by_gidx, unmatched_by_gidx, current_date, chunks
+                )
+                return
+
             await self.update_progress(
                 f"Прайс: {n_matched} позиций найдено, {n_unmatched} — нет. "
                 f"Отправляем {total_chunks} чанк(а) в Claude..."
             )
 
-            mode = getattr(task, "processing_mode", "fast")
             concurrency = FAST_CHUNK_CONCURRENCY if mode == "fast" else 1
             await self._check_cancelled()
             await _process_chunks(chunks, label_prefix="", concurrency=concurrency)
