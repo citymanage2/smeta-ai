@@ -53,7 +53,7 @@
 | 4 | batch: web_search в batch | `build_batch_request` переиспользует `_build_message_params` (web_search + кэш); `collect_claude_batch` ключует по custom_id | ✅ done (сервис); использование — Phase 4 |
 | 5 | batch: стоимость логируется по полным тарифам sonnet | `_calc_cost(batch=True)` ×0.5 + `_log_api_call(batch=True)` | ✅ done |
 | 6 | batch: `_recover_stuck_tasks` фейлит все `processing` при рестарте | Исключить задачи со «зависшим» batch (по `progress_data._stage == "batch_pending"`) | pending |
-| 7 | batch: шаг 3 (сборка Excel) сейчас вызывается сразу после шага 2 в одной корутине | Рефактор границы шаг2/шаг3 на re-entrant: batch-режим сохраняет состояние и выходит; поллер восстанавливает и вызывает `_run_estimate_step3` | pending |
+| 7 | batch: шаг 3 (сборка Excel) сейчас вызывается сразу после шага 2 в одной корутине | Переиспользован существующий `pre_excel` resume: `resume_from_batch` собирает результаты → pre_excel-чекпоинт → `_run_estimate_step3` | ✅ done |
 | 8 | batch: отмена задачи должна отменять batch | В `_check_cancelled`/обработчике отмены вызывать `client.messages.batches.cancel(batch_id)` | pending |
 
 ---
@@ -105,7 +105,7 @@
 - **Impact:** затрагивает несколько шагов и другие типы задач (`LIST_FROM_*`, `fix_empty_prices`) — **обязательна регрессия по всем типам** (Stage 7).
 
 ### Phase 4: Batch-режим — submit + сохранение состояния (re-entrant граница шаг2/шаг3)
-- **Status:** pending
+- **Status:** ✅ completed (2026-07-21) — переиспользован существующий `pre_excel` resume; MVP без inline retry/null
 - **Files:** `backend/app/services/task_processor.py`
 - **Changes:**
   - Рефактор: выделить «подготовку чанков» и «сборку step3» так, чтобы step3 вызывался независимо, из состояния.
@@ -168,9 +168,10 @@
 | 2026-07-21 | Phase 2 | `claude_service`: build/submit/poll/collect/cancel batch + `_calc_cost(batch=True)`; рефактор общих хелперов (`_build_message_params`/`_extract_result_text`/`_extract_usage`/`_log_api_call`), `call_claude` неизменен; 6 тестов; регрессия 135→141 passed. Коммит 4c82fa2 |
 | 2026-07-21 | Phase 3a | Примитив `_run_chunks_parallel` (db-free воркеры + cancel-watcher); `_fetch_chunk`/`_apply_chunk_items`; 3 цикла ESTIMATE_FROM_LIST → `_process_chunks` (concurrency по `processing_mode`). 5 тестов; регрессия 141→146. Коммит 08d2b2f |
 | 2026-07-21 | Phase 3b | `fix_empty_prices` → `_fetch_batch` + `_run_chunks_parallel`. Согласовано: LIST_FROM_* остаются последовательными. Регрессия 146 passed. Коммит 403fd66 |
+| 2026-07-21 | Phase 4 | `_submit_estimate_batch` + `resume_from_batch` (через pre_excel resume) + диспетчеризация; общий `_cache_priced_item`. MVP без inline retry/null. 2 теста; регрессия 146→148. Коммит 6a0f850 |
 
 ---
 
 ## Итоговый блок
-**Реализовано:** Phase 1 (БД), Phase 2 (batch-инфраструктура), Phase 3 (fast-режим: ESTIMATE_FROM_LIST + fix_empty_prices).
-**Осталось:** Phase 4-7. Примечание: LIST_FROM_* сознательно оставлены последовательными (согласовано). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
+**Реализовано:** Phase 1 (БД), Phase 2 (batch-инфраструктура), Phase 3 (fast-режим), Phase 4 (batch submit/resume в процессоре).
+**Осталось:** Phase 5 (поллер — дочитывание batch в рантайме + отмена + исключение из `_recover_stuck_tasks`), Phase 6 (роутер), Phase 7 (фронтенд). Примечания: LIST_FROM_* последовательны (согласовано); batch MVP без inline retry/null (возможен Phase 4b). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
