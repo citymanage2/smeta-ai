@@ -2371,10 +2371,9 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
     fixed_count = 0
 
     batches = [empty_indices[i:i + 5] for i in range(0, len(empty_indices), 5)]
-    for batch_num, batch in enumerate(batches, 1):
-        await self.update_progress(
-            f"Исправление пустых цен: батч {batch_num}/{len(batches)}..."
-        )
+
+    async def _fetch_batch(batch: list[int], label: str) -> list[dict]:
+        """DB-free: отправить батч пустых цен в Claude, вернуть result-items ([] при ошибке)."""
         batch_items = [
             {
                 "id": idx,
@@ -2392,39 +2391,44 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         )
         messages = [{"role": "user", "content": prompt_text}]
         try:
-            data = await self._interruptible_claude_json_with_retry(
+            data = await self._call_claude_json_with_retry(
                 messages,
                 system_prompt=SYSTEM_BASE,
                 use_web_search=True,
                 processing_timeout=1200.0,
             )
-        except TaskCancelledError:
+        except (TaskCancelledError, asyncio.TimeoutError):
             raise
         except Exception as e:
             logger.warning(
                 "fix_empty_prices batch failed, skipping",
                 task_id=self.task_id,
-                batch=batch_num,
+                batch=label,
                 error=str(e),
             )
-            continue
+            return []
+        return data.get("items", [])
 
-        returned_ids = [r.get("id") for r in data.get("items", [])]
-        logger.info(
-            "fix_empty_prices batch result",
-            task_id=self.task_id,
-            batch=batch_num,
-            expected_ids=batch,
-            returned_ids=returned_ids,
-            items_count=len(data.get("items", [])),
-        )
-        for result_item in data.get("items", []):
+    mode = getattr(task, "processing_mode", "fast")
+    concurrency = FAST_CHUNK_CONCURRENCY if mode == "fast" else 1
+    await self.update_progress(f"Исправление пустых цен: {len(batches)} батч(ей)...")
+    await self._check_cancelled()
+    workers = [
+        (lambda b=b, k=k: _fetch_batch(b, f"{k + 1}/{len(batches)}"))
+        for k, b in enumerate(batches)
+    ]
+    all_results = await self._run_chunks_parallel(workers, concurrency=concurrency)
+
+    # Применяем результаты последовательно (мутация items / fixed_count).
+    empty_set = set(empty_indices)
+    for result_items in all_results:
+        for result_item in result_items:
             raw_id = result_item.get("id")
             try:
                 orig_idx = int(raw_id)
             except (TypeError, ValueError):
                 continue
-            if orig_idx not in batch:
+            if orig_idx not in empty_set:
                 continue
             orig = items[orig_idx]
             wp = result_item.get("work_price")
