@@ -1,6 +1,6 @@
 # План: Режимы обработки ESTIMATE_FROM_LIST — «быстро» (asyncio.gather) и «долго» (Batch API)
 
-**Статус:** planning
+**Статус:** ✅ completed (2026-07-22)
 **Дата:** 2026-07-21
 **Тип задачи затронут:** `ESTIMATE_FROM_LIST` (и общие чанк-циклы `LIST_FROM_*`, `fix_empty_prices` в fast-режиме)
 
@@ -139,7 +139,7 @@
 - **Impact:** контракт API (multipart) — аддитивно.
 
 ### Phase 7: Фронтенд — переключатель fast/batch
-- **Status:** pending
+- **Status:** ✅ completed (2026-07-22)
 - **Files:** `frontend/src/pages/TaskCreate.tsx`, `frontend/src/types/index.ts`
 - **Changes:**
   - `const [processingMode, setProcessingMode] = useState<'fast'|'batch'>('fast')` (рядом с [TaskCreate.tsx:49-54](../frontend/src/pages/TaskCreate.tsx#L49-L54)).
@@ -171,9 +171,17 @@
 | 2026-07-21 | Phase 4 | `_submit_estimate_batch` + `resume_from_batch` (через pre_excel resume) + диспетчеризация; общий `_cache_priced_item`. MVP без inline retry/null. 2 теста; регрессия 146→148. Коммит 6a0f850 |
 | 2026-07-21 | Phase 5 | `batch_poller.py` (poll/resume/cancel) + job в scheduler (60s); `_recover_stuck_tasks` исключает batch_pending. 5 тестов; регрессия 148→153. Backend batch end-to-end. Коммит 88c40eb |
 | 2026-07-22 | Phase 6 | `create_task`: Form `processing_mode` + `_resolve_processing_mode` (batch только для ESTIMATE_FROM_LIST); передача в `Task`. 5 тестов; регрессия 153→158. Коммит 0e2e49e |
+| 2026-07-22 | Phase 7 | Toggle «Быстро/Долго» в `TaskCreate.tsx` (паттерн Path-B toggle) + `formData.append('processing_mode')`. tsc 0 ошибок. Коммит 75ae7cc |
 
 ---
 
 ## Итоговый блок
-**Реализовано:** Phase 1-5 — backend полностью (БД, batch-инфраструктура, fast-режим, batch submit/resume, поллер). Batch работает end-to-end на бэкенде.
-**Осталось:** Phase 6 (роутер — приём `processing_mode`), Phase 7 (фронтенд — toggle). Примечания: LIST_FROM_* последовательны (согласовано); batch MVP без inline retry/null (возможен Phase 4b). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
+**Реализовано полностью (Phase 1-7).** Фича работает end-to-end: пользователь выбирает «Быстро»/«Долго» в форме → `processing_mode` доезжает до `Task` → fast (параллель) или batch (Message Batches API + поллер + устойчивость к рестартам).
+
+**Метрики:** +23 unit-теста; регрессия backend 132→158 passed (все новые зелёные, предсуществующие 7 failed / 70 errors не связаны — `apscheduler`/`fitz` вне локального окружения + `render.yaml`); frontend tsc 0 ошибок. 15 коммитов на `feature/estimate-processing-modes`.
+
+**Согласованные компромиссы (задокументированы):**
+1. LIST_FROM_* оставлены последовательными (чекпоинт-resume + другие типы задач вне toggle).
+2. Batch MVP — одна проходка без inline retry/null (пропущенные/null позиции без цены; step3 допускает). Возможен Phase 4b (второй batch-этап для retry/null).
+
+**Перед деплоем:** прогнать регрессию в окружении с `apscheduler`/`fitz`/`@testing-library/dom`; применится миграция 029 автоматически (`alembic upgrade head` в `render.yaml`). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
