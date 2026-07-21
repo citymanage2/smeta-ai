@@ -24,6 +24,10 @@ from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.unit_normalizer import normalize_items
 from app.services import price_service as _price_svc
 
+# Fast-режим: сколько чанков ESTIMATE_FROM_LIST обрабатывать параллельно.
+# 1 == последовательно (запасной путь).
+FAST_CHUNK_CONCURRENCY = 4
+
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 logger = structlog.get_logger()
@@ -829,6 +833,69 @@ class TaskProcessor:
                     await asyncio.sleep(wait)
                     await self._check_cancelled()
         raise last_error  # type: ignore[misc]
+
+    async def _run_chunks_parallel(
+        self,
+        workers: list,
+        concurrency: int = FAST_CHUNK_CONCURRENCY,
+        cancel_check_interval: float = 10.0,
+    ) -> list:
+        """Выполнить db-free воркеры параллельно под Semaphore, вернуть результаты по порядку.
+
+        Каждый worker — zero-arg async callable, который НЕ обращается к self.db
+        (иначе конкурентный доступ к AsyncSession сломает сессию). Отмена задачи
+        отслеживается одним общим watcher-ом (self.db читает только он) — при отмене
+        воркеры отменяются и поднимается TaskCancelledError. concurrency=1 → фактически
+        последовательно. Реальные (не-отмена) исключения воркеров пробрасываются.
+        """
+        if not workers:
+            return []
+
+        sem = asyncio.Semaphore(max(1, concurrency))
+
+        async def _guard(w):
+            async with sem:
+                return await w()
+
+        tasks = [asyncio.create_task(_guard(w)) for w in workers]
+        cancelled = {"flag": False}
+
+        async def _watch():
+            try:
+                while True:
+                    await asyncio.sleep(cancel_check_interval)
+                    if all(t.done() for t in tasks):
+                        return
+                    try:
+                        await self._check_cancelled()
+                    except TaskCancelledError:
+                        cancelled["flag"] = True
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        return
+            except asyncio.CancelledError:
+                return
+
+        watcher = asyncio.create_task(_watch())
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            watcher.cancel()
+            try:
+                await watcher
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        if cancelled["flag"]:
+            raise TaskCancelledError("Задача остановлена пользователем")
+
+        for r in results:
+            if isinstance(r, asyncio.CancelledError):
+                raise TaskCancelledError("Задача остановлена пользователем")
+            if isinstance(r, BaseException):
+                raise r
+        return results
 
     async def process(self) -> None:
         """Main processing method."""
@@ -1810,8 +1877,12 @@ class TaskProcessor:
         # Results keyed by int _id (= global index), not by name string.
         claude_results: dict[int, dict] = {}
 
-        async def _call_claude_chunk(chunk: list[dict], chunk_label: str) -> None:
-            """Send one chunk to Claude and populate claude_results by _id."""
+        async def _fetch_chunk(chunk: list[dict], chunk_label: str) -> list[dict]:
+            """DB-free: отправить чанк в Claude, вернуть список result-items.
+
+            НЕ обращается к self.db (безопасно под _run_chunks_parallel).
+            Ошибки чанка (кроме отмены/таймаута/баланса) поглощаются → [].
+            """
             unmatched_json = json.dumps(
                 [{"id": it["_id"], "type": it["type"], "name": it["name"],
                   "unit": it["unit"], "quantity": it.get("quantity")}
@@ -1824,13 +1895,16 @@ class TaskProcessor:
             )
             messages = [{"role": "user", "content": prompt_text}]
             try:
-                data = await self._interruptible_claude_json_with_retry(
+                # Non-interruptible вариант: НЕ поллит self.db (отмену ведёт общий
+                # watcher в _run_chunks_parallel). Логирование стоимости в call_claude
+                # использует независимую сессию — конкуренции по self.db нет.
+                data = await self._call_claude_json_with_retry(
                     messages,
                     system_prompt=SYSTEM_BASE,
                     use_web_search=True,
                     processing_timeout=1200.0,
                 )
-            except TaskCancelledError:
+            except (TaskCancelledError, asyncio.TimeoutError):
                 raise
             except Exception as chunk_error:
                 err_str = str(chunk_error)
@@ -1842,8 +1916,12 @@ class TaskProcessor:
                     chunk_label=chunk_label,
                     error=err_str,
                 )
-                return
-            for result_item in data.get("items", []):
+                return []
+            return data.get("items", [])
+
+        async def _apply_chunk_items(result_items: list[dict]) -> None:
+            """Последовательно (self.db): заполнить claude_results и сохранить цены в кеш."""
+            for result_item in result_items:
                 item_id = result_item.get("id")
                 if item_id is not None:
                     claude_results[int(item_id)] = result_item
@@ -1870,6 +1948,18 @@ class TaskProcessor:
                     except Exception as _cache_err:
                         logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
 
+        async def _process_chunks(chunk_list: list[list[dict]], label_prefix: str, concurrency: int) -> None:
+            """fast → параллельно (Semaphore) с общим cancel-watcher; иначе последовательно.
+            Fetch (Claude) параллельно, применение результатов (self.db) — барьером после."""
+            total = len(chunk_list)
+            workers = [
+                (lambda c=c, k=k: _fetch_chunk(c, f"{label_prefix}{k + 1}/{total}"))
+                for k, c in enumerate(chunk_list)
+            ]
+            results = await self._run_chunks_parallel(workers, concurrency=concurrency)
+            for items in results:
+                await _apply_chunk_items(items)
+
         if unmatched_by_gidx:
             unmatched_list = list(unmatched_by_gidx.values())
             current_date = _date.today().strftime("%d.%m.%Y")
@@ -1881,14 +1971,10 @@ class TaskProcessor:
                 f"Отправляем {total_chunks} чанк(а) в Claude..."
             )
 
-            for i, chunk in enumerate(chunks):
-                try:
-                    await self._check_cancelled()
-                except TaskCancelledError:
-                    raise
-                if total_chunks > 1:
-                    await self.update_progress(f"Claude: обработка части {i + 1} из {total_chunks}...")
-                await _call_claude_chunk(chunk, chunk_label=f"{i + 1}/{total_chunks}")
+            mode = getattr(task, "processing_mode", "fast")
+            concurrency = FAST_CHUNK_CONCURRENCY if mode == "fast" else 1
+            await self._check_cancelled()
+            await _process_chunks(chunks, label_prefix="", concurrency=concurrency)
 
             # Retry any ids Claude skipped — in smaller batches of 5.
             missing_ids = set(unmatched_by_gidx.keys()) - set(claude_results.keys())
@@ -1898,12 +1984,8 @@ class TaskProcessor:
                 )
                 missing_items = [unmatched_by_gidx[gidx] for gidx in sorted(missing_ids)]
                 retry_chunks = [missing_items[i:i + 5] for i in range(0, len(missing_items), 5)]
-                for j, retry_chunk in enumerate(retry_chunks):
-                    try:
-                        await self._check_cancelled()
-                    except TaskCancelledError:
-                        raise
-                    await _call_claude_chunk(retry_chunk, chunk_label=f"retry-{j + 1}/{len(retry_chunks)}")
+                await self._check_cancelled()
+                await _process_chunks(retry_chunks, label_prefix="retry-", concurrency=concurrency)
 
             still_missing = set(unmatched_by_gidx.keys()) - set(claude_results.keys())
             if still_missing:
@@ -1926,12 +2008,8 @@ class TaskProcessor:
                 )
                 null_items = [unmatched_by_gidx[gidx] for gidx in sorted(null_price_ids)]
                 null_chunks = [null_items[i:i + 5] for i in range(0, len(null_items), 5)]
-                for j, null_chunk in enumerate(null_chunks):
-                    try:
-                        await self._check_cancelled()
-                    except TaskCancelledError:
-                        raise
-                    await _call_claude_chunk(null_chunk, chunk_label=f"null-price-{j + 1}/{len(null_chunks)}")
+                await self._check_cancelled()
+                await _process_chunks(null_chunks, label_prefix="null-price-", concurrency=concurrency)
                 still_null = {
                     gidx for gidx in null_price_ids
                     if (unmatched_by_gidx[gidx].get("type") == "Работа" and not claude_results.get(gidx, {}).get("work_price"))
