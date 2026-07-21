@@ -86,8 +86,8 @@
 - **Gates:** `py_compile`, `pytest`, `ruff`.
 - **Impact:** новый код рядом с `call_claude`; существующий путь не трогаем.
 
-### Phase 3: Fast-режим — параллелизация всех чанк-циклов
-- **Status:** 🟡 частично (2026-07-21) — сделаны 3 цикла ESTIMATE_FROM_LIST; LIST_FROM_*/fix_empty_prices отложены (см. отклонение ниже)
+### Phase 3: Fast-режим — параллелизация чанк-циклов
+- **Status:** ✅ completed (2026-07-21) — ESTIMATE_FROM_LIST (3 цикла) + fix_empty_prices. **Согласованное сужение:** LIST_FROM_* оставлены последовательными (чекпоинт-resume + другие типы задач вне toggle).
 - **Files:** `backend/app/services/task_processor.py`
 - **Changes:**
   - Хелпер `_gather_chunks(coros, concurrency)` с `asyncio.Semaphore`; concurrency из config (дефолт 4).
@@ -166,10 +166,11 @@
 | 2026-07-21 | — | План создан |
 | 2026-07-21 | Phase 1 | `Task.processing_mode` VARCHAR(10) default `fast` + миграция 029 (IF NOT EXISTS); 3 теста зелёные; регрессия чистая (baseline 132→135 passed). Ветка `feature/estimate-processing-modes`, коммит 9d73489 |
 | 2026-07-21 | Phase 2 | `claude_service`: build/submit/poll/collect/cancel batch + `_calc_cost(batch=True)`; рефактор общих хелперов (`_build_message_params`/`_extract_result_text`/`_extract_usage`/`_log_api_call`), `call_claude` неизменен; 6 тестов; регрессия 135→141 passed. Коммит 4c82fa2 |
-| 2026-07-21 | Phase 3a | Примитив `_run_chunks_parallel` (db-free воркеры + cancel-watcher); `_fetch_chunk`/`_apply_chunk_items`; 3 цикла ESTIMATE_FROM_LIST → `_process_chunks` (concurrency по `processing_mode`). 5 тестов; регрессия 141→146. **Отклонение:** LIST_FROM_*/fix_empty_prices не тронуты. Коммит 08d2b2f |
+| 2026-07-21 | Phase 3a | Примитив `_run_chunks_parallel` (db-free воркеры + cancel-watcher); `_fetch_chunk`/`_apply_chunk_items`; 3 цикла ESTIMATE_FROM_LIST → `_process_chunks` (concurrency по `processing_mode`). 5 тестов; регрессия 141→146. Коммит 08d2b2f |
+| 2026-07-21 | Phase 3b | `fix_empty_prices` → `_fetch_batch` + `_run_chunks_parallel`. Согласовано: LIST_FROM_* остаются последовательными. Регрессия 146 passed. Коммит 403fd66 |
 
 ---
 
 ## Итоговый блок
-**Реализовано:** Phase 1 (БД: поле `processing_mode` + миграция 029), Phase 2 (batch-инфраструктура в `claude_service`).
-**Осталось:** Phase 3-7. Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
+**Реализовано:** Phase 1 (БД), Phase 2 (batch-инфраструктура), Phase 3 (fast-режим: ESTIMATE_FROM_LIST + fix_empty_prices).
+**Осталось:** Phase 4-7. Примечание: LIST_FROM_* сознательно оставлены последовательными (согласовано). Открытых развилок нет — согласовано: batch-поллинг через **отдельный периодический поллер** (Phase 5); fast-режим параллелит **все** последовательные чанк-циклы задачи (Phase 3). Приоритетный риск — граница шаг2/шаг3 при batch (Phase 4) и регрессия по другим типам задач из-за параллелизации общих циклов (Phase 3).
