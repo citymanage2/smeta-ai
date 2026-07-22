@@ -44,6 +44,7 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
 // в backend/app/routers/tasks.py). Должен совпадать с бэкендом.
 const RESUMABLE_TASK_TYPES: string[] = [
   'LIST_FROM_GRAND',
+  'LIST_FROM_PROJECT',
   'CHECK_LIST_COMPLETENESS',
   'CHECK_PROJECT_COMPLETENESS',
   'ESTIMATE_FROM_LIST',

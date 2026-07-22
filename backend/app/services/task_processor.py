@@ -1572,13 +1572,27 @@ class TaskProcessor:
                 f"PDF разбит на {total_chunks} части для обработки..."
             )
 
-        accumulated_items: list[dict] = []
-        seen_names: set[str] = set()
+        # Resume: восстанавливаем накопленные позиции и стадию из чекпоинта.
+        progress_data = task.progress_data or {}
+        pd_stage = progress_data.get("_stage")
+        accumulated_items: list[dict] = list(progress_data.get("items", []))
+        seen_names: set = set()
+        for it in accumulated_items:
+            seen_names.add((it.get("name", "").strip().lower(), it.get("type", "").strip()))
 
-        for chunk_idx, chunk in enumerate(chunks, 1):
+        if pd_stage == "pass1_done":
+            # Проход 1 уже завершён ранее (пауза случилась в проходе 2) —
+            # пропускаем дорогой проход 1 и идём сразу к уточнению объёмов.
+            start_chunk = total_chunks
+        else:
+            start_chunk = int(progress_data.get("chunks_done", 0) or 0)
+
+        for chunk_idx in range(start_chunk, total_chunks):
+            chunk = chunks[chunk_idx]
+            display = chunk_idx + 1
             if total_chunks > 1:
                 await self.update_progress(
-                    f"Обработка части {chunk_idx} из {total_chunks}..."
+                    f"Обработка части {display} из {total_chunks}..."
                 )
 
             prompt_pass1 = (
@@ -1589,7 +1603,7 @@ class TaskProcessor:
 
             if total_chunks > 1:
                 prompt_pass1 = (
-                    f"ЧАСТЬ {chunk_idx} ИЗ {total_chunks} ДОКУМЕНТА.\n\n"
+                    f"ЧАСТЬ {display} ИЗ {total_chunks} ДОКУМЕНТА.\n\n"
                     + prompt_pass1
                 )
 
@@ -1602,14 +1616,18 @@ class TaskProcessor:
                     processing_timeout=1200.0,
                     max_tokens=64000,
                 )
+            except InsufficientBalanceError:
+                # Баланс исчерпан — на паузу. Чекпоинт после предыдущего чанка
+                # уже сохранён, resume продолжит с необработанных частей PDF.
+                raise
             except Exception as chunk_err:
                 logger.warning(
                     "Project PDF chunk failed",
                     task_id=self.task_id,
-                    chunk=chunk_idx,
+                    chunk=display,
                     error=str(chunk_err),
                 )
-                if chunk_idx == 1:
+                if chunk_idx == 0:
                     raise
                 continue
 
@@ -1623,15 +1641,34 @@ class TaskProcessor:
             logger.info(
                 "Project PDF chunk processed",
                 task_id=self.task_id,
-                chunk=chunk_idx,
+                chunk=display,
                 total=total_chunks,
                 new_items=len(chunk_items),
                 total_items=len(accumulated_items),
             )
 
+            # Чекпоинт после каждого чанка прохода 1 — resume не пересчитывает
+            # уже обработанные части PDF (устойчивость к паузе на балансе).
+            await self._save_progress_data({
+                "chunks_done": chunk_idx + 1,
+                "total_chunks": total_chunks,
+                "items": accumulated_items,
+                "_stage": "pass1",
+            })
+
         items = accumulated_items
         if not items:
             raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое PDF.")
+
+        # Проход 1 завершён — фиксируем стадию, чтобы пауза в проходе 2 не
+        # перезапускала дорогой проход 1 при возобновлении.
+        if pd_stage != "pass1_done":
+            await self._save_progress_data({
+                "chunks_done": total_chunks,
+                "total_chunks": total_chunks,
+                "items": items,
+                "_stage": "pass1_done",
+            })
 
         await self.update_progress(f"Найдено {len(items)} позиций. Проверяю незаполненные объёмы...")
 
@@ -1678,12 +1715,26 @@ class TaskProcessor:
                             expected=len(chunk_idx),
                             got=len(resolved),
                         )
+                except InsufficientBalanceError:
+                    # Баланс исчерпан — на паузу. Уже уточнённые объёмы сохранены
+                    # чекпоинтом ниже; resume пересчитает лишь оставшиеся null.
+                    raise
                 except Exception as pass2_err:
                     logger.warning(
                         "Pass2 failed, keeping original null items",
                         task_id=self.task_id,
                         error=str(pass2_err),
                     )
+
+                # Чекпоинт прохода 2: сохраняем items с уже применёнными
+                # объёмами. При resume заполненные позиции больше не null и
+                # повторно не отправляются в Claude.
+                await self._save_progress_data({
+                    "chunks_done": total_chunks,
+                    "total_chunks": total_chunks,
+                    "items": items,
+                    "_stage": "pass1_done",
+                })
 
         resolved_count = sum(1 for i in null_indices if items[i].get("quantity") is not None)
         if null_indices:

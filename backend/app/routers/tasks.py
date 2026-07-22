@@ -662,7 +662,7 @@ async def resume_task(
             detail=f"Возобновление невозможно: задача в статусе «{task.status}»",
         )
 
-    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS", "ESTIMATE_FROM_LIST"}
+    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "LIST_FROM_PROJECT", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS", "ESTIMATE_FROM_LIST"}
     if task.task_type.upper() not in RESUMABLE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
