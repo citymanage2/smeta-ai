@@ -393,7 +393,12 @@ async def get_task(
     db: AsyncSession = Depends(get_db),
     admin: dict = Depends(get_admin_user),
 ):
-    result = await db.execute(select(Task).where(Task.id == task_id))
+    # Trashed tasks (deleted_at set) are not visible via the normal detail
+    # endpoint — consistent with list_tasks and the projects soft-delete
+    # contract; they remain accessible only through the /tasks/trash list.
+    result = await db.execute(
+        select(Task).where(Task.id == task_id, Task.deleted_at.is_(None))
+    )
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")

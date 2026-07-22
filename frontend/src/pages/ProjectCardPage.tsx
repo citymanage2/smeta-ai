@@ -39,6 +39,7 @@ const STATUS_DOT: Record<string, { color: string; label: string }> = {
   pending:    { color: '#f59e0b', label: 'В очереди' },
   failed:     { color: '#ef4444', label: 'Ошибка' },
   cancelled:  { color: '#94a3b8', label: 'Отменено' },
+  paused:     { color: '#b45309', label: 'На паузе' },
 }
 
 function StatusDot({ status }: { status: string }) {

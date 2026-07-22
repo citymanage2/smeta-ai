@@ -1,6 +1,4 @@
-import io
 import os
-from typing import Any
 import structlog
 
 logger = structlog.get_logger()
@@ -309,7 +307,7 @@ def generate_comparison_report(data: dict) -> bytes:
     Returns PDF bytes.
     """
     try:
-        from weasyprint import HTML, CSS
+        from weasyprint import HTML
     except ImportError:
         logger.error("WeasyPrint not available")
         raise RuntimeError("WeasyPrint не установлен. Установите: pip install weasyprint")

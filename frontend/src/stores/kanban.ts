@@ -42,6 +42,7 @@ function computeGuard(card: WorkflowCard, toStage: KanbanStage): GuardResult {
     if (!t) return { allowed: false, blockType: 'hard', message: 'Сначала создайте Перечень' }
     if (t.status === 'pending') return { allowed: false, blockType: 'hard', message: 'Перечень ещё не запущен' }
     if (t.status === 'processing') return { allowed: false, blockType: 'hard', message: 'Перечень ещё обрабатывается' }
+    if (t.status === 'paused') return { allowed: false, blockType: 'hard', message: 'Перечень на паузе (баланс API) — продолжится автоматически' }
     if (t.status === 'failed') return { allowed: false, blockType: 'hard', message: 'Перечень завершился с ошибкой — исправьте' }
     if (t.status === 'cancelled') return { allowed: false, blockType: 'hard', message: 'Перечень отменён — создайте заново' }
     return { allowed: true, blockType: null, message: '' }
@@ -52,6 +53,7 @@ function computeGuard(card: WorkflowCard, toStage: KanbanStage): GuardResult {
     if (!lt) return { allowed: false, blockType: 'hard', message: 'Сначала создайте Перечень' }
     if (lt.status === 'pending') return { allowed: false, blockType: 'hard', message: 'Перечень ещё не запущен' }
     if (lt.status === 'processing') return { allowed: false, blockType: 'hard', message: 'Перечень ещё обрабатывается' }
+    if (lt.status === 'paused') return { allowed: false, blockType: 'hard', message: 'Перечень на паузе (баланс API) — продолжится автоматически' }
     if (lt.status === 'failed') return { allowed: false, blockType: 'hard', message: 'Перечень завершился с ошибкой — исправьте' }
     if (lt.status === 'cancelled') return { allowed: false, blockType: 'hard', message: 'Перечень отменён — создайте заново' }
     // list completed — проверяем completeness (soft)

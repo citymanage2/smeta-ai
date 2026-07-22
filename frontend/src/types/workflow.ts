@@ -1,6 +1,6 @@
 export type KanbanStage = 'list' | 'completeness' | 'estimate' | 'optimization'
 
-export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused'
 
 export interface InputFileBrief {
   name: string

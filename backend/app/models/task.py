@@ -1,7 +1,7 @@
 import uuid as _uuid
 from typing import Optional
 from decimal import Decimal
-from sqlalchemy import Index, Integer, String, Text, DateTime, JSON, Numeric, ForeignKey
+from sqlalchemy import Index, String, Text, DateTime, JSON, Numeric, ForeignKey
 from sqlalchemy import JSON as _JSON
 from sqlalchemy.dialects.postgresql import JSONB as _JSONB
 # Используем JSONB на PostgreSQL, JSON на SQLite (тесты)

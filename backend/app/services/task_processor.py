@@ -16,6 +16,7 @@ from app.services.claude_service import (
     build_batch_request,
     submit_claude_batch,
     collect_claude_batch,
+    InsufficientBalanceError,
 )
 from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
@@ -23,7 +24,7 @@ from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.pdf_text_extractor import chunk_project_pdf
-from app.utils.pdf_ocr_extractor import extract_pdf_with_ocr, chunk_pdf_pages, extract_single_page, get_pdf_page_count
+from app.utils.pdf_ocr_extractor import chunk_pdf_pages, extract_single_page, get_pdf_page_count
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.unit_normalizer import normalize_items
@@ -32,6 +33,11 @@ from app.services import price_service as _price_svc
 # Fast-режим: сколько чанков ESTIMATE_FROM_LIST обрабатывать параллельно.
 # 1 == последовательно (запасной путь).
 FAST_CHUNK_CONCURRENCY = 4
+
+# Шаг 2 ESTIMATE_FROM_LIST (fast/sync): каждые сколько чанков главного прохода
+# сохранять промежуточный чекпоинт claude_partial. При паузе на балансе resume
+# продолжит с последней группы — теряется максимум одна группа, а не вся смета.
+ESTIMATE_MAIN_CHECKPOINT_GROUP = 8
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -777,9 +783,10 @@ class TaskProcessor:
                 raise
             except asyncio.TimeoutError:
                 raise
+            except InsufficientBalanceError:
+                # Баланс API исчерпан — ретраи не помогут; пробрасываем на паузу.
+                raise
             except Exception as e:
-                if "баланс api" in str(e).lower() or "credit balance" in str(e).lower():
-                    raise
                 last_error = e
                 if attempt < max_chunk_retries - 1:
                     wait = chunk_retry_delays[attempt]
@@ -821,9 +828,10 @@ class TaskProcessor:
                 raise
             except asyncio.TimeoutError:
                 raise
+            except InsufficientBalanceError:
+                # Баланс API исчерпан — ретраи не помогут; пробрасываем на паузу.
+                raise
             except Exception as e:
-                if "баланс api" in str(e).lower() or "credit balance" in str(e).lower():
-                    raise
                 last_error = e
                 if attempt < max_chunk_retries - 1:
                     wait = chunk_retry_delays[attempt]
@@ -925,6 +933,32 @@ class TaskProcessor:
                     logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
         except Exception as _cache_err:
             logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
+
+    @staticmethod
+    def _pending_chunks(chunks: list, done_ids: set) -> list:
+        """Отфильтровать чанки, оставив только позиции с _id, ещё не посчитанными
+        Claude (done_ids). Полностью посчитанные чанки исключаются, частичные —
+        обрезаются до необсчитанных позиций. Для resume fast/sync: уже оценённые
+        позиции повторно в Claude не отправляются."""
+        out: list = []
+        for c in chunks:
+            rem = [it for it in c if it.get("_id") not in done_ids]
+            if rem:
+                out.append(rem)
+        return out
+
+    async def _save_claude_partial(
+        self, items: list, matched_by_gidx: dict, claude_results: dict
+    ) -> None:
+        """Промежуточный чекпоинт шага 2 (fast/sync): накопленные claude_results.
+        Тот же формат, что pre_excel, но _stage="claude_partial" — resume прогонит
+        шаги 0-1 заново, а шаг 2 продолжит только по необсчитанным позициям."""
+        await self._save_progress_data({
+            "_stage": "claude_partial",
+            "items": items,
+            "matched": {str(k): v for k, v in matched_by_gidx.items()},
+            "claude_results": {str(k): v for k, v in claude_results.items()},
+        })
 
     async def _submit_estimate_batch(
         self,
@@ -1063,6 +1097,20 @@ class TaskProcessor:
 
         except TaskCancelledError:
             logger.info("Task was cancelled by user", task_id=self.task_id)
+        except InsufficientBalanceError:
+            # Баланс API исчерпан — не failed, а пауза. Чекпоинт (progress_data)
+            # к этому моменту уже сохранён отдельными сессиями и переживает
+            # rollback; планировщик возобновит задачу после пополнения счёта.
+            logger.warning("Task paused — Anthropic API balance exhausted", task_id=self.task_id)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            await self.update_status(
+                "paused",
+                error="Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.",
+            )
+            await self.update_progress("⏸ На паузе: баланс API исчерпан. Возобновление произойдёт автоматически после пополнения.")
         except Exception as e:
             logger.error("Task processing failed", task_id=self.task_id, error=str(e))
             try:
@@ -1524,13 +1572,27 @@ class TaskProcessor:
                 f"PDF разбит на {total_chunks} части для обработки..."
             )
 
-        accumulated_items: list[dict] = []
-        seen_names: set[str] = set()
+        # Resume: восстанавливаем накопленные позиции и стадию из чекпоинта.
+        progress_data = task.progress_data or {}
+        pd_stage = progress_data.get("_stage")
+        accumulated_items: list[dict] = list(progress_data.get("items", []))
+        seen_names: set = set()
+        for it in accumulated_items:
+            seen_names.add((it.get("name", "").strip().lower(), it.get("type", "").strip()))
 
-        for chunk_idx, chunk in enumerate(chunks, 1):
+        if pd_stage == "pass1_done":
+            # Проход 1 уже завершён ранее (пауза случилась в проходе 2) —
+            # пропускаем дорогой проход 1 и идём сразу к уточнению объёмов.
+            start_chunk = total_chunks
+        else:
+            start_chunk = int(progress_data.get("chunks_done", 0) or 0)
+
+        for chunk_idx in range(start_chunk, total_chunks):
+            chunk = chunks[chunk_idx]
+            display = chunk_idx + 1
             if total_chunks > 1:
                 await self.update_progress(
-                    f"Обработка части {chunk_idx} из {total_chunks}..."
+                    f"Обработка части {display} из {total_chunks}..."
                 )
 
             prompt_pass1 = (
@@ -1541,7 +1603,7 @@ class TaskProcessor:
 
             if total_chunks > 1:
                 prompt_pass1 = (
-                    f"ЧАСТЬ {chunk_idx} ИЗ {total_chunks} ДОКУМЕНТА.\n\n"
+                    f"ЧАСТЬ {display} ИЗ {total_chunks} ДОКУМЕНТА.\n\n"
                     + prompt_pass1
                 )
 
@@ -1554,14 +1616,18 @@ class TaskProcessor:
                     processing_timeout=1200.0,
                     max_tokens=64000,
                 )
+            except InsufficientBalanceError:
+                # Баланс исчерпан — на паузу. Чекпоинт после предыдущего чанка
+                # уже сохранён, resume продолжит с необработанных частей PDF.
+                raise
             except Exception as chunk_err:
                 logger.warning(
                     "Project PDF chunk failed",
                     task_id=self.task_id,
-                    chunk=chunk_idx,
+                    chunk=display,
                     error=str(chunk_err),
                 )
-                if chunk_idx == 1:
+                if chunk_idx == 0:
                     raise
                 continue
 
@@ -1575,15 +1641,34 @@ class TaskProcessor:
             logger.info(
                 "Project PDF chunk processed",
                 task_id=self.task_id,
-                chunk=chunk_idx,
+                chunk=display,
                 total=total_chunks,
                 new_items=len(chunk_items),
                 total_items=len(accumulated_items),
             )
 
+            # Чекпоинт после каждого чанка прохода 1 — resume не пересчитывает
+            # уже обработанные части PDF (устойчивость к паузе на балансе).
+            await self._save_progress_data({
+                "chunks_done": chunk_idx + 1,
+                "total_chunks": total_chunks,
+                "items": accumulated_items,
+                "_stage": "pass1",
+            })
+
         items = accumulated_items
         if not items:
             raise ValueError("Claude не вернул ни одной позиции. Проверьте содержимое PDF.")
+
+        # Проход 1 завершён — фиксируем стадию, чтобы пауза в проходе 2 не
+        # перезапускала дорогой проход 1 при возобновлении.
+        if pd_stage != "pass1_done":
+            await self._save_progress_data({
+                "chunks_done": total_chunks,
+                "total_chunks": total_chunks,
+                "items": items,
+                "_stage": "pass1_done",
+            })
 
         await self.update_progress(f"Найдено {len(items)} позиций. Проверяю незаполненные объёмы...")
 
@@ -1630,12 +1715,26 @@ class TaskProcessor:
                             expected=len(chunk_idx),
                             got=len(resolved),
                         )
+                except InsufficientBalanceError:
+                    # Баланс исчерпан — на паузу. Уже уточнённые объёмы сохранены
+                    # чекпоинтом ниже; resume пересчитает лишь оставшиеся null.
+                    raise
                 except Exception as pass2_err:
                     logger.warning(
                         "Pass2 failed, keeping original null items",
                         task_id=self.task_id,
                         error=str(pass2_err),
                     )
+
+                # Чекпоинт прохода 2: сохраняем items с уже применёнными
+                # объёмами. При resume заполненные позиции больше не null и
+                # повторно не отправляются в Claude.
+                await self._save_progress_data({
+                    "chunks_done": total_chunks,
+                    "total_chunks": total_chunks,
+                    "items": items,
+                    "_stage": "pass1_done",
+                })
 
         resolved_count = sum(1 for i in null_indices if items[i].get("quantity") is not None)
         if null_indices:
@@ -1765,6 +1864,13 @@ class TaskProcessor:
             _claude_restored: dict[int, dict] = {int(k): v for k, v in _claude_raw.items()}
             await self._run_estimate_step3(task, _items_raw, _matched_restored, _claude_restored)
             return
+
+        # Resume (fast/sync): подхватить уже посчитанные Claude-позиции из
+        # промежуточного чекпоинта. Захватываем ДО шагов 0-1, т.к. они могут
+        # перезаписать progress_data. Шаг 2 продолжит только по необсчитанным.
+        _resume_claude_results: dict[int, dict] = {}
+        if _progress.get("_stage") == "claude_partial":
+            _resume_claude_results = {int(k): v for k, v in (_progress.get("claude_results") or {}).items()}
 
         # ── Шаг 0: Получаем items ───────────────────────────────────────────
         items: list[dict] = []
@@ -1996,7 +2102,8 @@ class TaskProcessor:
 
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
         # Results keyed by int _id (= global index), not by name string.
-        claude_results: dict[int, dict] = {}
+        # Seed из resume-чекпоинта: уже посчитанные позиции не пересчитываем.
+        claude_results: dict[int, dict] = dict(_resume_claude_results)
 
         async def _fetch_chunk(chunk: list[dict], chunk_label: str) -> list[dict]:
             """DB-free: отправить чанк в Claude, вернуть список result-items.
@@ -2027,10 +2134,11 @@ class TaskProcessor:
                 )
             except (TaskCancelledError, asyncio.TimeoutError):
                 raise
+            except InsufficientBalanceError:
+                # Баланс API исчерпан — не проглатываем чанк, пробрасываем на паузу.
+                raise
             except Exception as chunk_error:
                 err_str = str(chunk_error)
-                if "баланс" in err_str.lower() or "credit balance" in err_str.lower():
-                    raise
                 logger.warning(
                     "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
                     task_id=self.task_id,
@@ -2080,8 +2188,15 @@ class TaskProcessor:
             )
 
             concurrency = FAST_CHUNK_CONCURRENCY if mode == "fast" else 1
-            await self._check_cancelled()
-            await _process_chunks(chunks, label_prefix="", concurrency=concurrency)
+            # Главный проход группами: после каждой группы — промежуточный
+            # чекпоинт claude_partial (устойчивость к паузе на балансе).
+            # Пропускаем позиции, уже посчитанные в предыдущем запуске (resume).
+            pending = self._pending_chunks(chunks, set(claude_results.keys()))
+            for _gi in range(0, len(pending), ESTIMATE_MAIN_CHECKPOINT_GROUP):
+                group = pending[_gi:_gi + ESTIMATE_MAIN_CHECKPOINT_GROUP]
+                await self._check_cancelled()
+                await _process_chunks(group, label_prefix="", concurrency=concurrency)
+                await self._save_claude_partial(items, matched_by_gidx, claude_results)
 
             # Retry any ids Claude skipped — in smaller batches of 5.
             missing_ids = set(unmatched_by_gidx.keys()) - set(claude_results.keys())

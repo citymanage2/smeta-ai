@@ -461,7 +461,7 @@ const ProjectDetailPage: React.FC = () => {
               return (
                 <div
                   key={task.id}
-                  onClick={() => navigate(`/tasks/${task.id}/status`)}
+                  onClick={() => { if (task.id) navigate(`/tasks/${task.id}/status`); }}
                   style={{
                     backgroundColor: '#fff',
                     border: '1px solid #e2e8f0',
@@ -511,7 +511,7 @@ const ProjectDetailPage: React.FC = () => {
                     <div
                       style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0, marginLeft: '12px' }}
                     >
-                      {isEstimateType && task.estimation_status === 'estimated' && (
+                      {isEstimateType && task.task_type !== 'ESTIMATE_OPTIMIZATION' && task.estimation_status === 'estimated' && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setOptimizingTaskId(task.id); }}
                           style={{ padding: '4px 12px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}

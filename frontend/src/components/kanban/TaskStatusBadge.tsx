@@ -24,6 +24,8 @@ export function TaskStatusBadge({ task }: Props) {
       return <span style={{ color: '#dc2626', fontSize: '13px' }}>● Ошибка</span>
     case 'cancelled':
       return <span style={{ color: '#94a3b8', fontSize: '13px' }}>● Остановлено</span>
+    case 'paused':
+      return <span style={{ color: '#b45309', fontSize: '13px' }}>● На паузе</span>
     default:
       return <span style={{ color: '#94a3b8', fontSize: '13px' }}>● Неизвестно</span>
   }

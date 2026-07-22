@@ -1,6 +1,6 @@
 export type TaskType = string;
 
-export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'optimizing';
 
@@ -143,6 +143,7 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   completed: 'Завершено',
   failed: 'Ошибка',
   cancelled: 'Остановлено',
+  paused: 'На паузе',
 };
 
 export interface Project {

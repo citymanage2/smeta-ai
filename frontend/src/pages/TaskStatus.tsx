@@ -37,7 +37,32 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
   completed: { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },
   failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
   cancelled: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
+  paused: { bg: '#fffbeb', text: '#b45309', border: '#fcd34d' },
 };
+
+// Типы задач, которые бэкенд умеет продолжать с чекпоинта (см. RESUMABLE_TYPES
+// в backend/app/routers/tasks.py). Должен совпадать с бэкендом.
+const RESUMABLE_TASK_TYPES: string[] = [
+  'LIST_FROM_GRAND',
+  'LIST_FROM_PROJECT',
+  'CHECK_LIST_COMPLETENESS',
+  'CHECK_PROJECT_COMPLETENESS',
+  'ESTIMATE_FROM_LIST',
+];
+
+// Есть ли у задачи сохранённый чекпоинт для продолжения без потери прогресса.
+function hasResumeCheckpoint(task: TaskStatusResponse): boolean {
+  const pd = task.progress_data;
+  if (!pd) return false;
+  return pd.chunks_done != null || pd._stage === 'pre_excel' || pd._stage === 'claude_partial';
+}
+
+function isResumable(task: TaskStatusResponse): boolean {
+  return (
+    RESUMABLE_TASK_TYPES.includes((task.task_type || '').toUpperCase()) &&
+    hasResumeCheckpoint(task)
+  );
+}
 
 function Spinner() {
   return <LumaSpin size="sm" color="#2563eb" />;
@@ -862,6 +887,58 @@ const TaskStatusPage: React.FC = () => {
                 </div>
               )}
 
+              {/* Paused — баланс API исчерпан, задача возобновится автоматически */}
+              {task.status === 'paused' && (
+                <div
+                  data-testid="paused-block"
+                  style={{
+                    marginTop: '16px',
+                    padding: '16px',
+                    backgroundColor: '#fffbeb',
+                    border: '1px solid #fcd34d',
+                    borderRadius: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#b45309', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    ⏸ На паузе
+                  </div>
+                  <div style={{ margin: 0, fontSize: '13px', color: '#92400e', lineHeight: 1.6 }}>
+                    {task.error_message
+                      ? formatTaskError(task.error_message)
+                      : 'Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта — прогресс сохранён, уже посчитанные позиции повторно не считаются.'}
+                  </div>
+                  {progressLog.length > 0 && (
+                    <div style={{ marginTop: '12px', borderTop: '1px solid #fde68a', paddingTop: '10px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#b45309', marginBottom: '6px' }}>
+                        Остановлено на шаге:
+                      </div>
+                      <span style={{ fontSize: '13px', color: '#92400e' }}>
+                        {progressLog[progressLog.length - 1]}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ marginTop: '16px' }}>
+                    <button
+                      data-testid="resume-now-button"
+                      onClick={handleResume}
+                      disabled={resuming}
+                      style={{
+                        padding: '8px 20px',
+                        backgroundColor: resuming ? '#fcd34d' : '#d97706',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: resuming ? 'not-allowed' : 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {resuming ? 'Запуск...' : '▶ Продолжить сейчас'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Error message */}
               {task.status === 'failed' && (
                 <div
@@ -901,15 +978,16 @@ const TaskStatusPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Resume section for LIST_FROM_GRAND with saved progress */}
-                  {task.task_type === 'ESTIMATE_FROM_LIST' && task.progress_data?._stage === 'pre_excel' ? (
+                  {/* Resume section — показываем «Продолжить» для любой resumable-задачи с чекпоинтом */}
+                  {isResumable(task) && (task.progress_data?._stage === 'pre_excel' || task.progress_data?._stage === 'claude_partial') ? (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
-                        Данные от Claude сохранены. Задача зависла на этапе формирования Excel.
-                        Нажмите «Продолжить» — токены повторно тратиться не будут.
+                        Часть данных от Claude сохранена. Продолжение не будет пересчитывать
+                        уже обработанные позиции — токены повторно тратиться не будут.
                       </div>
                       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                         <button
+                          data-testid="resume-button"
                           onClick={handleResume}
                           disabled={resuming || restarting}
                           style={{
@@ -943,7 +1021,7 @@ const TaskStatusPage: React.FC = () => {
                         </button>
                       </div>
                     </div>
-                  ) : task.task_type === 'LIST_FROM_GRAND' && task.progress_data?.chunks_done != null ? (
+                  ) : isResumable(task) && task.progress_data?.chunks_done != null ? (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
                         Обработано {String(task.progress_data.chunks_done)} из {String(task.progress_data.total_chunks ?? '?')} частей.
@@ -970,6 +1048,7 @@ const TaskStatusPage: React.FC = () => {
                           </button>
                         ))}
                         <button
+                          data-testid="resume-button"
                           onClick={handleResume}
                           disabled={resuming || restarting}
                           style={{
@@ -1006,6 +1085,7 @@ const TaskStatusPage: React.FC = () => {
                   ) : (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <button
+                        data-testid="restart-button"
                         onClick={handleRestart}
                         disabled={restarting}
                         style={{

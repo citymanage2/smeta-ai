@@ -106,7 +106,7 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
                 url = f"{base_url}/tasks/{task.id}/files/{slot}/download"
                 ws_s.cell(row=row_idx, column=1, value=TASK_TYPE_LABELS.get(task.task_type, task.task_type))
                 ws_s.cell(row=row_idx, column=2, value=task_result.file_name)
-                link_cell = ws_s.cell(row=row_idx, column=3, value=f'=HYPERLINK("{url}")')
+                ws_s.cell(row=row_idx, column=3, value=f'=HYPERLINK("{url}")')
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -279,7 +279,6 @@ async def init_from_result(
     # Look for TaskResult in requested slot, fallback to 'result' if 'estimate' not found
     slots_to_try = [file_slot] if file_slot == "result" else [file_slot, "result"]
     tr = None
-    found_slot = file_slot
     for slot_candidate in slots_to_try:
         res = await db.execute(
             select(TaskResult)
@@ -289,7 +288,6 @@ async def init_from_result(
         )
         tr = res.scalar_one_or_none()
         if tr is not None:
-            found_slot = slot_candidate
             break
 
     if tr is None:

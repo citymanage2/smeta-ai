@@ -5,7 +5,6 @@ import time
 import uuid
 from urllib.parse import quote
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Optional
 from fastapi import (
     APIRouter,
@@ -646,7 +645,7 @@ async def resume_task(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Resume a failed resumable task from the last saved chunk."""
+    """Resume a failed / cancelled / paused resumable task from the last saved chunk."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
 
@@ -656,13 +655,13 @@ async def resume_task(
             detail="Задача не найдена",
         )
 
-    if task.status not in ("failed", "cancelled"):
+    if task.status not in ("failed", "cancelled", "paused"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Возобновление невозможно: задача в статусе «{task.status}»",
         )
 
-    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS", "ESTIMATE_FROM_LIST"}
+    RESUMABLE_TYPES = {"LIST_FROM_GRAND", "LIST_FROM_PROJECT", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS", "ESTIMATE_FROM_LIST"}
     if task.task_type.upper() not in RESUMABLE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -670,7 +669,10 @@ async def resume_task(
         )
 
     progress_data = task.progress_data or {}
-    has_checkpoint = "chunks_done" in progress_data or progress_data.get("_stage") == "pre_excel"
+    has_checkpoint = (
+        "chunks_done" in progress_data
+        or progress_data.get("_stage") in ("pre_excel", "claude_partial")
+    )
     if not has_checkpoint:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

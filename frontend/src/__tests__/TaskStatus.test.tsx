@@ -31,6 +31,8 @@ vi.mock('../api/tasks', () => ({
   sendMessage: vi.fn(),
   cancelTask: vi.fn(),
   downloadResult: vi.fn(),
+  resumeTask: vi.fn(),
+  restartTask: vi.fn(),
 }));
 
 vi.mock('../api/projects', () => ({
@@ -44,6 +46,13 @@ vi.mock('../stores/auth', () => ({
 
 vi.mock('../components/BatchProgressBar', () => ({
   BatchProgressBar: () => null,
+}));
+
+// notificationSound регистрирует глобальный click-листенер с AudioContext,
+// который jsdom не поддерживает — мок убирает сайд-эффект при .click() в тестах.
+vi.mock('../utils/notificationSound', () => ({
+  playSuccess: vi.fn(),
+  playError: vi.fn(),
 }));
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -128,5 +137,149 @@ describe('TaskStatus — progress_message display', () => {
 
     await screen.findByText('Завершено');
     expect(screen.queryByTestId('progress-message')).toBeNull();
+  });
+});
+
+// ── Phase 1: resume button shows wherever a checkpoint exists ────────────────
+
+describe('TaskStatus — resume button visibility (Phase 1)', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+    vi.mocked(getTaskResults).mockResolvedValue([]);
+  });
+
+  it('shows "Продолжить" for a failed CHECK_LIST_COMPLETENESS with a chunk checkpoint', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'CHECK_LIST_COMPLETENESS' as any,
+        status: 'failed',
+        error_message: 'Ошибка',
+        progress_data: { chunks_done: 2, total_chunks: 5 } as any,
+      })
+    );
+
+    renderPage();
+
+    const btn = await screen.findByTestId('resume-button');
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent('Продолжить');
+  });
+
+  it('shows "Продолжить" for a failed CHECK_PROJECT_COMPLETENESS with a chunk checkpoint', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'CHECK_PROJECT_COMPLETENESS' as any,
+        status: 'failed',
+        error_message: 'Ошибка',
+        progress_data: { chunks_done: 1, total_chunks: 3 } as any,
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
+  });
+
+  it('still shows "Продолжить" for a failed ESTIMATE_FROM_LIST at pre_excel stage (regression)', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'ESTIMATE_FROM_LIST' as any,
+        status: 'failed',
+        error_message: 'Ошибка',
+        progress_data: { _stage: 'pre_excel' } as any,
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
+  });
+
+  it('shows "Продолжить" for a failed ESTIMATE_FROM_LIST at claude_partial stage (Phase 2b)', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'ESTIMATE_FROM_LIST' as any,
+        status: 'failed',
+        error_message: 'Баланс API исчерпан',
+        progress_data: { _stage: 'claude_partial', claude_results: { '0': {} } } as any,
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
+  });
+
+  it('shows only "Перезапустить" for a failed task without a checkpoint', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'LIST_FROM_PROJECT' as any,
+        status: 'failed',
+        error_message: 'Ошибка',
+        progress_data: undefined,
+      })
+    );
+
+    renderPage();
+
+    await screen.findByText('Ошибка выполнения');
+    expect(screen.queryByTestId('resume-button')).toBeNull();
+    expect(screen.getByTestId('restart-button')).toBeInTheDocument();
+  });
+});
+
+// ── Phase 5: paused status block + «Продолжить сейчас» ───────────────────────
+
+describe('TaskStatus — paused status (Phase 5)', () => {
+  beforeEach(() => {
+    mockNavigate.mockClear();
+    vi.mocked(getTaskResults).mockResolvedValue([]);
+  });
+
+  it('renders the paused block with «Продолжить сейчас» for a paused task', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'ESTIMATE_FROM_LIST' as any,
+        status: 'paused',
+        error_message: 'Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.',
+        progress_data: { _stage: 'claude_partial' } as any,
+      })
+    );
+
+    renderPage();
+
+    const block = await screen.findByTestId('paused-block');
+    expect(block).toBeInTheDocument();
+    const btn = screen.getByTestId('resume-now-button');
+    expect(btn).toHaveTextContent('Продолжить сейчас');
+  });
+
+  it('«Продолжить сейчас» calls resumeTask', async () => {
+    const { resumeTask } = await import('../api/tasks');
+    vi.mocked(resumeTask).mockResolvedValue({ task_id: 'x', status: 'pending' } as any);
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'ESTIMATE_FROM_LIST' as any,
+        status: 'paused',
+        error_message: 'Баланс API исчерпан',
+        progress_data: { _stage: 'claude_partial' } as any,
+      })
+    );
+
+    renderPage();
+
+    const btn = await screen.findByTestId('resume-now-button');
+    btn.click();
+    expect(vi.mocked(resumeTask)).toHaveBeenCalledWith('aaaaaaaa-0000-0000-0000-000000000001');
+  });
+
+  it('shows «На паузе» status label for a paused task', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({ status: 'paused', progress_data: { _stage: 'pre_excel' } as any })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText('На паузе')).toBeInTheDocument();
   });
 });

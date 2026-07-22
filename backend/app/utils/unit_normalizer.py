@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 _PREFIX_SPACE_RE = re.compile(r'^(\d+(?:[.,]\d+)?)\s+(.+)$')
 _PREFIX_NOSPACE_RE = re.compile(r'^(\d+(?:[.,]\d+)?)([а-яёА-ЯЁa-zA-Z].+)$')

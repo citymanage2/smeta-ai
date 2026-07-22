@@ -21,7 +21,6 @@ from app.models.task import Task
 from app.utils.auth import hash_password, verify_password
 from app.services import price_service
 from sqlalchemy import select, update, text
-from datetime import datetime, timezone
 
 # Configure structlog
 structlog.configure(
@@ -143,7 +142,19 @@ async def lifespan(app: FastAPI):
         # завершённые на серверах Anthropic. max_instances=1 — без наложения проходов.
         from app.services.batch_poller import poll_batch_tasks
         scheduler.add_job(poll_batch_tasks, "interval", seconds=60, max_instances=1)
+        # Авто-возобновление задач на паузе (баланс API исчерпан). Пробный
+        # вызов раз в 10 минут: если счёт пополнен — расчёт продолжится с
+        # чекпоинта, иначе задача тихо вернётся в paused. max_instances=1 —
+        # без наложения проходов.
+        from app.services.resume_poller import resume_paused_tasks
+        scheduler.add_job(resume_paused_tasks, "interval", minutes=10, max_instances=1)
         scheduler.start()
+        # Один немедленный проход после старта — чтобы paused-задачи, пережившие
+        # рестарт сервера, подхватились сразу, не дожидаясь первого тика.
+        try:
+            await resume_paused_tasks()
+        except Exception as e:
+            logger.warning("Initial resume_paused_tasks pass failed", error=str(e))
         logger.info("Startup complete")
     except Exception as e:
         logger.error("Startup failed", error=str(e))

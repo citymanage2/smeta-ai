@@ -79,7 +79,15 @@ async def test_patch_project(async_client: AsyncClient, user_token: str):
 
 
 @pytest.mark.asyncio
-async def test_delete_project_requires_admin(async_client: AsyncClient, user_token: str):
+async def test_delete_project_soft_deletes_for_any_user(
+    async_client: AsyncClient, user_token: str
+):
+    """Мягкое удаление (в корзину) разрешено любому авторизованному пользователю.
+
+    Начиная с редизайна «удаление в корзину» soft-delete обратим и доступен
+    обычным пользователям; админ по-прежнему требуется только для необратимых
+    операций (permanent-delete и очистка корзины).
+    """
     create_resp = await async_client.post(
         "/projects",
         json={"name": "Удаляемый"},
@@ -91,7 +99,14 @@ async def test_delete_project_requires_admin(async_client: AsyncClient, user_tok
         f"/projects/{project_id}",
         headers={"Authorization": user_token},
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+
+    # Проект перемещён в корзину — обычным detail-эндпоинтом больше не виден.
+    get_resp = await async_client.get(
+        f"/projects/{project_id}",
+        headers={"Authorization": user_token},
+    )
+    assert get_resp.status_code == 404
 
 
 @pytest.mark.asyncio
