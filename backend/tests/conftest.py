@@ -26,6 +26,7 @@ sys.modules['weasyprint'] = weasyprint_mock
 
 from app.database import Base, get_db
 from app.models.task import Task          # noqa: F401  (registers with Base.metadata)
+from app.models.task_input_file import TaskInputFile  # noqa: F401
 from app.models.result import TaskResult  # noqa: F401
 from app.models.user import User          # noqa: F401
 from app.models.price import PriceWork, PriceMaterial  # noqa: F401

@@ -79,5 +79,8 @@ def test_extract_total_cost_float_value():
 
 
 def test_estimate_task_types_constant():
-    assert "LIST_FROM_GRAND" in ESTIMATE_TASK_TYPES
-    assert "LIST_FROM_TZ" not in ESTIMATE_TASK_TYPES
+    # Estimate-producing task types (source of truth: app/constants.py).
+    # LIST_FROM_GRAND is a "list" stage (produces a перечень), not an estimate,
+    # so it must NOT be here — only ESTIMATE_FROM_LIST / ESTIMATE_OPTIMIZATION.
+    assert "ESTIMATE_FROM_LIST" in ESTIMATE_TASK_TYPES
+    assert "LIST_FROM_GRAND" not in ESTIMATE_TASK_TYPES

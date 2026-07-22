@@ -23,7 +23,7 @@ from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.pdf_text_extractor import chunk_project_pdf
-from app.utils.pdf_ocr_extractor import extract_pdf_with_ocr, chunk_pdf_pages, extract_single_page, get_pdf_page_count
+from app.utils.pdf_ocr_extractor import chunk_pdf_pages, extract_single_page, get_pdf_page_count
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.unit_normalizer import normalize_items
