@@ -21,7 +21,6 @@ from app.models.task import Task
 from app.utils.auth import hash_password, verify_password
 from app.services import price_service
 from sqlalchemy import select, update, text
-from datetime import datetime, timezone
 
 # Configure structlog
 structlog.configure(

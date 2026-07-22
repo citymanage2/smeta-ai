@@ -1308,7 +1308,7 @@ def generate_estimate_export(
 
     def _write_total(label: str, value: float, fill: PatternFill, bold: bool = False):
         nonlocal row_idx
-        c_label = ws.cell(row=row_idx, column=3, value=label)
+        ws.cell(row=row_idx, column=3, value=label)
         c_value = ws.cell(row=row_idx, column=8, value=value)
         c_value.number_format = _NUMBER_FMT
         for ci in range(1, len(COLS) + 1):
@@ -1374,7 +1374,6 @@ def _build_svodная(wb: "openpyxl.Workbook", versions: list, customer_estimate
 
     # Column layout: col1=Показатель, col2=Смета от заказчика (optional), col3..N=versions
     col_offset = 2 if has_customer else 1
-    total_cols = col_offset + len(versions)
 
     # Header row
     h = ws.cell(row=1, column=1, value="Показатель")

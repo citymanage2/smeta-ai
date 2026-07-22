@@ -5,7 +5,6 @@ import time
 import uuid
 from urllib.parse import quote
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Optional
 from fastapi import (
     APIRouter,

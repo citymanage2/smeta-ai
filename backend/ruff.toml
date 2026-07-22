@@ -1,0 +1,31 @@
+# Ruff configuration for the smeta-ai backend.
+#
+# App code (app/**, scripts/**) is kept lint-clean — real findings are fixed,
+# not ignored. This file only silences intentional patterns and generated /
+# boilerplate noise so `ruff check .` is green and surfaces only new issues.
+
+[lint]
+# Default rule set (pyflakes F + pycodestyle E/W). No extra rules enabled here
+# to avoid churn; tighten later if desired.
+
+[lint.per-file-ignores]
+# Tests: mock-before-import scaffolding requires statements before imports
+# (E402), and helpers/fixtures intentionally keep unused imports (F401),
+# redefinitions (F811), throwaway locals (F841) and placeholder f-strings (F541).
+"tests/**" = ["E402", "F401", "F811", "F841", "F541"]
+
+# Alembic migrations are generated from a template that imports sqlalchemy
+# helpers whether or not a given revision uses them.
+"alembic/**" = ["F401", "E402"]
+
+# Models define a dialect-aware JSONB variant (a runtime statement) between
+# imports on purpose — the later imports don't depend on it, so E402 here is
+# an intentional grouping, not a mistake.
+"app/models/*.py" = ["E402"]
+
+# pdf_ocr_extractor guards optional native deps (pytesseract / fitz) behind a
+# try/except and a logger definition placed before the guarded imports.
+"app/utils/pdf_ocr_extractor.py" = ["E402"]
+
+# One-off maintenance scripts are not part of the app runtime.
+"scripts/**" = ["F401"]
