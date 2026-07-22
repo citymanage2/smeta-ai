@@ -52,6 +52,10 @@ vi.mock('../components/HistoryModal', () => ({
   default: () => null,
 }));
 
+vi.mock('../components/kanban/KanbanBoard', () => ({
+  KanbanBoard: () => null,
+}));
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 import { getProject } from '../api/projects';
@@ -75,7 +79,7 @@ function makeProject(taskOverrides: { estimation_status?: EstimationStatus; task
     tasks: [
       {
         id: TASK_ID,
-        task_type: 'SMETA_FROM_LIST',
+        task_type: 'ESTIMATE_FROM_LIST',
         status: 'completed',
         estimation_status: 'estimated' as EstimationStatus,
         cost: 100000,
@@ -88,12 +92,15 @@ function makeProject(taskOverrides: { estimation_status?: EstimationStatus; task
   };
 }
 
-function renderPage() {
-  return render(
+async function renderPage() {
+  const utils = render(
     <MemoryRouter>
       <ProjectDetailPage />
     </MemoryRouter>
   );
+  // Дефолтный вид — 'kanban'; строки задач рендерятся только в виде 'list'.
+  fireEvent.click(await screen.findByText('Список'));
+  return utils;
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
@@ -105,7 +112,7 @@ describe('ProjectDetail — Bug 1: task card click navigates to status page', ()
   });
 
   it('clicking the task row navigates to /tasks/{id}/status', async () => {
-    renderPage();
+    await renderPage();
     const row = await screen.findByText('Смета из перечня');
     fireEvent.click(row);
     expect(mockNavigate).toHaveBeenCalledWith(`/tasks/${TASK_ID}/status`);
@@ -113,7 +120,7 @@ describe('ProjectDetail — Bug 1: task card click navigates to status page', ()
 
   it('does NOT navigate when task id is falsy (guard against catch-all→/task/create redirect)', async () => {
     vi.mocked(getProject).mockResolvedValue(makeProject({ id: '' }));
-    renderPage();
+    await renderPage();
     const row = await screen.findByText('Смета из перечня');
     fireEvent.click(row);
     expect(mockNavigate).not.toHaveBeenCalledWith('/tasks//status');
@@ -129,17 +136,17 @@ describe('ProjectDetail — Bug 2: Optimize button condition', () => {
 
   it('shows Optimize button for estimate task type with estimation_status estimated', async () => {
     vi.mocked(getProject).mockResolvedValue(
-      makeProject({ task_type: 'SMETA_FROM_LIST', estimation_status: 'estimated' })
+      makeProject({ task_type: 'ESTIMATE_FROM_LIST', estimation_status: 'estimated' })
     );
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Оптимизировать')).toBeInTheDocument();
   });
 
-  it('does NOT show Optimize button for OPTIMIZE_SMETA task even if estimation_status is estimated', async () => {
+  it('does NOT show Optimize button for ESTIMATE_OPTIMIZATION task even if estimation_status is estimated', async () => {
     vi.mocked(getProject).mockResolvedValue(
-      makeProject({ task_type: 'OPTIMIZE_SMETA', estimation_status: 'estimated' })
+      makeProject({ task_type: 'ESTIMATE_OPTIMIZATION', estimation_status: 'estimated' })
     );
-    renderPage();
+    await renderPage();
     await screen.findByText('Оптимизация сметы');  // wait for render
     // Wait briefly for async render then check button is absent
     await new Promise(r => setTimeout(r, 50));
@@ -148,9 +155,9 @@ describe('ProjectDetail — Bug 2: Optimize button condition', () => {
 
   it('does NOT show Optimize button when estimation_status is unestimated', async () => {
     vi.mocked(getProject).mockResolvedValue(
-      makeProject({ task_type: 'SMETA_FROM_LIST', estimation_status: 'unestimated' })
+      makeProject({ task_type: 'ESTIMATE_FROM_LIST', estimation_status: 'unestimated' })
     );
-    renderPage();
+    await renderPage();
     await screen.findByText('Смета из перечня');
     expect(screen.queryByText('Оптимизировать')).toBeNull();
   });
@@ -165,7 +172,7 @@ describe('ProjectDetail — Bug 3: estimation status badge', () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'estimated' })
     );
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Рассчитана')).toBeInTheDocument();
   });
 
@@ -173,7 +180,7 @@ describe('ProjectDetail — Bug 3: estimation status badge', () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'optimizing' })
     );
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Оптимизируется')).toBeInTheDocument();
   });
 
@@ -181,7 +188,7 @@ describe('ProjectDetail — Bug 3: estimation status badge', () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'optimized' })
     );
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Оптимизирована')).toBeInTheDocument();
   });
 
@@ -189,16 +196,16 @@ describe('ProjectDetail — Bug 3: estimation status badge', () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'unestimated' })
     );
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Не рассчитана')).toBeInTheDocument();
   });
 
   it('does NOT show badge for not_applicable status', async () => {
     vi.mocked(getProject).mockResolvedValue(
-      makeProject({ task_type: 'LIST_FROM_TZ', estimation_status: 'not_applicable' })
+      makeProject({ task_type: 'LIST_FROM_GRAND', estimation_status: 'not_applicable' })
     );
-    renderPage();
-    await screen.findByText('Перечень из ТЗ');
+    await renderPage();
+    await screen.findByText('Перечень из Гранд-сметы');
     expect(screen.queryByText('Не рассчитана')).toBeNull();
     expect(screen.queryByText('Рассчитана')).toBeNull();
   });
