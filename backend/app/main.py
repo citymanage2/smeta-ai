@@ -97,11 +97,15 @@ async def _recover_stuck_tasks() -> None:
     stops polling and shows an actionable error instead of hanging forever.
     All processing tasks are reset immediately — there are no surviving workers
     after a restart.
+
+    Исключение: задачи в состоянии batch_pending (долгий batch-режим) НЕ фейлятся —
+    их пачка продолжает считаться на серверах Anthropic и будет дочитана поллером.
     """
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             update(Task)
             .where(Task.status == "processing")
+            .where(text("progress_data->>'_stage' IS DISTINCT FROM 'batch_pending'"))
             .values(
                 status="failed",
                 error_message="Задача прервана: сервер был перезапущен во время обработки. Нажмите «Перезапустить».",
@@ -135,6 +139,10 @@ async def lifespan(app: FastAPI):
         await _recover_stuck_tasks()
         await cleanup_price_cache()
         scheduler.add_job(cleanup_price_cache, "interval", hours=24)
+        # Поллер batch-задач ESTIMATE_FROM_LIST (долгий режим): дочитывает пачки,
+        # завершённые на серверах Anthropic. max_instances=1 — без наложения проходов.
+        from app.services.batch_poller import poll_batch_tasks
+        scheduler.add_job(poll_batch_tasks, "interval", seconds=60, max_instances=1)
         scheduler.start()
         logger.info("Startup complete")
     except Exception as e:

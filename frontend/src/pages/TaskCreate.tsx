@@ -53,6 +53,9 @@ const TaskCreate: React.FC = () => {
   const [selectedSourceTaskId, setSelectedSourceTaskId] = useState('');
   const [selectedStage, setSelectedStage] = useState<number>(1);
 
+  // Режим обработки (только ESTIMATE_FROM_LIST): fast — параллельно, batch — Batch API (дешевле)
+  const [processingMode, setProcessingMode] = useState<'fast' | 'batch'>('fast');
+
   useEffect(() => {
     listProjects().then(setProjects).catch(() => {});
   }, []);
@@ -209,6 +212,7 @@ const TaskCreate: React.FC = () => {
       const formData = new FormData();
       formData.append('task_type', taskType);
       formData.append('name', name.trim());
+      formData.append('processing_mode', processingMode);
 
       if (isEstimateOpt) {
         // Main estimate file goes first (index 0)
@@ -481,6 +485,42 @@ const TaskCreate: React.FC = () => {
                       {mode === 'file' ? '📎 Загрузить файл' : '🗂 Из существующей задачи'}
                     </button>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Режим обработки — only for ESTIMATE_FROM_LIST */}
+            {taskType === 'ESTIMATE_FROM_LIST' && (
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: 600, color: '#374151', marginBottom: '10px' }}>
+                  Режим обработки
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['fast', 'batch'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      disabled={submitting}
+                      onClick={() => setProcessingMode(mode)}
+                      style={{
+                        padding: '8px 18px',
+                        fontSize: '14px',
+                        fontWeight: 500,
+                        border: `1.5px solid ${processingMode === mode ? '#2563eb' : '#e2e8f0'}`,
+                        borderRadius: '8px',
+                        backgroundColor: processingMode === mode ? '#eff6ff' : '#ffffff',
+                        color: processingMode === mode ? '#1d4ed8' : '#64748b',
+                        cursor: submitting ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {mode === 'fast' ? '⚡ Быстро' : '🕐 Долго (дешевле)'}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ marginTop: '8px', fontSize: '13px', color: '#64748b' }}>
+                  {processingMode === 'fast'
+                    ? 'Параллельная обработка — результат максимально быстро.'
+                    : 'Пакетная обработка (Batch API): дешевле примерно вдвое, но результат может готовиться до часа. Подходит для заранее подготавливаемых смет.'}
                 </div>
               </div>
             )}

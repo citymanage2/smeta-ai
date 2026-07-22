@@ -47,6 +47,14 @@ class Task(Base):
         nullable=False,
         default="not_applicable",
     )
+    # Режим обработки ESTIMATE_FROM_LIST: 'fast' — параллельно (asyncio.gather),
+    # 'batch' — Anthropic Message Batches API (−50% стоимости, устойчивость к рестартам).
+    processing_mode: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        default="fast",
+        server_default="fast",
+    )
     cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
