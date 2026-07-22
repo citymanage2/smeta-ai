@@ -56,6 +56,14 @@ vi.mock('../components/kanban/KanbanBoard', () => ({
   KanbanBoard: () => null,
 }));
 
+// notificationSound регистрирует глобальный click-листенер с AudioContext,
+// которого нет в jsdom — при .click() в тестах он бросает ReferenceError.
+// Мок убирает сайд-эффект.
+vi.mock('../utils/notificationSound', () => ({
+  playSuccess: vi.fn(),
+  playError: vi.fn(),
+}));
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 import { getProject } from '../api/projects';

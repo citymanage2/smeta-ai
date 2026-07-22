@@ -17,6 +17,7 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; border: string }
   completed:  { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },
   failed:     { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
   cancelled:  { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
+  paused:     { bg: '#fffbeb', text: '#b45309', border: '#fcd34d' },
 }
 
 function formatDate(iso: string): string {

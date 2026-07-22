@@ -26,6 +26,7 @@ const STATUS_DOT_COLOR: Record<string, string> = {
   completed: '#22c55e',
   failed: '#ef4444',
   cancelled: '#94a3b8',
+  paused: '#d97706',
 };
 
 function formatDate(iso: string): string {

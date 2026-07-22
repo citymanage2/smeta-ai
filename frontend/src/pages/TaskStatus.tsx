@@ -37,6 +37,7 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
   completed: { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },
   failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
   cancelled: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
+  paused: { bg: '#fffbeb', text: '#b45309', border: '#fcd34d' },
 };
 
 // Типы задач, которые бэкенд умеет продолжать с чекпоинта (см. RESUMABLE_TYPES
@@ -880,6 +881,58 @@ const TaskStatusPage: React.FC = () => {
                       }}
                     >
                       {restarting ? 'Запуск...' : '↺ Перезапустить'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Paused — баланс API исчерпан, задача возобновится автоматически */}
+              {task.status === 'paused' && (
+                <div
+                  data-testid="paused-block"
+                  style={{
+                    marginTop: '16px',
+                    padding: '16px',
+                    backgroundColor: '#fffbeb',
+                    border: '1px solid #fcd34d',
+                    borderRadius: '8px',
+                  }}
+                >
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#b45309', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    ⏸ На паузе
+                  </div>
+                  <div style={{ margin: 0, fontSize: '13px', color: '#92400e', lineHeight: 1.6 }}>
+                    {task.error_message
+                      ? formatTaskError(task.error_message)
+                      : 'Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта — прогресс сохранён, уже посчитанные позиции повторно не считаются.'}
+                  </div>
+                  {progressLog.length > 0 && (
+                    <div style={{ marginTop: '12px', borderTop: '1px solid #fde68a', paddingTop: '10px' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 600, color: '#b45309', marginBottom: '6px' }}>
+                        Остановлено на шаге:
+                      </div>
+                      <span style={{ fontSize: '13px', color: '#92400e' }}>
+                        {progressLog[progressLog.length - 1]}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ marginTop: '16px' }}>
+                    <button
+                      data-testid="resume-now-button"
+                      onClick={handleResume}
+                      disabled={resuming}
+                      style={{
+                        padding: '8px 20px',
+                        backgroundColor: resuming ? '#fcd34d' : '#d97706',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: resuming ? 'not-allowed' : 'pointer',
+                        fontSize: '13px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      {resuming ? 'Запуск...' : '▶ Продолжить сейчас'}
                     </button>
                   </div>
                 </div>
