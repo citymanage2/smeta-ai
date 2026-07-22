@@ -33,6 +33,11 @@ from app.services import price_service as _price_svc
 # 1 == последовательно (запасной путь).
 FAST_CHUNK_CONCURRENCY = 4
 
+# Шаг 2 ESTIMATE_FROM_LIST (fast/sync): каждые сколько чанков главного прохода
+# сохранять промежуточный чекпоинт claude_partial. При паузе на балансе resume
+# продолжит с последней группы — теряется максимум одна группа, а не вся смета.
+ESTIMATE_MAIN_CHECKPOINT_GROUP = 8
+
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 logger = structlog.get_logger()
@@ -926,6 +931,32 @@ class TaskProcessor:
         except Exception as _cache_err:
             logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
 
+    @staticmethod
+    def _pending_chunks(chunks: list, done_ids: set) -> list:
+        """Отфильтровать чанки, оставив только позиции с _id, ещё не посчитанными
+        Claude (done_ids). Полностью посчитанные чанки исключаются, частичные —
+        обрезаются до необсчитанных позиций. Для resume fast/sync: уже оценённые
+        позиции повторно в Claude не отправляются."""
+        out: list = []
+        for c in chunks:
+            rem = [it for it in c if it.get("_id") not in done_ids]
+            if rem:
+                out.append(rem)
+        return out
+
+    async def _save_claude_partial(
+        self, items: list, matched_by_gidx: dict, claude_results: dict
+    ) -> None:
+        """Промежуточный чекпоинт шага 2 (fast/sync): накопленные claude_results.
+        Тот же формат, что pre_excel, но _stage="claude_partial" — resume прогонит
+        шаги 0-1 заново, а шаг 2 продолжит только по необсчитанным позициям."""
+        await self._save_progress_data({
+            "_stage": "claude_partial",
+            "items": items,
+            "matched": {str(k): v for k, v in matched_by_gidx.items()},
+            "claude_results": {str(k): v for k, v in claude_results.items()},
+        })
+
     async def _submit_estimate_batch(
         self,
         task: Task,
@@ -1766,6 +1797,13 @@ class TaskProcessor:
             await self._run_estimate_step3(task, _items_raw, _matched_restored, _claude_restored)
             return
 
+        # Resume (fast/sync): подхватить уже посчитанные Claude-позиции из
+        # промежуточного чекпоинта. Захватываем ДО шагов 0-1, т.к. они могут
+        # перезаписать progress_data. Шаг 2 продолжит только по необсчитанным.
+        _resume_claude_results: dict[int, dict] = {}
+        if _progress.get("_stage") == "claude_partial":
+            _resume_claude_results = {int(k): v for k, v in (_progress.get("claude_results") or {}).items()}
+
         # ── Шаг 0: Получаем items ───────────────────────────────────────────
         items: list[dict] = []
         user_prompt = task.user_prompt or ""
@@ -1996,7 +2034,8 @@ class TaskProcessor:
 
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
         # Results keyed by int _id (= global index), not by name string.
-        claude_results: dict[int, dict] = {}
+        # Seed из resume-чекпоинта: уже посчитанные позиции не пересчитываем.
+        claude_results: dict[int, dict] = dict(_resume_claude_results)
 
         async def _fetch_chunk(chunk: list[dict], chunk_label: str) -> list[dict]:
             """DB-free: отправить чанк в Claude, вернуть список result-items.
@@ -2080,8 +2119,15 @@ class TaskProcessor:
             )
 
             concurrency = FAST_CHUNK_CONCURRENCY if mode == "fast" else 1
-            await self._check_cancelled()
-            await _process_chunks(chunks, label_prefix="", concurrency=concurrency)
+            # Главный проход группами: после каждой группы — промежуточный
+            # чекпоинт claude_partial (устойчивость к паузе на балансе).
+            # Пропускаем позиции, уже посчитанные в предыдущем запуске (resume).
+            pending = self._pending_chunks(chunks, set(claude_results.keys()))
+            for _gi in range(0, len(pending), ESTIMATE_MAIN_CHECKPOINT_GROUP):
+                group = pending[_gi:_gi + ESTIMATE_MAIN_CHECKPOINT_GROUP]
+                await self._check_cancelled()
+                await _process_chunks(group, label_prefix="", concurrency=concurrency)
+                await self._save_claude_partial(items, matched_by_gidx, claude_results)
 
             # Retry any ids Claude skipped — in smaller batches of 5.
             missing_ids = set(unmatched_by_gidx.keys()) - set(claude_results.keys())

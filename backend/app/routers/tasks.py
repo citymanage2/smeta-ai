@@ -670,7 +670,10 @@ async def resume_task(
         )
 
     progress_data = task.progress_data or {}
-    has_checkpoint = "chunks_done" in progress_data or progress_data.get("_stage") == "pre_excel"
+    has_checkpoint = (
+        "chunks_done" in progress_data
+        or progress_data.get("_stage") in ("pre_excel", "claude_partial")
+    )
     if not has_checkpoint:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

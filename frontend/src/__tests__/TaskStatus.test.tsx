@@ -188,6 +188,21 @@ describe('TaskStatus — resume button visibility (Phase 1)', () => {
     expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
   });
 
+  it('shows "Продолжить" for a failed ESTIMATE_FROM_LIST at claude_partial stage (Phase 2b)', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'ESTIMATE_FROM_LIST' as any,
+        status: 'failed',
+        error_message: 'Баланс API исчерпан',
+        progress_data: { _stage: 'claude_partial', claude_results: { '0': {} } } as any,
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
+  });
+
   it('shows only "Перезапустить" for a failed task without a checkpoint', async () => {
     vi.mocked(getTaskStatus).mockResolvedValue(
       makeTaskResponse({

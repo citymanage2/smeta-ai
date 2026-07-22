@@ -52,7 +52,7 @@ const RESUMABLE_TASK_TYPES: string[] = [
 function hasResumeCheckpoint(task: TaskStatusResponse): boolean {
   const pd = task.progress_data;
   if (!pd) return false;
-  return pd.chunks_done != null || pd._stage === 'pre_excel';
+  return pd.chunks_done != null || pd._stage === 'pre_excel' || pd._stage === 'claude_partial';
 }
 
 function isResumable(task: TaskStatusResponse): boolean {
@@ -925,11 +925,11 @@ const TaskStatusPage: React.FC = () => {
                   )}
 
                   {/* Resume section — показываем «Продолжить» для любой resumable-задачи с чекпоинтом */}
-                  {isResumable(task) && task.progress_data?._stage === 'pre_excel' ? (
+                  {isResumable(task) && (task.progress_data?._stage === 'pre_excel' || task.progress_data?._stage === 'claude_partial') ? (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
-                        Данные от Claude сохранены. Задача зависла на этапе формирования Excel.
-                        Нажмите «Продолжить» — токены повторно тратиться не будут.
+                        Часть данных от Claude сохранена. Продолжение не будет пересчитывать
+                        уже обработанные позиции — токены повторно тратиться не будут.
                       </div>
                       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                         <button
