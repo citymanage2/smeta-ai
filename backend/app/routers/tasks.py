@@ -646,7 +646,7 @@ async def resume_task(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Resume a failed resumable task from the last saved chunk."""
+    """Resume a failed / cancelled / paused resumable task from the last saved chunk."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
 
@@ -656,7 +656,7 @@ async def resume_task(
             detail="Задача не найдена",
         )
 
-    if task.status not in ("failed", "cancelled"):
+    if task.status not in ("failed", "cancelled", "paused"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Возобновление невозможно: задача в статусе «{task.status}»",

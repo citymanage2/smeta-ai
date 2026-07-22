@@ -13,6 +13,16 @@ logger = structlog.get_logger()
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
+
+class InsufficientBalanceError(RuntimeError):
+    """Anthropic API отклонил запрос из-за исчерпанного баланса счёта.
+
+    Отдельный тип (а не голый RuntimeError), чтобы вызывающий код мог перевести
+    задачу на паузу (`paused`) и автоматически возобновить её после пополнения,
+    вместо перевода в `failed`. Наследуется от RuntimeError для обратной
+    совместимости с существующими `except RuntimeError`.
+    """
+
 # USD per token for cost calculation
 _COST_PER_TOKEN: dict[str, dict[str, float]] = {
     "claude-sonnet-4-6": {
@@ -376,7 +386,7 @@ async def call_claude(
                 body = getattr(e, "body", None) or {}
                 err_msg = body.get("error", {}).get("message", "") if isinstance(body, dict) else ""
                 if "credit balance" in err_msg.lower() or "credit balance" in str(e).lower():
-                    raise RuntimeError(
+                    raise InsufficientBalanceError(
                         "Баланс API Anthropic меньше 0. Обратитесь к администратору сервиса"
                     ) from e
                 raise

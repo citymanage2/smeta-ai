@@ -16,6 +16,7 @@ from app.services.claude_service import (
     build_batch_request,
     submit_claude_batch,
     collect_claude_batch,
+    InsufficientBalanceError,
 )
 from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
@@ -782,9 +783,10 @@ class TaskProcessor:
                 raise
             except asyncio.TimeoutError:
                 raise
+            except InsufficientBalanceError:
+                # Баланс API исчерпан — ретраи не помогут; пробрасываем на паузу.
+                raise
             except Exception as e:
-                if "баланс api" in str(e).lower() or "credit balance" in str(e).lower():
-                    raise
                 last_error = e
                 if attempt < max_chunk_retries - 1:
                     wait = chunk_retry_delays[attempt]
@@ -826,9 +828,10 @@ class TaskProcessor:
                 raise
             except asyncio.TimeoutError:
                 raise
+            except InsufficientBalanceError:
+                # Баланс API исчерпан — ретраи не помогут; пробрасываем на паузу.
+                raise
             except Exception as e:
-                if "баланс api" in str(e).lower() or "credit balance" in str(e).lower():
-                    raise
                 last_error = e
                 if attempt < max_chunk_retries - 1:
                     wait = chunk_retry_delays[attempt]
@@ -1094,6 +1097,20 @@ class TaskProcessor:
 
         except TaskCancelledError:
             logger.info("Task was cancelled by user", task_id=self.task_id)
+        except InsufficientBalanceError:
+            # Баланс API исчерпан — не failed, а пауза. Чекпоинт (progress_data)
+            # к этому моменту уже сохранён отдельными сессиями и переживает
+            # rollback; планировщик возобновит задачу после пополнения счёта.
+            logger.warning("Task paused — Anthropic API balance exhausted", task_id=self.task_id)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            await self.update_status(
+                "paused",
+                error="Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.",
+            )
+            await self.update_progress("⏸ На паузе: баланс API исчерпан. Возобновление произойдёт автоматически после пополнения.")
         except Exception as e:
             logger.error("Task processing failed", task_id=self.task_id, error=str(e))
             try:
@@ -2066,10 +2083,11 @@ class TaskProcessor:
                 )
             except (TaskCancelledError, asyncio.TimeoutError):
                 raise
+            except InsufficientBalanceError:
+                # Баланс API исчерпан — не проглатываем чанк, пробрасываем на паузу.
+                raise
             except Exception as chunk_error:
                 err_str = str(chunk_error)
-                if "баланс" in err_str.lower() or "credit balance" in err_str.lower():
-                    raise
                 logger.warning(
                     "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
                     task_id=self.task_id,

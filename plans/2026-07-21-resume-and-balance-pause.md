@@ -36,7 +36,7 @@
   внутри шага 2 (`claude_partial`, после каждой группы чанков); при обрыве/паузе
   в шаге 2 resume продолжает только по необсчитанным позициям — уже посчитанные
   в Claude повторно не отправляются. (fast/sync; для batch устойчивость уже есть.)
-- [ ] **КП-4.** При исчерпании баланса Anthropic задача переходит в статус
+- [x] **КП-4.** При исчерпании баланса Anthropic задача переходит в статус
   `paused` (не `failed`), сохранив чекпоинт; текст объясняет причину.
 - [ ] **КП-5.** Планировщик каждые 10 минут автоматически пытается продолжить
   `paused`-задачи; при успехе (баланс пополнен) расчёт идёт дальше с чекпоинта,
@@ -161,8 +161,24 @@
   Тесты: `test_estimate_resume_checkpoint.py` (4), фронт `claude_partial` (1).
   Гейты: py_compile OK, целевые 18/18, фронт 38/38, tsc 0. Предсуществующие
   11 падений бэкенда — не связаны (проверено stash-прогоном на базе).
-- [ ] **Фаза 3 — Слой 3a (пауза: `InsufficientBalanceError` + статус `paused`).**
-  `claude_service.py`, `task_processor.py`, `tasks.py` (resume из `paused`).
+- [x] **Задача 1 (baseline) — починка 11 предсуществующих падений тестов + ruff.**
+  Коммит `47a5ddd`. Каждое падение разобрано «тест устарел / код сломан»:
+  migration_startup (деплой→Docker, читаем Dockerfile CMD), admin get_task
+  (код: фильтр `deleted_at IS NULL` — недоведённый soft-delete), delete_project
+  (тест: soft-delete теперь разрешён любому юзеру), task_file_slots +
+  estimate_task_types_constant (тесты: `LIST_FROM_GRAND` больше не estimate-тип
+  → `ESTIMATE_FROM_LIST`), conftest (импорт модели `TaskInputFile`), ruff F401.
+  Итог сьюта: **239 passed, 8 skipped, 0 failed**.
+- [x] **Фаза 3 — Слой 3a (пауза: `InsufficientBalanceError` + статус `paused`).**
+  `claude_service.py`: класс `InsufficientBalanceError(RuntimeError)`, бросается
+  вместо голого RuntimeError при 4xx «credit balance». `task_processor.py`:
+  импорт класса; 3 строковых проверки (`_call_claude_json_with_retry`,
+  `_interruptible_claude_json_with_retry`, ESTIMATE chunk) заменены на
+  `except InsufficientBalanceError`; в `process()` отдельный
+  `except InsufficientBalanceError` → `update_status("paused", ...)` (чекпоинт
+  в progress_data переживает rollback). `tasks.py`: `resume_task` допускает
+  статус `paused`. Тесты: `test_balance_pause.py` (7). Гейты: py_compile OK,
+  ruff (изменённые файлы) чист, целевые 7/7, полный сьют **246 passed**.
 - [ ] **Фаза 4 — Слой 3b (автовозобновление планировщиком).**
   `main.py` interval-job + защита от двойного запуска.
 - [ ] **Фаза 5 — Слой 3c (фронт: статус `paused`, блоки/цвета/поллер).**
