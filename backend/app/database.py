@@ -16,7 +16,7 @@ def _make_async_url(url: str) -> str:
 
 engine = create_async_engine(
     _make_async_url(settings.DATABASE_URL),
-    echo=False,
+    echo=settings.SQL_ECHO,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     TASK_TIMEOUT_SECONDS: int = 600
     CORS_ORIGINS: str = "*"
     VAT_RATE: float = 0.22
+    # Наблюдаемость: включает вывод всех SQL-запросов SQLAlchemy в лог (только для отладки).
+    SQL_ECHO: bool = False
 
     def get_cors_origins(self) -> List[str]:
         try:

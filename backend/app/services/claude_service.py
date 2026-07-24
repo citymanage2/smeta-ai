@@ -97,8 +97,13 @@ async def _log_api_call(
     cache_read_t: int,
     cache_creation_t: int,
     batch: bool = False,
+    duration_ms: Optional[int] = None,
 ) -> None:
-    """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5."""
+    """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5.
+
+    duration_ms — длительность самого API-вызова (None для batch: там нет
+    синхронного времени ответа, пачка считается на серверах Anthropic).
+    """
     if db is None or task_id is None:
         return
     try:
@@ -113,6 +118,7 @@ async def _log_api_call(
             cache_read_tokens=cache_read_t,
             cache_creation_tokens=cache_creation_t,
             cost_usd=cost,
+            duration_ms=duration_ms,
         )
         # Независимая сессия — caller может параллельно использовать свою db (cancel-checks).
         async with AsyncSessionLocal() as log_db:
@@ -275,6 +281,7 @@ async def call_claude(
 
             # Pass timeout directly to SDK (sets httpx total request timeout).
             # asyncio.wait_for обеспечивает отмену корутины по оставшемуся бюджету.
+            attempt_start = asyncio.get_event_loop().time()
             if remaining is not None:
                 sdk_kwargs = {**kwargs, "timeout": remaining}
                 response = await asyncio.wait_for(
@@ -283,6 +290,7 @@ async def call_claude(
                 )
             else:
                 response = await _client.messages.create(**kwargs)
+            call_duration_ms = int((asyncio.get_event_loop().time() - attempt_start) * 1000)
 
             # Detect output truncation before trying to use the response
             if response.stop_reason == "max_tokens":
@@ -308,9 +316,13 @@ async def call_claude(
                 attempt=attempt,
                 cache_read_tokens=cache_read_t,
                 cache_creation_tokens=cache_creation_t,
+                duration_ms=call_duration_ms,
             )
 
-            await _log_api_call(task_id, db, input_t, output_t, cache_read_t, cache_creation_t)
+            await _log_api_call(
+                task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
+                duration_ms=call_duration_ms,
+            )
 
             return result
 

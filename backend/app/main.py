@@ -1,6 +1,7 @@
 import structlog
 import os
 import asyncio
+import time
 from alembic.config import Config
 from alembic import command
 from contextlib import asynccontextmanager
@@ -178,6 +179,29 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
+
+    # Request-timing middleware (наблюдаемость): пишет длительность каждого
+    # HTTP-ответа. Добавлен до CORS → CORS окажется снаружи, а тайминг обернёт
+    # реальную обработку. Health-check и статику (SPA-ассеты, index.html) не
+    # логируем, чтобы не засорять лог фоновым трафиком поллеров.
+    _timing_skip_exact = {"/health", "/"}
+
+    @app.middleware("http")
+    async def request_timing_middleware(request: Request, call_next):
+        path = request.url.path
+        start = time.perf_counter()
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000, 1)
+        if path not in _timing_skip_exact and not path.startswith("/assets"):
+            logger.info(
+                "request",
+                method=request.method,
+                path=path,
+                status=response.status_code,
+                duration_ms=duration_ms,
+            )
+        response.headers["X-Process-Time-Ms"] = str(duration_ms)
+        return response
 
     # CORS — hardcoded to ["*"] so no env var can silently break preflights.
     # Safe because allow_credentials=False (Bearer tokens, no cookies).

@@ -26,6 +26,9 @@ class ApiCallLog(Base):
     cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_creation_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=Decimal("0"))
+    # Длительность синхронного API-вызова в миллисекундах (наблюдаемость).
+    # NULL для batch-вызовов: пачка считается на серверах Anthropic асинхронно.
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     called_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,
