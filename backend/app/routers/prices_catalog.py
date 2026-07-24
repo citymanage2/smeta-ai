@@ -119,6 +119,11 @@ async def _reload_cache(db: AsyncSession) -> None:
     await price_service.load_cache(db)
 
 
+def _escape_like(term: str) -> str:
+    """Экранировать спецсимволы LIKE, чтобы поиск по '%' / '_' был буквальным."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _apply_sort(items: list[CatalogItem], sort: str) -> list[CatalogItem]:
     if sort == "name_asc":
         return sorted(items, key=lambda x: x.name.lower())
@@ -150,24 +155,48 @@ async def list_catalog(
     _user=Depends(get_current_user),
 ):
     items: list[CatalogItem] = []
-    search_lower = search.strip().lower() if search else None
+    search_term = search.strip() if search else None
+    # Экранированный шаблон для ILIKE — фильтр выполняется в БД, а не в Python.
+    pattern = f"%{_escape_like(search_term)}%" if search_term else None
 
+    # Явный список колонок: тяжёлая колонка `embedding` (≈8-10 КБ JSON/строку)
+    # НЕ грузится — она не нужна в списке. Это снимает мегабайты лишнего трафика
+    # и памяти на каждый показ каталога.
     if tab in ("all", "works"):
-        result = await db.execute(select(PriceWork))
-        works = result.scalars().all()
-        for w in works:
-            if search_lower and search_lower not in w.name.lower():
-                continue
-            items.append(_work_to_item(w))
+        q = select(
+            PriceWork.id, PriceWork.name, PriceWork.unit,
+            PriceWork.min_price, PriceWork.prices, PriceWork.updated_at,
+        )
+        if pattern:
+            q = q.where(PriceWork.name.ilike(pattern, escape="\\"))
+        rows = (await db.execute(q)).all()
+        items.extend(
+            CatalogItem(
+                id=r.id, kind="work", name=r.name, unit=r.unit,
+                price=r.min_price, prices=r.prices, updated_at=r.updated_at,
+            )
+            for r in rows
+        )
 
     if tab in ("all", "materials"):
-        result = await db.execute(select(PriceMaterial))
-        materials = result.scalars().all()
-        for m in materials:
-            if search_lower and search_lower not in m.name.lower():
-                continue
-            items.append(_material_to_item(m))
+        q = select(
+            PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit,
+            PriceMaterial.price, PriceMaterial.updated_at,
+        )
+        if pattern:
+            q = q.where(PriceMaterial.name.ilike(pattern, escape="\\"))
+        rows = (await db.execute(q)).all()
+        items.extend(
+            CatalogItem(
+                id=r.id, kind="material", name=r.name, unit=r.unit,
+                price=r.price, prices=None, updated_at=r.updated_at,
+            )
+            for r in rows
+        )
 
+    # Сортировка/пагинация — в Python, но уже на «лёгких» строках без embedding.
+    # Единый путь для all/works/materials исключает расхождение порядка между
+    # вкладками (SQL lower() vs Python .lower() дают разный collation для кириллицы).
     items = _apply_sort(items, sort)
     total = len(items)
     start = (page - 1) * page_size
@@ -414,7 +443,8 @@ async def export_catalog(
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    search_lower = search.strip().lower() if search else None
+    search_term = search.strip() if search else None
+    pattern = f"%{_escape_like(search_term)}%" if search_term else None
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -438,11 +468,14 @@ async def export_catalog(
     row = 2
 
     if tab in ("all", "works"):
-        result = await db.execute(select(PriceWork))
-        works = result.scalars().all()
+        q = select(
+            PriceWork.name, PriceWork.unit, PriceWork.min_price,
+            PriceWork.prices, PriceWork.updated_at,
+        )
+        if pattern:
+            q = q.where(PriceWork.name.ilike(pattern, escape="\\"))
+        works = (await db.execute(q)).all()
         for w in works:
-            if search_lower and search_lower not in w.name.lower():
-                continue
             contractors = "; ".join(f"{k}: {v}" for k, v in (w.prices or {}).items())
             ws.cell(row=row, column=1, value="Работа")
             ws.cell(row=row, column=2, value=w.name)
@@ -453,11 +486,14 @@ async def export_catalog(
             row += 1
 
     if tab in ("all", "materials"):
-        result = await db.execute(select(PriceMaterial))
-        materials = result.scalars().all()
+        q = select(
+            PriceMaterial.name, PriceMaterial.unit,
+            PriceMaterial.price, PriceMaterial.updated_at,
+        )
+        if pattern:
+            q = q.where(PriceMaterial.name.ilike(pattern, escape="\\"))
+        materials = (await db.execute(q)).all()
         for m in materials:
-            if search_lower and search_lower not in m.name.lower():
-                continue
             ws.cell(row=row, column=1, value="Материал")
             ws.cell(row=row, column=2, value=m.name)
             ws.cell(row=row, column=3, value=m.unit or "")

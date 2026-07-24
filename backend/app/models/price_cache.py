@@ -16,6 +16,9 @@ class PriceCacheWork(Base):
 
     id: Mapped[str] = mapped_column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Нормализованное имя (lower/strip/ё→е/сжатие пробелов) для прямого поиска
+    # существующей записи по индексу вместо полного скана таблицы.
+    name_norm: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     sources: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -37,6 +40,9 @@ class PriceCacheMaterial(Base):
 
     id: Mapped[str] = mapped_column(UUID, primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Нормализованное имя (lower/strip/ё→е/сжатие пробелов) для прямого поиска
+    # существующей записи по индексу вместо полного скана таблицы.
+    name_norm: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     unit: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     sources: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -802,9 +802,11 @@ async def save_to_cache(
     now = datetime.now(timezone.utc)
 
     if item_type == "work":
-        result = await db.execute(select(PriceCacheWork))
-        all_records = result.scalars().all()
-        existing = next((r for r in all_records if normalize_text(r.name) == norm), None)
+        # Прямой поиск по индексированному name_norm вместо загрузки всей таблицы.
+        result = await db.execute(
+            select(PriceCacheWork).where(PriceCacheWork.name_norm == norm).limit(1)
+        )
+        existing = result.scalar_one_or_none()
 
         if existing:
             existing.price = price  # type: ignore[assignment]
@@ -814,16 +816,17 @@ async def save_to_cache(
             record_id = existing.id
             logger.info("Cache work updated", name=name, price=price)
         else:
-            record = PriceCacheWork(name=name, unit=unit, price=price, sources=sources)  # type: ignore[arg-type]
+            record = PriceCacheWork(name=name, name_norm=norm, unit=unit, price=price, sources=sources)  # type: ignore[arg-type]
             db.add(record)
             await db.commit()
             await db.refresh(record)
             record_id = record.id
             logger.info("Cache work created", name=name, price=price)
     else:
-        result = await db.execute(select(PriceCacheMaterial))
-        all_records = result.scalars().all()
-        existing = next((r for r in all_records if normalize_text(r.name) == norm), None)
+        result = await db.execute(
+            select(PriceCacheMaterial).where(PriceCacheMaterial.name_norm == norm).limit(1)
+        )
+        existing = result.scalar_one_or_none()
 
         if existing:
             existing.price = price  # type: ignore[assignment]
@@ -833,7 +836,7 @@ async def save_to_cache(
             record_id = existing.id
             logger.info("Cache material updated", name=name, price=price)
         else:
-            record = PriceCacheMaterial(name=name, unit=unit, price=price, sources=sources)  # type: ignore[arg-type]
+            record = PriceCacheMaterial(name=name, name_norm=norm, unit=unit, price=price, sources=sources)  # type: ignore[arg-type]
             db.add(record)
             await db.commit()
             await db.refresh(record)

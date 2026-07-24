@@ -873,7 +873,10 @@ async def create_cache_work(
     admin: dict = Depends(get_admin_user),
 ):
     now = datetime.now(timezone.utc)
-    obj = PriceCacheWork(name=body.name, unit=body.unit, price=body.price, sources=body.sources, updated_at=now)
+    obj = PriceCacheWork(
+        name=body.name, name_norm=price_service.normalize_text(body.name),
+        unit=body.unit, price=body.price, sources=body.sources, updated_at=now,
+    )
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
@@ -889,7 +892,10 @@ async def create_cache_material(
     admin: dict = Depends(get_admin_user),
 ):
     now = datetime.now(timezone.utc)
-    obj = PriceCacheMaterial(name=body.name, unit=body.unit, price=body.price, sources=body.sources, updated_at=now)
+    obj = PriceCacheMaterial(
+        name=body.name, name_norm=price_service.normalize_text(body.name),
+        unit=body.unit, price=body.price, sources=body.sources, updated_at=now,
+    )
     db.add(obj)
     await db.commit()
     await db.refresh(obj)
@@ -913,6 +919,7 @@ async def update_cache_work(
     now = datetime.now(timezone.utc)
     if body.name is not None:
         obj.name = body.name
+        obj.name_norm = price_service.normalize_text(body.name)
     if body.unit is not None:
         obj.unit = body.unit
     if body.price is not None:
@@ -943,6 +950,7 @@ async def update_cache_material(
     now = datetime.now(timezone.utc)
     if body.name is not None:
         obj.name = body.name
+        obj.name_norm = price_service.normalize_text(body.name)
     if body.unit is not None:
         obj.unit = body.unit
     if body.price is not None:
