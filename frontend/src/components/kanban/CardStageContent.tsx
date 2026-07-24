@@ -85,7 +85,7 @@ function ActionButton({
   )
 }
 
-function ArrowBtn({ onClick, title = 'Открыть карточку' }: { onClick: () => void; title?: string }) {
+function ArrowBtn({ onClick, title = 'Открыть смету' }: { onClick: () => void; title?: string }) {
   return (
     <button
       onClick={onClick}
@@ -217,7 +217,7 @@ function FileRowCompact({ name, size, mime, date, onDownload, onOpenEditor, onOp
         </button>
         {onOpenTask && (
           <button
-            title="Открыть карточку"
+            title="Открыть смету"
             onClick={onOpenTask}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px 4px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
@@ -606,7 +606,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
               <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Перечень', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
-              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )
         )}
@@ -732,7 +732,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
               <ViewBtn onClick={() => onOpenEditor({ taskId: listTask.id, title: 'Перечень', fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
-              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
           {listEditedWarning && (
@@ -790,7 +790,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
               <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Полнота', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
-              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
           {completenessEditedWarning && (
@@ -914,7 +914,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
               <ViewBtn onClick={() => onOpenEditor({ taskId: listTask.id, title: 'Перечень', fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
-              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
           {listEditedWarning && (
@@ -950,7 +950,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
               <ViewBtn onClick={() => onOpenEditor({ taskId: completenessTask.id, title: 'Полнота', fileSlot: 'result', taskType: completenessTask.task_type })} title="Открыть онлайн" />
-              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
           {completenessEditedWarning && (
@@ -997,7 +997,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
             <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
             <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать смету" />
             <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Смета из перечня', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
-            <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+            <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
           </div>
         )
       )}
@@ -1215,7 +1215,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'optimized')} title="Скачать оптимизацию" />
               <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы', fileSlot: 'optimized', taskType: task.task_type })} title="Открыть онлайн" />
-              <ArrowBtn onClick={navigateToCard} title="Открыть карточку" />
+              <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
 

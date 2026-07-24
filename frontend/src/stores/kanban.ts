@@ -97,7 +97,7 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
 
   moveCard: async (cardId, toStage, bypassSoft = false) => {
     const card = get().cards.find((c) => c.id === cardId)
-    if (!card) return { allowed: false, blockType: 'hard' as const, message: 'Карточка не найдена' }
+    if (!card) return { allowed: false, blockType: 'hard' as const, message: 'Смета не найдена' }
 
     const guard = computeGuard(card, toStage)
 

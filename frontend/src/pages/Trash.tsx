@@ -105,7 +105,7 @@ const Trash: React.FC = () => {
       setCards(data.items);
       setCardsTotal(data.total);
     } catch {
-      setCardsError('Не удалось загрузить удалённые карточки');
+      setCardsError('Не удалось загрузить удалённые сметы');
     } finally {
       setCardsLoading(false);
     }
@@ -206,21 +206,21 @@ const Trash: React.FC = () => {
       setCards(prev => prev.filter(c => c.id !== cardId));
       setCardsTotal(prev => prev - 1);
     } catch {
-      setCardsError('Не удалось восстановить карточку');
+      setCardsError('Не удалось восстановить смету');
     } finally {
       setRestoringCardId(null);
     }
   }
 
   async function handlePermanentDeleteCard(cardId: string) {
-    if (!window.confirm('Удалить карточку и все её задачи навсегда? Это действие нельзя отменить.')) return;
+    if (!window.confirm('Удалить смету и все её задачи навсегда? Это действие нельзя отменить.')) return;
     setDeletingCardId(cardId);
     try {
       await permanentDeleteCard(cardId);
       setCards(prev => prev.filter(c => c.id !== cardId));
       setCardsTotal(prev => prev - 1);
     } catch {
-      setCardsError('Не удалось удалить карточку');
+      setCardsError('Не удалось удалить смету');
     } finally {
       setDeletingCardId(null);
     }
@@ -256,7 +256,7 @@ const Trash: React.FC = () => {
           {([
             { key: 'tasks' as Tab, label: 'Задачи', count: tasksTotal },
             { key: 'projects' as Tab, label: 'Проекты', count: projectsTotal },
-            { key: 'cards' as Tab, label: 'Карточки', count: cardsTotal },
+            { key: 'cards' as Tab, label: 'Сметы', count: cardsTotal },
           ]).map(({ key, label, count }) => (
             <button
               key={key}
@@ -572,8 +572,8 @@ const Trash: React.FC = () => {
             ) : cards.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 14 }}>
                 <LayoutDashboard size={40} color="#e2e8f0" style={{ marginBottom: 12 }} />
-                <div>Нет удалённых карточек</div>
-                <div style={{ fontSize: 12, marginTop: 4 }}>Удалённые карточки канбана будут отображаться здесь</div>
+                <div>Нет удалённых смет</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Удалённые сметы будут отображаться здесь</div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -618,7 +618,7 @@ const Trash: React.FC = () => {
                         <button
                           onClick={() => handleRestoreCard(card.id)}
                           disabled={isRestoring || isDeleting}
-                          title="Восстановить карточку"
+                          title="Восстановить смету"
                           style={{
                             display: 'flex', alignItems: 'center', gap: 5,
                             padding: '6px 10px',

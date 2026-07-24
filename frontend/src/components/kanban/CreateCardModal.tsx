@@ -77,10 +77,10 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
   }
 
   const title = isListStage
-    ? 'Новая карточка · Перечень'
+    ? 'Новая смета · Перечень'
     : isOptimization
-    ? 'Новая карточка · Оптимизация'
-    : 'Новая карточка'
+    ? 'Новая смета · Оптимизация'
+    : 'Новая смета'
 
   return (
     <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
@@ -98,7 +98,7 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
             maxLength={255}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Название карточки"
+            placeholder="Название сметы"
             style={{
               width: '100%',
               boxSizing: 'border-box',

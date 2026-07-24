@@ -330,7 +330,7 @@ const ProjectCardPage: React.FC = () => {
       const data = await getCardDetail(cardId)
       setDetail(data)
     } catch {
-      setError('Не удалось загрузить данные карточки')
+      setError('Не удалось загрузить данные сметы')
     } finally {
       setLoading(false)
     }
@@ -367,7 +367,7 @@ const ProjectCardPage: React.FC = () => {
     return (
       <Layout>
         <div style={{ padding: '32px', textAlign: 'center', color: '#ef4444', fontSize: '14px' }}>
-          {error || 'Карточка не найдена'}
+          {error || 'Смета не найдена'}
         </div>
       </Layout>
     )

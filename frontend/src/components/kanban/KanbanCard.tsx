@@ -126,7 +126,7 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
           {!isOverlay && (
             <button
               style={trashStyle}
-              title="Удалить карточку"
+              title="Удалить смету"
               onClick={(e) => { e.stopPropagation(); setShowConfirm(true) }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#ef4444' }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#cbd5e1' }}
@@ -176,10 +176,10 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
               <Trash2 size={18} color="#ef4444" />
-              <span style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>Удалить карточку?</span>
+              <span style={{ fontWeight: 700, fontSize: '15px', color: '#0f172a' }}>Удалить смету?</span>
             </div>
             <p style={{ fontSize: '13px', color: '#475569', lineHeight: 1.6, margin: '0 0 20px' }}>
-              Карточка <strong>«{card.name}»</strong> и её задачи будут перемещены в корзину. Восстановить можно из раздела «Корзина».
+              Смета <strong>«{card.name}»</strong> и её задачи будут перемещены в корзину. Восстановить можно из раздела «Корзина».
             </p>
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button

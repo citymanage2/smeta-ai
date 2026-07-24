@@ -114,7 +114,7 @@ export function KanbanColumn({ stage, cards, onAddCard }: Props) {
           <button
             onClick={onAddCard}
             style={addButtonStyle}
-            title="Добавить карточку"
+            title="Добавить смету"
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.9)'
             }}
@@ -135,7 +135,7 @@ export function KanbanColumn({ stage, cards, onAddCard }: Props) {
 
       {cards.length === 0 && (
         <div style={emptyStyle}>
-          {stage === 'list' || stage === 'optimization' ? 'Нажмите + чтобы начать' : 'Перетащите карточку'}
+          {stage === 'list' || stage === 'optimization' ? 'Нажмите + чтобы начать' : 'Перетащите смету'}
         </div>
       )}
     </div>
