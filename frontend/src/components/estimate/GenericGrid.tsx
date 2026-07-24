@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { GenericRow } from '../../types';
 import './GenericGrid.css';
 
@@ -112,17 +112,24 @@ function getTypeClass(typeVal: string | null): string {
 interface CellInputProps {
   value: string | number | null;
   readOnly: boolean;
-  onChange: (val: string) => void;
+  rowId: string;
+  colKey: string;
+  // Стабильный диспетчер (rowId, colKey, val) — не пересоздаётся между рендерами,
+  // поэтому React.memo реально работает: ячейка перерисовывается только при
+  // изменении собственного value.
+  onChange: (rowId: string, colKey: string, val: string) => void;
   isTypeBadge?: boolean;
 }
 
-const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange, isTypeBadge }) => {
+const CellInput: React.FC<CellInputProps> = React.memo(({ value, readOnly, rowId, colKey, onChange, isTypeBadge }) => {
   const [localVal, setLocalVal] = useState(String(value ?? ''));
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setLocalVal(String(value ?? ''));
   }, [value]);
+
+  const commit = () => onChange(rowId, colKey, localVal);
 
   if (isTypeBadge) {
     const v = String(value ?? '').trim();
@@ -138,7 +145,7 @@ const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange, isType
         value={localVal}
         title={v}
         onChange={(e) => setLocalVal(e.target.value)}
-        onBlur={() => onChange(localVal)}
+        onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter') inputRef.current?.blur();
           if (e.key === 'Escape') { setLocalVal(String(value ?? '')); inputRef.current?.blur(); }
@@ -154,14 +161,15 @@ const CellInput: React.FC<CellInputProps> = ({ value, readOnly, onChange, isType
       value={localVal}
       readOnly={readOnly}
       onChange={(e) => setLocalVal(e.target.value)}
-      onBlur={() => onChange(localVal)}
+      onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') inputRef.current?.blur();
         if (e.key === 'Escape') { setLocalVal(String(value ?? '')); inputRef.current?.blur(); }
       }}
     />
   );
-};
+});
+CellInput.displayName = 'CellInput';
 
 const GenericGrid: React.FC<GenericGridProps> = ({
   rows,
@@ -225,10 +233,14 @@ const GenericGrid: React.FC<GenericGridProps> = ({
     return rows.filter((r) => String(r.cells[TYPE_COL] ?? '').trim() === target);
   }, [rows, activeTab, isEnhanced]);
 
+  // Отложенное значение поиска: ввод не блокирует перефильтрацию тяжёлой таблицы —
+  // символы печатаются мгновенно, список догоняет неблокирующим рендером.
+  const deferredSearch = useDeferredValue(searchText);
+
   // Search filtering
   const displayedRows = useMemo(() => {
-    if (!searchText.trim()) return tabFiltered;
-    const q = searchText.toLowerCase();
+    if (!deferredSearch.trim()) return tabFiltered;
+    const q = deferredSearch.toLowerCase();
     return tabFiltered.filter((r) => {
       if (hasNameCol) {
         return String(r.cells[NAME_COL] ?? '').toLowerCase().includes(q);
@@ -238,7 +250,7 @@ const GenericGrid: React.FC<GenericGridProps> = ({
         (v) => v != null && String(v).toLowerCase().includes(q),
       );
     });
-  }, [tabFiltered, searchText, hasNameCol]);
+  }, [tabFiltered, deferredSearch, hasNameCol]);
 
   // Row counts for tabs
   const workCount = useMemo(
@@ -300,6 +312,17 @@ const GenericGrid: React.FC<GenericGridProps> = ({
     },
     [rows, onRowsChange, recalcConfig],
   );
+
+  // Стабильный диспетчер для CellInput: handleCellChange пересоздаётся на каждый
+  // edit (зависит от rows), поэтому оборачиваем его в ref-обёртку с постоянной
+  // ссылкой — иначе React.memo на CellInput был бы бесполезен.
+  const handleCellChangeRef = useRef(handleCellChange);
+  useEffect(() => {
+    handleCellChangeRef.current = handleCellChange;
+  });
+  const dispatchCellChange = useCallback((rowId: string, colKey: string, val: string) => {
+    handleCellChangeRef.current(rowId, colKey, val);
+  }, []);
 
   // Undo
   const handleUndo = useCallback(() => {
@@ -532,8 +555,10 @@ const GenericGrid: React.FC<GenericGridProps> = ({
                       <CellInput
                         value={row.cells[col]}
                         readOnly={!!isReadonly}
+                        rowId={row.row_id}
+                        colKey={col}
                         isTypeBadge={isEnhanced && col === TYPE_COL}
-                        onChange={(val) => handleCellChange(row.row_id, col, val)}
+                        onChange={dispatchCellChange}
                       />
                     </td>
                   ))}

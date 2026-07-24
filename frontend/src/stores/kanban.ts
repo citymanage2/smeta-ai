@@ -104,13 +104,26 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
     if (!guard.allowed && guard.blockType === 'hard') return guard
     if (guard.blockType === 'soft' && !bypassSoft) return guard
 
-    set({ movingCardId: cardId })
+    // Оптимистичный перенос: карточка сразу переставляется в целевую колонку,
+    // не дожидаясь сервера (нет «отскока» на медленной сети). Снимок прежнего
+    // состояния — для отката при ошибке. movingCardId блокирует поллинг, чтобы
+    // фоновый fetch не перезаписал оптимистику до ответа сервера.
+    const prevCards = get().cards
+    set({
+      movingCardId: cardId,
+      cards: prevCards.map((c) => (c.id === cardId ? { ...c, stage: toStage } : c)),
+    })
     try {
       const updated = await updateWorkflowCard(cardId, { stage: toStage })
+      // Сверка с сервером как источником истины.
       set((s) => ({
         cards: s.cards.map((c) => (c.id === cardId ? updated : c)),
       }))
       return { allowed: true, blockType: null, message: '' }
+    } catch (err) {
+      // Откат к снимку — карточка возвращается в исходную колонку.
+      set({ cards: prevCards })
+      throw err
     } finally {
       set({ movingCardId: null })
     }
