@@ -22,6 +22,13 @@ const COL_MAX_PRICE = 90;
 const COL_PAD = 24;
 const UNDO_LIMIT = 50;
 
+// Виртуализация: перечни > этого порога рендерятся «окном» видимых строк
+// (тендерные списки бывают >500 строк × N инпутов). Меньшие — как раньше,
+// целиком: ноль риска для обычного случая. overscan — запас строк за краями.
+const VIRT_THRESHOLD = 120;
+const VIRT_OVERSCAN = 8;
+const ROW_H_DEFAULT = 33;
+
 // Column keys that are auto-generated or need special handling
 const EXCLUDED_COLS = new Set(['№', '#']);
 
@@ -251,6 +258,54 @@ const GenericGrid: React.FC<GenericGridProps> = ({
       );
     });
   }, [tabFiltered, deferredSearch, hasNameCol]);
+
+  // ── Виртуализация длинных перечней ──────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(600);
+  const [rowH, setRowH] = useState(ROW_H_DEFAULT);
+  const virtualize = displayedRows.length > VIRT_THRESHOLD;
+
+  // Отслеживаем скролл и высоту вьюпорта контейнера.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    setViewportH(el.clientHeight);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => setViewportH(el.clientHeight));
+      ro.observe(el);
+    }
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      ro?.disconnect();
+    };
+  }, []);
+
+  // Смена вкладки/поиска — вернуть скролл наверх (иначе окно считается от старой позиции).
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    setScrollTop(0);
+  }, [deferredSearch, activeTab]);
+
+  // Однократная калибровка реальной высоты строки (инпуты — одна строка, высота ровная).
+  const measureRowRef = useCallback((el: HTMLTableRowElement | null) => {
+    if (el) {
+      const h = el.offsetHeight;
+      if (h > 0) setRowH((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+    }
+  }, []);
+
+  const total = displayedRows.length;
+  const startIndex = virtualize ? Math.max(0, Math.floor(scrollTop / rowH) - VIRT_OVERSCAN) : 0;
+  const endIndex = virtualize
+    ? Math.min(total, startIndex + Math.ceil(viewportH / rowH) + VIRT_OVERSCAN * 2)
+    : total;
+  const topPad = startIndex * rowH;
+  const bottomPad = Math.max(0, (total - endIndex) * rowH);
+  const visibleRows = virtualize ? displayedRows.slice(startIndex, endIndex) : displayedRows;
 
   // Row counts for tabs
   const workCount = useMemo(
@@ -499,7 +554,7 @@ const GenericGrid: React.FC<GenericGridProps> = ({
       )}
 
       {/* ── Table ────────────────────────────────────────────────────────── */}
-      <div className="gg-scroll">
+      <div className="gg-scroll" ref={scrollRef}>
         <table className="gg-table">
           <thead>
             <tr>
@@ -528,12 +583,23 @@ const GenericGrid: React.FC<GenericGridProps> = ({
             </tr>
           </thead>
           <tbody>
-            {displayedRows.map((row, idx) => {
+            {/* Верхний спейсер: держит высоту прокрутки за невидимыми строками сверху */}
+            {virtualize && topPad > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={columns.length + 2} style={{ height: topPad, padding: 0, border: 'none' }} />
+              </tr>
+            )}
+            {visibleRows.map((row, i) => {
+              const absIdx = startIndex + i;
               const typeVal = hasTypeCol ? String(row.cells[TYPE_COL] ?? '').trim() : '';
               const rowClass = `gg-tr ${getTypeClass(typeVal)} ${selectedIds.has(row.row_id) ? 'gg-tr-selected' : ''}`;
 
               return (
-                <tr key={row.row_id} className={rowClass}>
+                <tr
+                  key={row.row_id}
+                  className={rowClass}
+                  ref={i === 0 ? measureRowRef : undefined}
+                >
                   {/* Checkbox */}
                   <td className="gg-td gg-td-check">
                     <input
@@ -544,7 +610,7 @@ const GenericGrid: React.FC<GenericGridProps> = ({
                     />
                   </td>
                   {/* Row number */}
-                  <td className="gg-td gg-td-num">{idx + 1}</td>
+                  <td className="gg-td gg-td-num">{absIdx + 1}</td>
                   {/* Data cells */}
                   {columns.map((col) => (
                     <td
@@ -565,6 +631,12 @@ const GenericGrid: React.FC<GenericGridProps> = ({
                 </tr>
               );
             })}
+            {/* Нижний спейсер: высота прокрутки за невидимыми строками снизу */}
+            {virtualize && bottomPad > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={columns.length + 2} style={{ height: bottomPad, padding: 0, border: 'none' }} />
+              </tr>
+            )}
           </tbody>
         </table>
 
