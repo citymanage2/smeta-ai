@@ -1,4 +1,5 @@
 """REST API for EstimateVersion — online editor + optimization pipeline."""
+import asyncio
 import uuid
 from decimal import Decimal
 from typing import Optional
@@ -1383,7 +1384,9 @@ async def export_version(
     version = await _get_version_or_404(task_id, version_id, db)
 
     try:
-        xlsx_bytes = generate_estimate_export(
+        # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
+        xlsx_bytes = await asyncio.to_thread(
+            generate_estimate_export,
             rows=version.rows or [],
             overhead_pct=float(version.overhead_pct or 0),
             transport_pct=float(version.transport_pct or 0),
@@ -1456,7 +1459,8 @@ async def export_comparison(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Версии не найдены")
 
     customer_est = body.customer_estimate.model_dump() if body.customer_estimate else None
-    xlsx_bytes = generate_comparison_export(versions_data, customer_estimate=customer_est)
+    # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
+    xlsx_bytes = await asyncio.to_thread(generate_comparison_export, versions_data, customer_estimate=customer_est)
 
     return StreamingResponse(
         _io.BytesIO(xlsx_bytes),

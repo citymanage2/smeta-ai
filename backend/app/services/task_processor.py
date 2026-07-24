@@ -1130,7 +1130,7 @@ class TaskProcessor:
 
     async def _save_partial(self, items: list, chunk_idx: int, total: int, prefix: str = "Частичная_проверка") -> None:
         """Save accumulated items as a partial Excel result."""
-        excel_data = generate_list(items)
+        excel_data = await asyncio.to_thread(generate_list,items)
         await self.save_result(
             f"{prefix}_{chunk_idx}_из_{total}.xlsx",
             _XLSX_MIME,
@@ -1198,7 +1198,7 @@ class TaskProcessor:
                     if accumulated_items:
                         partial_count += 1
                         accumulated_items = normalize_items(accumulated_items)
-                        partial_excel = generate_list(accumulated_items)
+                        partial_excel = await asyncio.to_thread(generate_list,accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
                             _XLSX_MIME,
@@ -1250,7 +1250,7 @@ class TaskProcessor:
                     if accumulated_items:
                         partial_count += 1
                         accumulated_items = normalize_items(accumulated_items)
-                        partial_excel = generate_list(accumulated_items)
+                        partial_excel = await asyncio.to_thread(generate_list,accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
                             _XLSX_MIME,
@@ -1281,7 +1281,7 @@ class TaskProcessor:
 
         accumulated_items = normalize_items(accumulated_items)
         await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
-        excel_data = generate_list(accumulated_items)
+        excel_data = await asyncio.to_thread(generate_list,accumulated_items)
         await self.save_result(
             self._result_filename(task, "Перечень_из_Гранд-сметы.xlsx"),
             _XLSX_MIME,
@@ -1387,7 +1387,7 @@ class TaskProcessor:
                     if accumulated_items:
                         partial_count += 1
                         accumulated_items = normalize_items(accumulated_items)
-                        partial_excel = generate_list(accumulated_items)
+                        partial_excel = await asyncio.to_thread(generate_list,accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
                             _XLSX_MIME,
@@ -1437,7 +1437,7 @@ class TaskProcessor:
                     if accumulated_items:
                         partial_count += 1
                         accumulated_items = normalize_items(accumulated_items)
-                        partial_excel = generate_list(accumulated_items)
+                        partial_excel = await asyncio.to_thread(generate_list,accumulated_items)
                         await self.save_result(
                             f"Частичный_перечень_{i}_из_{total_chunks}.xlsx",
                             _XLSX_MIME,
@@ -1468,7 +1468,7 @@ class TaskProcessor:
 
         accumulated_items = normalize_items(accumulated_items)
         await self.update_progress(f"Найдено {len(accumulated_items)} позиций. Формирование Excel...")
-        excel_data = generate_list(accumulated_items)
+        excel_data = await asyncio.to_thread(generate_list,accumulated_items)
         await self.save_result(
             self._result_filename(task, "Перечень_из_Гранд-сметы.xlsx"),
             _XLSX_MIME,
@@ -1549,7 +1549,7 @@ class TaskProcessor:
 
         all_items = normalize_items(all_items)
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
-        excel_data = generate_list(all_items, changes_summary=changes_summary)
+        excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
         await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info(
@@ -1768,7 +1768,7 @@ class TaskProcessor:
         items = normalize_items(items)
         await self._save_progress_data({"items": items})
 
-        excel_data = generate_list(items)
+        excel_data = await asyncio.to_thread(generate_list,items)
         await self.save_result(self._result_filename(task, "Перечень_из_проекта.xlsx"), _XLSX_MIME, excel_data)
         await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info(
@@ -1850,7 +1850,7 @@ class TaskProcessor:
 
         all_items = normalize_items(all_items)
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
-        excel_data = generate_list(all_items, changes_summary=changes_summary)
+        excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_по_проекту.xlsx"), _XLSX_MIME, excel_data)
         await self._create_initial_generic_version(excel_data, task.task_type)
         logger.info(
