@@ -478,6 +478,25 @@ async def get_estimate_sources(
     )
     source_tasks = result.scalars().all()
 
+    # Один батч-запрос всех check-задач вместо N запросов в цикле (устранение N+1).
+    # user_prompt check-задачи хранит id её источника. Раскладываем в dict по
+    # (source_id, check_type); при сортировке created_at DESC первым встречается
+    # самый свежий check — как и в прежнем limit(1) на каждый источник.
+    source_ids = [str(s.id) for s in source_tasks]
+    latest_check_by_key: dict[tuple[str, str], Task] = {}
+    if source_ids:
+        check_result = await db.execute(
+            select(Task)
+            .where(Task.user_prompt.in_(source_ids))
+            .where(Task.task_type.in_(["CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"]))
+            .where(Task.status == "completed")
+            .order_by(sa_desc(Task.created_at))
+        )
+        for chk in check_result.scalars().all():
+            key = (chk.user_prompt, chk.task_type)
+            if key not in latest_check_by_key:
+                latest_check_by_key[key] = chk
+
     sources = []
     for src in source_tasks:
         items = (src.progress_data or {}).get("items", [])
@@ -489,15 +508,7 @@ async def get_estimate_sources(
             if src.task_type == "LIST_FROM_GRAND"
             else "CHECK_PROJECT_COMPLETENESS"
         )
-        check_result = await db.execute(
-            select(Task)
-            .where(Task.user_prompt == str(src.id))
-            .where(Task.task_type == check_type)
-            .where(Task.status == "completed")
-            .order_by(sa_desc(Task.created_at))
-            .limit(1)
-        )
-        check_task = check_result.scalar_one_or_none()
+        check_task = latest_check_by_key.get((str(src.id), check_type))
 
         stages = [{"stage": 1, "label": "Исходный перечень", "items_count": len(items)}]
         if check_task:
