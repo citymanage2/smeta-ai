@@ -30,7 +30,7 @@ from app.models.result import TaskResult
 from app.models.task_input_file import TaskInputFile
 from app.models.history import TaskHistory
 from app.models.project import Project
-from app.utils.auth import get_current_user, get_download_user
+from app.utils.auth import get_current_user, get_download_user, current_user_id
 from app.config import settings
 from app.services.task_processor import process_task, fix_empty_prices_background
 from app.services.checkpoint import has_resumable_checkpoint
@@ -292,6 +292,7 @@ async def create_task(
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
+        owner_id=current_user_id(current_user),
         task_type=task_type,
         status="pending",
         input_files=input_files_meta,
@@ -437,6 +438,7 @@ async def check_completeness(
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
+        owner_id=current_user_id(current_user),
         task_type="CHECK_LIST_COMPLETENESS",
         status="pending",
         input_files=[],
@@ -564,6 +566,7 @@ async def check_project_completeness(
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
+        owner_id=current_user_id(current_user),
         task_type="CHECK_PROJECT_COMPLETENESS",
         status="pending",
         input_files=[],

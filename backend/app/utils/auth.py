@@ -20,15 +20,24 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
 
 
-def create_access_token(role: str) -> str:
+def create_access_token(user_id: int, role: str, username: Optional[str] = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRE_HOURS)
     payload = {
-        "sub": role,
+        "sub": str(user_id),   # sub = идентификатор человека (для owner_id)
         "role": role,
+        "username": username,
         "exp": expire,
         "iat": datetime.now(timezone.utc),
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def current_user_id(current_user: dict) -> Optional[int]:
+    """owner_id из токена. None для legacy-токенов, где sub был ролью (не число)."""
+    sub = current_user.get("sub")
+    if sub is not None and str(sub).isdigit():
+        return int(sub)
+    return None
 
 
 def verify_token(token: str) -> dict:

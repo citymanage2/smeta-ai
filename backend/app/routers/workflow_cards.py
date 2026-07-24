@@ -35,7 +35,7 @@ from app.schemas.workflow_card import (
     InputFileDetail,
     ResultFileDetail,
 )
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, current_user_id
 from app.utils.progress_summary import build_progress_summary
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD
 
@@ -581,6 +581,7 @@ async def start_task(
     new_task = Task(
         id=task_id,
         user_role=user_role,
+        owner_id=current_user_id(current_user),
         task_type=task_type,
         status="pending",
         input_files=input_files_meta,

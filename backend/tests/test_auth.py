@@ -26,7 +26,7 @@ async def test_login_invalid_password(async_client, seed_users):
     """Wrong password returns 401 with Russian error detail."""
     response = await async_client.post("/auth/login", json={"password": "wrongpassword"})
     assert response.status_code == 401
-    assert "Неверный пароль" in response.json()["detail"]
+    assert "Неверный" in response.json()["detail"]
 
 
 async def test_login_empty_password(async_client, seed_users):

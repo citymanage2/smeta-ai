@@ -6,6 +6,7 @@ const Login: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? '/system';
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [sessionExpired, setSessionExpired] = useState(false);
@@ -28,12 +29,12 @@ const Login: React.FC = () => {
     setError('');
 
     try {
-      await login(password);
+      await login(password, username);
       navigate(from, { replace: true });
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string }; status?: number }; request?: unknown };
       if (axiosError.response?.status === 401) {
-        setError('Неверный пароль. Попробуйте ещё раз.');
+        setError('Неверный логин или пароль. Попробуйте ещё раз.');
       } else if (axiosError.request && !axiosError.response) {
         setError('Нет соединения с сервером. Проверьте интернет и попробуйте ещё раз.');
       } else {
@@ -102,6 +103,43 @@ const Login: React.FC = () => {
 
         {/* Form */}
         <form onSubmit={handleSubmit} noValidate>
+          <div style={{ marginBottom: '16px' }}>
+            <label
+              htmlFor="username"
+              style={{
+                display: 'block',
+                fontSize: '14px',
+                fontWeight: 600,
+                color: '#374151',
+                marginBottom: '8px',
+              }}
+            >
+              Логин <span style={{ color: '#94a3b8', fontWeight: 400 }}>(если выдан)</span>
+            </label>
+            <input
+              id="username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Ваш логин"
+              autoComplete="username"
+              autoFocus
+              style={{
+                width: '100%',
+                padding: '11px 14px',
+                fontSize: '15px',
+                border: '1.5px solid #e2e8f0',
+                borderRadius: '8px',
+                outline: 'none',
+                color: '#1e293b',
+                backgroundColor: '#ffffff',
+                boxSizing: 'border-box',
+                transition: 'border-color 0.15s',
+              }}
+              onFocus={(e) => { e.target.style.borderColor = '#2563eb'; }}
+              onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }}
+            />
+          </div>
           <div style={{ marginBottom: '20px' }}>
             <label
               htmlFor="password"
@@ -121,7 +159,7 @@ const Login: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Введите пароль"
-              autoFocus
+              autoComplete="current-password"
               style={{
                 width: '100%',
                 padding: '11px 14px',

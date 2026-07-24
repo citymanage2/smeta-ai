@@ -70,8 +70,11 @@ async def _initialize_users() -> None:
     changes via env vars take effect after redeployment.
     """
     async with AsyncSessionLocal() as db:
+        # Общие пароли ролей (legacy, username IS NULL).
         for role, password in [("user", settings.USER_PASSWORD), ("admin", settings.ADMIN_PASSWORD)]:
-            result = await db.execute(select(User).where(User.role == role))
+            result = await db.execute(
+                select(User).where(User.role == role, User.username.is_(None))
+            )
             existing = result.scalar_one_or_none()
             if not existing:
                 user = User(
@@ -85,6 +88,28 @@ async def _initialize_users() -> None:
                 if not verify_password(password, existing.password_hash):
                     existing.password_hash = hash_password(password)
                     logger.info("Updated password hash for user", role=role)
+
+        # Индивидуальные аккаунты из USERS ("login:pass:role;...").
+        for entry in settings.USERS.split(";"):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split(":")
+            if len(parts) < 2 or not parts[0] or not parts[1]:
+                logger.warning("Skipping malformed USERS entry", entry=entry)
+                continue
+            username, password = parts[0].strip(), parts[1]
+            u_role = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else "user"
+            result = await db.execute(select(User).where(User.username == username))
+            existing = result.scalar_one_or_none()
+            if not existing:
+                db.add(User(username=username, role=u_role, password_hash=hash_password(password)))
+                logger.info("Created individual user", username=username, role=u_role)
+            else:
+                existing.role = u_role
+                if not verify_password(password, existing.password_hash):
+                    existing.password_hash = hash_password(password)
+                    logger.info("Updated individual user password", username=username)
 
         await db.commit()
 

@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 168  # 7 days
     USER_PASSWORD: str = "user123"
     ADMIN_PASSWORD: str = "admin123"
+    # Индивидуальные аккаунты для сидинга: "login:pass:role;login2:pass2:role2".
+    # role необязателен (по умолчанию user). Пусто → только общие пароли (legacy).
+    USERS: str = ""
     MAX_FILE_SIZE_MB: int = 20
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
