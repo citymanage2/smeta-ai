@@ -6,7 +6,6 @@ Create Date: 2026-05-24 00:00:00.000000
 """
 from typing import Sequence, Union
 from alembic import op
-import sqlalchemy as sa
 
 revision: str = "027"
 down_revision: Union[str, None] = "026"
@@ -15,15 +14,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "workflow_cards",
-        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.create_index(
-        "ix_workflow_cards_deleted_at",
-        "workflow_cards",
-        ["deleted_at"],
-        unique=False,
+    op.execute("ALTER TABLE workflow_cards ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_workflow_cards_deleted_at "
+        "ON workflow_cards (deleted_at)"
     )
 
 
