@@ -36,7 +36,7 @@ interface KanbanStore {
   clearPendingListTask: (cardId: string) => void
 }
 
-function computeGuard(card: WorkflowCard, toStage: KanbanStage): GuardResult {
+export function computeGuard(card: WorkflowCard, toStage: KanbanStage): GuardResult {
   if (toStage === 'completeness') {
     const t = card.list_task
     if (!t) return { allowed: false, blockType: 'hard', message: 'Сначала создайте Перечень' }
