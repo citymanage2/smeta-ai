@@ -119,13 +119,15 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
 
     logger.info("ocr_start", page=page_num, peak_rss_mb=_peak_rss_mb())
 
+    timed_out = False
     try:
-        # C3: таймаут 30 сек на страницу
-        ocr_text = pytesseract.image_to_string(img, lang="rus+eng", timeout=30)
+        # C3: таймаут 60 сек на страницу (на 0.5 CPU Tesseract иногда не укладывается в 30с)
+        ocr_text = pytesseract.image_to_string(img, lang="rus+eng", timeout=60)
     except RuntimeError:
-        # C6: таймаут — логируем, возвращаем пустую строку
+        # C6: таймаут — помечаем страницу как нераспознанную, чтобы выше её не потеряли молча
         logger.warning("ocr_timeout", page=page_num)
         ocr_text = ""
+        timed_out = True
     except pytesseract.pytesseract.TesseractNotFoundError:
         # C1: Tesseract не найден в системе
         raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
@@ -135,7 +137,17 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
 
     logger.info("ocr_end", page=page_num, peak_rss_mb=_peak_rss_mb())
 
-    return {"page": page_num, "text": ocr_text.strip(), "method": "ocr"}
+    result = {"page": page_num, "text": ocr_text.strip(), "method": "ocr"}
+    if timed_out:
+        # Флаг для вызывающего кода: страница НЕ распозналась, текст потерян —
+        # перечень по ней будет неполным (см. timed_out_page_numbers).
+        result["ocr_timeout"] = True
+    return result
+
+
+def timed_out_page_numbers(pages: list[dict]) -> list[int]:
+    """Номера страниц, где OCR не уложился в таймаут (их текст потерян → перечень неполон)."""
+    return [p["page"] for p in pages if p.get("ocr_timeout")]
 
 
 def get_pdf_page_count(pdf_bytes: bytes) -> int:
