@@ -22,8 +22,19 @@ export function useDashboardStats() {
 
   useEffect(() => {
     fetch();
-    const timer = setInterval(fetch, POLL_INTERVAL);
-    return () => clearInterval(timer);
+    // Пауза в фоне: свёрнутая вкладка не льёт запрос каждые 30 с.
+    const timer = setInterval(() => {
+      if (!document.hidden) fetch();
+    }, POLL_INTERVAL);
+    // При возврате на вкладку — сразу обновить, не дожидаясь интервала.
+    const onVisible = () => {
+      if (!document.hidden) fetch();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [fetch]);
 
   return { data, loading, error, refetch: fetch };

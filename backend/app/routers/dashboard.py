@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,9 +132,14 @@ class DashboardStats(BaseModel):
 
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(
+    response: Response,
     db: AsyncSession = Depends(get_db),
     _: dict = Depends(get_current_user),
 ) -> DashboardStats:
+    # HTTP-кэш в такт polling: несколько вкладок/компонентов, запросивших дашборд
+    # в окне 10 с, получают ответ из кэша браузера, не нагружая БД повторно.
+    # private — данные за авторизацией, не кэшировать на общих прокси.
+    response.headers["Cache-Control"] = "private, max-age=10"
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
