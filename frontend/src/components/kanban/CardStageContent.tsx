@@ -16,6 +16,7 @@ import { TaskStatusBadge } from './TaskStatusBadge'
 import { EstimateEditorModal } from '../card/EstimateEditorModal'
 import { GenericEditorModal } from '../card/GenericEditorModal'
 import { LumaSpin } from '../ui/LumaSpin'
+import { ProgressCounter } from './ProgressCounter'
 import { GENERIC_EDITOR_TASK_TYPES } from '../../types'
 
 // ---------------------------------------------------------------------------
@@ -536,9 +537,12 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
         <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
           <LumaSpin size="sm" color="#d97706" />
-          <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
-            {task.progress_message || 'В очереди…'}
-          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: '11px', color: '#92400e', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
+              {task.progress_message || 'В очереди…'}
+            </span>
+            <ProgressCounter data={task.progress_data} />
+          </div>
           <ArrowBtn onClick={navigateToCard} />
         </div>
       </div>
@@ -753,11 +757,14 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
           <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
             <LumaSpin size="sm" color="#d97706" />
-            {task.progress_message && (
-              <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4' }}>
-                {task.progress_message}
-              </span>
-            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {task.progress_message && (
+                <span style={{ display: 'block', fontSize: '11px', color: '#92400e', whiteSpace: 'normal', lineHeight: '1.4' }}>
+                  {task.progress_message}
+                </span>
+              )}
+              <ProgressCounter data={task.progress_data} />
+            </div>
             <ArrowBtn onClick={navigateToCard} />
           </div>
         </div>
@@ -965,9 +972,12 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
       {task !== null && (task.status === 'pending' || task.status === 'processing') && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
           <LumaSpin size="sm" color="#d97706" />
-          <span style={{ fontSize: '11px', color: '#92400e', flex: 1, minWidth: 0, whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
-            {task.progress_message || 'В очереди…'}
-          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: '11px', color: '#92400e', whiteSpace: 'normal', lineHeight: '1.4', paddingTop: '1px' }}>
+              {task.progress_message || 'В очереди…'}
+            </span>
+            <ProgressCounter data={task.progress_data} />
+          </div>
           <ArrowBtn onClick={navigateToCard} />
         </div>
       )}

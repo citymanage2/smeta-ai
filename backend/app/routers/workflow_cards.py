@@ -36,6 +36,7 @@ from app.schemas.workflow_card import (
     ResultFileDetail,
 )
 from app.utils.auth import get_current_user
+from app.utils.progress_summary import build_progress_summary
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD
 
 logger = structlog.get_logger()
@@ -70,6 +71,7 @@ def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
             created_at=task.created_at.isoformat(),
             input_files=files,
             progress_message=task.progress_message,
+            progress_data=build_progress_summary(task.progress_data),
         )
 
     return WorkflowCardResponse(

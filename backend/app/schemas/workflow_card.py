@@ -17,6 +17,9 @@ class TaskBrief(BaseModel):
     created_at: str
     input_files: list[InputFileBrief] = []
     progress_message: Optional[str] = None
+    # Выжимка прогресса по белому списку (счётчики «N из M»), без чувствительных
+    # полей progress_data. Заполняется через build_progress_summary().
+    progress_data: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 

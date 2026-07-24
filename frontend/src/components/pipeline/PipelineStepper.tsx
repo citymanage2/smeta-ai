@@ -60,6 +60,18 @@ export function computeNodeState(card: WorkflowCard, stage: KanbanStage): NodeSt
   return 'wait'
 }
 
+/** Компактная подпись прогресса «N/M» для идущего узла из безопасной выжимки. */
+export function nodeProgressCaption(task: TaskBrief | null): string | null {
+  const pd = task?.progress_data
+  if (!pd) return null
+  const total = pd.total_chunks ?? pd.chunks_total
+  const done = pd.chunks_done
+  if (typeof total === 'number' && total > 1 && typeof done === 'number' && done >= 0) {
+    return `${Math.min(done, total)}/${total}`
+  }
+  return null
+}
+
 function NodeIcon({ state, index }: { state: NodeState; index: number }) {
   const c = STATE_STYLE[state]
   if (state === 'done')  return <Check size={16} color={c.icon} strokeWidth={3} />
@@ -149,7 +161,11 @@ export function PipelineStepper({ card, selectedStage, onSelect }: Props) {
                 {STAGE_LABELS[stage]}
               </span>
               {style.caption && !locked && (
-                <span style={{ fontSize: '10px', color: style.label, fontWeight: 500 }}>{style.caption}</span>
+                <span style={{ fontSize: '10px', color: style.label, fontWeight: 500 }}>
+                  {state === 'run'
+                    ? (nodeProgressCaption(stageTask(card, stage)) ?? style.caption)
+                    : style.caption}
+                </span>
               )}
               {locked && lockReason && (
                 <span
