@@ -18,8 +18,8 @@ engine = create_async_engine(
     _make_async_url(settings.DATABASE_URL),
     echo=settings.SQL_ECHO,
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=settings.DB_POOL_SIZE,
+    max_overflow=settings.DB_MAX_OVERFLOW,
     pool_recycle=1800,
     connect_args={
         "server_settings": {
