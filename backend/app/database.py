@@ -14,6 +14,19 @@ def _make_async_url(url: str) -> str:
     return url
 
 
+# SSL к managed Postgres (Timeweb DBaaS и т.п.): включаем TLS, если задан DB_SSL_MODE.
+# asyncpg принимает ssl=True (шифрование без проверки серверного серта — достаточно
+# для managed-БД в приватной сети). Локально DB_SSL_MODE пуст → без TLS.
+_connect_args: dict = {
+    "server_settings": {
+        "tcp_keepalives_idle": "60",
+        "tcp_keepalives_interval": "10",
+        "tcp_keepalives_count": "5",
+    }
+}
+if settings.DB_SSL_MODE:
+    _connect_args["ssl"] = True
+
 engine = create_async_engine(
     _make_async_url(settings.DATABASE_URL),
     echo=settings.SQL_ECHO,
@@ -21,13 +34,7 @@ engine = create_async_engine(
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_recycle=1800,
-    connect_args={
-        "server_settings": {
-            "tcp_keepalives_idle": "60",
-            "tcp_keepalives_interval": "10",
-            "tcp_keepalives_count": "5",
-        }
-    },
+    connect_args=_connect_args,
 )
 
 AsyncSessionLocal = async_sessionmaker(

@@ -39,6 +39,20 @@ services:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
+  worker:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/smeta_ai
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    # Отдельный процесс обработки задач: без alembic (мигрирует только backend),
+    # без веб-порта. Локальный паритет с прод-топологией web+worker.
+    command: python -m app.worker
+
   frontend:
     build: ./frontend
     ports:

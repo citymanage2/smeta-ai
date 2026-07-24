@@ -147,8 +147,17 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
         if _shutdown.is_set():
             sem.release()
             break
-        async with AsyncSessionLocal() as db:
-            job = await job_queue.claim_one(db, WORKER_ID)
+        try:
+            async with AsyncSessionLocal() as db:
+                job = await job_queue.claim_one(db, WORKER_ID)
+        except Exception as e:  # noqa: BLE001 — БД недоступна/таблицы ещё нет (первый деплой)
+            logger.warning("Claim failed, retrying", error=str(e))
+            sem.release()
+            try:
+                await asyncio.wait_for(_shutdown.wait(), timeout=settings.JOB_POLL_INTERVAL_S)
+            except asyncio.TimeoutError:
+                pass
+            continue
         if job is None:
             sem.release()
             try:

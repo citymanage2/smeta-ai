@@ -20,6 +20,25 @@ services:
       - key: CORS_ORIGINS
         value: 'https://smeta-ai.onrender.com'
 
+  # Worker-процесс обработки задач. Обязателен: web с версии durable-очереди
+  # (queue-P3) сам задачи НЕ обрабатывает. Тот же образ, команда — python -m app.worker.
+  # ВАЖНО: DATABASE_URL и прочие секреты (ANTHROPIC_API_KEY, COHERE_API_KEY, USERS,
+  # DB_SSL_MODE) должны быть заданы так же, как у web-сервиса (через дашборд/env-группу).
+  - type: worker
+    name: smeta-ai-worker
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m app.worker
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: COHERE_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+
   - type: static
     name: smeta-ai
     buildCommand: cd frontend && npm install && npm run build
