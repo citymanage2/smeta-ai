@@ -214,6 +214,21 @@ async def load_bytes(storage_key: Optional[str], blob: Optional[bytes]) -> bytes
     raise StorageError("нет содержимого: ни storage_key, ни BLOB")
 
 
+async def delete_key_safe(key: Optional[str]) -> None:
+    """Best-effort удаление объекта по ключу (None-safe, ошибку НЕ пробрасывает).
+
+    Для чистки осиротевших объектов при перезаписи/удалении строки: даже если
+    удаление в S3 не удалось, основная операция (уже закоммиченная в БД) не падает.
+    Гарантированную чистку всех объектов задачи даёт delete_prefix при её удалении.
+    """
+    if not key:
+        return
+    try:
+        await delete_object(key)
+    except StorageError:
+        logger.warning("Orphan S3 object cleanup failed", key=key)
+
+
 async def object_exists(key: str) -> bool:
     """Есть ли объект (head_object). 404 → False, иные ошибки → StorageError."""
     def _head() -> bool:

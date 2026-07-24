@@ -497,6 +497,7 @@ class TaskProcessor:
             ).limit(1)
         )
         record = existing.scalar_one_or_none()
+        old_key = record.storage_key if record is not None else None
         storage_key, blob = await storage_service.store_result_file(
             self.task_id, slot, file_name, mime_type, file_data
         )
@@ -518,6 +519,8 @@ class TaskProcessor:
             )
             self.db.add(record)
         await self.db.commit()
+        if old_key and old_key != storage_key:
+            await storage_service.delete_key_safe(old_key)  # прежний объект слота
 
     async def _create_initial_generic_version(self, file_data: bytes, task_type: str) -> None:
         """Create V0 EstimateVersion for LIST/COMPLETENESS tasks (idempotent)."""

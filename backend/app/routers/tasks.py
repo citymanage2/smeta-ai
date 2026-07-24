@@ -826,6 +826,7 @@ async def upload_file_to_slot(
         )
     )
     old = existing.scalar_one_or_none()
+    old_key = old.storage_key if old else None
     if old:
         await db.delete(old)
 
@@ -857,6 +858,7 @@ async def upload_file_to_slot(
 
     await db.commit()
     await db.refresh(task)
+    await storage_service.delete_key_safe(old_key)  # старый объект слота — в утиль
 
     return FileSlotResponse(
         task_id=task_id,
@@ -892,6 +894,7 @@ async def delete_file_from_slot(
         )
     )
     row = existing.scalar_one_or_none()
+    row_key = row.storage_key if row else None
     if row:
         await db.delete(row)
 
@@ -900,6 +903,7 @@ async def delete_file_from_slot(
         task.estimation_status = "unestimated"
 
     await db.commit()
+    await storage_service.delete_key_safe(row_key)
     return {"task_id": task_id, "slot": slot, "status": "deleted"}
 
 
@@ -1159,6 +1163,7 @@ async def delete_input_file(
         )
     )
     input_file = input_file_row.scalar_one_or_none()
+    input_key = input_file.storage_key if input_file is not None else None
     if input_file is not None:
         await db.delete(input_file)
 
@@ -1179,6 +1184,7 @@ async def delete_input_file(
         task.input_files = files_meta
 
     await db.commit()
+    await storage_service.delete_key_safe(input_key)
 
 
 @router.post("/{task_id}/input-files", status_code=200)
@@ -2070,4 +2076,9 @@ async def permanent_delete_my_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     await db.delete(task)
     await db.commit()
+    # Каскад БД удалил строки, но не объекты S3 — чистим все файлы задачи одним махом.
+    try:
+        await storage_service.delete_prefix(storage_service.task_prefix(task_id))
+    except storage_service.StorageError:
+        logger.warning("S3 cleanup after task delete failed", task_id=task_id)
     logger.info("Task permanently deleted", task_id=task_id, role=current_user.get("role"))

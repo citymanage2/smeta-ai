@@ -72,6 +72,14 @@ async def test_delete_object_idempotent(fake):
     await ss.delete_object("k")  # повторное удаление — не ошибка
 
 
+async def test_delete_key_safe(fake):
+    await ss.put_object("k", b"x")
+    await ss.delete_key_safe("k")
+    assert await ss.object_exists("k") is False
+    await ss.delete_key_safe(None)          # None → no-op, не падает
+    await ss.delete_key_safe("nonexistent")  # отсутствует → идемпотентно
+
+
 async def test_delete_prefix_removes_only_matching(fake):
     await ss.put_object("tasks/t1/input/0-a", b"1")
     await ss.put_object("tasks/t1/result/estimate-b", b"2")
