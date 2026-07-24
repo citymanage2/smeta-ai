@@ -39,8 +39,8 @@ const DashboardProjects: React.FC<Props> = ({ projects, orphanCount }) => {
           </span>
         </h2>
         {orphanCount > 0 && (
-          <button
-            onClick={() => navigate('/projects/unassigned')}
+          <span
+            title="Показаны во «Входящем»"
             style={{
               fontSize: 12,
               color: '#d97706',
@@ -48,11 +48,10 @@ const DashboardProjects: React.FC<Props> = ({ projects, orphanCount }) => {
               border: '1px solid #fde68a',
               borderRadius: 6,
               padding: '3px 10px',
-              cursor: 'pointer',
             }}
           >
-            {orphanCount} задач без проекта →
-          </button>
+            {orphanCount} задач без проекта — во «Входящем»
+          </span>
         )}
       </div>
 

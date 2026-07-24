@@ -338,7 +338,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
                   transition: 'opacity 0.15s',
                 }}>
                   <ArrowNavBtn
-                    onClick={e => { e.stopPropagation(); navigate(isUnassigned ? '/projects/unassigned' : `/projects/${id}`); }}
+                    onClick={e => { e.stopPropagation(); navigate(isUnassigned ? '/system' : `/projects/${id}`); }}
                     title="Открыть"
                   />
                 </div>
@@ -404,9 +404,9 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
         <div className="collapsed-project-list" style={{ flex: 1, overflowY: 'auto', overflowX: 'visible', width: '100%', padding: '6px 0' }}>
           {/* Без проекта */}
           <CollapsedProjectBtn
-            onClick={() => navigate('/projects/unassigned')}
-            tooltip="Без проекта"
-            active={location.pathname === '/projects/unassigned'}
+            onClick={() => navigate('/system')}
+            tooltip="Без проекта (во Входящем)"
+            active={location.pathname === '/system'}
             initials="БП"
           />
 

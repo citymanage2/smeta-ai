@@ -10,7 +10,6 @@ import Admin from './pages/Admin';
 import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
 import ProjectCardPage from './pages/ProjectCardPage';
-import UnassignedTasks from './pages/UnassignedTasks';
 import Calculator from './pages/Calculator';
 import Trash from './pages/Trash';
 import PriceCatalog from './pages/PriceCatalog';
@@ -72,14 +71,8 @@ const App: React.FC = () => {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="/projects/unassigned"
-          element={
-            <ProtectedRoute>
-              <UnassignedTasks />
-            </ProtectedRoute>
-          }
-        />
+        {/* «Задачи без проекта» поглощены «Входящим» (/system) */}
+        <Route path="/projects/unassigned" element={<Navigate to="/system" replace />} />
         <Route
           path="/projects/:projectId"
           element={
