@@ -45,6 +45,9 @@ def test_has_checkpoint_variants():
     assert rp._has_checkpoint({"chunks_done": 3}) is True
     assert rp._has_checkpoint({"_stage": "pre_excel"}) is True
     assert rp._has_checkpoint({"_stage": "claude_partial"}) is True
+    # OCR-чекпоинты (LIST_FROM_GRAND PDF): частичный и полный OCR
+    assert rp._has_checkpoint({"ocr_pages_partial": [{"page": 1, "text": "x"}]}) is True
+    assert rp._has_checkpoint({"ocr_pages": [{"page": 1, "text": "x"}]}) is True
     # без чекпоинта / незнакомый stage / пусто
     assert rp._has_checkpoint({"_stage": "batch_pending"}) is False
     assert rp._has_checkpoint({}) is False

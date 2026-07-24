@@ -25,21 +25,16 @@ from sqlalchemy import select, update
 
 from app.database import AsyncSessionLocal
 from app.models.task import Task
+from app.services.checkpoint import has_resumable_checkpoint
 
 logger = structlog.get_logger()
-
-# Чекпоинты, с которых поддерживается возобновление — тот же предикат, что в
-# ручном resume-эндпоинте (app/routers/tasks.py: resume_task), чтобы авто- и
-# ручное возобновление вели себя одинаково.
-_RESUMABLE_STAGES = ("pre_excel", "claude_partial")
 
 # Ссылки на fire-and-forget задачи, чтобы их не собрал GC до завершения.
 _background_runs: set = set()
 
-
-def _has_checkpoint(progress_data: dict | None) -> bool:
-    pd = progress_data or {}
-    return "chunks_done" in pd or pd.get("_stage") in _RESUMABLE_STAGES
+# Единый предикат возобновляемости — тот же, что в ручном resume-эндпоинте
+# (app/routers/tasks.py: resume_task). Алиас сохранён для обратной совместимости.
+_has_checkpoint = has_resumable_checkpoint
 
 
 async def _find_resumable_paused_ids(db) -> list[str]:

@@ -210,6 +210,45 @@ describe('TaskStatus — resume button visibility (Phase 1)', () => {
     expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
   });
 
+  it('shows "Продолжить" for a failed LIST_FROM_GRAND with a partial OCR checkpoint', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'LIST_FROM_GRAND' as any,
+        status: 'failed',
+        error_message: 'Задача прервана: сервер был перезапущен во время обработки.',
+        progress_data: {
+          ocr_pages_partial: [
+            { page: 1, text: 'a', method: 'ocr' },
+            { page: 2, text: 'b', method: 'ocr' },
+            { page: 3, text: 'c', method: 'ocr' },
+          ],
+        } as any,
+      })
+    );
+
+    renderPage();
+
+    const btn = await screen.findByTestId('resume-button');
+    expect(btn).toHaveTextContent('Продолжить');
+    // сообщение с числом уже распознанных страниц
+    expect(screen.getByText(/Распознано\s*3\s*стр/)).toBeInTheDocument();
+  });
+
+  it('shows "Продолжить" for a failed LIST_FROM_GRAND after OCR fully done (ocr_pages)', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'LIST_FROM_GRAND' as any,
+        status: 'failed',
+        error_message: 'Ошибка',
+        progress_data: { ocr_pages: [{ page: 1, text: 'a', method: 'ocr' }] } as any,
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
+  });
+
   it('shows only "Перезапустить" for a failed task without a checkpoint', async () => {
     vi.mocked(getTaskStatus).mockResolvedValue(
       makeTaskResponse({

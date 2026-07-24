@@ -33,6 +33,7 @@ from app.models.project import Project
 from app.utils.auth import get_current_user, get_download_user
 from app.config import settings
 from app.services.task_processor import process_task, fix_empty_prices_background
+from app.services.checkpoint import has_resumable_checkpoint
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
@@ -669,11 +670,7 @@ async def resume_task(
         )
 
     progress_data = task.progress_data or {}
-    has_checkpoint = (
-        "chunks_done" in progress_data
-        or progress_data.get("_stage") in ("pre_excel", "claude_partial")
-    )
-    if not has_checkpoint:
+    if not has_resumable_checkpoint(progress_data):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Нет сохранённого прогресса для возобновления",

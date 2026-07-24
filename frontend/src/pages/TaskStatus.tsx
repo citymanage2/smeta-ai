@@ -54,7 +54,21 @@ const RESUMABLE_TASK_TYPES: string[] = [
 function hasResumeCheckpoint(task: TaskStatusResponse): boolean {
   const pd = task.progress_data;
   if (!pd) return false;
-  return pd.chunks_done != null || pd._stage === 'pre_excel' || pd._stage === 'claude_partial';
+  return (
+    pd.chunks_done != null ||
+    pd.ocr_pages_partial != null ||
+    pd.ocr_pages != null ||
+    pd._stage === 'pre_excel' ||
+    pd._stage === 'claude_partial'
+  );
+}
+
+// Число уже распознанных страниц OCR (для сообщения при возобновлении).
+function ocrDonePages(task: TaskStatusResponse): number | null {
+  const pd = task.progress_data;
+  if (!pd) return null;
+  const arr = pd.ocr_pages ?? pd.ocr_pages_partial;
+  return Array.isArray(arr) ? arr.length : null;
 }
 
 function isResumable(task: TaskStatusResponse): boolean {
@@ -1047,6 +1061,48 @@ const TaskStatusPage: React.FC = () => {
                             {downloading === r.file_id ? 'Скачивание...' : '⬇ Скачать частичный результат'}
                           </button>
                         ))}
+                        <button
+                          data-testid="resume-button"
+                          onClick={handleResume}
+                          disabled={resuming || restarting}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: resuming ? '#fca5a5' : '#dc2626',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: (resuming || restarting) ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {resuming ? 'Запуск...' : '▶ Продолжить'}
+                        </button>
+                        <button
+                          onClick={handleRestart}
+                          disabled={restarting || resuming}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: restarting ? '#e2e8f0' : '#ffffff',
+                            color: '#64748b',
+                            border: '1.5px solid #cbd5e1',
+                            borderRadius: '8px',
+                            cursor: (restarting || resuming) ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {restarting ? 'Запуск...' : '↺ Перезапустить с начала'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : isResumable(task) && (task.progress_data?.ocr_pages_partial != null || task.progress_data?.ocr_pages != null) ? (
+                    <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
+                      <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
+                        Распознано{ocrDonePages(task) != null ? ` ${ocrDonePages(task)} стр.` : ' часть страниц'}.
+                        Продолжение распознает оставшиеся страницы, не пересчитывая уже готовые.
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                         <button
                           data-testid="resume-button"
                           onClick={handleResume}
