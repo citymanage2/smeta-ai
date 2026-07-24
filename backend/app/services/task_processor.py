@@ -24,7 +24,12 @@ from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.pdf_text_extractor import chunk_project_pdf
-from app.utils.pdf_ocr_extractor import chunk_pdf_pages, extract_single_page, get_pdf_page_count
+from app.utils.pdf_ocr_extractor import (
+    chunk_pdf_pages,
+    extract_single_page,
+    get_pdf_page_count,
+    timed_out_page_numbers,
+)
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.unit_normalizer import normalize_items
@@ -1340,6 +1345,22 @@ class TaskProcessor:
                 **{k: v for k, v in progress_data.items() if k != "ocr_pages_partial"},
                 "ocr_pages": pages,
             })
+
+        # Страницы, где OCR упал в таймаут — их текст потерян, перечень по ним неполон.
+        # Раньше это молча терялось; теперь предупреждаем явно (важно: неполная смета =
+        # финансовый риск на тендере).
+        timeout_pages = timed_out_page_numbers(pages)
+        if timeout_pages:
+            nums = ", ".join(str(n) for n in timeout_pages)
+            await self.update_progress(
+                f"⚠ Страницы {nums} не распознались (таймаут OCR) — перечень может быть неполным. "
+                f"Проверьте эти страницы вручную или перезапустите задачу."
+            )
+            logger.warning(
+                "OCR pages timed out — list may be incomplete",
+                task_id=self.task_id,
+                pages=timeout_pages,
+            )
 
         chunks = chunk_pdf_pages(pages)
         total_chunks = len(chunks)

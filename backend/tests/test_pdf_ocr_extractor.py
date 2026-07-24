@@ -11,7 +11,11 @@ import pytest
 fitz = pytest.importorskip("fitz")
 pytest.importorskip("PIL")
 
-from app.utils.pdf_ocr_extractor import _peak_rss_mb, _render_page_image
+from app.utils.pdf_ocr_extractor import (
+    _peak_rss_mb,
+    _render_page_image,
+    timed_out_page_numbers,
+)
 
 
 def _make_page(width: int = 300, height: int = 300):
@@ -48,3 +52,37 @@ def test_peak_rss_mb_positive():
     val = _peak_rss_mb()
     assert isinstance(val, int)
     assert 1 <= val < 100_000
+
+
+def test_timed_out_page_numbers():
+    """Собирает номера страниц с флагом ocr_timeout (текст потерян → перечень неполон)."""
+    pages = [
+        {"page": 1, "text": "ok", "method": "ocr"},
+        {"page": 2, "text": "", "method": "ocr", "ocr_timeout": True},
+        {"page": 3, "text": "ok", "method": "embedded"},
+        {"page": 4, "text": "", "method": "ocr", "ocr_timeout": True},
+    ]
+    assert timed_out_page_numbers(pages) == [2, 4]
+    assert timed_out_page_numbers([]) == []
+
+
+def test_ocr_page_tags_timeout(monkeypatch):
+    """Таймаут Tesseract помечает страницу ocr_timeout=True, а не теряет её молча."""
+    pytest.importorskip("pytesseract")
+    import app.utils.pdf_ocr_extractor as ex
+
+    monkeypatch.setattr(ex, "_TESSERACT_AVAILABLE", True)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("timeout")
+
+    monkeypatch.setattr(ex.pytesseract, "image_to_string", _boom)
+
+    doc, page = _make_page()
+    try:
+        res = ex._ocr_page(page, 3)
+        assert res["ocr_timeout"] is True
+        assert res["text"] == ""
+        assert res["page"] == 3
+    finally:
+        doc.close()
