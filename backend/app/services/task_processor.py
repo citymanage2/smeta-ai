@@ -11,6 +11,7 @@ from app.models.task import Task
 from app.models.result import TaskResult
 from app.models.task_input_file import TaskInputFile
 from app.models.estimate_version import EstimateVersion
+from app.services import storage_service
 from app.services.claude_service import (
     call_claude,
     build_batch_request,
@@ -422,15 +423,16 @@ class TaskProcessor:
         )
         rows = result.scalars().all()
         if rows:
-            self._input_files_cache = [
-                {
+            files = []
+            for r in rows:
+                data = await storage_service.load_bytes(r.storage_key, r.content)
+                files.append({
                     "name": r.file_name,
                     "mime_type": r.mime_type,
                     "size_bytes": r.size_bytes,
-                    "content_b64": base64.b64encode(r.content).decode("utf-8"),
-                }
-                for r in rows
-            ]
+                    "content_b64": base64.b64encode(data).decode("utf-8"),
+                })
+            self._input_files_cache = files
             return self._input_files_cache
 
         # Old tasks: content_b64 stored directly in input_file_data JSON column
@@ -495,17 +497,22 @@ class TaskProcessor:
             ).limit(1)
         )
         record = existing.scalar_one_or_none()
+        storage_key, blob = await storage_service.store_result_file(
+            self.task_id, slot, file_name, mime_type, file_data
+        )
         if record is not None:
             record.file_name = file_name
             record.mime_type = mime_type
-            record.file_data = file_data
+            record.storage_key = storage_key
+            record.file_data = blob
             record.size_bytes = len(file_data)
         else:
             record = TaskResult(
                 task_id=self.task_id,
                 file_name=file_name,
                 mime_type=mime_type,
-                file_data=file_data,
+                storage_key=storage_key,
+                file_data=blob,
                 size_bytes=len(file_data),
                 slot=slot,
             )
@@ -594,7 +601,10 @@ class TaskProcessor:
         }
         if result_row.mime_type in xlsx_mimes:
             try:
-                cost = extract_total_cost(result_row.file_data)
+                cost_bytes = await storage_service.load_bytes(
+                    result_row.storage_key, result_row.file_data
+                )
+                cost = extract_total_cost(cost_bytes)
             except Exception:
                 pass
 
@@ -2696,15 +2706,20 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         select(TaskResult).where(TaskResult.task_id == self.task_id, TaskResult.slot == "estimate")
     )
     old_result = existing_r.scalar_one_or_none()
+    est_key, est_data = await storage_service.store_result_file(
+        self.task_id, "estimate", "Смета_из_перечня.xlsx", _XLSX_MIME, excel_data
+    )
     if old_result:
-        old_result.file_data = excel_data
+        old_result.storage_key = est_key
+        old_result.file_data = est_data
         old_result.size_bytes = len(excel_data)
     else:
         self.db.add(TaskResult(
             task_id=self.task_id,
             file_name="Смета_из_перечня.xlsx",
             mime_type=_XLSX_MIME,
-            file_data=excel_data,
+            storage_key=est_key,
+            file_data=est_data,
             size_bytes=len(excel_data),
             slot="estimate",
         ))

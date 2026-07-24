@@ -14,6 +14,8 @@ import structlog
 
 from app.database import get_db
 from app.models.task import Task
+from app.models.task_input_file import TaskInputFile
+from app.services import storage_service
 from app.models.price import PriceWork, PriceMaterial
 from app.models.price_list import PriceList
 from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
@@ -430,6 +432,23 @@ async def download_input_file(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
+    # Новое хранилище: task_input_files (S3 или BLOB) — для новых/перенесённых задач.
+    tif_res = await db.execute(
+        select(TaskInputFile).where(
+            TaskInputFile.task_id == task_id,
+            TaskInputFile.file_index == file_index,
+        )
+    )
+    tif = tif_res.scalar_one_or_none()
+    if tif is not None:
+        data = await storage_service.load_bytes(tif.storage_key, tif.content)
+        return Response(
+            content=data,
+            media_type=tif.mime_type or "application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(tif.file_name)}"},
+        )
+
+    # Legacy fallback: content_b64 в input_file_data JSON
     file_data_list = task.input_file_data or []
     if file_index < 0 or file_index >= len(file_data_list):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")

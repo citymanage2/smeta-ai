@@ -83,11 +83,47 @@ async def test_delete_prefix_removes_only_matching(fake):
     assert await ss.object_exists("tasks/t2/input/0-c") is True  # чужой префикс цел
 
 
+async def test_store_input_file_s3_enabled(fake, monkeypatch):
+    monkeypatch.setattr(ss.settings, "S3_ENABLED", True)
+    key, content = await ss.store_input_file("t1", 0, "a.pdf", "application/pdf", b"hi")
+    assert content is None
+    assert key and key.startswith("tasks/t1/input/0-")
+    assert await ss.get_object(key) == b"hi"  # реально легло в S3
+
+
+async def test_store_input_file_s3_disabled(fake, monkeypatch):
+    monkeypatch.setattr(ss.settings, "S3_ENABLED", False)
+    key, content = await ss.store_input_file("t1", 0, "a.pdf", "application/pdf", b"hi")
+    assert key is None and content == b"hi"  # старый путь: BLOB в БД
+
+
+async def test_store_result_file_s3_enabled(fake, monkeypatch):
+    monkeypatch.setattr(ss.settings, "S3_ENABLED", True)
+    key, data = await ss.store_result_file("t1", "estimate", "e.xlsx", "x", b"bytes")
+    assert data is None
+    assert key.startswith("tasks/t1/result/estimate-")
+    assert await ss.get_object(key) == b"bytes"
+
+
+async def test_load_bytes_dual_read(fake):
+    await ss.put_object("k1", b"from_s3")
+    assert await ss.load_bytes("k1", None) == b"from_s3"        # storage_key → S3
+    assert await ss.load_bytes(None, b"from_blob") == b"from_blob"  # только BLOB
+    assert await ss.load_bytes("k1", b"ignored") == b"from_s3"  # приоритет ключа
+    with pytest.raises(ss.StorageError):
+        await ss.load_bytes(None, None)                          # ничего → ошибка
+
+
 async def test_key_builders_and_sanitize():
-    # path traversal в имени не уводит из префикса задачи
-    assert ss.build_input_key("t1", 0, "../../etc/passwd") == "tasks/t1/input/0-passwd"
+    # path traversal в имени не уводит из префикса задачи; в ключе есть uuid-токен
+    ik = ss.build_input_key("t1", 0, "../../etc/passwd")
+    assert ik.startswith("tasks/t1/input/0-") and ik.endswith("-passwd")
     assert ss.build_result_key("t1", "estimate", "Смета v2.xlsx").startswith(
         "tasks/t1/result/estimate-"
+    )
+    # два вызова → разные ключи (уникальность объектов, нет перезаписи при архивации)
+    assert ss.build_result_key("t1", "optimized", "o.xlsx") != ss.build_result_key(
+        "t1", "optimized", "o.xlsx"
     )
     assert ss.sanitize_filename("") == "file"
     assert "/" not in ss.sanitize_filename("a/b\\c.pdf")

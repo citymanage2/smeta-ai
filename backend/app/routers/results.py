@@ -13,6 +13,7 @@ from app.models.result import TaskResult
 from app.models.task import Task
 from app.utils.auth import get_current_user
 from app.services.excel_service import generate_list
+from app.services import storage_service
 
 logger = structlog.get_logger()
 
@@ -109,18 +110,26 @@ async def regenerate_task_result(
     )
     existing = existing_res.scalar_one_or_none()
 
+    _mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     if existing:
-        existing.file_data = new_bytes
+        existing.storage_key, existing.file_data = await storage_service.store_result_file(
+            task_id, "result", existing.file_name or "Перечень.xlsx",
+            existing.mime_type or _mime, new_bytes
+        )
         await db.commit()
         await db.refresh(existing)
         return ResultItem(file_id=existing.id, file_name=existing.file_name, mime_type=existing.mime_type)
 
     # No result record yet — create one with a generic name
+    storage_key, file_data = await storage_service.store_result_file(
+        task_id, "result", "Перечень.xlsx", _mime, new_bytes
+    )
     new_record = TaskResult(
         task_id=task_id,
         file_name="Перечень.xlsx",
-        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        file_data=new_bytes,
+        mime_type=_mime,
+        storage_key=storage_key,
+        file_data=file_data,
         size_bytes=len(new_bytes),
         slot="result",
     )
@@ -148,7 +157,8 @@ async def download_result(
             detail="Файл не найден",
         )
 
-    file_stream = io.BytesIO(file_record.file_data)
+    data = await storage_service.load_bytes(file_record.storage_key, file_record.file_data)
+    file_stream = io.BytesIO(data)
     filename = file_record.file_name
 
     # URL-encode filename for Content-Disposition
@@ -160,6 +170,6 @@ async def download_result(
         media_type=file_record.mime_type,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-            "Content-Length": str(len(file_record.file_data)),
+            "Content-Length": str(len(data)),
         },
     )

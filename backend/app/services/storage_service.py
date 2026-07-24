@@ -15,6 +15,7 @@ boto3 синхронный — блокирующие вызовы обёрну�
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Optional
 
 import structlog
@@ -72,13 +73,20 @@ def sanitize_filename(name: str) -> str:
     return name[:120] or "file"
 
 
+def _token() -> str:
+    """Короткий уникальный токен в ключе — чтобы новый объект НИКОГДА не перезаписал
+    старый при переиспользовании слота (архивация optimized→optimized_vN, пересохранение
+    estimate). Каждая запись = отдельный объект; ключ хранится в БД, не реконструируется."""
+    return uuid.uuid4().hex[:8]
+
+
 def build_input_key(task_id: str, file_index: int, filename: str) -> str:
-    return f"tasks/{task_id}/input/{file_index}-{sanitize_filename(filename)}"
+    return f"tasks/{task_id}/input/{file_index}-{_token()}-{sanitize_filename(filename)}"
 
 
 def build_result_key(task_id: str, slot: str, filename: str) -> str:
     slot = _SAFE.sub("_", slot or "result")
-    return f"tasks/{task_id}/result/{slot}-{sanitize_filename(filename)}"
+    return f"tasks/{task_id}/result/{slot}-{_token()}-{sanitize_filename(filename)}"
 
 
 def task_prefix(task_id: str) -> str:
@@ -165,6 +173,45 @@ async def delete_prefix(prefix: str) -> int:
     except Exception as e:  # noqa: BLE001
         logger.error("S3 delete_prefix failed", prefix=prefix, error=str(e))
         raise StorageError(f"delete_prefix failed for {prefix}: {e}") from e
+
+
+async def store_input_file(
+    task_id: str, file_index: int, filename: str, mime_type: Optional[str], data: bytes
+) -> tuple[Optional[str], Optional[bytes]]:
+    """Куда положить байты входного файла → вернуть (storage_key, content) для строки.
+
+    S3_ENABLED → пишем в S3, возвращаем (key, None). Иначе (None, data) — старый
+    путь (BLOB в БД). Вызывающий проставляет оба поля в TaskInputFile.
+    """
+    if settings.S3_ENABLED:
+        key = build_input_key(task_id, file_index, filename)
+        await put_object(key, data, mime_type)
+        return key, None
+    return None, data
+
+
+async def store_result_file(
+    task_id: str, slot: str, filename: str, mime_type: Optional[str], data: bytes
+) -> tuple[Optional[str], Optional[bytes]]:
+    """Куда положить байты результата → вернуть (storage_key, file_data) для строки."""
+    if settings.S3_ENABLED:
+        key = build_result_key(task_id, slot, filename)
+        await put_object(key, data, mime_type)
+        return key, None
+    return None, data
+
+
+async def load_bytes(storage_key: Optional[str], blob: Optional[bytes]) -> bytes:
+    """Dual-read: storage_key задан → из S3; иначе BLOB; иначе StorageError.
+
+    Единый путь чтения для роутов и task_processor на переходный период
+    (смешанные данные: часть в S3, часть ещё в БД).
+    """
+    if storage_key:
+        return await get_object(storage_key)
+    if blob is not None:
+        return blob
+    raise StorageError("нет содержимого: ни storage_key, ни BLOB")
 
 
 async def object_exists(key: str) -> bool:

@@ -34,6 +34,7 @@ from app.utils.auth import get_current_user, get_download_user, current_user_id
 from app.config import settings
 from app.services.task_processor import process_task
 from app.services.checkpoint import has_resumable_checkpoint
+from app.services import storage_service
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
@@ -324,13 +325,17 @@ async def create_task(
     # Store each file separately — one INSERT per file so a large PDF
     # never joins a multi-row batch that would overflow the connection buffer.
     for i, (raw_bytes, meta) in enumerate(zip(raw_file_bytes, input_file_data)):
+        storage_key, content = await storage_service.store_input_file(
+            task.id, i, meta["name"], meta["mime_type"], raw_bytes
+        )
         db.add(TaskInputFile(
             task_id=task.id,
             file_index=i,
             file_name=meta["name"],
             mime_type=meta["mime_type"],
             size_bytes=meta["size_bytes"],
-            content=raw_bytes,
+            storage_key=storage_key,
+            content=content,
         ))
         await db.commit()
 
@@ -824,11 +829,15 @@ async def upload_file_to_slot(
     if old:
         await db.delete(old)
 
+    storage_key, file_data = await storage_service.store_result_file(
+        task_id, slot, file.filename or f"{slot}.xlsx", mime, file_bytes
+    )
     new_result = TaskResult(
         task_id=task_id,
         file_name=file.filename or f"{slot}.xlsx",
         mime_type=mime,
-        file_data=file_bytes,
+        storage_key=storage_key,
+        file_data=file_data,
         size_bytes=len(file_bytes),
         slot=slot,
     )
@@ -1049,7 +1058,7 @@ async def download_file_from_slot(
         if src_file is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Исходный файл не найден")
         return StreamingResponse(
-            io.BytesIO(src_file.content),
+            io.BytesIO(await storage_service.load_bytes(src_file.storage_key, src_file.content)),
             media_type=src_file.mime_type,
             headers={"Content-Disposition": _content_disposition(src_file.file_name)},
         )
@@ -1068,7 +1077,7 @@ async def download_file_from_slot(
         )
 
     return StreamingResponse(
-        io.BytesIO(task_result.file_data),
+        io.BytesIO(await storage_service.load_bytes(task_result.storage_key, task_result.file_data)),
         media_type=task_result.mime_type or "application/octet-stream",
         headers={"Content-Disposition": _content_disposition(task_result.file_name)},
     )
@@ -1097,7 +1106,7 @@ async def download_input_file(
     input_file = input_file_row.scalar_one_or_none()
     if input_file is not None:
         return StreamingResponse(
-            io.BytesIO(input_file.content),
+            io.BytesIO(await storage_service.load_bytes(input_file.storage_key, input_file.content)),
             media_type=input_file.mime_type,
             headers={"Content-Disposition": _content_disposition(input_file.file_name)},
         )
@@ -1196,13 +1205,17 @@ async def add_input_file(
     existing_meta = list(task.input_files or [])
     new_index = len(existing_meta)
 
+    storage_key, content = await storage_service.store_input_file(
+        task_id, new_index, file_name, mime, raw_bytes
+    )
     db.add(TaskInputFile(
         task_id=task_id,
         file_index=new_index,
         file_name=file_name,
         mime_type=mime,
         size_bytes=size_bytes,
-        content=raw_bytes,
+        storage_key=storage_key,
+        content=content,
     ))
 
     existing_meta.append({"name": file_name, "mime_type": mime, "size_bytes": size_bytes})
@@ -1258,8 +1271,9 @@ async def optimize_analyze(
     if task_result is None:
         raise HTTPException(status_code=404, detail="Файл сметы (слот estimate) не найден")
 
+    estimate_bytes = await storage_service.load_bytes(task_result.storage_key, task_result.file_data)
     try:
-        items = parse_estimate_xlsx(task_result.file_data)
+        items = parse_estimate_xlsx(estimate_bytes)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Не удалось разобрать xlsx: {e}")
 
@@ -1447,6 +1461,9 @@ async def _run_optimization_background(
 
             # Archive the previous "optimized" slot by renaming it to a versioned snapshot.
             # This avoids storing file bytes in the JSON history field.
+            opt_key, opt_data = await storage_service.store_result_file(
+                task_id, "optimized", "optimized.xlsx", XLSX_MIME, optimized_bytes
+            )
             if prev_optimized:
                 archive_slot = f"optimized_v{version_count + 1}"
                 prev_optimized.slot = archive_slot
@@ -1461,7 +1478,8 @@ async def _run_optimization_background(
                     slot="optimized",
                     file_name="optimized.xlsx",
                     mime_type=XLSX_MIME,
-                    file_data=optimized_bytes,
+                    storage_key=opt_key,
+                    file_data=opt_data,
                     size_bytes=len(optimized_bytes),
                 ))
             else:
@@ -1471,7 +1489,8 @@ async def _run_optimization_background(
                     slot="optimized",
                     file_name="optimized.xlsx",
                     mime_type=XLSX_MIME,
-                    file_data=optimized_bytes,
+                    storage_key=opt_key,
+                    file_data=opt_data,
                     size_bytes=len(optimized_bytes),
                 ))
 
@@ -1628,8 +1647,12 @@ async def update_estimate_items(
         select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
     )
     old_result = existing_r.scalar_one_or_none()
+    est_key, est_data = await storage_service.store_result_file(
+        task_id, "estimate", "Смета_из_перечня.xlsx", XLSX_MIME, excel_data
+    )
     if old_result:
-        old_result.file_data = excel_data
+        old_result.storage_key = est_key
+        old_result.file_data = est_data
         old_result.size_bytes = len(excel_data)
         old_result.file_name = "Смета_из_перечня.xlsx"
     else:
@@ -1637,7 +1660,8 @@ async def update_estimate_items(
             task_id=task_id,
             file_name="Смета_из_перечня.xlsx",
             mime_type=XLSX_MIME,
-            file_data=excel_data,
+            storage_key=est_key,
+            file_data=est_data,
             size_bytes=len(excel_data),
             slot="estimate",
         ))
@@ -1727,8 +1751,12 @@ async def reprice_estimate_item(
             select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
         )
         old_result = existing_r.scalar_one_or_none()
+        est_key, est_data = await storage_service.store_result_file(
+            task_id, "estimate", "Смета_из_перечня.xlsx", XLSX_MIME, excel_data
+        )
         if old_result:
-            old_result.file_data = excel_data
+            old_result.storage_key = est_key
+            old_result.file_data = est_data
             old_result.size_bytes = len(excel_data)
             old_result.file_name = "Смета_из_перечня.xlsx"
         else:
@@ -1736,7 +1764,8 @@ async def reprice_estimate_item(
                 task_id=task_id,
                 file_name="Смета_из_перечня.xlsx",
                 mime_type=XLSX_MIME,
-                file_data=excel_data,
+                storage_key=est_key,
+                file_data=est_data,
                 size_bytes=len(excel_data),
                 slot="estimate",
             ))
@@ -1882,12 +1911,17 @@ async def revert_history(
     elif prev.get("file_data_b64"):
         # Backward compat: old entries stored file bytes as base64 in JSON
         restored_bytes = _b64.b64decode(prev["file_data_b64"])
+        _mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        rk, rd = await storage_service.store_result_file(
+            task_id, entry.slot, prev.get("file_name", "restored.xlsx"), _mime, restored_bytes
+        )
         db.add(TaskResult(
             task_id=task_id,
             slot=entry.slot,
             file_name=prev.get("file_name", "restored.xlsx"),
-            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            file_data=restored_bytes,
+            mime_type=_mime,
+            storage_key=rk,
+            file_data=rd,
             size_bytes=len(restored_bytes),
         ))
     # else: no file to restore (e.g., reverting the very first optimization → back to "estimated")

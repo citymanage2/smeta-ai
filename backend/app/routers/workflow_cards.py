@@ -28,6 +28,7 @@ from app.models.result import TaskResult
 from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.models.workflow_card import WorkflowCard
+from app.services import storage_service
 from app.schemas.workflow_card import (
     WorkflowCardCreate,
     WorkflowCardResponse,
@@ -615,13 +616,17 @@ async def start_task(
 
     # Сохраняем все файлы в task_input_files
     for idx, (file_bytes, meta) in enumerate(zip(raw_files_bytes, input_files_meta)):
+        storage_key, content = await storage_service.store_input_file(
+            task_id, idx, meta["name"], meta["mime_type"], file_bytes
+        )
         db.add(TaskInputFile(
             task_id=task_id,
             file_index=idx,
             file_name=meta["name"],
             mime_type=meta["mime_type"],
             size_bytes=meta["size_bytes"],
-            content=file_bytes,
+            storage_key=storage_key,
+            content=content,
         ))
 
     # Привязываем задачу к карточке
