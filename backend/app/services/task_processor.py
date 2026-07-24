@@ -36,8 +36,10 @@ from app.utils.unit_normalizer import normalize_items
 from app.services import price_service as _price_svc
 
 # Fast-режим: сколько чанков ESTIMATE_FROM_LIST обрабатывать параллельно.
-# 1 == последовательно (запасной путь).
-FAST_CHUNK_CONCURRENCY = 4
+# 1 == последовательно (запасной путь). Значение — из env (Settings), чтобы
+# снижать при множестве параллельных задач в worker (защита от 429 Anthropic).
+from app.config import settings as _settings
+FAST_CHUNK_CONCURRENCY = _settings.FAST_CHUNK_CONCURRENCY
 
 # Шаг 2 ESTIMATE_FROM_LIST (fast/sync): каждые сколько чанков главного прохода
 # сохранять промежуточный чекпоинт claude_partial. При паузе на балансе resume

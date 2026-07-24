@@ -139,6 +139,26 @@ async def _reclaim_job() -> None:
         logger.info("Reclaimed stale jobs", count=n)
 
 
+async def _cleanup_price_cache() -> None:
+    """Удалить протухшие записи кэша цен (>30 дней) и перезагрузить in-memory кэш.
+    Перенесено из web-lifespan."""
+    from sqlalchemy import text
+    from app.services import price_service
+
+    async with AsyncSessionLocal() as db:
+        rw = await db.execute(
+            text("DELETE FROM price_cache_works WHERE updated_at < now() - interval '30 days' RETURNING id")
+        )
+        rm = await db.execute(
+            text("DELETE FROM price_cache_materials WHERE updated_at < now() - interval '30 days' RETURNING id")
+        )
+        deleted_works, deleted_materials = len(rw.fetchall()), len(rm.fetchall())
+        await db.commit()
+    logger.info("Price cache cleanup done", works=deleted_works, materials=deleted_materials)
+    async with AsyncSessionLocal() as db:
+        await price_service.load_cache(db)
+
+
 def _build_scheduler():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from app.services.batch_poller import poll_batch_tasks
@@ -148,6 +168,7 @@ def _build_scheduler():
     scheduler.add_job(_reclaim_job, "interval", seconds=60, max_instances=1)
     scheduler.add_job(poll_batch_tasks, "interval", seconds=60, max_instances=1)
     scheduler.add_job(resume_paused_tasks, "interval", minutes=10, max_instances=1)
+    scheduler.add_job(_cleanup_price_cache, "interval", hours=24, max_instances=1)
     return scheduler
 
 

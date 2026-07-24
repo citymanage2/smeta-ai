@@ -158,6 +158,11 @@ _client = anthropic.AsyncAnthropic(
     http_client=_http_client,
 )
 
+# Глобальный лимит одновременных вызовов Anthropic на процесс. При N параллельных
+# задачах × M чанков суммарная конкуренция упирается в этот семафор — защита от
+# каскада 429. Сам rate-limit sleep семафор НЕ держит (обёрнут только вызов create).
+_anthropic_semaphore = asyncio.Semaphore(settings.ANTHROPIC_MAX_CONCURRENCY)
+
 
 def _build_messages(
     messages: list[dict],
@@ -282,14 +287,15 @@ async def call_claude(
             # Pass timeout directly to SDK (sets httpx total request timeout).
             # asyncio.wait_for обеспечивает отмену корутины по оставшемуся бюджету.
             attempt_start = asyncio.get_event_loop().time()
-            if remaining is not None:
-                sdk_kwargs = {**kwargs, "timeout": remaining}
-                response = await asyncio.wait_for(
-                    _client.messages.create(**sdk_kwargs),
-                    timeout=remaining,
-                )
-            else:
-                response = await _client.messages.create(**kwargs)
+            async with _anthropic_semaphore:
+                if remaining is not None:
+                    sdk_kwargs = {**kwargs, "timeout": remaining}
+                    response = await asyncio.wait_for(
+                        _client.messages.create(**sdk_kwargs),
+                        timeout=remaining,
+                    )
+                else:
+                    response = await _client.messages.create(**kwargs)
             call_duration_ms = int((asyncio.get_event_loop().time() - attempt_start) * 1000)
 
             # Detect output truncation before trying to use the response

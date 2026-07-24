@@ -160,8 +160,22 @@ _CONN_ERROR_KEYWORDS = (
 )
 
 
+async def _enqueue_task(db: AsyncSession, task_id: str) -> None:
+    """Поставить задачу в durable-очередь (kind=task.process). Исполнит worker-процесс.
+
+    owner_id берём из самой задачи (проставлен при создании) для честного round-robin.
+    """
+    from app.services import job_queue
+    owner_id = (
+        await db.execute(select(Task.owner_id).where(Task.id == task_id))
+    ).scalar_one_or_none()
+    await job_queue.enqueue(db, "task.process", {"task_id": task_id}, owner_id=owner_id)
+
+
 async def _run_task_in_background(task_id: str) -> None:
-    """Run task processor with its own DB session, retrying on transient connection errors."""
+    """[DEPRECATED] Прямой запуск в web-процессе. Оставлен как fallback-раннер для
+    воркера/совместимости; продьюсеры теперь ставят задачу в очередь (_enqueue_task).
+    Run task processor with its own DB session, retrying on transient connection errors."""
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
@@ -356,7 +370,7 @@ async def create_task(
     )
 
     # Launch background processing
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     return TaskCreateResponse(task_id=task_id, status="pending")
 
@@ -453,7 +467,7 @@ async def check_completeness(
     await db.refresh(task)
 
     task_id = str(task.id)
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info(
         "CHECK_LIST_COMPLETENESS task created",
@@ -581,7 +595,7 @@ async def check_project_completeness(
     await db.refresh(task)
 
     task_id = str(task.id)
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info(
         "CHECK_PROJECT_COMPLETENESS task created",
@@ -695,7 +709,7 @@ async def resume_task(
     task.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info("Task resumed", task_id=task_id, chunks_done=progress_data.get("chunks_done"))
     return TaskCreateResponse(task_id=task_id, status="pending")
@@ -729,7 +743,7 @@ async def restart_task(
     task.updated_at = now
     await db.commit()
 
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info("Task restarted from scratch", task_id=task_id)
     return TaskCreateResponse(task_id=task_id, status="pending")
@@ -768,7 +782,7 @@ async def send_message(
     await db.commit()
 
     # Reprocess
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     return {"task_id": task_id, "status": "pending", "message": "Сообщение принято, задача перезапущена"}
 

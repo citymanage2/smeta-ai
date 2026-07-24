@@ -500,7 +500,7 @@ async def start_task(
     current_user: dict = Depends(get_current_user),
 ):
     """Атомарно создаёт задачу и привязывает её к карточке в одной транзакции."""
-    from app.routers.tasks import _run_task_in_background
+    from app.routers.tasks import _enqueue_task
 
     card = await _load_card_with_tasks(card_id, db)
     if card is None:
@@ -613,8 +613,8 @@ async def start_task(
 
     logger.info("start-task atomic commit", card_id=card_id, task_id=task_id, task_type=task_type)
 
-    # Запускаем фоновую обработку после commit
-    background_tasks.add_task(_run_task_in_background, task_id)
+    # Ставим задачу в durable-очередь после commit — исполнит worker.
+    await _enqueue_task(db, task_id)
 
     # Возвращаем обновлённую карточку
     updated_card = await _load_card_with_tasks(card_id, db)
