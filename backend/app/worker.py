@@ -44,8 +44,50 @@ async def _handle_task_process(payload: dict, db) -> None:
     await process_task(task_id, db)
 
 
+async def _handle_task_optimize(payload: dict, db) -> None:
+    """Оптимизация сметы. estimate_bytes до-читаем из БД (не был в payload)."""
+    from sqlalchemy import select
+    from app.routers.tasks import _run_optimization_background
+    from app.models.result import TaskResult
+    task_id = payload["task_id"]
+    tr = (
+        await db.execute(
+            select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
+        )
+    ).scalar_one_or_none()
+    estimate_bytes = tr.file_data if tr else None
+    await _run_optimization_background(
+        task_id, payload.get("items", []), payload.get("prompt"), estimate_bytes, AsyncSessionLocal
+    )
+
+
+async def _handle_task_fix_prices(payload: dict, db) -> None:
+    from app.services.task_processor import fix_empty_prices_background
+    await fix_empty_prices_background(payload["task_id"], AsyncSessionLocal)
+
+
+async def _handle_version_optimize(payload: dict, db) -> None:
+    from app.routers.estimate_versions import _run_optimization_step
+    await _run_optimization_step(payload["task_id"], payload["step"])
+
+
+async def _handle_version_fill_prices(payload: dict, db) -> None:
+    from app.routers.estimate_versions import _run_fill_prices_step
+    await _run_fill_prices_step(payload["task_id"])
+
+
+async def _handle_retrain(payload: dict, db) -> None:
+    from app.services import retraining_service
+    await retraining_service.run_training_job(payload["job_id"], db)
+
+
 HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
     "task.process": _handle_task_process,
+    "task.optimize": _handle_task_optimize,
+    "task.fix_prices": _handle_task_fix_prices,
+    "version.optimize": _handle_version_optimize,
+    "version.fill_prices": _handle_version_fill_prices,
+    "retrain": _handle_retrain,
 }
 
 

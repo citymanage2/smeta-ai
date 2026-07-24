@@ -32,7 +32,7 @@ from app.models.history import TaskHistory
 from app.models.project import Project
 from app.utils.auth import get_current_user, get_download_user, current_user_id
 from app.config import settings
-from app.services.task_processor import process_task, fix_empty_prices_background
+from app.services.task_processor import process_task
 from app.services.checkpoint import has_resumable_checkpoint
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
@@ -1529,8 +1529,7 @@ async def optimize_run(
     if task_result is None:
         raise HTTPException(status_code=404, detail="Файл сметы (слот estimate) не найден")
 
-    estimate_bytes = task_result.file_data
-
+    # estimate_bytes здесь не читаем — worker до-читает его из БД перед оптимизацией.
     task.status = "processing"
     task.estimation_status = "optimizing"
     task.progress_message = "Начинаем оптимизацию..."
@@ -1538,13 +1537,13 @@ async def optimize_run(
 
     items_dicts = [item.model_dump() for item in body.items]
 
-    background_tasks.add_task(
-        _run_optimization_background,
-        task_id,
-        items_dicts,
-        body.prompt,
-        estimate_bytes,
-        AsyncSessionLocal,
+    from app.services import job_queue
+    # estimate_bytes НЕ кладём в payload (крупный бинарь) — хендлер worker'а
+    # до-читает его из TaskResult(slot=estimate).
+    await job_queue.enqueue(
+        db, "task.optimize",
+        {"task_id": task_id, "items": items_dicts, "prompt": body.prompt},
+        owner_id=task.owner_id,
     )
 
     return {"task_id": task_id, "status": "optimization_started"}
@@ -1598,7 +1597,8 @@ async def fix_empty_prices(
     task.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    background_tasks.add_task(fix_empty_prices_background, task_id, AsyncSessionLocal)
+    from app.services import job_queue
+    await job_queue.enqueue(db, "task.fix_prices", {"task_id": task_id}, owner_id=task.owner_id)
 
     return {"empty_count": empty_count, "status": "started"}
 

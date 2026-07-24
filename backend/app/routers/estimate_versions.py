@@ -872,8 +872,9 @@ def _make_optimize_endpoint(step: str):
         db: AsyncSession = Depends(get_db),
         current_user: dict = Depends(get_current_user),
     ):
-        await _get_task_or_404(task_id, db)
-        background_tasks.add_task(_run_optimization_step, task_id, step)
+        task = await _get_task_or_404(task_id, db)
+        from app.services import job_queue
+        await job_queue.enqueue(db, "version.optimize", {"task_id": task_id, "step": step}, owner_id=task.owner_id)
         return {"status": "running", "step": step}
     return optimize
 
@@ -1197,8 +1198,9 @@ async def optimize_fill_prices(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _get_task_or_404(task_id, db)
-    background_tasks.add_task(_run_fill_prices_step, task_id)
+    task = await _get_task_or_404(task_id, db)
+    from app.services import job_queue
+    await job_queue.enqueue(db, "version.fill_prices", {"task_id": task_id}, owner_id=task.owner_id)
     return {"status": "running", "step": "fill_prices"}
 
 
