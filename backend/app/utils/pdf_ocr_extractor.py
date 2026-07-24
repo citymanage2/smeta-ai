@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 import gc
+import resource
+
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+def _peak_rss_mb() -> int:
+    """Пиковое потребление RSS процессом, МБ. Монотонно растёт — high-water mark.
+
+    Логируется вокруг OCR, чтобы при повторных рестартах инстанса подтвердить/опровергнуть
+    OOM без доступа к метрикам хостинга. Linux даёт ru_maxrss в КБ, macOS — в байтах.
+    """
+    ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # эвристика единиц: значения > 10^7 почти наверняка в байтах (macOS)
+    return round(ru / (1024 * 1024)) if ru > 10_000_000 else round(ru / 1024)
 
 try:
     import pytesseract
@@ -70,13 +83,14 @@ def _process_page(page: fitz.Page, page_num: int) -> dict:
     return _ocr_page(page, page_num)
 
 
-def _ocr_page(page: fitz.Page, page_num: int) -> dict:
-    """Растеризует страницу и запускает Tesseract OCR."""
-    if not _TESSERACT_AVAILABLE:
-        # C1: Tesseract не установлен
-        raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
+def _render_page_image(page: fitz.Page):
+    """Растеризует страницу в PIL Image (grayscale) для OCR.
 
-    # B1: dpi=150 (уменьшено с 200 для экономии памяти), ограничение ширины 2480px
+    B1: dpi=150 (уменьшено с 200 для экономии памяти), ограничение ширины 2480px.
+    Grayscale (csGRAY) вместо RGB: Tesseract всё равно бинаризует изображение внутри,
+    поэтому точность распознавания не меняется, а память под pixmap и вход Tesseract
+    втрое меньше (1 байт/пиксель вместо 3) — критично для инстанса с ограниченной RAM.
+    """
     dpi = 150
     scale = dpi / 72.0
 
@@ -87,13 +101,23 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
     matrix = fitz.Matrix(scale, scale)
 
     # B2: pixmap создаём и сразу освобождаем после получения PIL Image
-    pix = page.get_pixmap(matrix=matrix)
+    pix = page.get_pixmap(matrix=matrix, colorspace=fitz.csGRAY)
     # B3: PIL Image напрямую без PNG round-trip
     img = pix.pil_image()
     pix = None  # освобождаем память
     gc.collect()
+    return img
 
-    logger.info("ocr_start", page=page_num)
+
+def _ocr_page(page: fitz.Page, page_num: int) -> dict:
+    """Растеризует страницу и запускает Tesseract OCR."""
+    if not _TESSERACT_AVAILABLE:
+        # C1: Tesseract не установлен
+        raise ValueError("OCR-движок не установлен. Обратитесь к администратору.")
+
+    img = _render_page_image(page)
+
+    logger.info("ocr_start", page=page_num, peak_rss_mb=_peak_rss_mb())
 
     try:
         # C3: таймаут 30 сек на страницу
@@ -109,7 +133,7 @@ def _ocr_page(page: fitz.Page, page_num: int) -> dict:
         del img
         gc.collect()
 
-    logger.info("ocr_end", page=page_num)
+    logger.info("ocr_end", page=page_num, peak_rss_mb=_peak_rss_mb())
 
     return {"page": page_num, "text": ocr_text.strip(), "method": "ocr"}
 
