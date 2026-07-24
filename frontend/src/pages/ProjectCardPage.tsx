@@ -15,15 +15,19 @@ import { WorkflowCard, KanbanStage } from '../types/workflow'
 
 // ---------------------------------------------------------------------------
 // Начальный выбранный этап: показываем то, что происходит/требует внимания
-// (идёт → ошибка → первый доступный незапущенный → последний завершённый).
+// (идёт → ошибка → первый незапущенный ПОСЛЕ последнего готового → последний
+// готовый). Важно: не открывать пустую форму пропущенного раннего этапа
+// (напр. опциональную «Полноту»), если дальше уже есть завершённые Смета/
+// Оптимизация — иначе готовая смета выглядит незавершённой.
 // ---------------------------------------------------------------------------
 function defaultStage(card: WorkflowCard): KanbanStage {
   const states = PIPELINE_STAGES.map((s) => ({ s, st: computeNodeState(card, s) }))
   const running = states.find((x) => x.st === 'run' || x.st === 'error')
   if (running) return running.s
-  const wait = states.find((x) => x.st === 'wait')
+  const lastDoneIdx = states.map((x) => x.st).lastIndexOf('done')
+  const wait = states.find((x, i) => x.st === 'wait' && i > lastDoneIdx)
   if (wait) return wait.s
-  const lastDone = [...states].reverse().find((x) => x.st === 'done')
+  const lastDone = lastDoneIdx >= 0 ? states[lastDoneIdx] : undefined
   return lastDone?.s ?? card.stage
 }
 

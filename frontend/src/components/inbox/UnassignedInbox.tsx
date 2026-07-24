@@ -16,7 +16,10 @@ import { StageStateBadge } from '../StageStateBadge';
 // ---------------------------------------------------------------------------
 
 const HIDDEN_TASK_TYPES = new Set(['CHECK_LIST_COMPLETENESS', 'CHECK_PROJECT_COMPLETENESS']);
-const ACTIVE_STATUSES = new Set(['pending', 'processing', 'paused']);
+// pending/processing показываются в активной очереди дашборда (active_queue), поэтому
+// исключаются из группы «Без проекта». paused НЕ входит в active_queue на бэке —
+// оставляем его в «Без проекта», иначе задача на паузе исчезает из «Входящего».
+const ACTIVE_STATUSES = new Set(['pending', 'processing']);
 
 function formatCost(cost: number): string {
   return cost.toLocaleString('ru-RU') + ' ₽';
