@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     #   'verify-ca'/'verify-full' → TLS с проверкой серта по системным CA.
     DB_SSL_MODE: str = ""
 
+    # --- S3-хранилище файлов (Timeweb Cloud Storage) ---
+    # Бинарь файлов выносится из PostgreSQL BLOB в объектное хранилище.
+    # S3_ENABLED — feature-flag для постепенного включения (dual-read/new-write).
+    S3_ENABLED: bool = False
+    S3_ENDPOINT_URL: str = "https://s3.twcstorage.ru"
+    S3_REGION: str = "ru-1"
+    S3_BUCKET: str = ""
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: str = ""
+
     def get_cors_origins(self) -> List[str]:
         try:
             return json.loads(self.CORS_ORIGINS)
