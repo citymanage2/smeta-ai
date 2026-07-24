@@ -14,10 +14,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index(
-        "ix_tasks_project_estimation",
-        "tasks",
-        ["project_id", "estimation_status"],
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_tasks_project_estimation "
+        "ON tasks (project_id, estimation_status)"
     )
 
 

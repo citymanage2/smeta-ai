@@ -5,6 +5,8 @@ from typing import Optional
 
 import structlog
 from pydantic import BaseModel
+import hashlib
+
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -13,6 +15,8 @@ from fastapi import (
     HTTPException,
     UploadFile,
     File,
+    Request,
+    Response,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,6 +132,8 @@ def _apply_soft_delete_filter(card: WorkflowCard) -> None:
 @router.get("/projects/{project_id}/workflow-cards", response_model=list[WorkflowCardResponse])
 async def get_workflow_cards(
     project_id: str,
+    request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -151,7 +157,20 @@ async def get_workflow_cards(
     cards = result.scalars().all()
     for card in cards:
         _apply_soft_delete_filter(card)
-    return [_build_card_response(c) for c in cards]
+    payload = [_build_card_response(c) for c in cards]
+
+    # ETag: этот список поллится каждые 5с. Если данные не изменились — отдаём 304
+    # без тела (клиент отдаёт из кэша). Cache-Control private — данные за авторизацией.
+    body = json.dumps(
+        [p.model_dump(mode="json") for p in payload], ensure_ascii=False, sort_keys=True
+    ).encode()
+    etag = '"' + hashlib.md5(body).hexdigest() + '"'
+    cache_headers = {"ETag": etag, "Cache-Control": "private, max-age=5"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=cache_headers)
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "private, max-age=5"
+    return payload
 
 
 @router.post("/projects/{project_id}/workflow-cards", response_model=WorkflowCardResponse, status_code=201)
