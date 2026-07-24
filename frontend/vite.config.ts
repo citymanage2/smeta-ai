@@ -7,7 +7,9 @@ export default defineConfig({
     include: ['@fortune-sheet/react', '@fortune-sheet/core'],
   },
   build: {
-    sourcemap: true,
+    // Прод-бандл без sourcemap: не раздувает статику и не утекает исходники.
+    // Для локальной отладки можно временно вернуть 'hidden'.
+    sourcemap: false,
   },
   server: {
     proxy: {

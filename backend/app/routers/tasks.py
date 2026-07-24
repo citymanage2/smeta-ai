@@ -1926,7 +1926,9 @@ async def list_my_trash(
     data_query = (
         select(Task.id, Task.task_type, Task.status, Task.name, Task.created_at, Task.deleted_at)
         .where(*conditions)
-        .order_by(Task.deleted_at.desc())
+        # Task.id как уникальный tie-breaker: при равных deleted_at
+        # offset-пагинация не даёт дублей/пропусков между страницами.
+        .order_by(Task.deleted_at.desc(), Task.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

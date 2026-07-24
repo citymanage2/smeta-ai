@@ -323,7 +323,7 @@ async def list_tasks(
         Task.id, Task.user_role, Task.task_type, Task.status,
         Task.progress_message, Task.error_message,
         Task.created_at, Task.updated_at, Task.deleted_at, Task.input_files,
-    ).where(*conditions).order_by(Task.created_at.desc()).offset((page - 1) * limit).limit(limit)
+    ).where(*conditions).order_by(Task.created_at.desc(), Task.id.desc()).offset((page - 1) * limit).limit(limit)
 
     result = await db.execute(data_query)
     rows = result.all()
@@ -364,7 +364,7 @@ async def list_trash(
         Task.id, Task.user_role, Task.task_type, Task.status,
         Task.progress_message, Task.error_message,
         Task.created_at, Task.updated_at, Task.deleted_at, Task.input_files,
-    ).where(*conditions).order_by(Task.deleted_at.desc()).offset((page - 1) * limit).limit(limit)
+    ).where(*conditions).order_by(Task.deleted_at.desc(), Task.id.desc()).offset((page - 1) * limit).limit(limit)
 
     result = await db.execute(data_query)
     rows = result.all()
