@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useKanbanStore } from '../stores/kanban'
 import { WorkflowCard, KanbanStage, TaskBrief } from '../types/workflow'
 import { CreateCardModal } from './kanban/CreateCardModal'
+// Единая палитра состояний стадии — общая с PipelineStepper/строками задач (Фаза 6).
+import { STATE_STYLE, WAITING_STATE } from '../utils/taskStatusView'
 
 const STAGE_LABELS: Record<KanbanStage, string> = {
   list: 'Перечень',
@@ -10,18 +12,6 @@ const STAGE_LABELS: Record<KanbanStage, string> = {
   estimate: 'Смета',
   optimization: 'Оптимизация',
 }
-
-// Состояние текущей стадии — по статусу задачи соответствующего этапа.
-const STATE_STYLE: Record<string, { label: string; color: string }> = {
-  completed: { label: 'Готово', color: '#10b981' },
-  processing: { label: 'Идёт', color: '#3b82f6' },
-  pending: { label: 'В очереди', color: '#f59e0b' },
-  paused: { label: 'На паузе', color: '#b45309' },
-  failed: { label: 'Ошибка', color: '#ef4444' },
-  cancelled: { label: 'Отменено', color: '#94a3b8' },
-}
-
-const WAITING_STATE = { label: 'Ожидает', color: '#94a3b8' }
 
 function stageTask(card: WorkflowCard): TaskBrief | null {
   switch (card.stage) {

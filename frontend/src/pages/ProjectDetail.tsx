@@ -11,22 +11,7 @@ import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
 import { KanbanBoard } from '../components/kanban/KanbanBoard';
 import { SmetaList } from '../components/SmetaList';
-
-const ESTIMATION_LABELS: Record<string, string> = {
-  unestimated: 'Не рассчитана',
-  estimated: 'Рассчитана',
-  optimizing: 'Оптимизируется',
-  optimized: 'Оптимизирована',
-  not_applicable: '—',
-};
-
-const ESTIMATION_COLORS: Record<string, { bg: string; text: string }> = {
-  unestimated: { bg: '#fef2f2', text: '#dc2626' },
-  estimated: { bg: '#fef9c3', text: '#854d0e' },
-  optimizing: { bg: '#eff6ff', text: '#2563eb' },
-  optimized: { bg: '#f0fdf4', text: '#15803d' },
-  not_applicable: { bg: '#f8fafc', text: '#94a3b8' },
-};
+import { StageStateBadge } from '../components/StageStateBadge';
 
 function formatCost(cost: number): string {
   return cost.toLocaleString('ru-RU') + ' ₽';
@@ -452,7 +437,6 @@ const ProjectDetailPage: React.FC = () => {
         ) : (
           <div style={{ display: 'grid', gap: '8px' }}>
             {project.tasks.map((task: TaskBrief) => {
-              const estColors = ESTIMATION_COLORS[task.estimation_status] ?? ESTIMATION_COLORS.not_applicable;
               const isEstimateType = ESTIMATE_TASK_TYPES.has(task.task_type as any);
               const taskLabel = TASK_TYPE_LABELS[task.task_type as keyof typeof TASK_TYPE_LABELS] ?? task.task_type;
               const taskDisplayName = task.name || taskLabel;
@@ -530,11 +514,8 @@ const ProjectDetailPage: React.FC = () => {
                           История
                         </button>
                       )}
-                      {task.estimation_status !== 'not_applicable' && task.task_type !== 'ESTIMATE_OPTIMIZATION' && (
-                        <span style={{ padding: '3px 10px', backgroundColor: estColors.bg, color: estColors.text, borderRadius: '12px', fontSize: '12px', fontWeight: 500 }}>
-                          {ESTIMATION_LABELS[task.estimation_status]}
-                        </span>
-                      )}
+                      {/* Единый статус: состояние стадии + тонкая бизнес-пометка (Фаза 6). */}
+                      <StageStateBadge status={task.status} estimation={task.estimation_status} />
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
                         disabled={deletingTaskId === task.id}

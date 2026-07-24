@@ -6,6 +6,7 @@ import { getUnassignedTasks, downloadSlotFile, uploadFileToSlot } from '../../ap
 import { updateTask, renameSlotFile } from '../../api/tasks';
 import OptimizeModal from '../OptimizeModal';
 import HistoryModal from '../HistoryModal';
+import { StageStateBadge } from '../StageStateBadge';
 
 // ---------------------------------------------------------------------------
 // «Ничейные» задачи (без project_id) как источник строк «Входящего».
@@ -13,22 +14,6 @@ import HistoryModal from '../HistoryModal';
 // оптимизация, история) перенесены сюда из бывшей страницы UnassignedTasks,
 // чтобы поглотить её без потери функциональности.
 // ---------------------------------------------------------------------------
-
-const ESTIMATION_LABELS: Record<string, string> = {
-  unestimated: 'Не рассчитана',
-  estimated: 'Рассчитана',
-  optimizing: 'Оптимизируется',
-  optimized: 'Оптимизирована',
-  not_applicable: '—',
-};
-
-const ESTIMATION_COLORS: Record<string, { bg: string; text: string }> = {
-  unestimated: { bg: '#fef2f2', text: '#dc2626' },
-  estimated: { bg: '#fef9c3', text: '#854d0e' },
-  optimizing: { bg: '#eff6ff', text: '#2563eb' },
-  optimized: { bg: '#f0fdf4', text: '#15803d' },
-  not_applicable: { bg: '#f8fafc', text: '#94a3b8' },
-};
 
 const HIDDEN_TASK_TYPES = new Set(['CHECK_LIST_COMPLETENESS', 'CHECK_PROJECT_COMPLETENESS']);
 const ACTIVE_STATUSES = new Set(['pending', 'processing', 'paused']);
@@ -220,7 +205,6 @@ export function useUnassignedInbox(reloadToken = 0): UnassignedInbox {
 
 function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInbox }) {
   const navigate = useNavigate();
-  const estColors = ESTIMATION_COLORS[task.estimation_status] ?? ESTIMATION_COLORS.not_applicable;
   const isEstimateType = ESTIMATE_TASK_TYPES.has(task.task_type as never);
   const slots = task.slot_files ?? {};
   const taskLabel = TASK_TYPE_LABELS[task.task_type] ?? task.task_type;
@@ -276,11 +260,8 @@ function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInb
               История
             </button>
           )}
-          {task.estimation_status !== 'not_applicable' && (
-            <span style={{ padding: '3px 10px', backgroundColor: estColors.bg, color: estColors.text, borderRadius: 12, fontSize: 12, fontWeight: 500 }}>
-              {ESTIMATION_LABELS[task.estimation_status]}
-            </span>
-          )}
+          {/* Единый статус: состояние стадии + тонкая бизнес-пометка (Фаза 6). */}
+          <StageStateBadge status={task.status} estimation={task.estimation_status} />
         </div>
       </div>
 

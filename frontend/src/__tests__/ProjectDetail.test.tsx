@@ -7,8 +7,11 @@
  * Bug 2: "Оптимизировать" button must check BOTH isEstimateType AND
  *        estimation_status === 'estimated'. Currently missing isEstimateType check.
  *
- * Bug 3: estimation_status badge must show text for 'optimizing' status.
- *        ESTIMATION_LABELS has stale key 'processing_optimization', missing 'optimizing'.
+ * Bug 3 → Фаза 6 (КП-6): двойной статус схлопнут в единое представление.
+ *        Вместо отдельного цветного estimation-бейджа строка задачи показывает
+ *        состояние стадии (Готово/Идёт/Ошибка) + тонкую бизнес-пометку
+ *        (рассчитана / оптимизирована / идёт оптимизация). Проверяем, что
+ *        бизнес-факт не потерян, но выражен как пометка, а не как второй бейдж.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -177,50 +180,55 @@ describe('ProjectDetail — Bug 2: Optimize button condition', () => {
   });
 });
 
-describe('ProjectDetail — Bug 3: estimation status badge', () => {
+describe('ProjectDetail — Bug 3 → Фаза 6: единый статус (состояние стадии + бизнес-пометка)', () => {
   beforeEach(() => {
     mockNavigate.mockClear();
   });
 
-  it('shows "Рассчитана" badge for estimated status', async () => {
+  it('показывает состояние «Готово» и пометку «рассчитана» для estimated', async () => {
     vi.mocked(getProject).mockResolvedValue(
-      makeProject({ estimation_status: 'estimated' })
+      makeProject({ estimation_status: 'estimated' })  // status по умолчанию 'completed'
     );
     await renderPage();
-    expect(await screen.findByText('Рассчитана')).toBeInTheDocument();
+    expect(await screen.findByText('Готово')).toBeInTheDocument();
+    expect(await screen.findByText(/рассчитана/)).toBeInTheDocument();
   });
 
-  it('shows "Оптимизируется" badge for optimizing status', async () => {
+  it('показывает пометку «идёт оптимизация» для optimizing (смысл optimizing не потерян)', async () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'optimizing' })
     );
     await renderPage();
-    expect(await screen.findByText('Оптимизируется')).toBeInTheDocument();
+    expect(await screen.findByText(/идёт оптимизация/)).toBeInTheDocument();
   });
 
-  it('shows "Оптимизирована" badge for optimized status', async () => {
+  it('показывает пометку «оптимизирована» для optimized', async () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'optimized' })
     );
     await renderPage();
-    expect(await screen.findByText('Оптимизирована')).toBeInTheDocument();
+    expect(await screen.findByText(/оптимизирована/)).toBeInTheDocument();
   });
 
-  it('shows "Не рассчитана" badge for unestimated status', async () => {
+  it('для unestimated показывает состояние стадии без бизнес-пометки', async () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ estimation_status: 'unestimated' })
     );
     await renderPage();
-    expect(await screen.findByText('Не рассчитана')).toBeInTheDocument();
+    // состояние стадии показано (задача completed → «Готово»)…
+    expect(await screen.findByText('Готово')).toBeInTheDocument();
+    // …а старого красного бейджа «Не рассчитана» больше нет
+    expect(screen.queryByText('Не рассчитана')).toBeNull();
   });
 
-  it('does NOT show badge for not_applicable status', async () => {
+  it('не показывает бизнес-пометку для not_applicable, но показывает состояние стадии', async () => {
     vi.mocked(getProject).mockResolvedValue(
       makeProject({ task_type: 'LIST_FROM_GRAND', estimation_status: 'not_applicable' })
     );
     await renderPage();
     await screen.findByText('Перечень из Гранд-сметы');
-    expect(screen.queryByText('Не рассчитана')).toBeNull();
-    expect(screen.queryByText('Рассчитана')).toBeNull();
+    expect(screen.queryByText(/рассчитана/)).toBeNull();
+    expect(screen.queryByText(/оптимизирована/)).toBeNull();
+    expect(screen.getByText('Готово')).toBeInTheDocument();
   });
 });
