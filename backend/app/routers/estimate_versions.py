@@ -1,4 +1,5 @@
 """REST API for EstimateVersion — online editor + optimization pipeline."""
+import asyncio
 import uuid
 from decimal import Decimal
 from typing import Optional
@@ -871,8 +872,9 @@ def _make_optimize_endpoint(step: str):
         db: AsyncSession = Depends(get_db),
         current_user: dict = Depends(get_current_user),
     ):
-        await _get_task_or_404(task_id, db)
-        background_tasks.add_task(_run_optimization_step, task_id, step)
+        task = await _get_task_or_404(task_id, db)
+        from app.services import job_queue
+        await job_queue.enqueue(db, "version.optimize", {"task_id": task_id, "step": step}, owner_id=task.owner_id)
         return {"status": "running", "step": step}
     return optimize
 
@@ -1196,8 +1198,9 @@ async def optimize_fill_prices(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _get_task_or_404(task_id, db)
-    background_tasks.add_task(_run_fill_prices_step, task_id)
+    task = await _get_task_or_404(task_id, db)
+    from app.services import job_queue
+    await job_queue.enqueue(db, "version.fill_prices", {"task_id": task_id}, owner_id=task.owner_id)
     return {"status": "running", "step": "fill_prices"}
 
 
@@ -1383,7 +1386,9 @@ async def export_version(
     version = await _get_version_or_404(task_id, version_id, db)
 
     try:
-        xlsx_bytes = generate_estimate_export(
+        # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
+        xlsx_bytes = await asyncio.to_thread(
+            generate_estimate_export,
             rows=version.rows or [],
             overhead_pct=float(version.overhead_pct or 0),
             transport_pct=float(version.transport_pct or 0),
@@ -1456,7 +1461,8 @@ async def export_comparison(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Версии не найдены")
 
     customer_est = body.customer_estimate.model_dump() if body.customer_estimate else None
-    xlsx_bytes = generate_comparison_export(versions_data, customer_estimate=customer_est)
+    # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
+    xlsx_bytes = await asyncio.to_thread(generate_comparison_export, versions_data, customer_estimate=customer_est)
 
     return StreamingResponse(
         _io.BytesIO(xlsx_bytes),

@@ -21,9 +21,11 @@ def test_hash_password():
 def test_create_access_token():
     """Test JWT token creation and verification."""
     from app.utils.auth import create_access_token, verify_token
-    token = create_access_token("user")
+    token = create_access_token(1, "user", "ivan")
     payload = verify_token(token)
     assert payload["role"] == "user"
+    assert payload["sub"] == "1"
+    assert payload["username"] == "ivan"
 
 
 def test_normalize_text():

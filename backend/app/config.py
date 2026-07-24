@@ -12,11 +12,29 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 168  # 7 days
     USER_PASSWORD: str = "user123"
     ADMIN_PASSWORD: str = "admin123"
+    # Индивидуальные аккаунты для сидинга: "login:pass:role;login2:pass2:role2".
+    # role необязателен (по умолчанию user). Пусто → только общие пароли (legacy).
+    USERS: str = ""
     MAX_FILE_SIZE_MB: int = 20
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
     CORS_ORIGINS: str = "*"
     VAT_RATE: float = 0.22
+    # Наблюдаемость: включает вывод всех SQL-запросов SQLAlchemy в лог (только для отладки).
+    SQL_ECHO: bool = False
+
+    # --- Durable-очередь и worker ---
+    WORKER_CONCURRENCY: int = 4          # сколько job worker гонит одновременно
+    ANTHROPIC_MAX_CONCURRENCY: int = 6   # глобальный семафор вызовов Anthropic (защита от 429)
+    FAST_CHUNK_CONCURRENCY: int = 4      # параллельность чанков внутри задачи (было в task_processor)
+    JOB_VISIBILITY_TIMEOUT_S: int = 900  # зависшая running-job (без heartbeat) → reclaim
+    JOB_POLL_INTERVAL_S: float = 2.0     # интервал опроса очереди worker'ом
+    JOB_MAX_ATTEMPTS: int = 3            # после стольких attempts job → failed
+    # Пул asyncpg под число слотов (env, чтобы поднять при масштабировании воркеров).
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    # SSL к managed Postgres (используется в Phase 4 деплоя): '', 'require', 'verify-full'.
+    DB_SSL_MODE: str = ""
 
     def get_cors_origins(self) -> List[str]:
         try:

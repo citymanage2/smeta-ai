@@ -92,12 +92,12 @@ async def db_session():
 
 @pytest.fixture
 def user_token() -> str:
-    return f"Bearer {create_access_token('user')}"
+    return f"Bearer {create_access_token(1, 'user')}"
 
 
 @pytest.fixture
 def admin_token() -> str:
-    return f"Bearer {create_access_token('admin')}"
+    return f"Bearer {create_access_token(2, 'admin')}"
 
 
 # ---------------------------------------------------------------------------

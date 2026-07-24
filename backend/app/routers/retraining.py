@@ -141,11 +141,8 @@ async def start_training(
     job = await retraining_service.create_training_job(db, pairs_count=stats["total_pairs"])
     job_id = str(job.id)
 
-    background_tasks.add_task(
-        retraining_service.run_training_job,
-        job_id,
-        db,
-    )
+    from app.services import job_queue
+    await job_queue.enqueue(db, "retrain", {"job_id": job_id})
 
     return TrainResponse(job_id=job_id)
 

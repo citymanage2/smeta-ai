@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
+import asyncio
 import io
 import structlog
 
@@ -96,7 +97,9 @@ async def regenerate_task_result(
     summaries = progress.get("summaries", [])
     changes_summary: Optional[str] = "\n\n".join(summaries) if summaries else None
 
-    new_bytes = generate_list(items, changes_summary=changes_summary)
+    # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не морозить event loop
+    # (иначе на время сериализации книги встают все HTTP-запросы единственного воркера).
+    new_bytes = await asyncio.to_thread(generate_list, items, changes_summary=changes_summary)
 
     # Find existing result record (slot='result'), update its bytes; create if missing
     existing_res = await db.execute(

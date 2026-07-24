@@ -1,28 +1,37 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
-import TaskCreate from './pages/TaskCreate';
-import TaskStatus from './pages/TaskStatus';
-import EstimateOptimizer from './pages/EstimateOptimizer';
-import Admin from './pages/Admin';
-import Projects from './pages/Projects';
-import ProjectDetail from './pages/ProjectDetail';
-import ProjectCardPage from './pages/ProjectCardPage';
-import Calculator from './pages/Calculator';
-import Trash from './pages/Trash';
-import PriceCatalog from './pages/PriceCatalog';
-import System from './pages/System';
-import SummaryEditor from './pages/SummaryEditor';
-import Retraining from './pages/Retraining';
 import { useAuthStore } from './stores/auth';
+
+// Ленивая загрузка страниц по роутам: тяжёлые библиотеки (recharts на /system,
+// xlsx-редакторы на /tasks/:id/estimate) грузятся только при переходе на экран,
+// а не в первичном бандле логина. Login оставлен eager — это первый paint.
+const TaskCreate = lazy(() => import('./pages/TaskCreate'));
+const TaskStatus = lazy(() => import('./pages/TaskStatus'));
+const EstimateOptimizer = lazy(() => import('./pages/EstimateOptimizer'));
+const Admin = lazy(() => import('./pages/Admin'));
+const Projects = lazy(() => import('./pages/Projects'));
+const ProjectDetail = lazy(() => import('./pages/ProjectDetail'));
+const ProjectCardPage = lazy(() => import('./pages/ProjectCardPage'));
+const Calculator = lazy(() => import('./pages/Calculator'));
+const Trash = lazy(() => import('./pages/Trash'));
+const PriceCatalog = lazy(() => import('./pages/PriceCatalog'));
+const System = lazy(() => import('./pages/System'));
+const SummaryEditor = lazy(() => import('./pages/SummaryEditor'));
+const Retraining = lazy(() => import('./pages/Retraining'));
+
+const RouteFallback: React.FC = () => (
+  <div style={{ padding: 32, textAlign: 'center', color: '#64748b' }}>Загрузка…</div>
+);
 
 const App: React.FC = () => {
   const { isAuthenticated } = useAuthStore();
 
   return (
     <BrowserRouter>
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         {/* Public route */}
         <Route
@@ -174,6 +183,7 @@ const App: React.FC = () => {
           }
         />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 };

@@ -7,7 +7,21 @@ export default defineConfig({
     include: ['@fortune-sheet/react', '@fortune-sheet/core'],
   },
   build: {
-    sourcemap: true,
+    // Прод-бандл без sourcemap: не раздувает статику и не утекает исходники.
+    // Для локальной отладки можно временно вернуть 'hidden'.
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Тяжёлые библиотеки — в отдельные vendor-чанки: стабильные имена лучше
+        // кэшируются между релизами и не тянутся в чанки, где не нужны.
+        manualChunks: {
+          recharts: ['recharts'],
+          xlsx: ['xlsx'],
+          'fortune-sheet': ['@fortune-sheet/react', '@fortune-sheet/core'],
+          'react-data-grid': ['react-data-grid'],
+        },
+      },
+    },
   },
   server: {
     proxy: {

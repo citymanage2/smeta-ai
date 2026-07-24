@@ -115,4 +115,4 @@ async def test_admin_delete_task(async_client, seed_users, admin_token):
 def _get_user_token() -> str:
     """Helper to generate a user token without fixture injection."""
     from app.utils.auth import create_access_token
-    return create_access_token("user")
+    return create_access_token(1, "user")

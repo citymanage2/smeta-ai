@@ -30,9 +30,9 @@ from app.models.result import TaskResult
 from app.models.task_input_file import TaskInputFile
 from app.models.history import TaskHistory
 from app.models.project import Project
-from app.utils.auth import get_current_user, get_download_user
+from app.utils.auth import get_current_user, get_download_user, current_user_id
 from app.config import settings
-from app.services.task_processor import process_task, fix_empty_prices_background
+from app.services.task_processor import process_task
 from app.services.checkpoint import has_resumable_checkpoint
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
@@ -160,8 +160,22 @@ _CONN_ERROR_KEYWORDS = (
 )
 
 
+async def _enqueue_task(db: AsyncSession, task_id: str) -> None:
+    """Поставить задачу в durable-очередь (kind=task.process). Исполнит worker-процесс.
+
+    owner_id берём из самой задачи (проставлен при создании) для честного round-robin.
+    """
+    from app.services import job_queue
+    owner_id = (
+        await db.execute(select(Task.owner_id).where(Task.id == task_id))
+    ).scalar_one_or_none()
+    await job_queue.enqueue(db, "task.process", {"task_id": task_id}, owner_id=owner_id)
+
+
 async def _run_task_in_background(task_id: str) -> None:
-    """Run task processor with its own DB session, retrying on transient connection errors."""
+    """[DEPRECATED] Прямой запуск в web-процессе. Оставлен как fallback-раннер для
+    воркера/совместимости; продьюсеры теперь ставят задачу в очередь (_enqueue_task).
+    Run task processor with its own DB session, retrying on transient connection errors."""
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
@@ -292,6 +306,7 @@ async def create_task(
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
+        owner_id=current_user_id(current_user),
         task_type=task_type,
         status="pending",
         input_files=input_files_meta,
@@ -355,7 +370,7 @@ async def create_task(
     )
 
     # Launch background processing
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     return TaskCreateResponse(task_id=task_id, status="pending")
 
@@ -437,6 +452,7 @@ async def check_completeness(
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
+        owner_id=current_user_id(current_user),
         task_type="CHECK_LIST_COMPLETENESS",
         status="pending",
         input_files=[],
@@ -451,7 +467,7 @@ async def check_completeness(
     await db.refresh(task)
 
     task_id = str(task.id)
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info(
         "CHECK_LIST_COMPLETENESS task created",
@@ -478,6 +494,25 @@ async def get_estimate_sources(
     )
     source_tasks = result.scalars().all()
 
+    # Один батч-запрос всех check-задач вместо N запросов в цикле (устранение N+1).
+    # user_prompt check-задачи хранит id её источника. Раскладываем в dict по
+    # (source_id, check_type); при сортировке created_at DESC первым встречается
+    # самый свежий check — как и в прежнем limit(1) на каждый источник.
+    source_ids = [str(s.id) for s in source_tasks]
+    latest_check_by_key: dict[tuple[str, str], Task] = {}
+    if source_ids:
+        check_result = await db.execute(
+            select(Task)
+            .where(Task.user_prompt.in_(source_ids))
+            .where(Task.task_type.in_(["CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"]))
+            .where(Task.status == "completed")
+            .order_by(sa_desc(Task.created_at))
+        )
+        for chk in check_result.scalars().all():
+            key = (chk.user_prompt, chk.task_type)
+            if key not in latest_check_by_key:
+                latest_check_by_key[key] = chk
+
     sources = []
     for src in source_tasks:
         items = (src.progress_data or {}).get("items", [])
@@ -489,15 +524,7 @@ async def get_estimate_sources(
             if src.task_type == "LIST_FROM_GRAND"
             else "CHECK_PROJECT_COMPLETENESS"
         )
-        check_result = await db.execute(
-            select(Task)
-            .where(Task.user_prompt == str(src.id))
-            .where(Task.task_type == check_type)
-            .where(Task.status == "completed")
-            .order_by(sa_desc(Task.created_at))
-            .limit(1)
-        )
-        check_task = check_result.scalar_one_or_none()
+        check_task = latest_check_by_key.get((str(src.id), check_type))
 
         stages = [{"stage": 1, "label": "Исходный перечень", "items_count": len(items)}]
         if check_task:
@@ -553,6 +580,7 @@ async def check_project_completeness(
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
+        owner_id=current_user_id(current_user),
         task_type="CHECK_PROJECT_COMPLETENESS",
         status="pending",
         input_files=[],
@@ -567,7 +595,7 @@ async def check_project_completeness(
     await db.refresh(task)
 
     task_id = str(task.id)
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info(
         "CHECK_PROJECT_COMPLETENESS task created",
@@ -681,7 +709,7 @@ async def resume_task(
     task.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info("Task resumed", task_id=task_id, chunks_done=progress_data.get("chunks_done"))
     return TaskCreateResponse(task_id=task_id, status="pending")
@@ -715,7 +743,7 @@ async def restart_task(
     task.updated_at = now
     await db.commit()
 
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     logger.info("Task restarted from scratch", task_id=task_id)
     return TaskCreateResponse(task_id=task_id, status="pending")
@@ -754,7 +782,7 @@ async def send_message(
     await db.commit()
 
     # Reprocess
-    background_tasks.add_task(_run_task_in_background, task_id)
+    await _enqueue_task(db, task_id)
 
     return {"task_id": task_id, "status": "pending", "message": "Сообщение принято, задача перезапущена"}
 
@@ -1501,8 +1529,7 @@ async def optimize_run(
     if task_result is None:
         raise HTTPException(status_code=404, detail="Файл сметы (слот estimate) не найден")
 
-    estimate_bytes = task_result.file_data
-
+    # estimate_bytes здесь не читаем — worker до-читает его из БД перед оптимизацией.
     task.status = "processing"
     task.estimation_status = "optimizing"
     task.progress_message = "Начинаем оптимизацию..."
@@ -1510,13 +1537,13 @@ async def optimize_run(
 
     items_dicts = [item.model_dump() for item in body.items]
 
-    background_tasks.add_task(
-        _run_optimization_background,
-        task_id,
-        items_dicts,
-        body.prompt,
-        estimate_bytes,
-        AsyncSessionLocal,
+    from app.services import job_queue
+    # estimate_bytes НЕ кладём в payload (крупный бинарь) — хендлер worker'а
+    # до-читает его из TaskResult(slot=estimate).
+    await job_queue.enqueue(
+        db, "task.optimize",
+        {"task_id": task_id, "items": items_dicts, "prompt": body.prompt},
+        owner_id=task.owner_id,
     )
 
     return {"task_id": task_id, "status": "optimization_started"}
@@ -1570,7 +1597,8 @@ async def fix_empty_prices(
     task.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    background_tasks.add_task(fix_empty_prices_background, task_id, AsyncSessionLocal)
+    from app.services import job_queue
+    await job_queue.enqueue(db, "task.fix_prices", {"task_id": task_id}, owner_id=task.owner_id)
 
     return {"empty_count": empty_count, "status": "started"}
 
@@ -1926,7 +1954,9 @@ async def list_my_trash(
     data_query = (
         select(Task.id, Task.task_type, Task.status, Task.name, Task.created_at, Task.deleted_at)
         .where(*conditions)
-        .order_by(Task.deleted_at.desc())
+        # Task.id как уникальный tie-breaker: при равных deleted_at
+        # offset-пагинация не даёт дублей/пропусков между страницами.
+        .order_by(Task.deleted_at.desc(), Task.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
