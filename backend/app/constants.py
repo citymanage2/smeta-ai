@@ -1,5 +1,5 @@
 # Типы задач, результат которых — смета со стоимостью (estimation_status = "unestimated" при создании,
-# потом "estimated" после обработки). Сейчас пустой — текущие задачи дают перечни, не сметы.
+# потом "estimated"/"optimized" после обработки). Остальные типы дают перечни/проверки — "not_applicable".
 # При добавлении задачи, результат которой — Excel со стоимостью, добавить её тип сюда.
 ESTIMATE_TASK_TYPES: set[str] = {"ESTIMATE_FROM_LIST", "ESTIMATE_OPTIMIZATION"}
 

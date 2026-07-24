@@ -556,12 +556,12 @@ class TaskProcessor:
     async def _auto_fill_estimate_slot(self) -> None:
         """Promote slot='result' → 'estimate' and set estimation_status after task completes.
 
-        Called automatically when an ESTIMATE_TASK_TYPE (except OPTIMIZE_SMETA, which
-        manages its own slots) transitions to 'completed'.
+        Called automatically when an ESTIMATE_TASK_TYPE (except ESTIMATE_OPTIMIZATION,
+        which manages its own slots) transitions to 'completed'.
         """
         task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = task_res.scalar_one_or_none()
-        if not task or task.task_type not in ESTIMATE_TASK_TYPES or task.task_type in {"OPTIMIZE_SMETA", "ESTIMATE_OPTIMIZATION"}:
+        if not task or task.task_type not in ESTIMATE_TASK_TYPES or task.task_type == "ESTIMATE_OPTIMIZATION":
             return
 
         result_res = await self.db.execute(
