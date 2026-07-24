@@ -8,9 +8,11 @@ interface Props {
   projectId: string
   onClose: () => void
   stage?: KanbanStage
+  /** Опционально: вызывается после успешного создания сметы (до onClose). */
+  onCreated?: () => void
 }
 
-export function CreateCardModal({ projectId, onClose, stage }: Props) {
+export function CreateCardModal({ projectId, onClose, stage, onCreated }: Props) {
   const isListStage = stage === 'list'
   const isOptimization = stage === 'optimization'
   const { createCard, startTask, setPendingListTask } = useKanbanStore()
@@ -51,7 +53,8 @@ export function CreateCardModal({ projectId, onClose, stage }: Props) {
           // Карточка создана, задача не запустилась — пользователь запустит с карточки
         }
       }
-      onClose()
+      if (onCreated) onCreated()
+      else onClose()
     } catch {
       setLoading(false)
     }

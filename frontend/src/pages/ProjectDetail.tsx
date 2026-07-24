@@ -10,6 +10,7 @@ import { useAuthStore } from '../stores/auth';
 import OptimizeModal from '../components/OptimizeModal';
 import HistoryModal from '../components/HistoryModal';
 import { KanbanBoard } from '../components/kanban/KanbanBoard';
+import { SmetaList } from '../components/SmetaList';
 
 const ESTIMATION_LABELS: Record<string, string> = {
   unestimated: 'Не рассчитана',
@@ -182,7 +183,7 @@ const ProjectDetailPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
   const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'list' | 'kanban'>('kanban');
+  const [viewMode, setViewMode] = useState<'smeta' | 'kanban' | 'tasks'>('smeta');
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -414,7 +415,7 @@ const ProjectDetailPage: React.FC = () => {
 
         {/* Переключатель вида */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-          {(['list', 'kanban'] as const).map((mode) => (
+          {([['smeta', 'Сметы'], ['kanban', 'Канбан'], ['tasks', 'Задачи']] as const).map(([mode, label]) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
@@ -429,12 +430,14 @@ const ProjectDetailPage: React.FC = () => {
                 fontWeight: viewMode === mode ? 600 : 400,
               }}
             >
-              {mode === 'list' ? 'Список' : 'Канбан'}
+              {label}
             </button>
           ))}
         </div>
 
-        {viewMode === 'kanban' ? (
+        {viewMode === 'smeta' ? (
+          <SmetaList projectId={project.id} onCardCreated={() => setViewMode('kanban')} />
+        ) : viewMode === 'kanban' ? (
           <KanbanBoard projectId={project.id} />
         ) : (
           <>

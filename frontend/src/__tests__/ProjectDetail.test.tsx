@@ -56,6 +56,12 @@ vi.mock('../components/kanban/KanbanBoard', () => ({
   KanbanBoard: () => null,
 }));
 
+// SmetaList — дефолтный вид проекта; тянет kanban-стор и поллит workflow-cards.
+// Для этих тестов сырых задач он не нужен — мокаем, чтобы не было сетевых вызовов.
+vi.mock('../components/SmetaList', () => ({
+  SmetaList: () => null,
+}));
+
 // notificationSound регистрирует глобальный click-листенер с AudioContext,
 // которого нет в jsdom — при .click() в тестах он бросает ReferenceError.
 // Мок убирает сайд-эффект.
@@ -106,8 +112,8 @@ async function renderPage() {
       <ProjectDetailPage />
     </MemoryRouter>
   );
-  // Дефолтный вид — 'kanban'; строки задач рендерятся только в виде 'list'.
-  fireEvent.click(await screen.findByText('Список'));
+  // Дефолтный вид — 'smeta' (список смет); сырые задачи рендерятся в виде 'Задачи'.
+  fireEvent.click(await screen.findByText('Задачи'));
   return utils;
 }
 
