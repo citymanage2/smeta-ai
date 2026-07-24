@@ -1,0 +1,68 @@
+# Локальная разработка (НЕ для Timeweb): db-контейнер, volumes, hot-reload, frontend.
+# Запуск: docker compose -f docker-compose.dev.yml up
+# Прод-топология для Timeweb App Platform — в корневом docker-compose.yml (web+worker,
+# без volumes, managed PG). Timeweb читает строго docker-compose.yml в корне.
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: smeta_ai
+    # Наблюдаемость: логировать SQL-запросы дольше 200 мс и события подключения.
+    # Топ медленных запросов — база для диагностики (см. plans/2026-07-24-аудит-производительности.md).
+    command:
+      - "postgres"
+      - "-c"
+      - "log_min_duration_statement=200"
+      - "-c"
+      - "log_connections=on"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/smeta_ai
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/smeta_ai
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    # Отдельный процесс обработки задач: без alembic (мигрирует только backend),
+    # без веб-порта. Локальный паритет с прод-топологией web+worker.
+    command: python -m app.worker
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

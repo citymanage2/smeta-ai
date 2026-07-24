@@ -1,64 +1,58 @@
-version: '3.9'
-
+# Прод-топология для Timeweb App Platform (Docker Compose) — КОРНЕВОЙ файл деплоя.
+# Timeweb App Platform читает строго docker-compose.yml в корне репозитория.
+# Локальная разработка — в docker-compose.dev.yml (docker compose -f docker-compose.dev.yml up).
+#
+# Один App = web (первый, получает домен) + worker. База — ТОЛЬКО managed
+# PostgreSQL (DBaaS): контейнерный Postgres на платформе запрещён (нет volumes).
+# Запрещены volumes/privileged/network_mode:host — здесь их нет.
+#
+# Порядок первого деплоя: web на старте применяет миграции (alembic upgrade head
+# в CMD Dockerfile), worker миграции НЕ гонит и терпит недоступность БД до готовности
+# (poll-loop ретраит claim). Секреты задаются в панели Timeweb (env).
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: smeta_ai
-    # Наблюдаемость: логировать SQL-запросы дольше 200 мс и события подключения.
-    # Топ медленных запросов — база для диагностики (см. plans/2026-07-24-аудит-производительности.md).
-    command:
-      - "postgres"
-      - "-c"
-      - "log_min_duration_statement=200"
-      - "-c"
-      - "log_connections=on"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  backend:
+  web:
     build: ./backend
-    env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/smeta_ai
+      DATABASE_URL: ${DATABASE_URL}
+      DB_SSL_MODE: ${DB_SSL_MODE:-require}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      USER_PASSWORD: ${USER_PASSWORD}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      USERS: ${USERS:-}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      S3_ENABLED: ${S3_ENABLED:-false}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-https://s3.twcstorage.ru}
+      S3_REGION: ${S3_REGION:-ru-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     ports:
       - "8000:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # CMD из Dockerfile: alembic upgrade head && uvicorn (мигрирует только web).
 
   worker:
     build: ./backend
-    env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/smeta_ai
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-    # Отдельный процесс обработки задач: без alembic (мигрирует только backend),
-    # без веб-порта. Локальный паритет с прод-топологией web+worker.
+      DATABASE_URL: ${DATABASE_URL}
+      DB_SSL_MODE: ${DB_SSL_MODE:-require}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      COHERE_API_KEY: ${COHERE_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      USERS: ${USERS:-}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      ANTHROPIC_MAX_CONCURRENCY: ${ANTHROPIC_MAX_CONCURRENCY:-6}
+      FAST_CHUNK_CONCURRENCY: ${FAST_CHUNK_CONCURRENCY:-4}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-6}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      S3_ENABLED: ${S3_ENABLED:-false}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-https://s3.twcstorage.ru}
+      S3_REGION: ${S3_REGION:-ru-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    # Обработка задач: без alembic, без веб-порта. SIGTERM → graceful drain.
     command: python -m app.worker
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-
-volumes:
-  postgres_data:

@@ -31,7 +31,8 @@ smeta-ai/
 │   └── tests/            ← pytest
 ├── frontend/             ← React-приложение (TypeScript + Vite)
 │   └── src/              ← компоненты, страницы, стор, утилиты
-├── docker-compose.yml    ← локальное окружение
+├── docker-compose.yml    ← прод-топология для Timeweb (web+worker, managed PG)
+├── docker-compose.dev.yml ← локальное окружение (db+volumes+reload+frontend)
 └── render.yaml           ← деплой на Render.com
 ```
 
