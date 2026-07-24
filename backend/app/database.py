@@ -14,9 +14,13 @@ def _make_async_url(url: str) -> str:
     return url
 
 
-# SSL к managed Postgres (Timeweb DBaaS и т.п.): включаем TLS, если задан DB_SSL_MODE.
-# asyncpg принимает ssl=True (шифрование без проверки серверного серта — достаточно
-# для managed-БД в приватной сети). Локально DB_SSL_MODE пуст → без TLS.
+# SSL к managed Postgres (Timeweb DBaaS и т.п.), управляется DB_SSL_MODE:
+#   '' → без TLS (локальная разработка);
+#   'require'/'true'/'prefer' → ssl=True (шифрование без проверки серта — достаточно
+#      для managed-БД в приватной сети);
+#   'verify-ca'/'verify-full' → реальная проверка серверного серта по системным CA
+#      (verify-full также сверяет hostname). Раньше любой непустой режим давал лишь
+#      ssl=True — 'verify-full' не проверял серт (P3-c исправлено).
 _connect_args: dict = {
     "server_settings": {
         "tcp_keepalives_idle": "60",
@@ -24,7 +28,15 @@ _connect_args: dict = {
         "tcp_keepalives_count": "5",
     }
 }
-if settings.DB_SSL_MODE:
+_ssl_mode = settings.DB_SSL_MODE.strip().lower()
+if _ssl_mode in ("verify-ca", "verify-full"):
+    import ssl as _ssl
+
+    _ssl_ctx = _ssl.create_default_context()
+    if _ssl_mode == "verify-ca":
+        _ssl_ctx.check_hostname = False  # проверяем цепочку CA, но не hostname
+    _connect_args["ssl"] = _ssl_ctx
+elif _ssl_mode:
     _connect_args["ssl"] = True
 
 engine = create_async_engine(

@@ -160,7 +160,10 @@ _client = anthropic.AsyncAnthropic(
 
 # Глобальный лимит одновременных вызовов Anthropic на процесс. При N параллельных
 # задачах × M чанков суммарная конкуренция упирается в этот семафор — защита от
-# каскада 429. Сам rate-limit sleep семафор НЕ держит (обёрнут только вызов create).
+# каскада 429. Сам rate-limit sleep семафор НЕ держит.
+# Под семафором: messages.create (+web search) и быстрые batch-вызовы (submit/poll/
+# cancel). collect_claude_batch НЕ оборачиваем — это длинный стрим результатов,
+# держать на нём слот значило бы морозить обычные create (P3-b).
 _anthropic_semaphore = asyncio.Semaphore(settings.ANTHROPIC_MAX_CONCURRENCY)
 
 
@@ -455,14 +458,16 @@ def build_batch_request(
 
 async def submit_claude_batch(requests: list[dict]) -> str:
     """Отправить пачку запросов. Возвращает batch_id (msgbatch_...)."""
-    batch = await _client.messages.batches.create(requests=requests)
+    async with _anthropic_semaphore:
+        batch = await _client.messages.batches.create(requests=requests)
     logger.info("Claude batch submitted", batch_id=batch.id, count=len(requests))
     return batch.id
 
 
 async def poll_claude_batch(batch_id: str) -> str:
     """Вернуть processing_status пачки ('in_progress' | 'ended' | ...)."""
-    batch = await _client.messages.batches.retrieve(batch_id)
+    async with _anthropic_semaphore:
+        batch = await _client.messages.batches.retrieve(batch_id)
     return batch.processing_status
 
 
@@ -514,7 +519,8 @@ async def collect_claude_batch(
 
 async def cancel_claude_batch(batch_id: str) -> None:
     """Отменить пачку (при отмене задачи)."""
-    await _client.messages.batches.cancel(batch_id)
+    async with _anthropic_semaphore:
+        await _client.messages.batches.cancel(batch_id)
     logger.info("Claude batch cancelled", batch_id=batch_id)
 
 

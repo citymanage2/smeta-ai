@@ -96,14 +96,22 @@ HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
 # ---------------------------------------------------------------------------
 
 async def _heartbeat_loop(job_id: int, interval: float) -> None:
-    """Периодически продлевает claimed_at, пока job исполняется."""
-    try:
-        while True:
+    """Периодически продлевает claimed_at, пока job исполняется.
+
+    Транзиентный сбой БД (обрыв соединения, таймаут пула) НЕ убивает цикл:
+    логируем и продолжаем. Иначе один сбой оставил бы длинную живую job без
+    heartbeat → она протухла бы и её ошибочно реклеймили в параллельный прогон
+    (P0-B). Останавливается только по CancelledError (job завершилась).
+    """
+    while True:
+        try:
             await asyncio.sleep(interval)
             async with AsyncSessionLocal() as db:
                 await job_queue.heartbeat(db, job_id)
-    except asyncio.CancelledError:
-        pass
+        except asyncio.CancelledError:
+            break
+        except Exception as e:  # noqa: BLE001 — транзиентный сбой: логируем и продолжаем
+            logger.warning("Heartbeat failed, will retry", job_id=job_id, error=str(e))
 
 
 async def run_job(job: Job) -> None:
@@ -249,7 +257,18 @@ async def main() -> None:
         logger.info("Worker shutting down — draining in-flight jobs", count=len(inflight))
         scheduler.shutdown(wait=False)
         if inflight:
-            await asyncio.gather(*inflight, return_exceptions=True)
+            # Ограниченный дренаж: ждём завершения текущих job не дольше
+            # JOB_DRAIN_TIMEOUT_S (меньше SIGKILL-грейса Timeweb). Кого не успели —
+            # процесс убьют, но их корректно вернёт reclaim_stale (P2).
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*inflight, return_exceptions=True),
+                    timeout=settings.JOB_DRAIN_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Drain timeout — оставшиеся job вернёт reclaim", remaining=len(inflight)
+                )
         logger.info("Worker stopped")
 
 

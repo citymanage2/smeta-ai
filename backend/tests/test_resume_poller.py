@@ -136,6 +136,35 @@ async def test_resume_paused_tasks_claims_and_runs(db_session):
         await db_session.commit()
 
 
+async def test_resume_paused_tasks_enqueues_job(db_session):
+    """P1: прод-путь (без инъекции runner) АТОМАРНО ставит durable-job task.process,
+    а не запускает обработку напрямую мимо очереди."""
+    from sqlalchemy import delete, select
+    from app.models.job import Job
+
+    await db_session.execute(delete(Job))
+    await db_session.commit()
+    resumable = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
+    try:
+        claimed = await rp.resume_paused_tasks(
+            session_factory=_same_session_factory(db_session),
+        )
+        assert claimed == [resumable.id]
+        await db_session.refresh(resumable)
+        assert resumable.status == "pending"
+
+        jobs = (
+            await db_session.execute(select(Job).where(Job.kind == "task.process"))
+        ).scalars().all()
+        assert len(jobs) == 1
+        assert jobs[0].payload == {"task_id": resumable.id}
+        assert jobs[0].status == "queued"
+    finally:
+        await db_session.execute(delete(Job))
+        await db_session.execute(delete(Task).where(Task.id == resumable.id))
+        await db_session.commit()
+
+
 async def test_resume_paused_tasks_noop_when_none(db_session):
     runner = AsyncMock()
     claimed = await rp.resume_paused_tasks(

@@ -30,10 +30,14 @@ class Settings(BaseSettings):
     JOB_VISIBILITY_TIMEOUT_S: int = 900  # зависшая running-job (без heartbeat) → reclaim
     JOB_POLL_INTERVAL_S: float = 2.0     # интервал опроса очереди worker'ом
     JOB_MAX_ATTEMPTS: int = 3            # после стольких attempts job → failed
+    JOB_DRAIN_TIMEOUT_S: int = 25        # сколько ждём текущие job при SIGTERM (< грейса Timeweb)
     # Пул asyncpg под число слотов (env, чтобы поднять при масштабировании воркеров).
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
-    # SSL к managed Postgres (используется в Phase 4 деплоя): '', 'require', 'verify-full'.
+    # SSL к managed Postgres (Phase 4 деплоя):
+    #   '' → без TLS (локально);
+    #   'require' → TLS без проверки серта (достаточно для managed в приватной сети);
+    #   'verify-ca'/'verify-full' → TLS с проверкой серта по системным CA.
     DB_SSL_MODE: str = ""
 
     def get_cors_origins(self) -> List[str]:

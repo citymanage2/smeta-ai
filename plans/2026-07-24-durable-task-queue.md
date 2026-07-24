@@ -153,3 +153,20 @@
 **Проверить на проде после деплоя (не воспроизводимо локально без Timeweb/Postgres):**
 рантбук первого деплоя (web мигрирует → worker подхватывает), SIGTERM-drain,
 SKIP LOCKED под реальной конкуренцией воркеров, SSL к managed PG.
+
+---
+
+## Пост-ревью и фиксы (2026-07-25)
+
+Проведена адверсариальная верификация (3 ревьюера + собственная проверка ядра). Найдены и **исправлены** реальные баги (Stage 11):
+
+- **P0-A — `reclaim_stale` без guard** (job_queue.py): read-modify-write мог воскресить завершённую job или переоткрыть живую → двойное исполнение (деньги на Claude, битые сметы). Заменён на два атомарных guarded-`UPDATE ... WHERE status='running'`.
+- **P0-B — `_heartbeat_loop` умирал после первой ошибки БД** (worker.py): один транзиентный сбой оставлял живую job без heartbeat → ложный reclaim. Теперь ловит любые ошибки и продолжает.
+- **P1 — авто-резюме paused шло мимо очереди** (resume_poller.py): прямой `_run_task_in_background` → нет Job → терялось при рестарте (нарушение AC3). Теперь атомарно `paused→pending`+`enqueue(task.process)`.
+- **P2 — нет таймаута дренажа** (worker.py): `gather` без лимита → SIGKILL рвал job. Добавлен `JOB_DRAIN_TIMEOUT_S` + опора на reclaim.
+- **P3 (мелкие):** claim re-fetch до commit (не осиротеть в running); batch-вызовы Anthropic (submit/poll/cancel) под глобальным семафором; реальная поддержка `verify-ca/verify-full` SSL; честные комментарии к индексу.
+- **Не менялось осознанно:** индекс под `running_ct` (migration-churn ради ≤60 job не оправдан); перекос fairness при NULL owner (косметика).
+
+Тесты: +3 (reclaim-ignores-done, heartbeat-survives-error, resume-enqueues-job). Гейты: ruff clean, **276 passed** (2 предсуществующих OCR-сбоя не связаны).
+
+**Отдельно на будущее (предсуществующее, не регрессия очереди):** batch-режим `ESTIMATE_FROM_LIST` ставит `completed` сразу после сабмита (task_processor.py:1103), а `batch_poller` ищет `status in [processing,cancelled]` — возможно, batch не дочитывается. Требует отдельной проверки.

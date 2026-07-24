@@ -22,7 +22,10 @@ class Job(Base):
 
     __tablename__ = "jobs"
     __table_args__ = (
-        # Под claim-запрос: выбор queued с сортировкой priority/created_at.
+        # Покрывает WHERE status='queued' в claim и вторичную сортировку
+        # priority/created_at. NB: ведущий ключ ORDER BY в claim_one — коррелированный
+        # running_ct (число running на владельца), его индекс не покрывает; при малой
+        # очереди (десятки job) это несущественно, отдельный индекс не заводим.
         Index("ix_jobs_claim", "status", "priority", "created_at"),
         # Под подсчёт «running на владельца» (round-robin fairness).
         Index("ix_jobs_owner_status", "owner_id", "status"),

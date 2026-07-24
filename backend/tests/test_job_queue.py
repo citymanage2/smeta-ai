@@ -88,6 +88,29 @@ async def test_reclaim_fails_after_max_attempts(db_session):
     assert refreshed.status == "failed"
 
 
+async def test_reclaim_ignores_completed_job(db_session):
+    """P0-A: reclaim не воскрешает job, которую параллельно успели завершить.
+
+    Даже если claimed_at протух (job выглядит stale), но статус уже 'done' —
+    guarded-UPDATE `WHERE status='running'` её не трогает.
+    """
+    await _clear(db_session)
+    job = await job_queue.enqueue(db_session, "task.process", {"n": "z"}, owner_id=1)
+    await job_queue.claim_one(db_session, "w1")
+
+    # Протухший claimed_at, НО job уже завершена.
+    old = datetime.now(timezone.utc) - timedelta(seconds=2000)
+    await db_session.execute(
+        update(Job).where(Job.id == job.id).values(status="done", claimed_at=old)
+    )
+    await db_session.commit()
+
+    n = await job_queue.reclaim_stale(db_session, timeout_s=900, max_attempts=3)
+    assert n == 0
+    refreshed = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
+    assert refreshed.status == "done"  # не воскрешена в queued
+
+
 async def test_complete_and_fail(db_session):
     await _clear(db_session)
     j1 = await job_queue.enqueue(db_session, "task.process", {"n": "c"}, owner_id=1)

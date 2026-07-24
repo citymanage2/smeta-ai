@@ -92,8 +92,11 @@ async def claim_one(db: AsyncSession, worker_id: str, max_tries: int = 5) -> Opt
             )
         )
         if res.rowcount == 1:
-            await db.commit()
+            # Читаем строку ДО commit (в той же транзакции). Если re-fetch упадёт
+            # (обрыв соединения), claim откатится и job останется queued — не
+            # осиротеет в running без обработчика (P3-a).
             claimed = (await db.execute(select(Job).where(Job.id == job_id))).scalar_one()
+            await db.commit()
             logger.info("Job claimed", job_id=job_id, worker=worker_id, attempts=claimed.attempts)
             return claimed
 
@@ -129,26 +132,40 @@ async def reclaim_stale(db: AsyncSession, timeout_s: int, max_attempts: int) -> 
 
     Если attempts исчерпаны — job → failed. Возвращает число обработанных job.
     Заменяет _recover_stuck_tasks: после рестарта worker висящие job подхватятся.
+
+    Оба перехода — АТОМАРНЫЕ guarded-UPDATE с предикатом `status='running'`
+    (а не read-modify-write). Это исключает воскрешение только что завершённой
+    job: если параллельный complete()/fail() успел перевести её в done/failed,
+    WHERE status='running' не совпадёт и reclaim её не тронет (P0-A).
     """
     cutoff = _now() - timedelta(seconds=timeout_s)
-    stale = (
-        await db.execute(
-            select(Job).where(Job.status == "running", Job.claimed_at < cutoff)
-        )
-    ).scalars().all()
 
-    count = 0
-    for job in stale:
-        if job.attempts >= max_attempts:
-            job.status = "failed"
-            job.last_error = f"Превышено число попыток ({job.attempts})"
-            logger.warning("Job exhausted attempts", job_id=job.id, attempts=job.attempts)
-        else:
-            job.status = "queued"
-            job.claimed_by = None
-            job.claimed_at = None
-            logger.info("Job reclaimed", job_id=job.id, attempts=job.attempts)
-        count += 1
+    # Исчерпаны попытки → терминальный failed.
+    failed = await db.execute(
+        update(Job)
+        .where(
+            Job.status == "running",
+            Job.claimed_at < cutoff,
+            Job.attempts >= max_attempts,
+        )
+        .values(status="failed", last_error="Превышено число попыток (reclaim)")
+    )
+    # Ещё есть попытки → назад в очередь.
+    requeued = await db.execute(
+        update(Job)
+        .where(
+            Job.status == "running",
+            Job.claimed_at < cutoff,
+            Job.attempts < max_attempts,
+        )
+        .values(status="queued", claimed_by=None, claimed_at=None)
+    )
+
+    n_failed = failed.rowcount or 0
+    n_requeued = requeued.rowcount or 0
+    count = n_failed + n_requeued
     if count:
         await db.commit()
+        logger.info("Reclaimed stale jobs", requeued=n_requeued, failed=n_failed)
+    # count==0 → изменений нет; транзакцию закроет владелец сессии (async with).
     return count

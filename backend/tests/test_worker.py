@@ -1,4 +1,5 @@
 """Тесты worker-процесса: диспетчер kind→handler, complete/requeue/fail."""
+import asyncio
 import pytest
 from sqlalchemy import select, delete, update
 
@@ -65,6 +66,38 @@ async def test_run_job_requeues_then_fails(db_session, monkeypatch):
     reclaimed = (await db_session.execute(select(Job).where(Job.id == job_id))).scalar_one()
     await worker.run_job(reclaimed)
     assert await _status(db_session, job_id) == "failed"
+
+
+async def test_heartbeat_survives_db_error(monkeypatch):
+    """P0-B: транзиентная ошибка heartbeat не убивает цикл — он продолжает биться.
+
+    Иначе один сбой БД оставил бы живую длинную job без heartbeat → её ошибочно
+    реклеймили бы в параллельный прогон.
+    """
+    calls = {"n": 0}
+
+    async def flaky_heartbeat(db, job_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db blip")  # первый вызов падает
+
+    class _DummyDB:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(worker, "AsyncSessionLocal", lambda: _DummyDB())
+    monkeypatch.setattr(worker.job_queue, "heartbeat", flaky_heartbeat)
+
+    hb = asyncio.create_task(worker._heartbeat_loop(job_id=1, interval=0.005))
+    await asyncio.sleep(0.05)  # ~10 интервалов
+    hb.cancel()
+    await asyncio.gather(hb, return_exceptions=True)
+
+    # Пережил ошибку на 1-м вызове и продолжил (иначе застрял бы на n==1).
+    assert calls["n"] >= 3
 
 
 async def test_run_job_unknown_kind_fails(db_session, monkeypatch):

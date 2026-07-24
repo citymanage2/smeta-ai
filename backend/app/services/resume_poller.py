@@ -59,18 +59,45 @@ async def _claim(db, task_id: str) -> bool:
     return res.rowcount == 1
 
 
+async def _claim_and_enqueue(db, task_id: str) -> bool:
+    """Прод-путь авто-резюме: АТОМАРНО (одна транзакция) paused→pending + постановка
+    durable-job `task.process`. Так задача не осиротеет в `pending` без Job, если
+    воркер рестартует сразу после захвата (P1: раньше запускался прямой
+    _run_task_in_background мимо очереди — reclaim его не подхватывал)."""
+    from app.models.job import Job
+
+    res = await db.execute(
+        update(Task)
+        .where(Task.id == task_id, Task.status == "paused")
+        .values(status="pending", error_message=None, updated_at=datetime.now(timezone.utc))
+    )
+    if res.rowcount != 1:
+        await db.rollback()
+        return False
+    task = await db.get(Task, task_id)
+    db.add(
+        Job(
+            kind="task.process",
+            payload={"task_id": task_id},
+            owner_id=(task.owner_id if task else None),
+            status="queued",
+        )
+    )
+    await db.commit()
+    return True
+
+
 async def resume_paused_tasks(session_factory=AsyncSessionLocal, runner=None) -> list[str]:
-    """Один проход: захватить paused-задачи с чекпоинтом и запустить их заново.
+    """Один проход: захватить paused-задачи с чекпоинтом и переочередить их.
 
     Возвращает список ID реально захваченных (paused→pending) задач.
-    `runner` (по умолчанию — фоновый запуск обработки) инъектируется для тестов.
-    """
-    if runner is None:
-        # Ленивый импорт: избегаем цикла (tasks.py тянет много зависимостей) и
-        # держим импорт main.py лёгким.
-        from app.routers.tasks import _run_task_in_background
-        runner = _run_task_in_background
 
+    Прод (`runner is None`): захват и постановка durable-job атомарны
+    (`_claim_and_enqueue`) — обработку доведёт worker из очереди, в рамках лимита
+    WORKER_CONCURRENCY и с reclaim-подстраховкой.
+    Тесты могут инъектировать `runner` — тогда используется старый путь
+    (`_claim` + прямой вызов runner) для проверки оркестрации.
+    """
     async with session_factory() as db:
         candidates = await _find_resumable_paused_ids(db)
 
@@ -80,16 +107,20 @@ async def resume_paused_tasks(session_factory=AsyncSessionLocal, runner=None) ->
     claimed: list[str] = []
     for task_id in candidates:
         async with session_factory() as db:
-            if await _claim(db, task_id):
+            ok = await (_claim(db, task_id) if runner is not None else _claim_and_enqueue(db, task_id))
+            if ok:
                 claimed.append(task_id)
 
     if not claimed:
         return []
 
     logger.info("Auto-resuming paused tasks", count=len(claimed))
-    for task_id in claimed:
-        run = asyncio.create_task(runner(task_id))
-        _background_runs.add(run)
-        run.add_done_callback(_background_runs.discard)
+    # Прод-путь уже поставил job в очередь внутри _claim_and_enqueue. Прямой запуск —
+    # только для инъектированного тестового runner.
+    if runner is not None:
+        for task_id in claimed:
+            run = asyncio.create_task(runner(task_id))
+            _background_runs.add(run)
+            run.add_done_callback(_background_runs.discard)
 
     return claimed
