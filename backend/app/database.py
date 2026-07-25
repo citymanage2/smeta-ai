@@ -28,16 +28,22 @@ _connect_args: dict = {
         "tcp_keepalives_count": "5",
     }
 }
+import ssl as _ssl
+
 _ssl_mode = settings.DB_SSL_MODE.strip().lower()
 if _ssl_mode in ("verify-ca", "verify-full"):
-    import ssl as _ssl
-
     _ssl_ctx = _ssl.create_default_context()
     if _ssl_mode == "verify-ca":
         _ssl_ctx.check_hostname = False  # проверяем цепочку CA, но не hostname
     _connect_args["ssl"] = _ssl_ctx
 elif _ssl_mode:
-    _connect_args["ssl"] = True
+    # require/prefer/true → TLS-шифрование БЕЗ проверки серта. Именно это нужно для
+    # managed-БД с самоподписанным сертификатом (asyncpg ssl=True его бы ОТВЕРГ —
+    # CERTIFICATE_VERIFY_FAILED). check_hostname=False обязателен ДО verify_mode.
+    _ssl_ctx = _ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = _ssl.CERT_NONE
+    _connect_args["ssl"] = _ssl_ctx
 
 engine = create_async_engine(
     _make_async_url(settings.DATABASE_URL),
