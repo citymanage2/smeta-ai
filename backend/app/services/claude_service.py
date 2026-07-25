@@ -153,10 +153,32 @@ _http_client = httpx.AsyncClient(
     )
 )
 
-_client = anthropic.AsyncAnthropic(
-    api_key=settings.ANTHROPIC_API_KEY,
-    http_client=_http_client,
-)
+# Ленивый singleton клиента Anthropic: создаётся при первом вызове и кэшируется
+# в модульной переменной. base_url и X-Proxy-Secret подставляются из env условно —
+# код одинаков локально (прямой доступ) и на сервере (через посредника), вся
+# разница только в env.
+_client: Optional[anthropic.AsyncAnthropic] = None
+
+
+def _get_client() -> anthropic.AsyncAnthropic:
+    global _client
+    if _client is None:
+        if not settings.ANTHROPIC_API_KEY:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY не задан. Укажите ключ в .env "
+                "(локально — ключ Anthropic; на сервере — ключ агрегатора "
+                "или настоящий ключ при своём прокси)."
+            )
+        kwargs: dict[str, Any] = {
+            "api_key": settings.ANTHROPIC_API_KEY,
+            "http_client": _http_client,
+        }
+        if settings.ANTHROPIC_BASE_URL:
+            kwargs["base_url"] = settings.ANTHROPIC_BASE_URL
+        if settings.ANTHROPIC_PROXY_SECRET:
+            kwargs["default_headers"] = {"X-Proxy-Secret": settings.ANTHROPIC_PROXY_SECRET}
+        _client = anthropic.AsyncAnthropic(**kwargs)
+    return _client
 
 # Глобальный лимит одновременных вызовов Anthropic на процесс. При N параллельных
 # задачах × M чанков суммарная конкуренция упирается в этот семафор — защита от
@@ -240,7 +262,7 @@ async def call_claude(
     Call Claude API (non-streaming) with retry logic and optional web search.
     Returns the final text response.
 
-    processing_timeout — if set, wraps ONLY the _client.messages.create() call
+    processing_timeout — if set, wraps ONLY the _get_client().messages.create() call
         (not the rate-limit sleep).  asyncio.TimeoutError is raised and propagated
         immediately if the API call itself exceeds this budget.
 
@@ -294,11 +316,11 @@ async def call_claude(
                 if remaining is not None:
                     sdk_kwargs = {**kwargs, "timeout": remaining}
                     response = await asyncio.wait_for(
-                        _client.messages.create(**sdk_kwargs),
+                        _get_client().messages.create(**sdk_kwargs),
                         timeout=remaining,
                     )
                 else:
-                    response = await _client.messages.create(**kwargs)
+                    response = await _get_client().messages.create(**kwargs)
             call_duration_ms = int((asyncio.get_event_loop().time() - attempt_start) * 1000)
 
             # Detect output truncation before trying to use the response
@@ -459,7 +481,7 @@ def build_batch_request(
 async def submit_claude_batch(requests: list[dict]) -> str:
     """Отправить пачку запросов. Возвращает batch_id (msgbatch_...)."""
     async with _anthropic_semaphore:
-        batch = await _client.messages.batches.create(requests=requests)
+        batch = await _get_client().messages.batches.create(requests=requests)
     logger.info("Claude batch submitted", batch_id=batch.id, count=len(requests))
     return batch.id
 
@@ -467,7 +489,7 @@ async def submit_claude_batch(requests: list[dict]) -> str:
 async def poll_claude_batch(batch_id: str) -> str:
     """Вернуть processing_status пачки ('in_progress' | 'ended' | ...)."""
     async with _anthropic_semaphore:
-        batch = await _client.messages.batches.retrieve(batch_id)
+        batch = await _get_client().messages.batches.retrieve(batch_id)
     return batch.processing_status
 
 
@@ -484,7 +506,7 @@ async def collect_claude_batch(
     import inspect
 
     out: dict[str, dict] = {}
-    stream = _client.messages.batches.results(batch_id)
+    stream = _get_client().messages.batches.results(batch_id)
     if inspect.isawaitable(stream):
         stream = await stream
 
@@ -520,7 +542,7 @@ async def collect_claude_batch(
 async def cancel_claude_batch(batch_id: str) -> None:
     """Отменить пачку (при отмене задачи)."""
     async with _anthropic_semaphore:
-        await _client.messages.batches.cancel(batch_id)
+        await _get_client().messages.batches.cancel(batch_id)
     logger.info("Claude batch cancelled", batch_id=batch_id)
 
 

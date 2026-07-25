@@ -5,6 +5,13 @@ from typing import List
 
 class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
+    # Посредник для обхода геоблока Anthropic с РФ-IP.
+    #   ANTHROPIC_BASE_URL пусто → SDK идёт напрямую на api.anthropic.com (локально);
+    #   задан → трафик через посредника (агрегатор или свой прокси в ЕС).
+    ANTHROPIC_BASE_URL: str = ""
+    # Только для СВОЕГО прокси: прокидывается как заголовок X-Proxy-Secret,
+    # чтобы прокси не был открытым. Агрегатору не нужен — оставить пустым.
+    ANTHROPIC_PROXY_SECRET: str = ""
     OPENAI_API_KEY: str = ""
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost/smeta_ai"
     JWT_SECRET: str = "changeme-use-strong-secret-in-production"
