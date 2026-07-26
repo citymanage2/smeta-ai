@@ -64,3 +64,21 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     # Обработка задач: без alembic, без веб-порта. SIGTERM → graceful drain.
     command: python -m app.worker
+
+  # ВРЕМЕННЫЙ сервис миграции файлов BLOB→S3 (Phase P4/P7). УБРАТЬ после успешного backfill.
+  # Проход 1: только --dry-run (показывает объёмы, БД не меняет), затем спит, чтобы контейнер
+  # не рестартовал и логи остались доступны. Проход 2 (реальный перенос) — снять --dry-run.
+  # Маленький пул БД (2), чтобы не отъедать соединения managed PG у web/worker.
+  backfill:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DB_SSL_MODE: ${DB_SSL_MODE:-require}
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "2"
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-https://s3.twcstorage.ru}
+      S3_REGION: ${S3_REGION:-ru-1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    command: sh -c "python scripts/backfill_files_to_s3.py --dry-run; echo '=== DRYRUN_DONE ==='; sleep infinity"
