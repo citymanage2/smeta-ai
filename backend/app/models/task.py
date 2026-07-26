@@ -1,7 +1,7 @@
 import uuid as _uuid
 from typing import Optional
 from decimal import Decimal
-from sqlalchemy import Index, Integer, String, Text, DateTime, JSON, Numeric, ForeignKey
+from sqlalchemy import Index, Integer, String, Text, DateTime, JSON, Numeric, ForeignKey, Boolean
 from sqlalchemy import JSON as _JSON
 from sqlalchemy.dialects.postgresql import JSONB as _JSONB
 # Используем JSONB на PostgreSQL, JSON на SQLite (тесты)
@@ -24,11 +24,15 @@ class Task(Base):
         primary_key=True,
         default=lambda: str(_uuid.uuid4()),
     )
-    user_role: Mapped[str] = mapped_column(String(10), nullable=False)
+    user_role: Mapped[str] = mapped_column(String(32), nullable=False)
     # Владелец задачи (человек) — для честного round-robin в очереди. nullable:
     # legacy-задачи и задачи под общими паролями (sub не числовой) остаются без владельца.
     owner_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Архив: True → задача скрыта из основной панели, видна только в разделе «Архив».
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
     )
     task_type: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
