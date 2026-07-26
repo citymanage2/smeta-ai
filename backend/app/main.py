@@ -19,7 +19,7 @@ from app.database import AsyncSessionLocal
 from app.models.user import User
 from app.utils.auth import hash_password, verify_password
 from app.services import price_service
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 # Configure structlog
 structlog.configure(
@@ -42,53 +42,76 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 async def _initialize_users() -> None:
-    """Create or update default user and admin accounts.
+    """Bootstrap-аккаунты и backfill владельца legacy-данных.
 
-    If a user for a role already exists but the password hash doesn't match
-    the current environment variable, update the hash. This ensures password
-    changes via env vars take effect after redeployment.
+    - Именованный админ (ADMIN_USERNAME + ADMIN_PASSWORD): под ним первый вход и
+      создание остальных аккаунтов в UI; он же — владелец архива legacy-данных.
+    - Legacy shared-пароли ролей (username IS NULL) — оставлены для переходной
+      совместимости входа по общему паролю.
+    - Индивидуальные аккаунты сотрудников теперь создаются только через UI
+      (env-переменная USERS больше не обрабатывается).
+    - Backfill: все проекты/задачи без владельца → на именованного админа + в архив.
+    Хэш пароля обновляется, если env-переменная изменилась с прошлого деплоя.
     """
     async with AsyncSessionLocal() as db:
-        # Общие пароли ролей (legacy, username IS NULL).
+        # Именованный бутстрап-админ (username = ADMIN_USERNAME).
+        admin_username = (settings.ADMIN_USERNAME or "admin").strip()
+        result = await db.execute(select(User).where(User.username == admin_username))
+        admin = result.scalar_one_or_none()
+        if not admin:
+            admin = User(
+                username=admin_username,
+                role="admin",
+                full_name="Администратор",
+                password_hash=hash_password(settings.ADMIN_PASSWORD),
+            )
+            db.add(admin)
+            logger.info("Created named admin", username=admin_username)
+        else:
+            admin.role = "admin"
+            admin.is_active = True
+            if not verify_password(settings.ADMIN_PASSWORD, admin.password_hash):
+                admin.password_hash = hash_password(settings.ADMIN_PASSWORD)
+                logger.info("Updated named admin password", username=admin_username)
+        # Нужен id админа для backfill — фиксируем запись.
+        await db.flush()
+        admin_id = admin.id
+
+        # Legacy shared-пароли ролей (username IS NULL) — переходная совместимость.
         for role, password in [("user", settings.USER_PASSWORD), ("admin", settings.ADMIN_PASSWORD)]:
             result = await db.execute(
                 select(User).where(User.role == role, User.username.is_(None))
             )
             existing = result.scalar_one_or_none()
             if not existing:
-                user = User(
-                    role=role,
-                    password_hash=hash_password(password),
-                )
-                db.add(user)
-                logger.info("Created default user", role=role)
+                db.add(User(role=role, password_hash=hash_password(password)))
+                logger.info("Created default shared user", role=role)
             else:
-                # Update password hash if env var changed since last deploy
                 if not verify_password(password, existing.password_hash):
                     existing.password_hash = hash_password(password)
-                    logger.info("Updated password hash for user", role=role)
+                    logger.info("Updated password hash for shared user", role=role)
 
-        # Индивидуальные аккаунты из USERS ("login:pass:role;...").
-        for entry in settings.USERS.split(";"):
-            entry = entry.strip()
-            if not entry:
-                continue
-            parts = entry.split(":")
-            if len(parts) < 2 or not parts[0] or not parts[1]:
-                logger.warning("Skipping malformed USERS entry", entry=entry)
-                continue
-            username, password = parts[0].strip(), parts[1]
-            u_role = parts[2].strip() if len(parts) >= 3 and parts[2].strip() else "user"
-            result = await db.execute(select(User).where(User.username == username))
-            existing = result.scalar_one_or_none()
-            if not existing:
-                db.add(User(username=username, role=u_role, password_hash=hash_password(password)))
-                logger.info("Created individual user", username=username, role=u_role)
-            else:
-                existing.role = u_role
-                if not verify_password(password, existing.password_hash):
-                    existing.password_hash = hash_password(password)
-                    logger.info("Updated individual user password", username=username)
+        # Backfill владельца: legacy проекты/задачи без owner_id → админ + архив.
+        # Идемпотентно: после перехода новые строки всегда с owner_id.
+        res_p = await db.execute(
+            text(
+                "UPDATE projects SET owner_id = :aid, is_archived = true "
+                "WHERE owner_id IS NULL"
+            ),
+            {"aid": admin_id},
+        )
+        res_t = await db.execute(
+            text(
+                "UPDATE tasks SET owner_id = :aid, is_archived = true "
+                "WHERE owner_id IS NULL"
+            ),
+            {"aid": admin_id},
+        )
+        if res_p.rowcount or res_t.rowcount:
+            logger.info(
+                "Backfilled legacy owners to admin",
+                projects=res_p.rowcount, tasks=res_t.rowcount, admin_id=admin_id,
+            )
 
         await db.commit()
 
