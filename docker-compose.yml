@@ -81,4 +81,4 @@ services:
       S3_BUCKET: ${S3_BUCKET:-}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
-    command: sh -c "python scripts/backfill_files_to_s3.py --dry-run; echo '=== DRYRUN_DONE ==='; sleep infinity"
+    command: sh -c "python scripts/backfill_files_to_s3.py; echo '=== BACKFILL_DONE ==='; sleep infinity"
