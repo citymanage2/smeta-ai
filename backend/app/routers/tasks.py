@@ -234,6 +234,18 @@ async def create_task(
     # Path B: ESTIMATE_FROM_LIST from existing task — skip file requirement
     is_path_b = task_type == "ESTIMATE_FROM_LIST" and source_task_id
 
+    # Изоляция: источник Path B должен принадлежать пользователю (или менеджеру),
+    # иначе ПМ построил бы смету из чужого перечня (IDOR). Как в check_completeness.
+    if is_path_b:
+        src = (
+            await db.execute(select(Task).where(Task.id == source_task_id))
+        ).scalar_one_or_none()
+        if not src or not can_access(src.owner_id, current_user):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Исходная задача не найдена",
+            )
+
     # Validate file count (skip for Path B)
     if not is_path_b and len(files) > settings.MAX_FILES_PER_REQUEST:
         raise HTTPException(
@@ -2045,11 +2057,12 @@ async def list_my_trash(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Список удалённых задач текущего пользователя."""
-    conditions = [Task.deleted_at.is_not(None)]
-    vis = visibility_filter(Task, current_user)
-    if vis is not None:
-        conditions.append(vis)
+    """Список удалённых задач текущего пользователя.
+
+    Это «моя корзина» — всегда только свои задачи (по owner_id), в т.ч. для
+    менеджера: чтобы «очистить корзину» не затрагивало чужие удалённые задачи.
+    """
+    conditions = [Task.deleted_at.is_not(None), Task.owner_id == current_user_id(current_user)]
 
     count_result = await db.execute(select(func.count(Task.id)).where(*conditions))
     total = count_result.scalar() or 0
@@ -2085,11 +2098,11 @@ async def clear_my_trash(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Удалить все задачи из корзины текущего пользователя навсегда."""
-    conditions = [Task.deleted_at.is_not(None)]
-    vis = visibility_filter(Task, current_user)
-    if vis is not None:
-        conditions.append(vis)
+    """Удалить все задачи из корзины текущего пользователя навсегда.
+
+    Только свои задачи (по owner_id) — менеджер не стирает чужие удалённые.
+    """
+    conditions = [Task.deleted_at.is_not(None), Task.owner_id == current_user_id(current_user)]
     await db.execute(delete(Task).where(*conditions))
     await db.commit()
     logger.info("Trash cleared", role=current_user.get("role"))

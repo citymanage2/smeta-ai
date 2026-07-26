@@ -4,6 +4,8 @@
 по id → 404), архив, переназначение владельца, управление аккаунтами (admin_users),
 вход именованного админа, backfill legacy-данных.
 """
+from datetime import datetime, timezone
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -246,3 +248,65 @@ async def test_named_admin_login(async_client, rbac_users):
     assert r.status_code == 200
     body = r.json()
     assert body["role"] == "admin" and body["username"] == "admin" and body["access_token"]
+
+
+# --- IDOR Path B: смета из чужого источника (security-review Finding 1) ---
+
+@pytest.mark.asyncio
+async def test_pm_cannot_estimate_from_foreign_source(async_client, rbac_users, db_session):
+    # Источник-перечень принадлежит pm2.
+    src = Task(
+        owner_id=rbac_users["pm2"], user_role="project_manager",
+        task_type="LIST_FROM_GRAND", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(src)
+    await db_session.commit()
+    # pm1 пытается построить смету из источника pm2 → 404 (не раскрываем существование).
+    r = await async_client.post(
+        "/tasks",
+        data={"task_type": "ESTIMATE_FROM_LIST", "source_task_id": str(src.id)},
+        headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_pm_can_estimate_from_own_source(async_client, rbac_users, db_session):
+    src = Task(
+        owner_id=rbac_users["pm1"], user_role="project_manager",
+        task_type="LIST_FROM_GRAND", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(src)
+    await db_session.commit()
+    r = await async_client.post(
+        "/tasks",
+        data={"task_type": "ESTIMATE_FROM_LIST", "source_task_id": str(src.id)},
+        headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
+    )
+    assert r.status_code in (200, 201)
+
+
+# --- «Моя корзина» изолирована даже для менеджера (Finding 3) ---
+
+@pytest.mark.asyncio
+async def test_clear_my_trash_only_own_even_for_manager(async_client, rbac_users, db_session):
+    now = datetime.now(timezone.utc)
+    head_trash = Task(
+        owner_id=rbac_users["head"], user_role="head_of_sales", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[], deleted_at=now,
+    )
+    pm1_trash = Task(
+        owner_id=rbac_users["pm1"], user_role="project_manager", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[], deleted_at=now,
+    )
+    db_session.add_all([head_trash, pm1_trash])
+    await db_session.commit()
+    pm1_id = pm1_trash.id
+
+    # Менеджер очищает СВОЮ корзину — чужая (pm1) не должна пострадать.
+    r = await async_client.delete("/tasks/trash", headers=_auth(rbac_users["head"], "head_of_sales", "head"))
+    assert r.status_code == 204
+    survived = (await db_session.execute(select(Task).where(Task.id == pm1_id))).scalar_one_or_none()
+    assert survived is not None and survived.deleted_at is not None

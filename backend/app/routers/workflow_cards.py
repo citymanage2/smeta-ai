@@ -419,6 +419,10 @@ async def set_primary_version(
         ver = await db.get(EstimateVersion, body.version_id)
         if ver is None:
             raise HTTPException(status_code=404, detail="Версия сметы не найдена")
+        # Версия должна принадлежать доступной задаче — не ссылаемся на чужую.
+        ver_task = await db.get(Task, ver.task_id)
+        if ver_task is None or not can_access(ver_task.owner_id, current_user):
+            raise HTTPException(status_code=404, detail="Версия сметы не найдена")
 
     card.primary_version_id = body.version_id
     card.updated_at = datetime.now(timezone.utc)
