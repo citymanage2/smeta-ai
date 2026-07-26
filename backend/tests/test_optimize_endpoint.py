@@ -19,6 +19,7 @@ from sqlalchemy import text
 
 from app.models.task import Task
 from app.models.result import TaskResult
+from tests.conftest import store_result_row
 
 
 # ---------------------------------------------------------------------------
@@ -73,14 +74,11 @@ async def seed_optimize_task(db_session: AsyncSession):
     db_session.add(task)
     await db_session.flush()
 
-    result = TaskResult(
-        task_id=TASK_ID,
-        slot="estimate",
-        file_name="estimate.xlsx",
-        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        file_data=_make_smeta_xlsx_bytes(),
+    await store_result_row(
+        db_session, TASK_ID, "estimate", "estimate.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _make_smeta_xlsx_bytes(),
     )
-    db_session.add(result)
     await db_session.commit()
     yield
     await db_session.execute(text("DELETE FROM task_results WHERE task_id = :tid"), {"tid": _TASK_ID_HEX})

@@ -197,7 +197,7 @@ async def save_rows(
             )
             tr = res.scalar_one_or_none()
             if tr is not None:
-                tr.storage_key, tr.file_data = await storage_service.store_result_file(
+                tr.storage_key = await storage_service.store_result_file(
                     task_id, "result", tr.file_name or "result.xlsx", tr.mime_type, xlsx_bytes
                 )
                 tr.size_bytes = len(xlsx_bytes)
@@ -216,7 +216,7 @@ async def save_rows(
             )
             tif = res.scalar_one_or_none()
             if tif is not None:
-                tif.storage_key, tif.content = await storage_service.store_input_file(
+                tif.storage_key = await storage_service.store_input_file(
                     task_id, tif.file_index, tif.file_name, tif.mime_type, xlsx_bytes
                 )
                 tif.size_bytes = len(xlsx_bytes)
@@ -300,7 +300,7 @@ async def init_from_result(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TaskResult не найден")
 
     rows = parse_xlsx_to_generic_rows(
-        await storage_service.load_bytes(tr.storage_key, tr.file_data)
+        await storage_service.load_bytes(tr.storage_key)
     )
     count_res = await db.execute(select(EstimateVersion).where(EstimateVersion.task_id == task_id))
     all_versions = count_res.scalars().all()
@@ -361,7 +361,7 @@ async def init_from_input(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Input-файл с index={file_index} не найден")
 
     rows = parse_xlsx_to_generic_rows(
-        await storage_service.load_bytes(tif.storage_key, tif.content)
+        await storage_service.load_bytes(tif.storage_key)
     )
     count_res = await db.execute(select(EstimateVersion).where(EstimateVersion.task_id == task_id))
     all_versions = count_res.scalars().all()
@@ -429,7 +429,7 @@ async def init_from_estimate_result(
 
     try:
         rows = parse_estimate_excel(
-            await storage_service.load_bytes(tr.storage_key, tr.file_data)
+            await storage_service.load_bytes(tr.storage_key)
         )
     except Exception as exc:
         raise HTTPException(
@@ -617,7 +617,7 @@ async def _load_client_context(
         ftype = context_indices.get(f.file_index)
         if ftype is None:
             continue
-        _fbytes = await storage_service.load_bytes(f.storage_key, f.content)
+        _fbytes = await storage_service.load_bytes(f.storage_key)
         content_b64 = base64.b64encode(_fbytes).decode("utf-8")
         try:
             parsed = _parse_file(f.file_name, f.mime_type, content_b64)

@@ -177,41 +177,34 @@ async def delete_prefix(prefix: str) -> int:
 
 async def store_input_file(
     task_id: str, file_index: int, filename: str, mime_type: Optional[str], data: bytes
-) -> tuple[Optional[str], Optional[bytes]]:
-    """Куда положить байты входного файла → вернуть (storage_key, content) для строки.
+) -> str:
+    """Записать байты входного файла в S3 → вернуть storage_key для строки.
 
-    S3_ENABLED → пишем в S3, возвращаем (key, None). Иначе (None, data) — старый
-    путь (BLOB в БД). Вызывающий проставляет оба поля в TaskInputFile.
+    После contract-фазы (035) BLOB-колонки нет — S3 единственный путь.
     """
-    if settings.S3_ENABLED:
-        key = build_input_key(task_id, file_index, filename)
-        await put_object(key, data, mime_type)
-        return key, None
-    return None, data
+    key = build_input_key(task_id, file_index, filename)
+    await put_object(key, data, mime_type)
+    return key
 
 
 async def store_result_file(
     task_id: str, slot: str, filename: str, mime_type: Optional[str], data: bytes
-) -> tuple[Optional[str], Optional[bytes]]:
-    """Куда положить байты результата → вернуть (storage_key, file_data) для строки."""
-    if settings.S3_ENABLED:
-        key = build_result_key(task_id, slot, filename)
-        await put_object(key, data, mime_type)
-        return key, None
-    return None, data
+) -> str:
+    """Записать байты результата в S3 → вернуть storage_key для строки."""
+    key = build_result_key(task_id, slot, filename)
+    await put_object(key, data, mime_type)
+    return key
 
 
-async def load_bytes(storage_key: Optional[str], blob: Optional[bytes]) -> bytes:
-    """Dual-read: storage_key задан → из S3; иначе BLOB; иначе StorageError.
+async def load_bytes(storage_key: Optional[str]) -> bytes:
+    """Прочитать содержимое файла из S3 по storage_key.
 
-    Единый путь чтения для роутов и task_processor на переходный период
-    (смешанные данные: часть в S3, часть ещё в БД).
+    Единый путь чтения для роутов и task_processor. После contract-фазы (035)
+    BLOB-fallback убран: все объекты в S3, ключ должен быть задан.
     """
-    if storage_key:
-        return await get_object(storage_key)
-    if blob is not None:
-        return blob
-    raise StorageError("нет содержимого: ни storage_key, ни BLOB")
+    if not storage_key:
+        raise StorageError("нет содержимого: storage_key пуст")
+    return await get_object(storage_key)
 
 
 async def delete_key_safe(key: Optional[str]) -> None:

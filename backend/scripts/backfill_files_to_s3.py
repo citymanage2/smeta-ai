@@ -1,5 +1,12 @@
 """backfill_files_to_s3.py — перенос файлов из PostgreSQL BLOB в S3 (Phase 4).
 
+⚠️ OBSOLETE после миграции 035 (contract-фаза). Скрипт обращается к BLOB-колонкам
+task_input_files.content / task_results.file_data, которые дропнуты миграцией 035.
+Backfill на проде завершён (остаток 0/0). Файл оставлен как audit-trail процесса
+переноса; приложением не импортируется. Запускать после 035 нельзя — упадёт на
+отсутствующих колонках.
+
+
 Идёт батчами по task_input_files и task_results (content/file_data IS NOT NULL,
 storage_key IS NULL): грузит байты в S3, проставляет storage_key, обнуляет BLOB.
 Отдельно обрабатывает legacy tasks.input_file_data (base64 в JSON). Идемпотентный —

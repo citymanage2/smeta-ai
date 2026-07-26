@@ -6,7 +6,7 @@ def test_imports():
     """Verify core modules can be imported."""
     from app.config import settings
     assert settings.JWT_ALGORITHM == "HS256"
-    assert settings.MAX_FILE_SIZE_MB == 20
+    assert settings.MAX_FILE_SIZE_MB == 50
 
 
 def test_hash_password():

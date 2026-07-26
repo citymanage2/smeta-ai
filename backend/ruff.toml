@@ -23,6 +23,10 @@
 # an intentional grouping, not a mistake.
 "app/models/*.py" = ["E402"]
 
+# database.py places `import ssl` after the asyncpg connect_args dict on purpose
+# (grouped with the TLS setup it belongs to) — intentional, not a mistake.
+"app/database.py" = ["E402"]
+
 # pdf_ocr_extractor guards optional native deps (pytesseract / fitz) behind a
 # try/except and a logger definition placed before the guarded imports.
 "app/utils/pdf_ocr_extractor.py" = ["E402"]

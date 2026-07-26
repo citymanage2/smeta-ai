@@ -49,13 +49,14 @@ async def _handle_task_optimize(payload: dict, db) -> None:
     from sqlalchemy import select
     from app.routers.tasks import _run_optimization_background
     from app.models.result import TaskResult
+    from app.services import storage_service
     task_id = payload["task_id"]
     tr = (
         await db.execute(
             select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
         )
     ).scalar_one_or_none()
-    estimate_bytes = tr.file_data if tr else None
+    estimate_bytes = await storage_service.load_bytes(tr.storage_key) if tr else None
     await _run_optimization_background(
         task_id, payload.get("items", []), payload.get("prompt"), estimate_bytes, AsyncSessionLocal
     )

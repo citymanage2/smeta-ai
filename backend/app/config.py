@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     # Индивидуальные аккаунты для сидинга: "login:pass:role;login2:pass2:role2".
     # role необязателен (по умолчанию user). Пусто → только общие пароли (legacy).
     USERS: str = ""
-    MAX_FILE_SIZE_MB: int = 20
+    # Дефолт поднят 20 → 50 в contract-фазе S3 (035): байты файлов идут в S3,
+    # а не в буфер соединения PostgreSQL, поэтому старого ограничения BLOB нет.
+    MAX_FILE_SIZE_MB: int = 50
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
     CORS_ORIGINS: str = "*"
@@ -48,8 +50,10 @@ class Settings(BaseSettings):
     DB_SSL_MODE: str = ""
 
     # --- S3-хранилище файлов (Timeweb Cloud Storage) ---
-    # Бинарь файлов выносится из PostgreSQL BLOB в объектное хранилище.
-    # S3_ENABLED — feature-flag для постепенного включения (dual-read/new-write).
+    # Бинарь файлов хранится в объектном хранилище, в БД — метаданные + storage_key.
+    # S3_ENABLED — исторический feature-flag; после contract-фазы (035) S3 —
+    # единственный путь, код на флаг больше не смотрит. Поле оставлено, чтобы
+    # прод-env `S3_ENABLED=true` продолжал валидироваться (без правки окружения).
     S3_ENABLED: bool = False
     S3_ENDPOINT_URL: str = "https://s3.twcstorage.ru"
     S3_REGION: str = "ru-1"

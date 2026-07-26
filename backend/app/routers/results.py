@@ -112,7 +112,7 @@ async def regenerate_task_result(
 
     _mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     if existing:
-        existing.storage_key, existing.file_data = await storage_service.store_result_file(
+        existing.storage_key = await storage_service.store_result_file(
             task_id, "result", existing.file_name or "Перечень.xlsx",
             existing.mime_type or _mime, new_bytes
         )
@@ -121,7 +121,7 @@ async def regenerate_task_result(
         return ResultItem(file_id=existing.id, file_name=existing.file_name, mime_type=existing.mime_type)
 
     # No result record yet — create one with a generic name
-    storage_key, file_data = await storage_service.store_result_file(
+    storage_key = await storage_service.store_result_file(
         task_id, "result", "Перечень.xlsx", _mime, new_bytes
     )
     new_record = TaskResult(
@@ -129,7 +129,6 @@ async def regenerate_task_result(
         file_name="Перечень.xlsx",
         mime_type=_mime,
         storage_key=storage_key,
-        file_data=file_data,
         size_bytes=len(new_bytes),
         slot="result",
     )
@@ -157,7 +156,7 @@ async def download_result(
             detail="Файл не найден",
         )
 
-    data = await storage_service.load_bytes(file_record.storage_key, file_record.file_data)
+    data = await storage_service.load_bytes(file_record.storage_key)
     file_stream = io.BytesIO(data)
     filename = file_record.file_name
 

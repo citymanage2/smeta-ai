@@ -4,29 +4,38 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_slot_download_returns_file(async_client: AsyncClient, user_token: str, db_session):
-    """Source slot download serves from task.input_file_data (not TaskResult)."""
+    """Source slot download serves the first input file (bytes from S3)."""
     import uuid
-    import base64
     from app.models.task import Task
+    from app.models.task_input_file import TaskInputFile
+    from app.services import storage_service
 
     task_id = str(uuid.uuid4())
     file_content = b"fake-xlsx-bytes"
+    _mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     task = Task(
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",
         status="completed",
-        input_files=[{"name": "source.xlsx", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "size_bytes": len(file_content)}],
-        input_file_data=[{
-            "name": "source.xlsx",
-            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "size_bytes": len(file_content),
-            "content_b64": base64.b64encode(file_content).decode(),
-        }],
+        input_files=[{"name": "source.xlsx", "mime_type": _mime, "size_bytes": len(file_content)}],
+        input_file_data=[{"name": "source.xlsx", "mime_type": _mime, "size_bytes": len(file_content)}],
         chat_history=[],
         estimation_status="not_applicable",
     )
     db_session.add(task)
+    await db_session.flush()
+
+    key = storage_service.build_input_key(task_id, 0, "source.xlsx")
+    await storage_service.put_object(key, file_content, _mime)
+    db_session.add(TaskInputFile(
+        task_id=task_id,
+        file_index=0,
+        file_name="source.xlsx",
+        mime_type=_mime,
+        size_bytes=len(file_content),
+        storage_key=key,
+    ))
     await db_session.commit()
 
     resp = await async_client.get(

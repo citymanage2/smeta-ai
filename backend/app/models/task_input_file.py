@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import Integer, String, LargeBinary, ForeignKey
+from sqlalchemy import Integer, String, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from app.database import Base
@@ -20,7 +20,6 @@ class TaskInputFile(Base):
     file_name: Mapped[str] = mapped_column(String(500), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Ключ объекта в S3 (Phase 3+). Если задан — байты в S3, content=NULL.
+    # Ключ объекта в S3. Байты файла хранятся в S3, в БД — только метаданные + ключ.
+    # BLOB-колонка content удалена в contract-фазе (миграция 035).
     storage_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    # BLOB стал nullable: при переносе в S3 обнуляется (fallback до contract-фазы).
-    content: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)

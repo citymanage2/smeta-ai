@@ -407,36 +407,30 @@ class TaskProcessor:
         self._input_files_cache: list[dict] | None = None
 
     async def _load_input_files(self, task: Task) -> list[dict]:
-        """Return input files with content_b64, loading from task_input_files table.
+        """Return input files with content_b64, loading bytes from S3 by storage_key.
 
-        Falls back to task.input_file_data for old tasks that still store content_b64 inline.
-        Result is cached so repeated calls within one processor run are cheap.
+        Все входные файлы (в т.ч. перенесённые legacy) лежат в task_input_files;
+        байты — в S3. Результат кэшируется на время одного прогона процессора.
         """
         if self._input_files_cache is not None:
             return self._input_files_cache
 
-        # New tasks: content stored in task_input_files, not in the JSON column
         result = await self.db.execute(
             select(TaskInputFile)
             .where(TaskInputFile.task_id == self.task_id)
             .order_by(TaskInputFile.file_index)
         )
         rows = result.scalars().all()
-        if rows:
-            files = []
-            for r in rows:
-                data = await storage_service.load_bytes(r.storage_key, r.content)
-                files.append({
-                    "name": r.file_name,
-                    "mime_type": r.mime_type,
-                    "size_bytes": r.size_bytes,
-                    "content_b64": base64.b64encode(data).decode("utf-8"),
-                })
-            self._input_files_cache = files
-            return self._input_files_cache
-
-        # Old tasks: content_b64 stored directly in input_file_data JSON column
-        self._input_files_cache = task.input_file_data or []
+        files = []
+        for r in rows:
+            data = await storage_service.load_bytes(r.storage_key)
+            files.append({
+                "name": r.file_name,
+                "mime_type": r.mime_type,
+                "size_bytes": r.size_bytes,
+                "content_b64": base64.b64encode(data).decode("utf-8"),
+            })
+        self._input_files_cache = files
         return self._input_files_cache
 
     async def _check_cancelled(self) -> None:
@@ -498,14 +492,13 @@ class TaskProcessor:
         )
         record = existing.scalar_one_or_none()
         old_key = record.storage_key if record is not None else None
-        storage_key, blob = await storage_service.store_result_file(
+        storage_key = await storage_service.store_result_file(
             self.task_id, slot, file_name, mime_type, file_data
         )
         if record is not None:
             record.file_name = file_name
             record.mime_type = mime_type
             record.storage_key = storage_key
-            record.file_data = blob
             record.size_bytes = len(file_data)
         else:
             record = TaskResult(
@@ -513,7 +506,6 @@ class TaskProcessor:
                 file_name=file_name,
                 mime_type=mime_type,
                 storage_key=storage_key,
-                file_data=blob,
                 size_bytes=len(file_data),
                 slot=slot,
             )
@@ -604,9 +596,7 @@ class TaskProcessor:
         }
         if result_row.mime_type in xlsx_mimes:
             try:
-                cost_bytes = await storage_service.load_bytes(
-                    result_row.storage_key, result_row.file_data
-                )
+                cost_bytes = await storage_service.load_bytes(result_row.storage_key)
                 cost = extract_total_cost(cost_bytes)
             except Exception:
                 pass
@@ -993,6 +983,13 @@ class TaskProcessor:
         сохранить состояние (_stage=batch_pending) и выйти. Смету достроит поллер
         (Phase 5) через resume_from_batch после завершения пачки.
         """
+        # Resumable-чекпоинт ДО отправки: если билинг падает на submit_claude_batch
+        # (баланс исчерпан) → задача уходит в paused. Без этого чекпоинта её не
+        # подхватил бы resume_poller (batch_pending не входит в RESUMABLE_STAGES,
+        # а до submit его ещё нет). claude_partial с пустыми результатами → resume
+        # прогонит шаги 0-1 заново (дёшево) и повторит отправку пачки.
+        await self._save_claude_partial(items, matched_by_gidx, {})
+
         requests = []
         for i, chunk in enumerate(chunks):
             unmatched_json = json.dumps(
@@ -2709,12 +2706,11 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         select(TaskResult).where(TaskResult.task_id == self.task_id, TaskResult.slot == "estimate")
     )
     old_result = existing_r.scalar_one_or_none()
-    est_key, est_data = await storage_service.store_result_file(
+    est_key = await storage_service.store_result_file(
         self.task_id, "estimate", "Смета_из_перечня.xlsx", _XLSX_MIME, excel_data
     )
     if old_result:
         old_result.storage_key = est_key
-        old_result.file_data = est_data
         old_result.size_bytes = len(excel_data)
     else:
         self.db.add(TaskResult(
@@ -2722,7 +2718,6 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
             file_name="Смета_из_перечня.xlsx",
             mime_type=_XLSX_MIME,
             storage_key=est_key,
-            file_data=est_data,
             size_bytes=len(excel_data),
             slot="estimate",
         ))

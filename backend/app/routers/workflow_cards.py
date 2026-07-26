@@ -20,7 +20,7 @@ from fastapi import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, defer
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.project import Project
@@ -435,7 +435,6 @@ async def _build_stage_meta(task: Optional[Task], db: AsyncSession) -> Optional[
     res_rows = await db.execute(
         select(TaskResult)
         .where(TaskResult.task_id == task.id)
-        .options(defer(TaskResult.file_data))
         .order_by(TaskResult.id)
     )
     res_files = [
@@ -572,9 +571,10 @@ async def start_task(
                 status_code=400,
                 detail="Файл сметы недоступен: результат не найден",
             )
-        raw_files_bytes = [tr.file_data]
+        estimate_bytes = await storage_service.load_bytes(tr.storage_key)
+        raw_files_bytes = [estimate_bytes]
         input_files_meta = [
-            {"name": tr.file_name, "mime_type": tr.mime_type, "size_bytes": len(tr.file_data)}
+            {"name": tr.file_name, "mime_type": tr.mime_type, "size_bytes": len(estimate_bytes)}
         ]
 
     elif task_type in _COMPLETENESS_TYPES:
@@ -616,7 +616,7 @@ async def start_task(
 
     # Сохраняем все файлы в task_input_files
     for idx, (file_bytes, meta) in enumerate(zip(raw_files_bytes, input_files_meta)):
-        storage_key, content = await storage_service.store_input_file(
+        storage_key = await storage_service.store_input_file(
             task_id, idx, meta["name"], meta["mime_type"], file_bytes
         )
         db.add(TaskInputFile(
@@ -626,7 +626,6 @@ async def start_task(
             mime_type=meta["mime_type"],
             size_bytes=meta["size_bytes"],
             storage_key=storage_key,
-            content=content,
         ))
 
     # Привязываем задачу к карточке

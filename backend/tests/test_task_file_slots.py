@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.models.task import Task
 from app.models.result import TaskResult
+from tests.conftest import store_result_row
 
 
 SEEDED_TASK_ID = "a1000000-0000-0000-0000-000000000001"
@@ -155,14 +156,9 @@ async def test_delete_estimate_slot_clears_cost(
     task.cost = 99000
     await db_session.commit()
 
-    slot_result = TaskResult(
-        task_id=SEEDED_TASK_ID,
-        file_name="estimate.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=b"fake",
-        slot="estimate",
+    await store_result_row(
+        db_session, SEEDED_TASK_ID, "estimate", "estimate.xlsx", XLSX_MIME, b"fake"
     )
-    db_session.add(slot_result)
     await db_session.commit()
 
     resp = await async_client.delete(
@@ -189,14 +185,9 @@ async def test_confirm_optimized_estimation(
     task.estimation_status = "estimated"
     await db_session.commit()
 
-    slot_result = TaskResult(
-        task_id=SEEDED_TASK_ID,
-        file_name="optimized.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=b"fake",
-        slot="optimized",
+    await store_result_row(
+        db_session, SEEDED_TASK_ID, "optimized", "optimized.xlsx", XLSX_MIME, b"fake"
     )
-    db_session.add(slot_result)
     await db_session.commit()
 
     resp = await async_client.patch(
@@ -305,14 +296,9 @@ async def test_auto_fill_estimate_slot_sets_status_and_slot(
     task = await _make_task(db_session, AUTO_TASK_ID, "ESTIMATE_FROM_LIST")
 
     xlsx_bytes = _make_xlsx_with_итого(99500.0)
-    result_row = TaskResult(
-        task_id=AUTO_TASK_ID,
-        file_name="smeta.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=xlsx_bytes,
-        slot="result",
+    await store_result_row(
+        db_session, AUTO_TASK_ID, "result", "smeta.xlsx", XLSX_MIME, xlsx_bytes
     )
-    db_session.add(result_row)
     await db_session.commit()
 
     processor = TaskProcessor(AUTO_TASK_ID, db_session)
@@ -354,14 +340,9 @@ async def test_auto_fill_skipped_for_non_estimate_task(
     task_id = "c2000000-0000-0000-0000-000000000098"
     task = await _make_task(db_session, task_id, "LIST_FROM_TZ")
 
-    result_row = TaskResult(
-        task_id=task_id,
-        file_name="list.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=_make_xlsx_with_итого(1000.0),
-        slot="result",
+    await store_result_row(
+        db_session, task_id, "result", "list.xlsx", XLSX_MIME, _make_xlsx_with_итого(1000.0)
     )
-    db_session.add(result_row)
     await db_session.commit()
 
     processor = TaskProcessor(task_id, db_session)

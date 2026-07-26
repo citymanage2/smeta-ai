@@ -11,6 +11,8 @@ from sqlalchemy import select, text
 from app.models.task import Task
 from app.models.result import TaskResult
 from app.models.history import TaskHistory
+from app.services import storage_service
+from tests.conftest import store_result_row
 
 
 # ---------------------------------------------------------------------------
@@ -75,14 +77,9 @@ async def seed_history_task(db_session: AsyncSession):
     await db_session.flush()
 
     # "optimized" slot — current active result
-    opt_result = TaskResult(
-        task_id=TASK_ID,
-        slot="optimized",
-        file_name="optimized.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=b"opt1_bytes",
+    await store_result_row(
+        db_session, TASK_ID, "optimized", "optimized.xlsx", XLSX_MIME, b"opt1_bytes"
     )
-    db_session.add(opt_result)
 
     # History entry in new format: no file bytes, just metadata
     entry = TaskHistory(
@@ -167,23 +164,13 @@ async def seed_two_history_entries(db_session: AsyncSession):
     await db_session.flush()
 
     # Versioned snapshot from first optimization (archived when second ran)
-    opt_v1 = TaskResult(
-        task_id=TASK_ID,
-        slot="optimized_v1",
-        file_name="opt1.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=b"opt1_bytes",
+    await store_result_row(
+        db_session, TASK_ID, "optimized_v1", "opt1.xlsx", XLSX_MIME, b"opt1_bytes"
     )
     # Current "optimized" = second optimization result
-    opt_current = TaskResult(
-        task_id=TASK_ID,
-        slot="optimized",
-        file_name="opt2.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=b"opt2_bytes",
+    await store_result_row(
+        db_session, TASK_ID, "optimized", "opt2.xlsx", XLSX_MIME, b"opt2_bytes"
     )
-    db_session.add(opt_v1)
-    db_session.add(opt_current)
 
     entry1 = TaskHistory(
         id=ENTRY_ID_1,
@@ -308,7 +295,7 @@ async def test_revert_restores_file_from_versioned_slot(
     restored = result_q.scalar_one_or_none()
     assert restored is not None
     assert restored.file_name == "opt1.xlsx"
-    assert restored.file_data == b"opt1_bytes"
+    assert await storage_service.load_bytes(restored.storage_key) == b"opt1_bytes"
 
     # optimized_v1 slot should no longer exist (it was renamed)
     v1_q = await db_session.execute(
@@ -352,14 +339,9 @@ async def seed_legacy_history_entry(db_session: AsyncSession):
     db_session.add(task)
     await db_session.flush()
 
-    opt_current = TaskResult(
-        task_id=TASK_ID,
-        slot="optimized",
-        file_name="opt2.xlsx",
-        mime_type=XLSX_MIME,
-        file_data=b"opt2_bytes",
+    await store_result_row(
+        db_session, TASK_ID, "optimized", "opt2.xlsx", XLSX_MIME, b"opt2_bytes"
     )
-    db_session.add(opt_current)
 
     entry = TaskHistory(
         id=ENTRY_ID_1,
@@ -413,4 +395,4 @@ async def test_revert_legacy_entry_restores_file(
     restored = result_q.scalar_one_or_none()
     assert restored is not None
     assert restored.file_name == "opt1.xlsx"
-    assert restored.file_data == b"opt1_bytes_legacy"
+    assert await storage_service.load_bytes(restored.storage_key) == b"opt1_bytes_legacy"

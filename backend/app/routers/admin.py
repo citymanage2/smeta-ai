@@ -1,4 +1,3 @@
-import base64
 import csv
 import io
 from datetime import datetime, timezone
@@ -432,7 +431,7 @@ async def download_input_file(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
-    # Новое хранилище: task_input_files (S3 или BLOB) — для новых/перенесённых задач.
+    # Файлы задачи хранятся в task_input_files (байты в S3 по storage_key).
     tif_res = await db.execute(
         select(TaskInputFile).where(
             TaskInputFile.task_id == task_id,
@@ -440,32 +439,14 @@ async def download_input_file(
         )
     )
     tif = tif_res.scalar_one_or_none()
-    if tif is not None:
-        data = await storage_service.load_bytes(tif.storage_key, tif.content)
-        return Response(
-            content=data,
-            media_type=tif.mime_type or "application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(tif.file_name)}"},
-        )
-
-    # Legacy fallback: content_b64 в input_file_data JSON
-    file_data_list = task.input_file_data or []
-    if file_index < 0 or file_index >= len(file_data_list):
+    if tif is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
 
-    file_info = file_data_list[file_index]
-    content_b64 = file_info.get("content_b64", "")
-    if not content_b64:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Содержимое файла отсутствует")
-
-    content = base64.b64decode(content_b64)
-    mime_type = file_info.get("mime_type", "application/octet-stream")
-    name = file_info.get("name", f"file_{file_index}")
-
+    data = await storage_service.load_bytes(tif.storage_key)
     return Response(
-        content=content,
-        media_type=mime_type,
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"},
+        content=data,
+        media_type=tif.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(tif.file_name)}"},
     )
 
 

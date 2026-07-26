@@ -91,35 +91,25 @@ async def test_delete_prefix_removes_only_matching(fake):
     assert await ss.object_exists("tasks/t2/input/0-c") is True  # чужой префикс цел
 
 
-async def test_store_input_file_s3_enabled(fake, monkeypatch):
-    monkeypatch.setattr(ss.settings, "S3_ENABLED", True)
-    key, content = await ss.store_input_file("t1", 0, "a.pdf", "application/pdf", b"hi")
-    assert content is None
+async def test_store_input_file_returns_key(fake):
+    key = await ss.store_input_file("t1", 0, "a.pdf", "application/pdf", b"hi")
     assert key and key.startswith("tasks/t1/input/0-")
     assert await ss.get_object(key) == b"hi"  # реально легло в S3
 
 
-async def test_store_input_file_s3_disabled(fake, monkeypatch):
-    monkeypatch.setattr(ss.settings, "S3_ENABLED", False)
-    key, content = await ss.store_input_file("t1", 0, "a.pdf", "application/pdf", b"hi")
-    assert key is None and content == b"hi"  # старый путь: BLOB в БД
-
-
-async def test_store_result_file_s3_enabled(fake, monkeypatch):
-    monkeypatch.setattr(ss.settings, "S3_ENABLED", True)
-    key, data = await ss.store_result_file("t1", "estimate", "e.xlsx", "x", b"bytes")
-    assert data is None
+async def test_store_result_file_returns_key(fake):
+    key = await ss.store_result_file("t1", "estimate", "e.xlsx", "x", b"bytes")
     assert key.startswith("tasks/t1/result/estimate-")
     assert await ss.get_object(key) == b"bytes"
 
 
-async def test_load_bytes_dual_read(fake):
+async def test_load_bytes_reads_from_s3(fake):
     await ss.put_object("k1", b"from_s3")
-    assert await ss.load_bytes("k1", None) == b"from_s3"        # storage_key → S3
-    assert await ss.load_bytes(None, b"from_blob") == b"from_blob"  # только BLOB
-    assert await ss.load_bytes("k1", b"ignored") == b"from_s3"  # приоритет ключа
+    assert await ss.load_bytes("k1") == b"from_s3"   # storage_key → S3
     with pytest.raises(ss.StorageError):
-        await ss.load_bytes(None, None)                          # ничего → ошибка
+        await ss.load_bytes(None)                     # нет ключа → ошибка
+    with pytest.raises(ss.StorageError):
+        await ss.load_bytes("missing")                # нет объекта → ошибка
 
 
 async def test_key_builders_and_sanitize():
