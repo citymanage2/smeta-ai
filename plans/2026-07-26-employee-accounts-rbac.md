@@ -176,4 +176,15 @@ UPDATE tasks    SET owner_id=<admin_id>, is_archived=true WHERE owner_id IS NULL
 ---
 
 ## Итог
-Не реализован. План финализирован, все развилки закрыты. Готов к старту Фазы 1 по команде пользователя.
+**Реализован целиком** (2026-07-27). Коммиты: `cae4df3` (Ф1), `82fb4a0` (Ф2), `67ae647` (Ф3–5).
+
+Сделано:
+- **Ф1** — модели (`users.role`→VARCHAR(32), `full_name`, `is_active`; `projects.owner_id`, `is_archived`; `tasks.is_archived`), миграция `036` (идемпотентная).
+- **Ф2** — `permissions.py` (роли, `is_manager`/`can_access`/`visibility_filter`/`get_manager_user`), бутстрап именованного админа (`ADMIN_USERNAME`), рантайм-backfill legacy-данных на админа + `is_archived=true`, убран env-сидинг `USERS`. Unit-тесты 11.
+- **Ф3** — изоляция по владельцу во всех роутерах данных (projects/tasks/estimate_versions/workflow_cards/summary/results), IDOR→404; архивация (`PATCH /archive`) и переназначение владельца (`PATCH /owner`, менеджер); `dashboard/stats` — гейт на менеджеров; `owner_id/owner_name/is_archived` в ответах проектов. Интеграционные IDOR/RBAC-тесты 30.
+- **Ф4** — `admin_users.py`: CRUD аккаунтов (только админ), `/assignable` (менеджер), защита последнего активного админа.
+- **Ф5** — фронтенд: вход по логину, роли в store (`isManager`), `ProtectedRoute requireManager`, страница «Сотрудники», раздел «Активные/Архив», метка владельца, кнопки архива и переназначения.
+
+Тесты: 313 backend passed (+30 новых RBAC). 20 падений — пре-существующие, окружение python 3.9 vs целевой 3.12 (claude_service monkeypatch, pdf/pymupdf), не связаны с этой задачей (доказано прогоном на чистом HEAD).
+
+Осталось (эксплуатация, не код): задать в прод-env `ADMIN_USERNAME`/`ADMIN_PASSWORD`; после перехода можно удалить legacy shared-пароли (`USER_PASSWORD`) и env `USERS`.
