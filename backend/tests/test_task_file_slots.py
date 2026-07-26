@@ -267,7 +267,7 @@ AUTO_TASK_ID = "c2000000-0000-0000-0000-000000000099"
 
 
 async def _make_task(db, task_id: str, task_type: str) -> Task:
-    task = Task(
+    task = Task(owner_id=1, 
         id=task_id,
         user_role="user",
         task_type=task_type,

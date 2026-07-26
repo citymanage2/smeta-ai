@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { useAuthStore } from '../stores/auth';
 import { useGlobalTaskPoller } from '../hooks/useGlobalTaskPoller';
+import { ROLE_LABELS } from '../api/adminUsers';
 import ProjectsSidebar from './ProjectsSidebar';
 
 interface LayoutProps {
@@ -11,8 +12,10 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
-  const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
+  const { role, logout, isAdmin, isManager, isAuthenticated } = useAuthStore();
   useGlobalTaskPoller();
+
+  const roleLabel = (role && ROLE_LABELS[role]) || 'Сотрудник';
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     const stored = localStorage.getItem('sidebarOpen');
@@ -75,7 +78,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               textTransform: 'uppercase',
             }}
           >
-            {role === 'admin' ? 'Администратор' : 'Пользователь'}
+            {roleLabel}
           </span>
         </div>
 
@@ -94,6 +97,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               style={headerBtnStyle}
             >
               Дообучение
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/employees')}
+              style={headerBtnStyle}
+            >
+              Сотрудники
             </button>
           )}
           <button onClick={() => navigate('/task/create')} style={headerBtnStyle}>
@@ -122,7 +133,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* ── Body: sidebar + content ── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {isAuthenticated && (
-          <ProjectsSidebar open={sidebarOpen} onToggle={handleToggleSidebar} />
+          <ProjectsSidebar open={sidebarOpen} onToggle={handleToggleSidebar} showSystem={isManager} />
         )}
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

@@ -249,7 +249,7 @@ async def seed_users(db_session: AsyncSession, fake_s3):
 
     # Task with a known ID (explicit, bypasses server_default). input_file_data
     # хранит только метаданные (как после backfill — content_b64 вырезан).
-    task = Task(
+    task = Task(owner_id=1, 
         id=SEEDED_TASK_ID,
         user_role="user",
         task_type="LIST_FROM_GRAND",

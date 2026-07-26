@@ -41,6 +41,7 @@ from app.schemas.workflow_card import (
     ResultFileDetail,
 )
 from app.utils.auth import get_current_user, current_user_id
+from app.utils.permissions import can_access
 from app.utils.progress_summary import build_progress_summary
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD
 
@@ -130,6 +131,13 @@ def _apply_soft_delete_filter(card: WorkflowCard) -> None:
             object.__setattr__(card, attr, None)
 
 
+async def _check_card_access(card: WorkflowCard, db: AsyncSession, current_user: dict) -> None:
+    """Доступ к карточке определяется владельцем её проекта (у WorkflowCard нет owner_id)."""
+    proj = await db.get(Project, card.project_id)
+    if proj is None or not can_access(proj.owner_id, current_user):
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
+
+
 @router.get("/projects/{project_id}/workflow-cards", response_model=list[WorkflowCardResponse])
 async def get_workflow_cards(
     project_id: str,
@@ -139,7 +147,7 @@ async def get_workflow_cards(
     current_user: dict = Depends(get_current_user),
 ):
     proj = await db.get(Project, project_id)
-    if proj is None:
+    if proj is None or not can_access(proj.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Проект не найден")
 
     stmt = (
@@ -182,7 +190,7 @@ async def create_workflow_card(
     current_user: dict = Depends(get_current_user),
 ):
     proj = await db.get(Project, project_id)
-    if proj is None:
+    if proj is None or not can_access(proj.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Проект не найден")
 
     card = WorkflowCard(
@@ -215,6 +223,7 @@ async def update_workflow_card(
     card = await _load_card_with_tasks(card_id, db)
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
 
     if body.name is not None:
         card.name = body.name
@@ -243,6 +252,7 @@ async def delete_workflow_card(
     card = result.scalar_one_or_none()
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
 
     now = datetime.now(timezone.utc)
     card.deleted_at = now
@@ -294,6 +304,8 @@ async def get_trash_cards(
     items = []
     for card in cards:
         proj = await db.get(Project, card.project_id)
+        if not can_access(proj.owner_id if proj else None, current_user):
+            continue
         task_count = sum(1 for tid in [
             card.list_task_id,
             card.completeness_task_id,
@@ -328,7 +340,9 @@ async def restore_workflow_card(
         raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
 
     proj = await db.get(Project, card.project_id)
-    if proj is None or proj.deleted_at is not None:
+    if proj is None or not can_access(proj.owner_id, current_user):
+        raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
+    if proj.deleted_at is not None:
         raise HTTPException(status_code=400, detail="Проект удалён — восстановление невозможно")
 
     card.deleted_at = None
@@ -362,6 +376,7 @@ async def permanent_delete_workflow_card(
     card = result.scalar_one_or_none()
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
+    await _check_card_access(card, db, current_user)
 
     task_ids = [tid for tid in [
         card.list_task_id,
@@ -398,6 +413,7 @@ async def set_primary_version(
     card = result.scalar_one_or_none()
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
 
     if body.version_id is not None:
         ver = await db.get(EstimateVersion, body.version_id)
@@ -471,6 +487,7 @@ async def get_card_detail(
     card = await _load_card_with_tasks(card_id, db)
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
 
     return CardDetailResponse(
         id=str(card.id),
@@ -494,6 +511,7 @@ async def get_card_files_meta(
     card = await _load_card_with_tasks(card_id, db)
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
 
     return CardDetailResponse(
         id=str(card.id),
@@ -524,6 +542,7 @@ async def start_task(
     card = await _load_card_with_tasks(card_id, db)
     if card is None:
         raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
 
     field_name = _TASK_TYPE_TO_FIELD.get(task_type)
     if field_name is None:

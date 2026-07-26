@@ -21,13 +21,17 @@ const PriceCatalog = lazy(() => import('./pages/PriceCatalog'));
 const System = lazy(() => import('./pages/System'));
 const SummaryEditor = lazy(() => import('./pages/SummaryEditor'));
 const Retraining = lazy(() => import('./pages/Retraining'));
+const Employees = lazy(() => import('./pages/Employees'));
 
 const RouteFallback: React.FC = () => (
   <div style={{ padding: 32, textAlign: 'center', color: '#64748b' }}>Загрузка…</div>
 );
 
 const App: React.FC = () => {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, isManager } = useAuthStore();
+
+  // Приземление после логина: менеджер → дашборд, остальные → проекты.
+  const landingPath = isManager ? '/system' : '/projects';
 
   return (
     <BrowserRouter>
@@ -38,7 +42,7 @@ const App: React.FC = () => {
           path="/login"
           element={
             isAuthenticated ? (
-              <Navigate to="/system" replace />
+              <Navigate to={landingPath} replace />
             ) : (
               <Login />
             )
@@ -81,7 +85,7 @@ const App: React.FC = () => {
           }
         />
         {/* «Задачи без проекта» поглощены «Входящим» (/system) */}
-        <Route path="/projects/unassigned" element={<Navigate to="/system" replace />} />
+        <Route path="/projects/unassigned" element={<Navigate to={landingPath} replace />} />
         <Route
           path="/projects/:projectId"
           element={
@@ -150,12 +154,20 @@ const App: React.FC = () => {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/employees"
+          element={
+            <ProtectedRoute requireAdmin>
+              <Employees />
+            </ProtectedRoute>
+          }
+        />
 
-        {/* System dashboard */}
+        {/* System dashboard — только менеджер */}
         <Route
           path="/system"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requireManager>
               <System />
             </ProtectedRoute>
           }
@@ -166,7 +178,7 @@ const App: React.FC = () => {
           path="/"
           element={
             <Navigate
-              to={isAuthenticated ? '/system' : '/login'}
+              to={isAuthenticated ? landingPath : '/login'}
               replace
             />
           }
@@ -177,7 +189,7 @@ const App: React.FC = () => {
           path="*"
           element={
             <Navigate
-              to={isAuthenticated ? '/system' : '/login'}
+              to={isAuthenticated ? landingPath : '/login'}
               replace
             />
           }

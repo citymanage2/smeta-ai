@@ -11,8 +11,19 @@ export interface ProjectUpdatePayload {
   description?: string;
 }
 
-export async function listProjects(): Promise<ProjectCard[]> {
-  const resp = await apiClient.get<ProjectCard[]>('/projects');
+export async function listProjects(archived?: boolean): Promise<ProjectCard[]> {
+  const params = archived === undefined ? undefined : { archived };
+  const resp = await apiClient.get<ProjectCard[]>('/projects', { params });
+  return resp.data;
+}
+
+export async function archiveProject(projectId: string, archived: boolean): Promise<Project> {
+  const resp = await apiClient.patch<Project>(`/projects/${projectId}/archive`, { archived });
+  return resp.data;
+}
+
+export async function reassignProjectOwner(projectId: string, ownerId: number): Promise<Project> {
+  const resp = await apiClient.patch<Project>(`/projects/${projectId}/owner`, { owner_id: ownerId });
   return resp.data;
 }
 

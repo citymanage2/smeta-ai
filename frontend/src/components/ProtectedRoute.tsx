@@ -5,10 +5,15 @@ import { useAuthStore } from '../stores/auth';
 interface ProtectedRouteProps {
   children: React.ReactNode;
   requireAdmin?: boolean;
+  requireManager?: boolean;
 }
 
-const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requireAdmin = false }) => {
-  const { isAuthenticated, isAdmin } = useAuthStore();
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
+  children,
+  requireAdmin = false,
+  requireManager = false,
+}) => {
+  const { isAuthenticated, isAdmin, isManager } = useAuthStore();
   const location = useLocation();
 
   if (!isAuthenticated) {
@@ -16,7 +21,11 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requireAdmin 
   }
 
   if (requireAdmin && !isAdmin) {
-    return <Navigate to="/task/create" replace />;
+    return <Navigate to="/projects" replace />;
+  }
+
+  if (requireManager && !isManager) {
+    return <Navigate to="/projects" replace />;
   }
 
   return <>{children}</>;

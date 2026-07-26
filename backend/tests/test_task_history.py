@@ -63,7 +63,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 @pytest_asyncio.fixture
 async def seed_history_task(db_session: AsyncSession):
     """Seed a task with one history entry (first optimization, new metadata-only format)."""
-    task = Task(
+    task = Task(owner_id=1, 
         id=TASK_ID,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -150,7 +150,7 @@ async def test_get_history_task_not_found(async_client: AsyncClient, user_token:
 @pytest_asyncio.fixture
 async def seed_two_history_entries(db_session: AsyncSession):
     """Seed a task with two sequential history entries using new versioned-slot format."""
-    task = Task(
+    task = Task(owner_id=1, 
         id=TASK_ID,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -326,7 +326,7 @@ async def test_revert_entry_not_found(async_client: AsyncClient, user_token: str
 async def seed_legacy_history_entry(db_session: AsyncSession):
     """Seed a history entry in the old format (file_data_b64 in previous_value)."""
     import base64
-    task = Task(
+    task = Task(owner_id=1, 
         id=TASK_ID,
         user_role="user",
         task_type="LIST_FROM_GRAND",

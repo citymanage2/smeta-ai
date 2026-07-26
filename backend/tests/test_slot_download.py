@@ -13,7 +13,7 @@ async def test_slot_download_returns_file(async_client: AsyncClient, user_token:
     task_id = str(uuid.uuid4())
     file_content = b"fake-xlsx-bytes"
     _mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    task = Task(
+    task = Task(owner_id=1, 
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -54,7 +54,7 @@ async def test_slot_download_empty_slot_returns_404(async_client: AsyncClient, u
     from app.models.task import Task
 
     task_id = str(uuid.uuid4())
-    task = Task(
+    task = Task(owner_id=1, 
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -81,7 +81,7 @@ async def test_slot_download_invalid_slot_returns_400(async_client: AsyncClient,
     from app.models.task import Task
 
     task_id = str(uuid.uuid4())
-    task = Task(
+    task = Task(owner_id=1, 
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",

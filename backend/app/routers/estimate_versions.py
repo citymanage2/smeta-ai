@@ -26,6 +26,7 @@ from app.schemas.estimate_version import (
 )
 from fastapi.responses import StreamingResponse
 from app.utils.auth import get_current_user
+from app.utils.permissions import can_access
 
 logger = structlog.get_logger()
 
@@ -47,10 +48,14 @@ VALID_LABELS = frozenset({
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _get_task_or_404(task_id: str, db: AsyncSession) -> Task:
+async def _get_task_or_404(
+    task_id: str, db: AsyncSession, current_user: Optional[dict] = None
+) -> Task:
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if current_user is not None and not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     return task
 
@@ -122,7 +127,7 @@ async def list_versions(
     current_user: dict = Depends(get_current_user),
 ):
     """Return all non-rolled-back versions for a task (without rows for speed)."""
-    await _get_task_or_404(task_id, db)
+    await _get_task_or_404(task_id, db, current_user)
     query = (
         select(EstimateVersion)
         .where(EstimateVersion.task_id == task_id, EstimateVersion.is_rolled_back == False)  # noqa: E712
@@ -148,6 +153,7 @@ async def get_version(
 ):
     """Return a full version including rows."""
     version = await _get_version_or_404(task_id, version_id, db)
+    await _get_task_or_404(version.task_id, db, current_user)
     return _version_to_response(version)
 
 
@@ -181,7 +187,7 @@ async def save_rows(
 
     version = await _get_version_or_404(task_id, version_id, db)
     version.rows = body.rows
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
     task.manually_edited_at = datetime.now(timezone.utc)
 
     # For LIST/COMPLETENESS: regenerate xlsx and persist back to source record
@@ -250,7 +256,7 @@ async def save_expenses(
     version.transport_pct = body.transport_pct
     version.contingency_pct = body.contingency_pct
     version.expenses_overridden = True
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
     task.manually_edited_at = datetime.now(timezone.utc)
     await db.commit()
     return {"version_id": version_id, "expenses_overridden": True}
@@ -271,7 +277,7 @@ async def init_from_result(
     from app.models.result import TaskResult
     from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
 
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
 
     existing = await db.execute(
         select(EstimateVersion).where(
@@ -336,7 +342,7 @@ async def init_from_input(
     from app.models.task_input_file import TaskInputFile
     from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
 
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
     label = f"input_{file_index}"
 
     existing = await db.execute(
@@ -396,7 +402,7 @@ async def init_from_estimate_result(
     from app.models.result import TaskResult
     from app.services.estimate_parser import parse_estimate_excel
 
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -884,7 +890,7 @@ def _make_optimize_endpoint(step: str):
         db: AsyncSession = Depends(get_db),
         current_user: dict = Depends(get_current_user),
     ):
-        task = await _get_task_or_404(task_id, db)
+        task = await _get_task_or_404(task_id, db, current_user)
         from app.services import job_queue
         await job_queue.enqueue(db, "version.optimize", {"task_id": task_id, "step": step}, owner_id=task.owner_id)
         return {"status": "running", "step": step}
@@ -1210,7 +1216,7 @@ async def optimize_fill_prices(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
     from app.services import job_queue
     await job_queue.enqueue(db, "version.fill_prices", {"task_id": task_id}, owner_id=task.owner_id)
     return {"status": "running", "step": "fill_prices"}
@@ -1238,6 +1244,7 @@ async def optimize_custom(
     import json as _json
 
     version = await _get_version_or_404(task_id, body.version_id, db)
+    await _get_task_or_404(version.task_id, db, current_user)
     rows = version.rows or []
     selected = [r for r in rows if r.get("id") in body.row_ids]
     if not selected:
@@ -1370,7 +1377,7 @@ async def apply_proposals(
         expenses_overridden=version.expenses_overridden,
     )
     db.add(new_version)
-    task = await _get_task_or_404(task_id, db)
+    task = await _get_task_or_404(task_id, db, current_user)
     from datetime import datetime, timezone
     task.manually_edited_at = datetime.now(timezone.utc)
     await db.commit()
@@ -1396,6 +1403,7 @@ async def export_version(
     from app.services.excel_service import generate_estimate_export
 
     version = await _get_version_or_404(task_id, version_id, db)
+    await _get_task_or_404(version.task_id, db, current_user)
 
     try:
         # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
@@ -1446,7 +1454,7 @@ async def export_comparison(
     import io as _io
     from app.services.excel_service import generate_comparison_export
 
-    await _get_task_or_404(task_id, db)
+    await _get_task_or_404(task_id, db, current_user)
 
     result = await db.execute(
         select(EstimateVersion).where(
@@ -1496,6 +1504,7 @@ async def rollback_version(
 ):
     """Mark all versions after this one as is_rolled_back=True."""
     version = await _get_version_or_404(task_id, version_id, db)
+    await _get_task_or_404(version.task_id, db, current_user)
 
     result = await db.execute(
         select(EstimateVersion).where(
@@ -1529,6 +1538,7 @@ async def rename_version(
 ):
     """Rename a version's display name."""
     version = await _get_version_or_404(task_id, version_id, db)
+    await _get_task_or_404(version.task_id, db, current_user)
     version.version_display_name = body.version_display_name.strip()
     await db.commit()
     return {"version_id": version_id, "version_display_name": version.version_display_name}
@@ -1552,6 +1562,7 @@ async def create_manual_version(
 ):
     """Manually snapshot the current state of a version (Зафиксировать версию)."""
     source = await _get_version_or_404(task_id, body.source_version_id, db)
+    await _get_task_or_404(source.task_id, db, current_user)
 
     count_result = await db.execute(
         select(EstimateVersion).where(EstimateVersion.task_id == task_id)

@@ -119,7 +119,7 @@ PAUSE_TASK_ID = "d3000000-0000-0000-0000-000000000001"
 
 
 async def test_process_pauses_on_insufficient_balance(seed_users, db_session):
-    task = Task(
+    task = Task(owner_id=1, 
         id=PAUSE_TASK_ID,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -150,7 +150,7 @@ async def test_process_pauses_on_insufficient_balance(seed_users, db_session):
 async def test_process_generic_error_still_fails(seed_users, db_session):
     """Регрессия: обычная ошибка (не баланс) по-прежнему → failed, не paused."""
     task_id = "d3000000-0000-0000-0000-000000000002"
-    task = Task(
+    task = Task(owner_id=1, 
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -179,7 +179,7 @@ async def test_process_generic_error_still_fails(seed_users, db_session):
 
 async def test_resume_allows_paused_task(async_client, user_token, seed_users, db_session, monkeypatch):
     task_id = "d3000000-0000-0000-0000-000000000003"
-    task = Task(
+    task = Task(owner_id=1, 
         id=task_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",

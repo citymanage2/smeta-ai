@@ -61,7 +61,7 @@ _TASK_ID_HEX = TASK_ID.replace("-", "")
 @pytest_asyncio.fixture
 async def seed_optimize_task(db_session: AsyncSession):
     """Seed a task with an estimate slot result."""
-    task = Task(
+    task = Task(owner_id=1, 
         id=TASK_ID,
         user_role="user",
         task_type="LIST_FROM_GRAND",
@@ -111,7 +111,7 @@ async def test_analyze_returns_items(async_client: AsyncClient, user_token: str,
 async def test_analyze_empty_slot_returns_404(async_client: AsyncClient, user_token: str, db_session: AsyncSession):
     """POST /optimize/analyze returns 404 when no estimate slot exists."""
     no_slot_id = "c1000000-0000-0000-0000-000000000002"
-    task = Task(
+    task = Task(owner_id=1, 
         id=no_slot_id,
         user_role="user",
         task_type="LIST_FROM_GRAND",

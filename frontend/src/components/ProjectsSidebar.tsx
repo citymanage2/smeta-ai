@@ -36,9 +36,11 @@ function formatDate(iso: string): string {
 interface Props {
   open: boolean;
   onToggle: () => void;
+  // Дашборд «Система» доступен только менеджеру; для обычных сотрудников пункт скрыт.
+  showSystem?: boolean;
 }
 
-const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
+const ProjectsSidebar: React.FC<Props> = ({ open, onToggle, showSystem = true }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
@@ -423,13 +425,15 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
 
         {/* System + Catalog + Trash + Expand */}
         <div style={{ padding: '4px 0 8px', borderTop: '1px solid #f1f5f9', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-          <CollapsedNavBtn
-            onClick={() => navigate('/system')}
-            tooltip="Система"
-            active={location.pathname === '/system'}
-          >
-            <Monitor size={15} />
-          </CollapsedNavBtn>
+          {showSystem && (
+            <CollapsedNavBtn
+              onClick={() => navigate('/system')}
+              tooltip="Система"
+              active={location.pathname === '/system'}
+            >
+              <Monitor size={15} />
+            </CollapsedNavBtn>
+          )}
           <CollapsedNavBtn
             onClick={() => navigate('/catalog')}
             tooltip="Каталог расценок"
@@ -554,7 +558,7 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle }) => {
 
       {/* Footer: Catalog + Trash + Collapse */}
       <div style={{ flexShrink: 0, borderTop: '1px solid #f1f5f9', backgroundColor: '#ffffff' }}>
-        <SystemBtn onClick={() => navigate('/system')} active={location.pathname === '/system'} />
+        {showSystem && <SystemBtn onClick={() => navigate('/system')} active={location.pathname === '/system'} />}
         <CatalogBtn onClick={() => navigate('/catalog')} active={location.pathname === '/catalog'} />
         <TrashBtn onClick={() => navigate('/trash')} active={location.pathname === '/trash'} />
         <CollapseBtn onToggle={onToggle} />

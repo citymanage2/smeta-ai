@@ -14,7 +14,13 @@ from app.models.project import Project
 from app.models.task import Task
 from app.models.result import TaskResult
 from app.models.summary_estimate import SummaryEstimate
-from app.utils.auth import get_current_user, get_admin_user
+from app.models.user import User
+from app.utils.auth import get_current_user, get_admin_user, current_user_id
+from app.utils.permissions import (
+    visibility_filter,
+    can_access,
+    get_manager_user,
+)
 
 logger = structlog.get_logger()
 
@@ -31,12 +37,23 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
 
 
+class ArchiveRequest(BaseModel):
+    archived: bool
+
+
+class OwnerRequest(BaseModel):
+    owner_id: int
+
+
 class ProjectResponse(BaseModel):
     id: str
     name: str
     description: Optional[str]
     created_at: str
     updated_at: str
+    is_archived: bool = False
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
 
 
 class ProjectCardResponse(BaseModel):
@@ -54,6 +71,9 @@ class ProjectCardResponse(BaseModel):
     summary_total: Optional[float] = None
     task_type_counts: dict[str, int] = {}
     total_tasks: int = 0
+    is_archived: bool = False
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
 
 
 class TaskBrief(BaseModel):
@@ -85,6 +105,9 @@ class ProjectDetailResponse(BaseModel):
     has_summary: bool = False
     task_type_counts: dict[str, int] = {}
     total_tasks: int = 0
+    is_archived: bool = False
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None
     tasks: list[TaskBrief]
 
 
@@ -101,20 +124,39 @@ class TrashProjectsResponse(BaseModel):
     total: int
 
 
-def _project_to_response(p: Project) -> ProjectResponse:
+def _project_to_response(p: Project, owner_name: Optional[str] = None) -> ProjectResponse:
     return ProjectResponse(
         id=str(p.id),
         name=p.name,
         description=p.description,
         created_at=p.created_at.isoformat(),
         updated_at=p.updated_at.isoformat(),
+        is_archived=p.is_archived,
+        owner_id=p.owner_id,
+        owner_name=owner_name,
     )
 
 
-async def _get_project_or_404(project_id: str, db: AsyncSession) -> Project:
+async def _owner_names(owner_ids: list[int], db: AsyncSession) -> dict[int, str]:
+    """{user_id: отображаемое имя (full_name или username)} для набора владельцев."""
+    ids = [i for i in set(owner_ids) if i is not None]
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(select(User.id, User.full_name, User.username).where(User.id.in_(ids)))
+    ).all()
+    return {r.id: (r.full_name or r.username or f"#{r.id}") for r in rows}
+
+
+async def _get_project_or_404(
+    project_id: str, db: AsyncSession, current_user: Optional[dict] = None
+) -> Project:
     result = await db.execute(select(Project).where(Project.id == project_id, Project.deleted_at.is_(None)))
     project = result.scalar_one_or_none()
     if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    # Изоляция по владельцу: чужой проект для ПМ = 404 (не раскрываем существование).
+    if current_user is not None and not can_access(project.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
     return project
 
@@ -172,18 +214,28 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    project = Project(id=str(uuid.uuid4()), name=body.name, description=body.description)
+    project = Project(
+        id=str(uuid.uuid4()),
+        name=body.name,
+        description=body.description,
+        owner_id=current_user_id(current_user),
+    )
     db.add(project)
     await db.commit()
-    logger.info("Project created", project_id=str(project.id), name=project.name)
+    logger.info(
+        "Project created",
+        project_id=str(project.id), name=project.name, owner_id=project.owner_id,
+    )
     return _project_to_response(project)
 
 
 @router.get("", response_model=list[ProjectCardResponse])
 async def list_projects(
+    archived: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    vis = visibility_filter(Project, current_user)
     stmt = (
         select(
             Project.id,
@@ -192,6 +244,8 @@ async def list_projects(
             Project.created_at,
             Project.updated_at,
             Project.summary_total,
+            Project.is_archived,
+            Project.owner_id,
             func.count(case((Task.estimation_status == "unestimated", 1), else_=None)).label("unestimated"),
             func.count(case((Task.estimation_status == "estimated", 1), else_=None)).label("estimated"),
             func.count(case((Task.estimation_status == "optimized", 1), else_=None)).label("optimized"),
@@ -211,7 +265,11 @@ async def list_projects(
             ).label("optimized_cost"),
         )
         .outerjoin(Task, (Task.project_id == Project.id) & Task.deleted_at.is_(None))
-        .where(Project.deleted_at.is_(None))
+        .where(
+            Project.deleted_at.is_(None),
+            Project.is_archived.is_(True) if archived else Project.is_archived.is_(False),
+            *( [vis] if vis is not None else [] ),
+        )
         .group_by(
             Project.id,
             Project.name,
@@ -219,6 +277,8 @@ async def list_projects(
             Project.created_at,
             Project.updated_at,
             Project.summary_total,
+            Project.is_archived,
+            Project.owner_id,
         )
         .order_by(Project.created_at.desc())
     )
@@ -226,6 +286,7 @@ async def list_projects(
 
     project_ids = [str(row.id) for row in rows]
     type_counts = await _get_task_type_counts(project_ids, db)
+    owner_names = await _owner_names([row.owner_id for row in rows], db)
 
     return [
         ProjectCardResponse(
@@ -234,6 +295,9 @@ async def list_projects(
             description=row.description,
             created_at=row.created_at.isoformat(),
             updated_at=row.updated_at.isoformat(),
+            is_archived=row.is_archived,
+            owner_id=row.owner_id,
+            owner_name=owner_names.get(row.owner_id),
             unestimated=row.unestimated or 0,
             estimated=row.estimated or 0,
             optimized=row.optimized or 0,
@@ -254,14 +318,20 @@ async def list_projects(
 
 @router.get("/unassigned", response_model=list[TaskBrief])
 async def list_unassigned_tasks(
+    archived: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    vis = visibility_filter(Task, current_user)
     tasks_result = await db.execute(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
             Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
-        ).where(Task.project_id.is_(None), Task.deleted_at.is_(None)).order_by(Task.created_at.desc())
+        ).where(
+            Task.project_id.is_(None), Task.deleted_at.is_(None),
+            Task.is_archived.is_(True) if archived else Task.is_archived.is_(False),
+            *( [vis] if vis is not None else [] ),
+        ).order_by(Task.created_at.desc())
     )
     rows = tasks_result.all()
     return [
@@ -285,15 +355,17 @@ async def list_trash_projects(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Список удалённых проектов (корзина)."""
+    """Список удалённых проектов (корзина). ПМ видит только свои."""
+    vis = visibility_filter(Project, current_user)
+    vis_clause = [vis] if vis is not None else []
     count_result = await db.execute(
-        select(func.count(Project.id)).where(Project.deleted_at.is_not(None))
+        select(func.count(Project.id)).where(Project.deleted_at.is_not(None), *vis_clause)
     )
     total = count_result.scalar() or 0
 
     data_result = await db.execute(
         select(Project.id, Project.name, Project.description, Project.created_at, Project.deleted_at)
-        .where(Project.deleted_at.is_not(None))
+        .where(Project.deleted_at.is_not(None), *vis_clause)
         .order_by(Project.deleted_at.desc())
     )
     rows = data_result.all()
@@ -328,7 +400,7 @@ async def get_project(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    project = await _get_project_or_404(project_id, db)
+    project = await _get_project_or_404(project_id, db, current_user)
     agg = await _aggregate(project_id, db)
 
     # Read summary state directly from SummaryEstimate (source of truth)
@@ -366,6 +438,7 @@ async def get_project(
             slot_files_by_task.setdefault(tid, {})[row.slot] = row.file_name
 
     type_counts = await _get_task_type_counts([project_id], db)
+    owner_names = await _owner_names([project.owner_id], db)
 
     return ProjectDetailResponse(
         id=str(project.id),
@@ -373,6 +446,9 @@ async def get_project(
         description=project.description,
         created_at=project.created_at.isoformat(),
         updated_at=project.updated_at.isoformat(),
+        is_archived=project.is_archived,
+        owner_id=project.owner_id,
+        owner_name=owner_names.get(project.owner_id),
         summary_total=summary_total,
         has_summary=has_summary,
         task_type_counts=type_counts.get(project_id, {}),
@@ -403,7 +479,7 @@ async def update_project(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    project = await _get_project_or_404(project_id, db)
+    project = await _get_project_or_404(project_id, db, current_user)
     if body.name is not None:
         project.name = body.name
     if body.description is not None:
@@ -419,7 +495,7 @@ async def delete_project(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    project = await _get_project_or_404(project_id, db)
+    project = await _get_project_or_404(project_id, db, current_user)
     project.deleted_at = datetime.now(timezone.utc)
     await db.commit()
     logger.info("Project soft-deleted (moved to trash)", project_id=project_id)
@@ -437,7 +513,7 @@ async def restore_project(
         select(Project).where(Project.id == project_id, Project.deleted_at.is_not(None))
     )
     project = result.scalar_one_or_none()
-    if not project:
+    if not project or not can_access(project.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден или не удалён")
     project.deleted_at = None
     await db.commit()
@@ -474,7 +550,7 @@ async def export_project(
             detail="Параметр format должен быть xlsx или pdf",
         )
 
-    project = await _get_project_or_404(project_id, db)
+    project = await _get_project_or_404(project_id, db, current_user)
 
     tasks_result = await db.execute(
         select(Task).where(Task.project_id == project_id).order_by(Task.created_at.asc())
@@ -521,3 +597,43 @@ async def export_project(
         media_type=media_type,
         headers={"Content-Disposition": content_disposition},
     )
+
+
+@router.patch("/{project_id}/archive", response_model=ProjectResponse)
+async def archive_project(
+    project_id: str,
+    body: ArchiveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Переместить проект в архив / вернуть из архива. Право = право редактирования."""
+    project = await _get_project_or_404(project_id, db, current_user)
+    project.is_archived = body.archived
+    project.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Project archive toggled", project_id=project_id, archived=body.archived)
+    return _project_to_response(project)
+
+
+@router.patch("/{project_id}/owner", response_model=ProjectResponse)
+async def reassign_project_owner(
+    project_id: str,
+    body: OwnerRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_manager_user),
+):
+    """Переназначить владельца проекта (только руководитель/админ)."""
+    project = await _get_project_or_404(project_id, db)
+    owner = (
+        await db.execute(select(User).where(User.id == body.owner_id))
+    ).scalar_one_or_none()
+    if not owner or not owner.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Указан несуществующий или неактивный пользователь",
+        )
+    project.owner_id = body.owner_id
+    project.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("Project owner reassigned", project_id=project_id, owner_id=body.owner_id)
+    return _project_to_response(project, owner_name=(owner.full_name or owner.username))

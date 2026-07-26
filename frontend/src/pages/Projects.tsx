@@ -1,10 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { SectionLoader } from '../components/ui/LumaSpin';
 import { ProjectCard } from '../types';
 import { TASK_TYPE_LABELS } from '../types';
-import { listProjects, createProject, deleteProject } from '../api/projects';
+import {
+  listProjects, createProject, deleteProject,
+  archiveProject, reassignProjectOwner,
+} from '../api/projects';
+import { listAssignable, AssignableUser } from '../api/adminUsers';
+import { useAuthStore } from '../stores/auth';
 
 function formatCost(cost: number | null | undefined): string {
   if (cost === null || cost === undefined) return '—';
@@ -94,6 +99,7 @@ const DeleteConfirmModal: React.FC<DeleteConfirmProps> = ({ project, onConfirm, 
 
 const Projects: React.FC = () => {
   const navigate = useNavigate();
+  const { isManager } = useAuthStore();
   const [projects, setProjects] = useState<ProjectCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -104,19 +110,64 @@ const Projects: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState<ProjectCard | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    loadProjects();
-  }, []);
+  // Раздел: активные / архив
+  const [section, setSection] = useState<'active' | 'archived'>('active');
+  const [busyProject, setBusyProject] = useState<string | null>(null);
 
-  async function loadProjects() {
+  // Переназначение владельца (только менеджер)
+  const [assignable, setAssignable] = useState<AssignableUser[]>([]);
+  const [reassignFor, setReassignFor] = useState<string | null>(null);
+
+  const loadProjects = useCallback(async () => {
     setLoading(true);
+    setError('');
     try {
-      const data = await listProjects();
+      const data = await listProjects(section === 'archived');
       setProjects(data);
     } catch {
       setError('Не удалось загрузить проекты. Проверьте соединение и обновите страницу.');
     } finally {
       setLoading(false);
+    }
+  }, [section]);
+
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects]);
+
+  // Список сотрудников для переназначения подгружаем один раз (только менеджеру).
+  useEffect(() => {
+    if (!isManager) return;
+    listAssignable().then(setAssignable).catch(() => { /* некритично */ });
+  }, [isManager]);
+
+  async function handleArchiveToggle(p: ProjectCard) {
+    setBusyProject(p.id);
+    setError('');
+    try {
+      await archiveProject(p.id, !p.is_archived);
+      // Проект уходит из текущего раздела — убираем из списка.
+      setProjects((prev) => prev.filter((x) => x.id !== p.id));
+    } catch {
+      setError(p.is_archived ? 'Не удалось вернуть проект из архива.' : 'Не удалось переместить проект в архив.');
+    } finally {
+      setBusyProject(null);
+    }
+  }
+
+  async function handleReassign(p: ProjectCard, ownerId: number) {
+    setBusyProject(p.id);
+    setReassignFor(null);
+    setError('');
+    try {
+      const updated = await reassignProjectOwner(p.id, ownerId);
+      setProjects((prev) => prev.map((x) => (x.id === p.id
+        ? { ...x, owner_id: updated.owner_id ?? ownerId, owner_name: updated.owner_name ?? x.owner_name }
+        : x)));
+    } catch {
+      setError('Не удалось переназначить владельца проекта.');
+    } finally {
+      setBusyProject(null);
     }
   }
 
@@ -154,23 +205,48 @@ const Projects: React.FC = () => {
   return (
     <Layout>
       <div style={{ maxWidth: '860px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#1e293b', margin: 0 }}>Проекты</h1>
-          <button
-            onClick={() => setShowCreate(!showCreate)}
-            style={{
-              padding: '8px 18px',
-              backgroundColor: '#2563eb',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: 600,
-            }}
-          >
-            + Новый проект
-          </button>
+          {section === 'active' && (
+            <button
+              onClick={() => setShowCreate(!showCreate)}
+              style={{
+                padding: '8px 18px',
+                backgroundColor: '#2563eb',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 600,
+              }}
+            >
+              + Новый проект
+            </button>
+          )}
+        </div>
+
+        {/* Переключатель разделов: активные / архив */}
+        <div style={{ display: 'flex', gap: '4px', borderBottom: '2px solid #e2e8f0', marginBottom: '24px' }}>
+          {([['active', 'Активные'], ['archived', 'Архив']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setSection(key)}
+              style={{
+                padding: '9px 18px',
+                fontSize: '14px',
+                fontWeight: 600,
+                backgroundColor: 'transparent',
+                color: section === key ? '#2563eb' : '#64748b',
+                border: 'none',
+                borderBottom: section === key ? '2px solid #2563eb' : '2px solid transparent',
+                cursor: 'pointer',
+                marginBottom: '-2px',
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {showCreate && (
@@ -263,7 +339,7 @@ const Projects: React.FC = () => {
           <SectionLoader />
         ) : projects.length === 0 ? (
           <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-            Проекты не найдены. Создайте первый проект.
+            {section === 'archived' ? 'В архиве нет проектов.' : 'Проекты не найдены. Создайте первый проект.'}
           </div>
         ) : (
           <div style={{ display: 'grid', gap: '16px' }}>
@@ -293,7 +369,12 @@ const Projects: React.FC = () => {
                     <div style={{ minWidth: 0 }}>
                       <h2 style={{ margin: '0 0 4px', fontSize: '17px', fontWeight: 600, color: '#1e293b' }}>{p.name}</h2>
                       {p.description && (
-                        <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>{p.description}</p>
+                        <p style={{ margin: '0 0 4px', fontSize: '13px', color: '#64748b' }}>{p.description}</p>
+                      )}
+                      {p.owner_name && (
+                        <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                          Владелец: <span style={{ color: '#475569', fontWeight: 500 }}>{p.owner_name}</span>
+                        </div>
                       )}
                     </div>
                     {hasCost && (
@@ -357,11 +438,79 @@ const Projects: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Кнопка удалить */}
+                  {/* Действия */}
                   <div
-                    style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', marginTop: '12px', display: 'flex', justifyContent: 'flex-end' }}
+                    style={{ borderTop: '1px solid #f1f5f9', paddingTop: '12px', marginTop: '12px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}
                     onClick={e => e.stopPropagation()}
                   >
+                    {/* Переназначение владельца — только менеджер */}
+                    {isManager && (
+                      reassignFor === p.id ? (
+                        <select
+                          autoFocus
+                          defaultValue=""
+                          disabled={busyProject === p.id}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => {
+                            const val = e.target.value;
+                            if (val) handleReassign(p, Number(val));
+                          }}
+                          onBlur={() => setReassignFor(null)}
+                          style={{
+                            padding: '5px 10px',
+                            fontSize: '12px',
+                            border: '1px solid #bfdbfe',
+                            borderRadius: '6px',
+                            color: '#1e293b',
+                            backgroundColor: '#fff',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <option value="" disabled>Выберите сотрудника…</option>
+                          {assignable.map(a => (
+                            <option key={a.id} value={a.id}>{a.display_name}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <button
+                          onClick={e => { e.stopPropagation(); setReassignFor(p.id); }}
+                          disabled={busyProject === p.id}
+                          style={{
+                            padding: '5px 14px',
+                            background: 'transparent',
+                            border: '1px solid #bfdbfe',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            color: '#2563eb',
+                            cursor: busyProject === p.id ? 'not-allowed' : 'pointer',
+                            fontWeight: 500,
+                          }}
+                        >
+                          Переназначить
+                        </button>
+                      )
+                    )}
+
+                    {/* Архивировать / вернуть */}
+                    <button
+                      onClick={e => { e.stopPropagation(); handleArchiveToggle(p); }}
+                      disabled={busyProject === p.id}
+                      style={{
+                        padding: '5px 14px',
+                        background: 'transparent',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        color: '#475569',
+                        cursor: busyProject === p.id ? 'not-allowed' : 'pointer',
+                        fontWeight: 500,
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      {p.is_archived ? 'Вернуть из архива' : 'В архив'}
+                    </button>
+
                     <button
                       onClick={e => { e.stopPropagation(); setConfirmDelete(p); }}
                       style={{

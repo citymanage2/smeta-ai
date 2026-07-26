@@ -30,6 +30,7 @@ from app.models.task_input_file import TaskInputFile
 from app.models.history import TaskHistory
 from app.models.project import Project
 from app.utils.auth import get_current_user, get_download_user, current_user_id
+from app.utils.permissions import visibility_filter, can_access
 from app.config import settings
 from app.services.task_processor import process_task
 from app.services.checkpoint import has_resumable_checkpoint
@@ -338,7 +339,7 @@ async def create_task(
         await db.commit()
 
     if project_name and not project_id:
-        new_proj = Project(name=project_name)
+        new_proj = Project(name=project_name, owner_id=current_user_id(current_user))
         db.add(new_proj)
         await db.flush()
         task.project_id = str(new_proj.id)
@@ -346,7 +347,13 @@ async def create_task(
         await db.refresh(task)
     elif project_id:
         proj_check = await db.execute(select(Project).where(Project.id == project_id))
-        if proj_check.scalar_one_or_none():
+        proj = proj_check.scalar_one_or_none()
+        if proj:
+            if not can_access(proj.owner_id, current_user):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Проект не найден",
+                )
             task.project_id = project_id
             await db.commit()
 
@@ -394,6 +401,12 @@ async def get_task_status(
             detail="Задача не найдена",
         )
 
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
+
     return TaskStatusResponse(
         id=str(task.id),
         task_type=task.task_type,
@@ -435,6 +448,12 @@ async def check_completeness(
     source_task = result.scalar_one_or_none()
 
     if not source_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Исходная задача не найдена",
+        )
+
+    if not can_access(source_task.owner_id, current_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Исходная задача не найдена",
@@ -488,13 +507,17 @@ async def get_estimate_sources(
     """Return completed LIST_FROM_GRAND / LIST_FROM_PROJECT tasks with available stages for ESTIMATE_FROM_LIST."""
     from sqlalchemy import desc as sa_desc
 
-    result = await db.execute(
+    vis = visibility_filter(Task, current_user)
+    sources_stmt = (
         select(Task)
         .where(Task.task_type.in_(["LIST_FROM_GRAND", "LIST_FROM_PROJECT"]))
         .where(Task.status == "completed")
         .order_by(sa_desc(Task.created_at))
         .limit(100)
     )
+    if vis is not None:
+        sources_stmt = sources_stmt.where(vis)
+    result = await db.execute(sources_stmt)
     source_tasks = result.scalars().all()
 
     # Один батч-запрос всех check-задач вместо N запросов в цикле (устранение N+1).
@@ -504,13 +527,16 @@ async def get_estimate_sources(
     source_ids = [str(s.id) for s in source_tasks]
     latest_check_by_key: dict[tuple[str, str], Task] = {}
     if source_ids:
-        check_result = await db.execute(
+        check_stmt = (
             select(Task)
             .where(Task.user_prompt.in_(source_ids))
             .where(Task.task_type.in_(["CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"]))
             .where(Task.status == "completed")
             .order_by(sa_desc(Task.created_at))
         )
+        if vis is not None:
+            check_stmt = check_stmt.where(vis)
+        check_result = await db.execute(check_stmt)
         for chk in check_result.scalars().all():
             key = (chk.user_prompt, chk.task_type)
             if key not in latest_check_by_key:
@@ -568,6 +594,12 @@ async def check_project_completeness(
             detail="Исходная задача не найдена",
         )
 
+    if not can_access(source_task.owner_id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Исходная задача не найдена",
+        )
+
     if source_task.task_type.upper() != "LIST_FROM_PROJECT":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -618,12 +650,16 @@ async def get_related_checks(
     that were created from this source task (identified by user_prompt == task_id)."""
     from sqlalchemy import desc as sa_desc
     check_types = ["CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"]
-    result = await db.execute(
+    vis = visibility_filter(Task, current_user)
+    related_stmt = (
         select(Task)
         .where(Task.user_prompt == task_id)
         .where(Task.task_type.in_(check_types))
         .order_by(sa_desc(Task.created_at))
     )
+    if vis is not None:
+        related_stmt = related_stmt.where(vis)
+    result = await db.execute(related_stmt)
     tasks = result.scalars().all()
 
     # Keep only the most recent of each type
@@ -656,6 +692,12 @@ async def cancel_task(
             detail="Задача не найдена",
         )
 
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
+
     if task.status not in ("pending", "processing"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -682,6 +724,12 @@ async def resume_task(
     task = result.scalar_one_or_none()
 
     if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
+
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -735,6 +783,11 @@ async def restart_task(
             detail="Задача не найдена",
         )
 
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
 
     now = datetime.now(timezone.utc)
     task.status = "pending"
@@ -765,6 +818,12 @@ async def send_message(
     task = result.scalar_one_or_none()
 
     if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Задача не найдена",
+        )
+
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -807,6 +866,8 @@ async def upload_file_to_slot(
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     mime = _get_mime_type(file)
@@ -884,6 +945,8 @@ async def delete_file_from_slot(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     existing = await db.execute(
         select(TaskResult).where(
@@ -924,6 +987,8 @@ async def update_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     if body.name is not None:
         task.name = body.name.strip() or None
     await db.commit()
@@ -956,6 +1021,11 @@ async def rename_slot_file(
     task_result = result.scalar_one_or_none()
     if not task_result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    task_owner = (
+        await db.execute(select(Task).where(Task.id == task_id))
+    ).scalar_one_or_none()
+    if task_owner is None or not can_access(task_owner.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     task_result.file_name = body.name.strip()
     await db.commit()
     return {"task_id": task_id, "slot": slot, "file_name": task_result.file_name}
@@ -977,6 +1047,8 @@ async def confirm_estimation(
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     slot_result = await db.execute(
@@ -1006,10 +1078,13 @@ async def link_task_to_project(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     if body.project_id is not None:
         proj_result = await db.execute(select(Project).where(Project.id == body.project_id))
-        if proj_result.scalar_one_or_none() is None:
+        target_proj = proj_result.scalar_one_or_none()
+        if target_proj is None or not can_access(target_proj.owner_id, current_user):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Проект не найден",
@@ -1036,6 +1111,8 @@ async def download_file_from_slot(
     task_row = await db.execute(select(Task).where(Task.id == task_id))
     task = task_row.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     # Source slot: serve original uploaded file from task_input_files
@@ -1087,6 +1164,8 @@ async def download_input_file(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     # Try new storage first (task_input_files table)
     input_file_row = await db.execute(
@@ -1120,6 +1199,8 @@ async def delete_input_file(
     task_row = await db.execute(select(Task).where(Task.id == task_id))
     task = task_row.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     if task.status == "processing":
@@ -1174,6 +1255,8 @@ async def add_input_file(
     task_row = await db.execute(select(Task).where(Task.id == task_id))
     task = task_row.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     if task.status == "processing":
@@ -1241,6 +1324,12 @@ async def optimize_analyze(
 ):
     """Synchronously parse estimate xlsx and return top-70% items for user review."""
     from app.utils.xlsx_optimizer import parse_estimate_xlsx, get_top_items
+
+    task = (
+        await db.execute(select(Task).where(Task.id == task_id))
+    ).scalar_one_or_none()
+    if task is None or not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=404, detail="Задача не найдена")
 
     result = await db.execute(
         select(TaskResult).where(
@@ -1514,7 +1603,7 @@ async def optimize_run(
 ):
     """Start background optimization: search lower prices for the same items and generate optimized xlsx."""
     task = await db.get(Task, task_id)
-    if task is None:
+    if task is None or not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     result = await db.execute(
@@ -1569,7 +1658,7 @@ async def fix_empty_prices(
     Возвращает 202 немедленно; задача переходит в status=processing на время работы.
     """
     task = await db.get(Task, task_id)
-    if task is None:
+    if task is None or not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
@@ -1615,6 +1704,8 @@ async def update_estimate_items(
     task_row = await db.execute(select(Task).where(Task.id == task_id))
     task = task_row.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
@@ -1667,6 +1758,8 @@ async def reprice_estimate_item(
     task_row = await db.execute(select(Task).where(Task.id == task_id))
     task = task_row.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
@@ -1778,7 +1871,7 @@ async def get_task_history(
 ):
     """Return list of history entries for a task (without file_data_b64)."""
     task = await db.get(Task, task_id)
-    if task is None:
+    if task is None or not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     result = await db.execute(
@@ -1820,7 +1913,7 @@ async def revert_history(
     import base64 as _b64
 
     task = await db.get(Task, task_id)
-    if task is None:
+    if task is None or not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     entry_result = await db.execute(
@@ -1953,8 +2046,10 @@ async def list_my_trash(
     current_user: dict = Depends(get_current_user),
 ):
     """Список удалённых задач текущего пользователя."""
-    role = current_user.get("role", "user")
-    conditions = [Task.deleted_at.is_not(None), Task.user_role == role]
+    conditions = [Task.deleted_at.is_not(None)]
+    vis = visibility_filter(Task, current_user)
+    if vis is not None:
+        conditions.append(vis)
 
     count_result = await db.execute(select(func.count(Task.id)).where(*conditions))
     total = count_result.scalar() or 0
@@ -1991,12 +2086,13 @@ async def clear_my_trash(
     current_user: dict = Depends(get_current_user),
 ):
     """Удалить все задачи из корзины текущего пользователя навсегда."""
-    role = current_user.get("role", "user")
-    await db.execute(
-        delete(Task).where(Task.deleted_at.is_not(None), Task.user_role == role)
-    )
+    conditions = [Task.deleted_at.is_not(None)]
+    vis = visibility_filter(Task, current_user)
+    if vis is not None:
+        conditions.append(vis)
+    await db.execute(delete(Task).where(*conditions))
     await db.commit()
-    logger.info("Trash cleared", role=role)
+    logger.info("Trash cleared", role=current_user.get("role"))
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -2009,6 +2105,8 @@ async def soft_delete_task(
     result = await db.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
     task = result.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     task.deleted_at = datetime.now(timezone.utc)
     await db.commit()
@@ -2026,6 +2124,8 @@ async def restore_my_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена или не удалена")
+    if not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена или не удалена")
     task.deleted_at = None
     await db.commit()
     logger.info("Task restored from trash", task_id=task_id, role=current_user.get("role"))
@@ -2041,6 +2141,8 @@ async def permanent_delete_my_task(
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    if not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     await db.delete(task)
     await db.commit()

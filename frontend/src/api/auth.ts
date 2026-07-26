@@ -3,8 +3,9 @@ import { useAuthStore } from '../stores/auth';
 
 interface LoginResponse {
   access_token: string;
-  role: 'user' | 'admin';
+  role: string;
   username?: string | null;
+  expires_in?: number;
 }
 
 export async function login(password: string, username?: string): Promise<LoginResponse> {
@@ -12,14 +13,13 @@ export async function login(password: string, username?: string): Promise<LoginR
   const payload: { password: string; username?: string } = { password };
   if (username && username.trim()) payload.username = username.trim();
   const response = await apiClient.post<LoginResponse>('/auth/login', payload);
-  const { access_token, role } = response.data;
+  const { access_token, role, username: respUsername } = response.data;
 
-  // Persist to localStorage
-  localStorage.setItem('token', access_token);
-  localStorage.setItem('role', role);
+  // Персональный логин: с бэкенда, иначе — тот, что ввёл пользователь.
+  const effectiveUsername = respUsername ?? (username && username.trim() ? username.trim() : null);
 
-  // Update zustand store
-  useAuthStore.getState().setAuth(access_token, role);
+  // setAuth сам сохраняет token/role/username в localStorage и обновляет zustand-стор.
+  useAuthStore.getState().setAuth(access_token, role, effectiveUsername);
 
   return response.data;
 }

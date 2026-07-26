@@ -17,6 +17,7 @@ from app.schemas.summary_estimate import (
 )
 from app.services import summary_service
 from app.utils.auth import get_current_user
+from app.utils.permissions import can_access
 from app.utils.xlsx_summary import generate_custom_export_xlsx, generate_summary_xlsx
 
 logger = structlog.get_logger()
@@ -24,9 +25,9 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["summary"])
 
 
-async def _project_or_404(project_id: str, db: AsyncSession) -> Project:
+async def _project_or_404(project_id: str, db: AsyncSession, current_user: dict) -> Project:
     proj = await db.get(Project, project_id)
-    if proj is None:
+    if proj is None or not can_access(proj.owner_id, current_user):
         raise HTTPException(status_code=404, detail="Проект не найден")
     return proj
 
@@ -37,7 +38,7 @@ async def get_summary(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _project_or_404(project_id, db)
+    await _project_or_404(project_id, db, current_user)
     summary = await summary_service.get_summary(project_id, db)
     if summary is None:
         raise HTTPException(status_code=404, detail="Сводная смета не найдена")
@@ -51,7 +52,7 @@ async def create_summary(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _project_or_404(project_id, db)
+    await _project_or_404(project_id, db, current_user)
     existing = await summary_service.get_summary(project_id, db)
     if existing is not None:
         preserved_overrides = body.overrides or SummaryOverrides(**existing.overrides)
@@ -68,7 +69,7 @@ async def update_summary(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _project_or_404(project_id, db)
+    await _project_or_404(project_id, db, current_user)
     summary = await summary_service.get_summary(project_id, db)
     if summary is None:
         raise HTTPException(status_code=404, detail="Сводная смета не найдена")
@@ -81,7 +82,7 @@ async def export_summary(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _project_or_404(project_id, db)
+    await _project_or_404(project_id, db, current_user)
     summary = await summary_service.get_summary(project_id, db)
     if summary is None:
         raise HTTPException(status_code=404, detail="Сводная смета не найдена")
@@ -101,7 +102,7 @@ async def custom_export_summary(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _project_or_404(project_id, db)
+    await _project_or_404(project_id, db, current_user)
 
     flat_rows: list[dict] = []
     section_groups: list[tuple[str, list[dict]]] = []

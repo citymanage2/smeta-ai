@@ -14,7 +14,7 @@ from app.models.price import PriceMaterial, PriceWork
 from app.models.price_list import PriceList
 from app.models.project import Project
 from app.models.task import Task
-from app.utils.auth import get_current_user
+from app.utils.permissions import get_manager_user
 
 logger = structlog.get_logger()
 
@@ -134,8 +134,10 @@ class DashboardStats(BaseModel):
 async def get_dashboard_stats(
     response: Response,
     db: AsyncSession = Depends(get_db),
-    _: dict = Depends(get_current_user),
+    _: dict = Depends(get_manager_user),
 ) -> DashboardStats:
+    # Дашборд — управленческий раздел (очередь, ошибки, API-расходы, прайс-листы).
+    # Доступ только руководителю/админу; ПМ работает из изолированных панелей.
     # HTTP-кэш в такт polling: несколько вкладок/компонентов, запросивших дашборд
     # в окне 10 с, получают ответ из кэша браузера, не нагружая БД повторно.
     # private — данные за авторизацией, не кэшировать на общих прокси.

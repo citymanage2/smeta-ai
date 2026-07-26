@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models.result import TaskResult
 from app.models.task import Task
 from app.utils.auth import get_current_user
+from app.utils.permissions import can_access
 from app.services.excel_service import generate_list
 from app.services import storage_service
 
@@ -43,7 +44,7 @@ async def list_task_results(
     # Verify task exists
     task_result = await db.execute(select(Task).where(Task.id == task_id))
     task = task_result.scalar_one_or_none()
-    if not task:
+    if not task or not can_access(task.owner_id, current_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -80,7 +81,7 @@ async def regenerate_task_result(
     """Regenerate the Excel result for a completed LIST/CHECK task from saved progress_data."""
     task_res = await db.execute(select(Task).where(Task.id == task_id))
     task = task_res.scalar_one_or_none()
-    if not task:
+    if not task or not can_access(task.owner_id, current_user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     task_type = (task.task_type or "").upper()
@@ -151,6 +152,16 @@ async def download_result(
     file_record = result.scalar_one_or_none()
 
     if not file_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл не найден",
+        )
+
+    # Изоляция: файл доступен только владельцу задачи (или менеджеру).
+    task = (
+        await db.execute(select(Task).where(Task.id == file_record.task_id))
+    ).scalar_one_or_none()
+    if not task or not can_access(task.owner_id, current_user):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Файл не найден",

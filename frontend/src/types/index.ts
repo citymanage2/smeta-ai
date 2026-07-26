@@ -152,6 +152,9 @@ export interface Project {
   description?: string | null;
   created_at: string;
   updated_at: string;
+  is_archived?: boolean;
+  owner_id?: number | null;
+  owner_name?: string | null;
 }
 
 export interface ProjectCard extends Project {
