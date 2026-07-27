@@ -181,6 +181,7 @@ export interface TaskBrief {
   slot_files?: Record<string, string>;
   name?: string | null;
   deleted_at?: string | null;
+  is_archived?: boolean;
   // Ответственный = текущий владелец задачи (бэкенд отдаёт в tasks[] и в /projects/unassigned).
   owner_id?: number | null;
   owner_name?: string | null;

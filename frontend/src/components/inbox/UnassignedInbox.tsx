@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Pencil, Check, X } from 'lucide-react';
+import { Pencil, Check, X, Archive } from 'lucide-react';
 import { TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../../types';
-import { getUnassignedTasks, downloadSlotFile, uploadFileToSlot } from '../../api/projects';
+import { getUnassignedTasks, downloadSlotFile, uploadFileToSlot, archiveTask } from '../../api/projects';
 import { updateTask, renameSlotFile } from '../../api/tasks';
 import OptimizeModal from '../OptimizeModal';
 import HistoryModal from '../HistoryModal';
@@ -150,6 +150,7 @@ export interface UnassignedInbox {
   reload: () => void;
   onRenameTask: (taskId: string, name: string) => Promise<void>;
   onRenameSlot: (taskId: string, slot: string, name: string) => Promise<void>;
+  onArchive: (taskId: string) => Promise<void>;
   optimizingTaskId: string | null;
   setOptimizingTaskId: (id: string | null) => void;
   historyTaskId: string | null;
@@ -192,13 +193,19 @@ export function useUnassignedInbox(reloadToken = 0): UnassignedInbox {
       : t));
   }, []);
 
+  // В архив: убираем задачу из активного списка сразу (оптимистично).
+  const onArchive = useCallback(async (taskId: string) => {
+    await archiveTask(taskId, true);
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+  }, []);
+
   const ready = tasks.filter(isReady);
   const gate = tasks.filter(isGate);
   const other = tasks.filter(t => !isReady(t) && !isGate(t) && !ACTIVE_STATUSES.has(t.status));
 
   return {
     ready, gate, other, loading, reload,
-    onRenameTask, onRenameSlot,
+    onRenameTask, onRenameSlot, onArchive,
     optimizingTaskId, setOptimizingTaskId,
     historyTaskId, setHistoryTaskId,
   };
@@ -270,6 +277,17 @@ function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInb
           )}
           {/* Единый статус: состояние стадии + тонкая бизнес-пометка (Фаза 6). */}
           <StageStateBadge status={task.status} estimation={task.estimation_status} />
+          <button
+            title="В архив"
+            onClick={e => { e.stopPropagation(); inbox.onArchive(task.id); }}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '4px 8px', backgroundColor: '#f8fafc', color: '#94a3b8',
+              border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontSize: 12,
+            }}
+          >
+            <Archive size={13} /> В архив
+          </button>
         </div>
       </div>
 

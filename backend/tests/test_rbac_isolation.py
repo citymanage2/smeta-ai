@@ -240,6 +240,56 @@ async def test_admin_resets_password(async_client, rbac_users, db_session):
     assert verify_password("brandnew", u.password_hash)
 
 
+# --- Backfill: данные под общими аккаунтами → админ + архив ---
+
+@pytest.mark.asyncio
+async def test_backfill_moves_shared_owned_to_admin_archive(db_session, monkeypatch):
+    from app import main as main_module
+    from app.config import settings
+    from tests.conftest import TestSessionLocal
+
+    for t in (Task, Project, User):
+        await db_session.execute(t.__table__.delete())
+    await db_session.commit()
+
+    # Старый общий аккаунт (username NULL) и данные под ним + «сирота» без владельца.
+    shared = User(role="user", is_active=True, password_hash=hash_password("x"))
+    db_session.add(shared)
+    await db_session.flush()
+    shared_id = shared.id
+    t_shared = Task(owner_id=shared_id, user_role="user", task_type="LIST_FROM_GRAND",
+                    status="completed", input_files=[], input_file_data=[], chat_history=[])
+    t_orphan = Task(owner_id=None, user_role="user", task_type="LIST_FROM_GRAND",
+                    status="completed", input_files=[], input_file_data=[], chat_history=[])
+    p_shared = Project(name="Старый проект", owner_id=shared_id, is_archived=False)
+    db_session.add_all([t_shared, t_orphan, p_shared])
+    await db_session.commit()
+    tid_shared, tid_orphan, pid = str(t_shared.id), str(t_orphan.id), str(p_shared.id)
+
+    monkeypatch.setattr(settings, "ADMIN_USERNAME", "bossadmin")
+    monkeypatch.setattr(settings, "ADMIN_PASSWORD", "pw12345")
+    monkeypatch.setattr(main_module, "AsyncSessionLocal", TestSessionLocal)
+    await main_module._initialize_users()
+
+    admin = (await db_session.execute(select(User).where(User.username == "bossadmin"))).scalar_one()
+    # Обе задачи и проект теперь у админа и в архиве.
+    for tid in (tid_shared, tid_orphan):
+        row = (await db_session.execute(select(Task).where(Task.id == tid))).scalar_one()
+        await db_session.refresh(row)
+        assert row.owner_id == admin.id and row.is_archived is True
+    proj = (await db_session.execute(select(Project).where(Project.id == pid))).scalar_one()
+    await db_session.refresh(proj)
+    assert proj.owner_id == admin.id and proj.is_archived is True
+    # Общий аккаунт деактивирован.
+    sh = (await db_session.execute(select(User).where(User.id == shared_id))).scalar_one()
+    await db_session.refresh(sh)
+    assert sh.is_active is False
+
+    for t in (Task, Project, User):
+        await db_session.execute(t.__table__.delete())
+    await db_session.commit()
+
+
 # --- Вход именованного админа ---
 
 @pytest.mark.asyncio
@@ -289,6 +339,47 @@ async def test_pm_can_estimate_from_own_source(async_client, rbac_users, db_sess
 
 
 # --- «Моя корзина» изолирована даже для менеджера (Finding 3) ---
+
+@pytest.mark.asyncio
+async def test_archive_loose_task_hides_from_active(async_client, rbac_users, db_session):
+    task = Task(
+        owner_id=rbac_users["pm1"], user_role="project_manager", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(task)
+    await db_session.commit()
+    tid = str(task.id)
+    hdr = _auth(rbac_users["pm1"], "project_manager", "pm1")
+
+    # Архивируем свою задачу.
+    r = await async_client.patch(f"/tasks/{tid}/archive", json={"archived": True}, headers=hdr)
+    assert r.status_code == 200 and r.json()["is_archived"] is True
+
+    # В активных «Без проекта» её нет, в архивных — есть.
+    active = await async_client.get("/projects/unassigned", headers=hdr)
+    assert all(t["id"] != tid for t in active.json())
+    archived = await async_client.get("/projects/unassigned?archived=true", headers=hdr)
+    assert any(t["id"] == tid for t in archived.json())
+
+    # Возврат из архива.
+    r2 = await async_client.patch(f"/tasks/{tid}/archive", json={"archived": False}, headers=hdr)
+    assert r2.status_code == 200 and r2.json()["is_archived"] is False
+
+
+@pytest.mark.asyncio
+async def test_pm_cannot_archive_foreign_task(async_client, rbac_users, db_session):
+    task = Task(
+        owner_id=rbac_users["pm2"], user_role="project_manager", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(task)
+    await db_session.commit()
+    r = await async_client.patch(
+        f"/tasks/{task.id}/archive", json={"archived": True},
+        headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
+    )
+    assert r.status_code == 404
+
 
 @pytest.mark.asyncio
 async def test_clear_my_trash_only_own_even_for_manager(async_client, rbac_users, db_session):

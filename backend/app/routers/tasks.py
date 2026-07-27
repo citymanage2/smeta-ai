@@ -1007,6 +1007,27 @@ async def update_task(
     return TaskUpdateResponse(task_id=str(task.id), name=task.name)
 
 
+class TaskArchiveRequest(BaseModel):
+    archived: bool
+
+
+@router.patch("/{task_id}/archive")
+async def archive_task(
+    task_id: str,
+    body: TaskArchiveRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """В архив / вернуть из архива. Право = право редактирования (владелец или менеджер)."""
+    result = await db.execute(select(Task).where(Task.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task or not can_access(task.owner_id, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    task.is_archived = body.archived
+    await db.commit()
+    return {"task_id": str(task.id), "is_archived": task.is_archived}
+
+
 class SlotRenameRequest(BaseModel):
     name: str
 

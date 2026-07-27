@@ -32,9 +32,14 @@ export async function getProject(projectId: string): Promise<ProjectDetail> {
   return resp.data;
 }
 
-export async function getUnassignedTasks(): Promise<TaskBrief[]> {
-  const resp = await apiClient.get<TaskBrief[]>('/projects/unassigned');
+export async function getUnassignedTasks(archived = false): Promise<TaskBrief[]> {
+  const params = archived ? { archived: true } : undefined;
+  const resp = await apiClient.get<TaskBrief[]>('/projects/unassigned', { params });
   return resp.data;
+}
+
+export async function archiveTask(taskId: string, archived: boolean): Promise<void> {
+  await apiClient.patch(`/tasks/${taskId}/archive`, { archived });
 }
 
 export async function createProject(payload: ProjectCreatePayload): Promise<Project> {

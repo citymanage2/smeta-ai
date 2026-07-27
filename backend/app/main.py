@@ -86,19 +86,24 @@ async def _initialize_users() -> None:
         if res_shared.rowcount:
             logger.info("Deactivated legacy shared accounts", count=res_shared.rowcount)
 
-        # Backfill владельца: legacy проекты/задачи без owner_id → админ + архив.
-        # Идемпотентно: после перехода новые строки всегда с owner_id.
+        # Backfill владельца: legacy проекты/задачи → на именованного админа + архив.
+        # Захватываем как строки без владельца (owner_id IS NULL), так и созданные
+        # под старыми ОБЩИМИ аккаунтами (username IS NULL) — их вход удалён, данные
+        # должны уехать в архив админа. Реальные аккаунты (с username) не трогаем.
+        # Идемпотентно: после переноса такие строки принадлежат админу (с username).
+        legacy_owner = (
+            "owner_id IS NULL OR owner_id IN "
+            "(SELECT id FROM users WHERE username IS NULL)"
+        )
         res_p = await db.execute(
             text(
-                "UPDATE projects SET owner_id = :aid, is_archived = true "
-                "WHERE owner_id IS NULL"
+                f"UPDATE projects SET owner_id = :aid, is_archived = true WHERE {legacy_owner}"
             ),
             {"aid": admin_id},
         )
         res_t = await db.execute(
             text(
-                "UPDATE tasks SET owner_id = :aid, is_archived = true "
-                "WHERE owner_id IS NULL"
+                f"UPDATE tasks SET owner_id = :aid, is_archived = true WHERE {legacy_owner}"
             ),
             {"aid": admin_id},
         )

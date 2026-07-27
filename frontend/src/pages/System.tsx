@@ -1,6 +1,9 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Archive, RotateCcw } from 'lucide-react';
 import Layout from '../components/Layout';
 import { useAuthStore } from '../stores/auth';
+import { getUnassignedTasks, archiveTask } from '../api/projects';
+import { TaskBrief, TASK_TYPE_LABELS } from '../types';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import DashboardPulse from '../components/dashboard/DashboardPulse';
 import DashboardQueue from '../components/dashboard/DashboardQueue';
@@ -23,6 +26,8 @@ const System: React.FC = () => {
   const { data, loading, error, refetch } = useDashboardStats(isManager);
   const [reloadToken, setReloadToken] = useState(0);
   const inbox = useUnassignedInbox(reloadToken);
+  // Раздел «Входящего»: активные задачи или архив задач «Без проекта».
+  const [section, setSection] = useState<'active' | 'archive'>('active');
 
   // Обновление одной кнопкой: и дашборд-агрегаты, и ничейные задачи.
   const refreshAll = useCallback(() => {
@@ -56,6 +61,33 @@ const System: React.FC = () => {
           </button>
         </div>
 
+        {/* Переключатель разделов «Входящего»: активные задачи / архив «Без проекта» */}
+        <div style={{ display: 'inline-flex', gap: 4, marginBottom: 20, backgroundColor: '#f1f5f9', borderRadius: 9, padding: 3 }}>
+          {([['active', 'Активные'], ['archive', 'Архив']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setSection(key)}
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                padding: '6px 16px',
+                border: 'none',
+                borderRadius: 7,
+                cursor: 'pointer',
+                backgroundColor: section === key ? '#ffffff' : 'transparent',
+                color: section === key ? '#1e293b' : '#64748b',
+                boxShadow: section === key ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {section === 'archive' && <ArchivedLooseTasks reloadToken={reloadToken} onChange={refreshAll} />}
+
+        {section === 'active' && (
+          <>
         {/* Стартовая загрузка: для менеджера ждём агрегаты, для остальных — «Входящий» */}
         {(isManager ? loading && !data : inbox.loading) &&
           !inbox.ready.length && !inbox.gate.length && !inbox.other.length && (
@@ -176,10 +208,103 @@ const System: React.FC = () => {
             </>
           )}
         </div>
+          </>
+        )}
       </div>
 
       <UnassignedModals inbox={inbox} />
     </Layout>
+  );
+};
+
+// Скрытые служебные типы — как в useUnassignedInbox, чтобы список архива совпадал.
+const HIDDEN_TASK_TYPES = new Set(['CHECK_LIST_COMPLETENESS', 'CHECK_PROJECT_COMPLETENESS']);
+
+// ─── Архив задач «Без проекта»: простой список карточек с возвратом из архива ───
+const ArchivedLooseTasks: React.FC<{ reloadToken: number; onChange: () => void }> = ({
+  reloadToken, onChange,
+}) => {
+  const [tasks, setTasks] = useState<TaskBrief[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await getUnassignedTasks(true);
+      setTasks(data.filter(t => !HIDDEN_TASK_TYPES.has(t.task_type)));
+    } catch {
+      /* при ошибке оставляем прежний список */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load, reloadToken]);
+
+  const restore = useCallback(async (taskId: string) => {
+    await archiveTask(taskId, false);
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+    onChange();
+  }, [onChange]);
+
+  if (loading && tasks.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 14 }}>
+        Загрузка...
+      </div>
+    );
+  }
+
+  if (tasks.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 14 }}>
+        В архиве нет задач «Без проекта»
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {tasks.map(task => {
+        const taskLabel = TASK_TYPE_LABELS[task.task_type] ?? task.task_type;
+        return (
+          <div
+            key={task.id}
+            style={{
+              backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 10,
+              padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 500, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Archive size={12} /> В архиве · {taskLabel}
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b', marginBottom: 2 }}>
+                {task.name || taskLabel}
+              </div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+                {new Date(task.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </div>
+              {task.owner_name && (
+                <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+                  Ответственный: <span style={{ color: '#475569', fontWeight: 500 }}>{task.owner_name}</span>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => restore(task.id)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, marginLeft: 12,
+                padding: '4px 12px', backgroundColor: '#f8fafc', color: '#475569',
+                border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+              }}
+            >
+              <RotateCcw size={13} /> Вернуть из архива
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 };
 
