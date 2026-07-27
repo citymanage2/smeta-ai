@@ -477,6 +477,11 @@ const ProjectDetailPage: React.FC = () => {
                       <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
                         {new Date(task.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </div>
+                      {task.owner_name && (
+                        <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                          Ответственный: <span style={{ color: '#475569', fontWeight: 500 }}>{task.owner_name}</span>
+                        </div>
+                      )}
 
                       {/* Cost info */}
                       {showCost && (

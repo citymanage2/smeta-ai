@@ -36,7 +36,7 @@ function formatDate(iso: string): string {
 interface Props {
   open: boolean;
   onToggle: () => void;
-  // Дашборд «Система» доступен только менеджеру; для обычных сотрудников пункт скрыт.
+  // «Система»/«Входящий» — домашняя для всех ролей; по умолчанию пункт виден.
   showSystem?: boolean;
 }
 

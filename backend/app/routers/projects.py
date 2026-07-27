@@ -87,6 +87,8 @@ class TaskBrief(BaseModel):
     slot_files: dict[str, str] = {}
     name: Optional[str] = None
     deleted_at: Optional[str] = None
+    owner_id: Optional[int] = None
+    owner_name: Optional[str] = None  # ответственный (текущий владелец задачи)
 
 
 class ProjectDetailResponse(BaseModel):
@@ -327,6 +329,7 @@ async def list_unassigned_tasks(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
             Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
+            Task.owner_id,
         ).where(
             Task.project_id.is_(None), Task.deleted_at.is_(None),
             Task.is_archived.is_(True) if archived else Task.is_archived.is_(False),
@@ -334,6 +337,7 @@ async def list_unassigned_tasks(
         ).order_by(Task.created_at.desc())
     )
     rows = tasks_result.all()
+    owner_names = await _owner_names([row.owner_id for row in rows], db)
     return [
         TaskBrief(
             id=str(row.id),
@@ -345,6 +349,8 @@ async def list_unassigned_tasks(
             source_file_name=(row.input_files[0]["name"] if row.input_files else None),
             name=row.name,
             deleted_at=row.deleted_at.isoformat() if row.deleted_at else None,
+            owner_id=row.owner_id,
+            owner_name=owner_names.get(row.owner_id),
         )
         for row in rows
     ]
@@ -420,6 +426,7 @@ async def get_project(
         select(
             Task.id, Task.task_type, Task.status, Task.estimation_status,
             Task.cost, Task.created_at, Task.input_files, Task.name, Task.deleted_at,
+            Task.owner_id,
         ).where(Task.project_id == project_id, Task.deleted_at.is_(None)).order_by(Task.created_at.desc())
     )
     tasks = tasks_result.all()
@@ -438,7 +445,7 @@ async def get_project(
             slot_files_by_task.setdefault(tid, {})[row.slot] = row.file_name
 
     type_counts = await _get_task_type_counts([project_id], db)
-    owner_names = await _owner_names([project.owner_id], db)
+    owner_names = await _owner_names([project.owner_id] + [t.owner_id for t in tasks], db)
 
     return ProjectDetailResponse(
         id=str(project.id),
@@ -465,6 +472,8 @@ async def get_project(
                 slot_files=slot_files_by_task.get(str(t.id), {}),
                 name=t.name,
                 deleted_at=t.deleted_at.isoformat() if t.deleted_at else None,
+                owner_id=t.owner_id,
+                owner_name=owner_names.get(t.owner_id),
             )
             for t in tasks
         ],

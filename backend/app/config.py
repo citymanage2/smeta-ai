@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "changeme-use-strong-secret-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = 168  # 7 days
+    # DEPRECATED: общий пароль роли user. Вход по общим паролям удалён — поле
+    # оставлено лишь для валидации прод-env, значение не используется.
     USER_PASSWORD: str = "user123"
     ADMIN_PASSWORD: str = "admin123"
     # Логин бутстрап-админа: под ним создаётся именованный аккаунт роли admin

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { login } from '../api/auth';
-import { useAuthStore } from '../stores/auth';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -22,8 +21,8 @@ const Login: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password.trim()) {
-      setError('Введите пароль');
+    if (!username.trim() || !password.trim()) {
+      setError('Введите логин и пароль');
       return;
     }
     setLoading(true);
@@ -31,9 +30,8 @@ const Login: React.FC = () => {
 
     try {
       await login(password, username);
-      // Приземление: если пришли с защищённой страницы — туда; иначе по роли.
-      const landing = useAuthStore.getState().isManager ? '/system' : '/projects';
-      navigate(fromPath ?? landing, { replace: true });
+      // Приземление: если пришли с защищённой страницы — туда; иначе «Входящий» для всех ролей.
+      navigate(fromPath ?? '/system', { replace: true });
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { detail?: string }; status?: number }; request?: unknown };
       if (axiosError.response?.status === 401) {
@@ -117,7 +115,7 @@ const Login: React.FC = () => {
                 marginBottom: '8px',
               }}
             >
-              Логин <span style={{ color: '#94a3b8', fontWeight: 400 }}>(если выдан)</span>
+              Логин
             </label>
             <input
               id="username"

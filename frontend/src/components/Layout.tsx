@@ -12,7 +12,7 @@ interface LayoutProps {
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
-  const { role, logout, isAdmin, isManager, isAuthenticated } = useAuthStore();
+  const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
   useGlobalTaskPoller();
 
   const roleLabel = (role && ROLE_LABELS[role]) || 'Сотрудник';
@@ -133,7 +133,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* ── Body: sidebar + content ── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {isAuthenticated && (
-          <ProjectsSidebar open={sidebarOpen} onToggle={handleToggleSidebar} showSystem={isManager} />
+          <ProjectsSidebar open={sidebarOpen} onToggle={handleToggleSidebar} />
         )}
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>

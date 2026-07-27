@@ -98,10 +98,13 @@ def _to_response(u: User) -> UserResponse:
 
 
 async def _count_active_admins(db: AsyncSession) -> int:
+    # Только реальные аккаунты (с логином); legacy shared-записи (username NULL) не в счёт.
     return (
         await db.execute(
             select(func.count(User.id)).where(
-                User.role == ROLE_ADMIN, User.is_active.is_(True)
+                User.role == ROLE_ADMIN,
+                User.is_active.is_(True),
+                User.username.is_not(None),
             )
         )
     ).scalar_one()

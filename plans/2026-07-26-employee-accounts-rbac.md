@@ -187,4 +187,17 @@ UPDATE tasks    SET owner_id=<admin_id>, is_archived=true WHERE owner_id IS NULL
 
 Тесты: 313 backend passed (+30 новых RBAC). 20 падений — пре-существующие, окружение python 3.9 vs целевой 3.12 (claude_service monkeypatch, pdf/pymupdf), не связаны с этой задачей (доказано прогоном на чистом HEAD).
 
-Осталось (эксплуатация, не код): задать в прод-env `ADMIN_USERNAME`/`ADMIN_PASSWORD`; после перехода можно удалить legacy shared-пароли (`USER_PASSWORD`) и env `USERS`.
+Осталось (эксплуатация, не код): задать в прод-env `ADMIN_USERNAME`/`ADMIN_PASSWORD`.
+
+---
+
+## Инкремент 2 (2026-07-28)
+
+По запросу пользователя:
+1. **Ответственный на задачах.** Владелец задачи (=ответственный) выводится в ответах: `TaskBrief.owner_id/owner_name` в `GET /projects/{id}` и `GET /projects/unassigned`; на карточках задач (инбокс, деталь проекта) показывается «Ответственный: ФИО». Модель не менялась (владелец = ответственный, меняется при переназначении).
+2. **Убран вход по общим паролям.** `POST /auth/login` требует `username`+`password`; password-only удалён. Деактивированный аккаунт (`is_active=false`) войти не может. `_initialize_users` больше не сеет shared-аккаунты и деактивирует существующие (`username IS NULL`). Удалена мёртвая `init_users()`. `_count_active_admins` считает только реальные аккаунты. Frontend: логин обязателен.
+3. **Фикс регрессии /system.** `/system` («Входящий» + дашборд) вернул доступ всем: инбокс (owner-scoped) виден всем, дашборд-виджеты и `/dashboard/stats` — только менеджеру. Иначе ПМ терял доступ к своим задачам без проекта.
+
+**Как завести руководителя и менеджеров:** админ входит по своему логину (`ADMIN_USERNAME`/`ADMIN_PASSWORD`) → страница «Сотрудники» → создать аккаунты (логин, ФИО, роль head_of_sales / project_manager, пароль). Env `USERS` не используется.
+
+Тесты: `test_auth.py` переписан под персональный вход (+deactivated), +тесты IDOR Path B и изоляции корзины.

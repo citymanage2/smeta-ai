@@ -42,16 +42,16 @@ limiter = Limiter(key_func=get_remote_address)
 
 
 async def _initialize_users() -> None:
-    """Bootstrap-аккаунты и backfill владельца legacy-данных.
+    """Bootstrap именованного админа и backfill владельца legacy-данных.
 
-    - Именованный админ (ADMIN_USERNAME + ADMIN_PASSWORD): под ним первый вход и
-      создание остальных аккаунтов в UI; он же — владелец архива legacy-данных.
-    - Legacy shared-пароли ролей (username IS NULL) — оставлены для переходной
-      совместимости входа по общему паролю.
-    - Индивидуальные аккаунты сотрудников теперь создаются только через UI
-      (env-переменная USERS больше не обрабатывается).
+    - Именованный админ (ADMIN_USERNAME + ADMIN_PASSWORD): единственный способ
+      первого входа; под ним создаются остальные аккаунты в UI. Он же — владелец
+      архива legacy-данных.
+    - Вход по общим паролям ролей удалён: существующие shared-записи (username IS
+      NULL) деактивируются, новые не создаются.
+    - Аккаунты сотрудников создаются только через UI (env USERS не обрабатывается).
     - Backfill: все проекты/задачи без владельца → на именованного админа + в архив.
-    Хэш пароля обновляется, если env-переменная изменилась с прошлого деплоя.
+    Хэш пароля админа обновляется, если ADMIN_PASSWORD изменился с прошлого деплоя.
     """
     async with AsyncSessionLocal() as db:
         # Именованный бутстрап-админ (username = ADMIN_USERNAME).
@@ -77,19 +77,14 @@ async def _initialize_users() -> None:
         await db.flush()
         admin_id = admin.id
 
-        # Legacy shared-пароли ролей (username IS NULL) — переходная совместимость.
-        for role, password in [("user", settings.USER_PASSWORD), ("admin", settings.ADMIN_PASSWORD)]:
-            result = await db.execute(
-                select(User).where(User.role == role, User.username.is_(None))
-            )
-            existing = result.scalar_one_or_none()
-            if not existing:
-                db.add(User(role=role, password_hash=hash_password(password)))
-                logger.info("Created default shared user", role=role)
-            else:
-                if not verify_password(password, existing.password_hash):
-                    existing.password_hash = hash_password(password)
-                    logger.info("Updated password hash for shared user", role=role)
+        # Ретайр legacy shared-аккаунтов (username IS NULL): вход по общим паролям
+        # удалён, поэтому такие записи деактивируем (недоступны для входа и не
+        # засчитываются в число активных админов).
+        res_shared = await db.execute(
+            text("UPDATE users SET is_active = false WHERE username IS NULL AND is_active = true")
+        )
+        if res_shared.rowcount:
+            logger.info("Deactivated legacy shared accounts", count=res_shared.rowcount)
 
         # Backfill владельца: legacy проекты/задачи без owner_id → админ + архив.
         # Идемпотентно: после перехода новые строки всегда с owner_id.

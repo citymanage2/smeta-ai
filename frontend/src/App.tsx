@@ -28,10 +28,10 @@ const RouteFallback: React.FC = () => (
 );
 
 const App: React.FC = () => {
-  const { isAuthenticated, isManager } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
 
-  // Приземление после логина: менеджер → дашборд, остальные → проекты.
-  const landingPath = isManager ? '/system' : '/projects';
+  // Приземление после логина: «Входящий» (/system) для всех ролей.
+  const landingPath = '/system';
 
   return (
     <BrowserRouter>
@@ -163,11 +163,11 @@ const App: React.FC = () => {
           }
         />
 
-        {/* System dashboard — только менеджер */}
+        {/* «Входящий» — домашняя для всех ролей (виджеты дашборда внутри — только менеджеру) */}
         <Route
           path="/system"
           element={
-            <ProtectedRoute requireManager>
+            <ProtectedRoute>
               <System />
             </ProtectedRoute>
           }

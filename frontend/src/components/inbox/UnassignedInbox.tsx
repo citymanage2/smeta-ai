@@ -235,6 +235,11 @@ function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInb
           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
             {new Date(task.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
           </div>
+          {task.owner_name && (
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+              Ответственный: <span style={{ color: '#475569', fontWeight: 500 }}>{task.owner_name}</span>
+            </div>
+          )}
           {showCost && (
             <div style={{ marginTop: 6 }}>
               <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 500 }}>Сумма по смете: </span>

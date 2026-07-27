@@ -3,12 +3,14 @@ import { getDashboardStats, DashboardStats } from '../api/dashboard';
 
 const POLL_INTERVAL = 30_000;
 
-export function useDashboardStats() {
+// enabled=false → хук не шлёт запрос (не-менеджер получил бы 403 на /dashboard/stats).
+export function useDashboardStats(enabled = true) {
   const [data, setData] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
   const fetch = useCallback(async () => {
+    if (!enabled) return;
     try {
       const stats = await getDashboardStats();
       setData(stats);
@@ -18,9 +20,10 @@ export function useDashboardStats() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     fetch();
     // Пауза в фоне: свёрнутая вкладка не льёт запрос каждые 30 с.
     const timer = setInterval(() => {
@@ -35,7 +38,7 @@ export function useDashboardStats() {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [fetch]);
+  }, [fetch, enabled]);
 
   return { data, loading, error, refetch: fetch };
 }

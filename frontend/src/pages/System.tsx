@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import Layout from '../components/Layout';
+import { useAuthStore } from '../stores/auth';
 import { useDashboardStats } from '../hooks/useDashboardStats';
 import DashboardPulse from '../components/dashboard/DashboardPulse';
 import DashboardQueue from '../components/dashboard/DashboardQueue';
@@ -16,7 +17,10 @@ import {
 } from '../components/inbox/UnassignedInbox';
 
 const System: React.FC = () => {
-  const { data, loading, error, refetch } = useDashboardStats();
+  // Дашборд-агрегаты доступны только менеджеру (бэкенд отдаёт 403 остальным),
+  // поэтому запрос статистики включаем лишь для него. «Входящий» — для всех.
+  const isManager = useAuthStore(s => s.isManager);
+  const { data, loading, error, refetch } = useDashboardStats(isManager);
   const [reloadToken, setReloadToken] = useState(0);
   const inbox = useUnassignedInbox(reloadToken);
 
@@ -52,13 +56,15 @@ const System: React.FC = () => {
           </button>
         </div>
 
-        {loading && !data && (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 14 }}>
-            Загрузка...
-          </div>
-        )}
+        {/* Стартовая загрузка: для менеджера ждём агрегаты, для остальных — «Входящий» */}
+        {(isManager ? loading && !data : inbox.loading) &&
+          !inbox.ready.length && !inbox.gate.length && !inbox.other.length && (
+            <div style={{ textAlign: 'center', padding: '60px 0', color: '#94a3b8', fontSize: 14 }}>
+              Загрузка...
+            </div>
+          )}
 
-        {error && (
+        {isManager && error && (
           <div
             style={{
               padding: '12px 16px',
@@ -74,96 +80,102 @@ const System: React.FC = () => {
           </div>
         )}
 
-        {data && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-            {/* ─── Входящий: смысловые группы «что требует меня» ─── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+          {/* ─── Входящий: смысловые группы «что требует меня» (для всех ролей) ─── */}
 
-            {/* Готовые к проверке — джоб завершён, ждёт человека */}
-            {inbox.ready.length > 0 && (
-              <Section>
-                <GroupHeader
-                  title="Готовые к проверке"
-                  count={inbox.ready.length}
-                  accent="#16a34a"
-                  hint="Смета рассчитана — проверьте, скачайте или оптимизируйте"
-                />
-                <UnassignedGroup tasks={inbox.ready} inbox={inbox} />
-              </Section>
-            )}
+          {/* Готовые к проверке — джоб завершён, ждёт человека */}
+          {inbox.ready.length > 0 && (
+            <Section>
+              <GroupHeader
+                title="Готовые к проверке"
+                count={inbox.ready.length}
+                accent="#16a34a"
+                hint="Смета рассчитана — проверьте, скачайте или оптимизируйте"
+              />
+              <UnassignedGroup tasks={inbox.ready} inbox={inbox} />
+            </Section>
+          )}
 
-            {/* Упавшие — resume/retry (журнал ошибок по всем задачам) */}
+          {/* Упавшие — resume/retry (журнал ошибок по всем задачам, только менеджер) */}
+          {isManager && data && (
             <Section>
               <DashboardErrors groups={data.errors} onResume={refreshAll} />
             </Section>
+          )}
 
-            {/* Ждут решения на гейте — перечень готов, смета не запущена.
-                Основано на доступных данных: ничейные перечни без сметы. */}
-            {inbox.gate.length > 0 && (
-              <Section>
-                <GroupHeader
-                  title="Ждут решения на гейте"
-                  count={inbox.gate.length}
-                  accent="#d97706"
-                  hint="Перечень готов — решите: рассчитать смету? (по доступным данным)"
-                />
-                <UnassignedGroup tasks={inbox.gate} inbox={inbox} />
-              </Section>
-            )}
+          {/* Ждут решения на гейте — перечень готов, смета не запущена.
+              Основано на доступных данных: ничейные перечни без сметы. */}
+          {inbox.gate.length > 0 && (
+            <Section>
+              <GroupHeader
+                title="Ждут решения на гейте"
+                count={inbox.gate.length}
+                accent="#d97706"
+                hint="Перечень готов — решите: рассчитать смету? (по доступным данным)"
+              />
+              <UnassignedGroup tasks={inbox.gate} inbox={inbox} />
+            </Section>
+          )}
 
-            {/* Идёт — активная очередь */}
+          {/* Идёт — активная очередь (только менеджер) */}
+          {isManager && data && (
             <Section>
               <DashboardQueue tasks={data.active_queue} onCancel={refreshAll} />
             </Section>
+          )}
 
-            {/* Прочие ничейные задачи — чтобы не потерять доступ */}
-            {inbox.other.length > 0 && (
+          {/* Прочие ничейные задачи — чтобы не потерять доступ */}
+          {inbox.other.length > 0 && (
+            <Section>
+              <GroupHeader
+                title="Без проекта"
+                count={inbox.other.length}
+                accent="#64748b"
+                hint="Задачи, не привязанные ни к одному проекту"
+              />
+              <UnassignedGroup tasks={inbox.other} inbox={inbox} />
+            </Section>
+          )}
+
+          {/* ─── Сводка и аналитика (только менеджер) ─── */}
+          {isManager && data && (
+            <>
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 4, marginTop: 4 }}>
+                <h2 style={{ fontSize: 16, fontWeight: 700, color: '#334155', margin: '0 0 4px' }}>
+                  Сводка и аналитика
+                </h2>
+                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+                  Оперативная картина работы сервиса
+                </p>
+              </div>
+
               <Section>
-                <GroupHeader
-                  title="Без проекта"
-                  count={inbox.other.length}
-                  accent="#64748b"
-                  hint="Задачи, не привязанные ни к одному проекту"
-                />
-                <UnassignedGroup tasks={inbox.other} inbox={inbox} />
+                <DashboardPulse pulse={data.pulse} />
               </Section>
-            )}
 
-            {/* ─── Сводка и аналитика (сохранено из прежнего дашборда) ─── */}
-            <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 4, marginTop: 4 }}>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: '#334155', margin: '0 0 4px' }}>
-                Сводка и аналитика
-              </h2>
-              <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
-                Оперативная картина работы сервиса
-              </p>
-            </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <Section>
+                  <DashboardFunnel funnel={data.quality_funnel} />
+                </Section>
+                <Section>
+                  <DashboardChart data={data.task_chart} />
+                </Section>
+              </div>
 
-            <Section>
-              <DashboardPulse pulse={data.pulse} />
-            </Section>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
               <Section>
-                <DashboardFunnel funnel={data.quality_funnel} />
+                <DashboardProjects projects={data.projects} orphanCount={data.orphan_tasks_count} />
               </Section>
+
               <Section>
-                <DashboardChart data={data.task_chart} />
+                <DashboardPriceLists priceLists={data.price_lists} />
               </Section>
-            </div>
 
-            <Section>
-              <DashboardProjects projects={data.projects} orphanCount={data.orphan_tasks_count} />
-            </Section>
-
-            <Section>
-              <DashboardPriceLists priceLists={data.price_lists} />
-            </Section>
-
-            <Section>
-              <DashboardCosts costs={data.api_costs} />
-            </Section>
-          </div>
-        )}
+              <Section>
+                <DashboardCosts costs={data.api_costs} />
+              </Section>
+            </>
+          )}
+        </div>
       </div>
 
       <UnassignedModals inbox={inbox} />

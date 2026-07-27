@@ -7,8 +7,7 @@ import structlog
 
 from app.database import get_db
 from app.models.user import User
-from app.utils.auth import verify_password, create_access_token, hash_password
-from app.config import settings
+from app.utils.auth import verify_password, create_access_token
 
 logger = structlog.get_logger()
 
@@ -30,55 +29,27 @@ class LoginResponse(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     """
-    Authenticate. Два режима:
-    - username+password → индивидуальный аккаунт (owner_id = user.id);
-    - только password → legacy-вход по общему паролю роли (admin, затем user).
+    Authenticate по индивидуальному аккаунту (username + password, owner_id = user.id).
+    Вход по общим паролям ролей удалён — только персональные аккаунты.
+    Деактивированный аккаунт (is_active=false) войти не может.
     """
-    if not body.password:
+    if not body.username or not body.password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Пароль не может быть пустым",
+            detail="Введите логин и пароль",
         )
 
-    if body.username:
-        # Индивидуальный аккаунт по логину.
-        result = await db.execute(select(User).where(User.username == body.username))
-        user = result.scalar_one_or_none()
-        if user and verify_password(body.password, user.password_hash):
-            token = create_access_token(user.id, user.role, user.username)
-            logger.info("User logged in", username=user.username, role=user.role)
-            return LoginResponse(
-                access_token=token, role=user.role, username=user.username, expires_in=86400,
-            )
-    else:
-        # Legacy: общий пароль роли. Сначала admin, затем user.
-        for role in ("admin", "user"):
-            result = await db.execute(
-                select(User).where(User.role == role, User.username.is_(None))
-            )
-            user = result.scalar_one_or_none()
-            if user and verify_password(body.password, user.password_hash):
-                token = create_access_token(user.id, role, None)
-                logger.info("User logged in (shared)", role=role)
-                return LoginResponse(
-                    access_token=token, role=role, username=None, expires_in=86400,
-                )
+    result = await db.execute(select(User).where(User.username == body.username))
+    user = result.scalar_one_or_none()
+    if user and user.is_active and verify_password(body.password, user.password_hash):
+        token = create_access_token(user.id, user.role, user.username)
+        logger.info("User logged in", username=user.username, role=user.role)
+        return LoginResponse(
+            access_token=token, role=user.role, username=user.username, expires_in=86400,
+        )
 
-    logger.warning("Failed login attempt", has_username=bool(body.username))
+    logger.warning("Failed login attempt", username=body.username)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Неверный логин или пароль",
     )
-
-
-async def init_users():
-    """Initialize users table with default passwords on startup."""
-    from app.database import AsyncSessionLocal
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(User).limit(1))
-        if result.scalar_one_or_none() is not None:
-            return
-        db.add(User(role="user", password_hash=hash_password(settings.USER_PASSWORD)))
-        db.add(User(role="admin", password_hash=hash_password(settings.ADMIN_PASSWORD)))
-        await db.commit()
-        logger.info("Default users created")
