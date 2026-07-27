@@ -16,13 +16,17 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor: redirect to /login on 401
+// Response interceptor: redirect to /login on 401 — КРОМЕ самого /auth/login,
+// чтобы неверные логин/пароль показывались как ошибка формы, а не «Сессия истекла».
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const url: string = error.config?.url || '';
+    const isLoginRequest = url.includes('/auth/login');
+    if (error.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem('token');
       localStorage.removeItem('role');
+      localStorage.removeItem('username');
       sessionStorage.setItem('sessionExpired', '1');
       window.location.href = '/login';
     }
