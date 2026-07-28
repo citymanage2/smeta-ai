@@ -173,16 +173,22 @@ async def _log_api_call(
     batch: bool = False,
     duration_ms: Optional[int] = None,
     web_search_requests: int = 0,
+    batch_id: Optional[str] = None,
+    batch_custom_id: Optional[str] = None,
 ) -> None:
     """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5.
 
     duration_ms — длительность самого API-вызова (None для batch: там нет
     синхронного времени ответа, пачка считается на серверах Anthropic).
     web_search_requests — число поисков; тарифицируется отдельно от токенов.
+    batch_id/batch_custom_id — координаты записи в пачке. Заданы → повторный сбор
+    той же пачки (resume после рестарта поллера) не создаёт дубль строки.
     """
     if db is None or task_id is None:
         return
     try:
+        from sqlalchemy import select
+
         from app.models.api_call_log import ApiCallLog
         from app.database import AsyncSessionLocal
         cost = _calc_cost(
@@ -199,9 +205,26 @@ async def _log_api_call(
             web_search_requests=web_search_requests,
             cost_usd=cost,
             duration_ms=duration_ms,
+            batch_id=batch_id,
+            batch_custom_id=batch_custom_id,
         )
         # Независимая сессия — caller может параллельно использовать свою db (cancel-checks).
         async with AsyncSessionLocal() as log_db:
+            if batch_id and batch_custom_id:
+                already = await log_db.execute(
+                    select(ApiCallLog.id)
+                    .where(
+                        ApiCallLog.batch_id == batch_id,
+                        ApiCallLog.batch_custom_id == batch_custom_id,
+                    )
+                    .limit(1)
+                )
+                if already.scalar_one_or_none() is not None:
+                    logger.info(
+                        "Batch entry already logged, skipping duplicate",
+                        batch_id=batch_id, custom_id=batch_custom_id,
+                    )
+                    return
             log_db.add(log_entry)
             await log_db.commit()
     except Exception as log_err:
@@ -678,6 +701,7 @@ async def collect_claude_batch(
             await _log_api_call(
                 task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
                 batch=True, web_search_requests=searches_t,
+                batch_id=batch_id, batch_custom_id=cid,
             )
         else:
             # errored | canceled | expired

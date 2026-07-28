@@ -28,6 +28,11 @@ class ApiCallLog(Base):
     # Число web-поисков в вызове. Тарифицируется отдельно от токенов ($10/1000)
     # и до 28.07.2026 не учитывалось вовсе — на нём терялось 22% счёта Anthropic.
     web_search_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Идентификаторы записи batch-пачки. Нужны, чтобы повторный сбор той же пачки
+    # (resume_from_batch идемпотентен и вызывается заново после рестарта поллера)
+    # не создавал дубли строк и не завышал метрику. NULL для обычных вызовов.
+    batch_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    batch_custom_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=Decimal("0"))
     # Длительность синхронного API-вызова в миллисекундах (наблюдаемость).
     # NULL для batch-вызовов: пачка считается на серверах Anthropic асинхронно.

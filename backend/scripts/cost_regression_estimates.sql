@@ -160,6 +160,38 @@ GROUP BY 1, 2
 ORDER BY 1 DESC, logged_usd DESC;
 
 \echo ''
-\echo 'Дальше: сумму logged_usd за период сравнить с фактическим списанием у посредника.'
-\echo 'Отношение факт / logged = коэффициент, в который входят наценка, web search,'
-\echo 'неуспешные вызовы и непрокинутая batch-скидка.'
+\echo '=== 8. Эффект выката max_uses (граница — первая строка с поисками) ==='
+-- Границу не задаём руками: первая строка с web_search_requests > 0 и есть
+-- первый вызов на новой версии кода. cost_usd после выката включает плату за
+-- поиск, до — нет, поэтому для сопоставимости считаем и «только токены».
+WITH cutoff AS (
+    SELECT min(called_at) AS t FROM api_call_log WHERE web_search_requests > 0
+),
+per_task AS (
+    SELECT t.id, t.created_at,
+           count(l.id)                AS calls,
+           sum(l.web_search_requests) AS searches,
+           sum(l.cost_usd)            AS cost_usd,
+           sum(l.cost_usd - l.web_search_requests * 0.01) AS cost_tokens_only
+    FROM tasks t
+    JOIN api_call_log l ON l.task_id = t.id
+    WHERE t.task_type = 'ESTIMATE_FROM_LIST'
+    GROUP BY t.id, t.created_at
+)
+SELECT CASE WHEN p.created_at < c.t THEN '1. до выката max_uses' ELSE '2. после' END AS period,
+       count(*)                                              AS tasks,
+       round(avg(p.calls), 1)                                AS avg_calls,
+       round(avg(p.searches), 1)                             AS avg_searches,
+       round(avg(p.searches) / nullif(avg(p.calls), 0), 1)   AS avg_searches_per_call,
+       round(avg(p.cost_tokens_only), 4)                     AS avg_cost_tokens_only,
+       round(avg(p.cost_usd), 4)                             AS avg_cost_total
+FROM per_task p CROSS JOIN cutoff c
+WHERE c.t IS NOT NULL
+GROUP BY 1
+ORDER BY 1;
+
+\echo ''
+\echo 'Сверка: сумму logged_usd за период сравнить с Total cost в консоли Anthropic'
+\echo '(platform.claude.com → Cost). После выката они должны почти совпасть: web search'
+\echo 'теперь входит в cost_usd. Расхождение сверх пары процентов = ещё одна'
+\echo 'невидимая статья, искать её.'

@@ -180,6 +180,85 @@ async def test_collect_claude_batch_keys_by_custom_id(batches):
 
 
 # --------------------------------------------------------------------------
+# Логирование batch-записи идемпотентно: повторный сбор пачки не даёт дубль.
+# resume_from_batch вызывается заново после рестарта поллера — без защиты
+# метрика завышалась на каждую пересборку.
+# --------------------------------------------------------------------------
+
+class _FakeLogSession:
+    """Сессия-заглушка: помнит add(), отвечает на SELECT существующей строки."""
+
+    def __init__(self, store: list, existing: bool):
+        self._store = store
+        self._existing = existing
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def execute(self, _stmt):
+        found = 1 if self._existing else None
+        return SimpleNamespace(scalar_one_or_none=lambda: found)
+
+    def add(self, obj):
+        self._store.append(obj)
+
+    async def commit(self):
+        pass
+
+
+def _patch_log_session(monkeypatch, store: list, existing: bool) -> None:
+    import app.database as database
+
+    monkeypatch.setattr(
+        database, "AsyncSessionLocal", lambda: _FakeLogSession(store, existing)
+    )
+
+
+async def test_batch_entry_logged_once(monkeypatch):
+    saved: list = []
+    _patch_log_session(monkeypatch, saved, existing=False)
+
+    await cs._log_api_call(
+        "tid-1", db=object(), input_t=100, output_t=50, cache_read_t=0,
+        cache_creation_t=0, batch=True, batch_id="msgbatch_1", batch_custom_id="chunk-0",
+    )
+
+    assert len(saved) == 1
+    assert saved[0].batch_id == "msgbatch_1"
+    assert saved[0].batch_custom_id == "chunk-0"
+
+
+async def test_batch_entry_not_logged_twice(monkeypatch):
+    """Строка по (batch_id, custom_id) уже есть → повторную не пишем."""
+    saved: list = []
+    _patch_log_session(monkeypatch, saved, existing=True)
+
+    await cs._log_api_call(
+        "tid-1", db=object(), input_t=100, output_t=50, cache_read_t=0,
+        cache_creation_t=0, batch=True, batch_id="msgbatch_1", batch_custom_id="chunk-0",
+    )
+
+    assert saved == []
+
+
+async def test_regular_call_logged_even_if_identical(monkeypatch):
+    """Дедупликация — только для batch-записей: обычные вызовы повторяются
+    штатно (ретраи, соседние чанки) и каждый стоит денег."""
+    saved: list = []
+    _patch_log_session(monkeypatch, saved, existing=True)
+
+    await cs._log_api_call(
+        "tid-1", db=object(), input_t=100, output_t=50, cache_read_t=0,
+        cache_creation_t=0, duration_ms=1234,
+    )
+
+    assert len(saved) == 1
+
+
+# --------------------------------------------------------------------------
 # cancel — зовёт SDK с batch_id
 # --------------------------------------------------------------------------
 
