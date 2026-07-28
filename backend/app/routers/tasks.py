@@ -33,7 +33,7 @@ from app.utils.auth import get_current_user, get_download_user, current_user_id
 from app.utils.permissions import visibility_filter, can_access
 from app.config import settings
 from app.services.task_processor import process_task
-from app.services.checkpoint import has_resumable_checkpoint
+from app.services.checkpoint import has_resumable_checkpoint, is_batch_pending
 from app.services import storage_service
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
@@ -754,14 +754,30 @@ async def resume_task(
         )
 
     RESUMABLE_TYPES = {"LIST_FROM_GRAND", "LIST_FROM_PROJECT", "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS", "ESTIMATE_FROM_LIST"}
-    if task.task_type.upper() not in RESUMABLE_TYPES:
+    # Для `paused` (баланс API исчерпан) тип не ограничиваем: задача остановлена
+    # внешней причиной, а не своей логикой — её нужно просто досчитать/пересчитать.
+    if task.status != "paused" and task.task_type.upper() not in RESUMABLE_TYPES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Возобновление не поддерживается для данного типа задачи",
         )
 
     progress_data = task.progress_data or {}
-    if not has_resumable_checkpoint(progress_data):
+
+    # Пачка уже отправлена в Batch API и оплачена — не запускаем обработку заново,
+    # возвращаем задачу в processing, результаты доберёт batch_poller.
+    if task.status == "paused" and is_batch_pending(progress_data):
+        task.status = "processing"
+        task.error_message = None
+        task.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.info("Paused batch task returned to polling", task_id=task_id)
+        return TaskCreateResponse(task_id=task_id, status="processing")
+
+    # Чекпоинт обязателен только для failed/cancelled. У `paused` его может не быть
+    # (баланс кончился до первого чекпоинта) — тогда возобновление = запуск с нуля,
+    # иначе задача остаётся мёртвой навсегда: ни поллер, ни кнопка её не поднимут.
+    if task.status != "paused" and not has_resumable_checkpoint(progress_data):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Нет сохранённого прогресса для возобновления",

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { formatTaskError } from '../utils/formatError';
+import { formatTaskError, formatApiDetail } from '../utils/formatError';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -157,8 +157,8 @@ const TaskStatusPage: React.FC = () => {
     if (!taskId || resuming) return;
     setResuming(true);
     try {
-      await resumeTask(taskId);
-      setTask((prev) => prev ? { ...prev, status: 'pending', error_message: undefined } : prev);
+      const res = await resumeTask(taskId);
+      setTask((prev) => prev ? { ...prev, status: (res.status as TStatus) || 'pending', error_message: undefined } : prev);
       setProgressLog([]);
       setElapsedSeconds(0);
       startTimeRef.current = null;
@@ -166,8 +166,9 @@ const TaskStatusPage: React.FC = () => {
         pollingRef.current = setInterval(fetchStatus, 3000);
       }
       fetchStatus();
-    } catch {
-      setError('Не удалось возобновить задачу.');
+    } catch (e: any) {
+      // Показываем причину с бэкенда (409 detail), иначе диагностировать нечем.
+      setError(formatApiDetail(e?.response?.data?.detail, 'Не удалось возобновить задачу.'));
     } finally {
       setResuming(false);
     }
@@ -186,8 +187,8 @@ const TaskStatusPage: React.FC = () => {
         pollingRef.current = setInterval(fetchStatus, 3000);
       }
       fetchStatus();
-    } catch {
-      setError('Не удалось перезапустить задачу.');
+    } catch (e: any) {
+      setError(formatApiDetail(e?.response?.data?.detail, 'Не удалось перезапустить задачу.'));
     } finally {
       setRestarting(false);
     }

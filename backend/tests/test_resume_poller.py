@@ -2,9 +2,9 @@
 Фаза 4 — планировщик авто-возобновления задач на паузе (paused).
 
 Контракт:
-- _has_checkpoint: возобновляемы только paused-задачи с чекпоинтом (тот же
-  предикат, что у ручного resume-эндпоинта).
-- _find_resumable_paused_ids: выбирает только paused + с чекпоинтом.
+- _has_checkpoint: предикат «есть чекпоинт» (тот же, что у ручного resume-
+  эндпоинта); для paused он больше НЕ обязателен — см. Фазу 8.
+- _find_resumable_paused_ids: выбирает все paused-задачи.
 - _claim: атомарно paused→pending; повторный захват уже перехваченной задачи
   возвращает False (гард от двойного запуска).
 - resume_paused_tasks: захватывает кандидатов и запускает runner для каждого.
@@ -55,20 +55,23 @@ def test_has_checkpoint_variants():
 
 
 # ---------------------------------------------------------------------------
-# _find_resumable_paused_ids — только paused + с чекпоинтом
+# _find_resumable_paused_ids — все paused (Фаза 8: чекпоинт не обязателен)
 # ---------------------------------------------------------------------------
 
 async def test_find_resumable_paused_ids_filters(db_session):
+    """Фаза 8: берём ВСЕ paused, включая без чекпоинта (баланс кончился до первого
+    чекпоинта — такую задачу надо перезапустить с нуля, иначе она мертва)."""
     ok = await _seed(db_session, status="paused", progress_data={"chunks_done": 2})
-    await _seed(db_session, status="paused", progress_data={})            # нет чекпоинта
+    no_cp = await _seed(db_session, status="paused", progress_data={})     # нет чекпоинта
     await _seed(db_session, status="failed", progress_data={"chunks_done": 1})  # не paused
-    await _seed(db_session, status="paused", progress_data={"_stage": "claude_partial"})
+    partial = await _seed(db_session, status="paused", progress_data={"_stage": "claude_partial"})
 
     ids = await rp._find_resumable_paused_ids(db_session)
 
-    # ok + claude_partial задача; без-чекпоинта и failed — исключены
     assert ok.id in ids
-    assert len(ids) == 2
+    assert no_cp.id in ids
+    assert partial.id in ids
+    assert len(ids) == 3  # failed — исключён
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +113,6 @@ def _same_session_factory(session):
 
 async def test_resume_paused_tasks_claims_and_runs(db_session):
     resumable = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
-    await _seed(db_session, status="paused", progress_data={})  # без чекпоинта — не берём
     ids_to_cleanup = []
 
     runner = AsyncMock(return_value=None)

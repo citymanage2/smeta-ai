@@ -554,6 +554,14 @@ class TaskProcessor:
             return obj.isoformat()
         return obj
 
+    async def _is_batch_pending(self) -> bool:
+        """Свежий из БД признак «пачка Batch API отправлена, результатов ещё нет»."""
+        from app.services.checkpoint import is_batch_pending
+
+        result = await self.db.execute(select(Task).where(Task.id == self.task_id))
+        task = result.scalar_one_or_none()
+        return bool(task) and is_batch_pending(task.progress_data)
+
     async def _save_progress_data(self, data: dict) -> None:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = result.scalar_one_or_none()
@@ -1108,6 +1116,15 @@ class TaskProcessor:
                 await self._handle_estimate_optimization(task)
             else:
                 raise NotImplementedError(f"Тип задачи {task.task_type!r} ещё не настроен")
+
+            # Batch-режим: пачка отправлена в Anthropic, результатов ещё нет —
+            # задача НЕ завершена. Оставляем `processing`, чтобы её увидел
+            # batch_poller (он ищет processing + _stage=batch_pending) и достроил
+            # смету. Иначе задача помечалась completed без результата и поллер
+            # её больше никогда не подхватывал.
+            if await self._is_batch_pending():
+                logger.info("Task left in processing — batch pending", task_id=self.task_id)
+                return
 
             await self._auto_fill_estimate_slot()
             await self.update_status("completed")

@@ -25,7 +25,7 @@ from sqlalchemy import select, update
 
 from app.database import AsyncSessionLocal
 from app.models.task import Task
-from app.services.checkpoint import has_resumable_checkpoint
+from app.services.checkpoint import has_resumable_checkpoint, is_batch_pending
 
 logger = structlog.get_logger()
 
@@ -38,9 +38,16 @@ _has_checkpoint = has_resumable_checkpoint
 
 
 async def _find_resumable_paused_ids(db) -> list[str]:
-    """ID задач в статусе paused, у которых есть чекпоинт (Python-фильтр — DB-agnostic)."""
+    """ID ВСЕХ задач в статусе paused.
+
+    Фаза 8: раньше здесь стоял фильтр «только с чекпоинтом», и задача, у которой
+    баланс кончился до первого чекпоинта (первая группа чанков fast-режима или
+    submit пачки в batch-режиме), не возобновлялась ни поллером, ни кнопкой —
+    оставалась paused навсегда. Пауза ставится только по балансу, поэтому paused
+    без чекпоинта безопасно перезапустить с нуля: терять нечего.
+    """
     result = await db.execute(select(Task).where(Task.status == "paused"))
-    return [t.id for t in result.scalars().all() if _has_checkpoint(t.progress_data)]
+    return [t.id for t in result.scalars().all()]
 
 
 async def _claim(db, task_id: str) -> bool:
@@ -51,6 +58,26 @@ async def _claim(db, task_id: str) -> bool:
         .where(Task.id == task_id, Task.status == "paused")
         .values(
             status="pending",
+            error_message=None,
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+    await db.commit()
+    return res.rowcount == 1
+
+
+async def _claim_batch_to_processing(db, task_id: str) -> bool:
+    """Атомарно paused→processing для задачи с уже отправленной пачкой Batch API.
+
+    Пачка оплачена и считается на серверах Anthropic — перезапускать обработку
+    нельзя (заплатим второй раз). Достаточно вернуть задачу в `processing`:
+    результаты доберёт batch_poller.
+    """
+    res = await db.execute(
+        update(Task)
+        .where(Task.id == task_id, Task.status == "paused")
+        .values(
+            status="processing",
             error_message=None,
             updated_at=datetime.now(timezone.utc),
         )
@@ -88,9 +115,11 @@ async def _claim_and_enqueue(db, task_id: str) -> bool:
 
 
 async def resume_paused_tasks(session_factory=AsyncSessionLocal, runner=None) -> list[str]:
-    """Один проход: захватить paused-задачи с чекпоинтом и переочередить их.
+    """Один проход: захватить paused-задачи и переочередить их.
 
-    Возвращает список ID реально захваченных (paused→pending) задач.
+    Возвращает список ID реально захваченных (paused→pending) задач. Задачи с
+    отправленной пачкой Batch API возвращаются в `processing` (их досчитает
+    batch_poller) и в этот список не попадают — их не нужно обрабатывать заново.
 
     Прод (`runner is None`): захват и постановка durable-job атомарны
     (`_claim_and_enqueue`) — обработку доведёт worker из очереди, в рамках лимита
@@ -105,11 +134,26 @@ async def resume_paused_tasks(session_factory=AsyncSessionLocal, runner=None) ->
         return []
 
     claimed: list[str] = []
+    batch_claimed: list[str] = []
     for task_id in candidates:
         async with session_factory() as db:
+            task = await db.get(Task, task_id)
+            # Пачка Batch API уже отправлена → возвращаем в processing (без job и
+            # без runner): смету достроит batch_poller из готовых результатов.
+            if task is not None and is_batch_pending(task.progress_data):
+                if await _claim_batch_to_processing(db, task_id):
+                    batch_claimed.append(task_id)
+                continue
             ok = await (_claim(db, task_id) if runner is not None else _claim_and_enqueue(db, task_id))
             if ok:
                 claimed.append(task_id)
+
+    if batch_claimed:
+        logger.info(
+            "Paused batch tasks returned to polling",
+            count=len(batch_claimed),
+            task_ids=batch_claimed,
+        )
 
     if not claimed:
         return []
