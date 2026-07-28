@@ -111,6 +111,11 @@ def _same_session_factory(session):
     return _factory
 
 
+async def _ping_ok() -> dict:
+    """Баланс есть. Инъекция вместо реального api_ping — тест не ходит в сеть."""
+    return {"ok": True, "is_balance_error": False, "status_code": 200, "error": None}
+
+
 async def test_resume_paused_tasks_claims_and_runs(db_session):
     resumable = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
     ids_to_cleanup = []
@@ -120,6 +125,7 @@ async def test_resume_paused_tasks_claims_and_runs(db_session):
         claimed = await rp.resume_paused_tasks(
             session_factory=_same_session_factory(db_session),
             runner=runner,
+            pinger=_ping_ok,
         )
         ids_to_cleanup = claimed
 
@@ -150,6 +156,7 @@ async def test_resume_paused_tasks_enqueues_job(db_session):
     try:
         claimed = await rp.resume_paused_tasks(
             session_factory=_same_session_factory(db_session),
+            pinger=_ping_ok,
         )
         assert claimed == [resumable.id]
         await db_session.refresh(resumable)
@@ -169,9 +176,13 @@ async def test_resume_paused_tasks_enqueues_job(db_session):
 
 async def test_resume_paused_tasks_noop_when_none(db_session):
     runner = AsyncMock()
+    pinger = AsyncMock()
     claimed = await rp.resume_paused_tasks(
         session_factory=_same_session_factory(db_session),
         runner=runner,
+        pinger=pinger,
     )
     assert claimed == []
     runner.assert_not_called()
+    # AC1: нет пауз → пробный вызов API не делается вовсе (тик бесплатен).
+    pinger.assert_not_called()

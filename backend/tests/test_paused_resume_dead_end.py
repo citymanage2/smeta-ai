@@ -196,6 +196,12 @@ def _same_session_factory(session):
     return lambda: _Ctx()
 
 
+async def _ping_ok() -> dict:
+    """Баланс есть — поллер должен возобновлять. Инъекция вместо реального
+    api_ping, чтобы тест не ходил в сеть."""
+    return {"ok": True, "is_balance_error": False, "status_code": 200, "error": None}
+
+
 async def test_poller_resumes_paused_without_checkpoint(db_session):
     """Авто-возобновление: paused без чекпоинта → pending + durable job."""
     await db_session.execute(delete(Job))
@@ -204,7 +210,7 @@ async def test_poller_resumes_paused_without_checkpoint(db_session):
     task = await _seed_task(db_session, task_id, status="paused", progress_data={})
     try:
         claimed = await rp.resume_paused_tasks(
-            session_factory=_same_session_factory(db_session)
+            session_factory=_same_session_factory(db_session), pinger=_ping_ok
         )
         assert claimed == [task_id]
         await db_session.refresh(task)
@@ -231,7 +237,7 @@ async def test_poller_returns_batch_task_to_processing(db_session):
     )
     try:
         claimed = await rp.resume_paused_tasks(
-            session_factory=_same_session_factory(db_session)
+            session_factory=_same_session_factory(db_session), pinger=_ping_ok
         )
         assert claimed == [], "batch-задача не должна попадать в пересчёт"
         await db_session.refresh(task)

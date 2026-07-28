@@ -24,7 +24,7 @@ e-mail/Telegram, учащение тика (детально — в research). �
 не делаем (новый хук независим), «колокольчик» с историей уведомлений — не делаем
 (нет в scope), формат текста паузы в `task_processor` не трогаем.
 
-## Фаза 1 — Модель события + миграция `[ ]`
+## Фаза 1 — Модель события + миграция `[x]`
 
 - `backend/app/models/system_event.py`: `SystemEvent` (`system_events`):
   `id` BigInt PK autoincrement, `kind` String(40) not null, `payload` JSONB not null
@@ -36,7 +36,7 @@ e-mail/Telegram, учащение тика (детально — в research). �
 
 Гейт: `pytest backend/tests/test_migration_startup.py -q`.
 
-## Фаза 2 — Гейт по api_ping + запись события `[ ]`
+## Фаза 2 — Гейт по api_ping + запись события `[x]`
 
 `backend/app/services/resume_poller.py`:
 
