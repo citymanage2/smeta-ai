@@ -386,6 +386,7 @@ function ResultFilesSection({
   color,
   fallbackSlot = 'result',
   defaultExpanded = false,
+  footer,
 }: {
   stage: StageDetail
   taskId: string
@@ -395,6 +396,8 @@ function ResultFilesSection({
   color: string
   fallbackSlot?: string
   defaultExpanded?: boolean
+  /** Доп. блок внутри секции — например, запуск задачи следующей стадии. */
+  footer?: React.ReactNode
 }) {
   return (
     <CollapsibleSection color={color} label={label} defaultExpanded={defaultExpanded}>
@@ -425,6 +428,7 @@ function ResultFilesSection({
           <ArrowBtn onClick={navigateToCard} />
         </div>
       )}
+      {footer}
     </CollapsibleSection>
   )
 }
@@ -1116,6 +1120,54 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
 
   const canStart = task === null || task.status === 'failed' || task.status === 'cancelled'
 
+  // Секция «Смета» показывается, только если смета уже готова на предыдущей стадии.
+  const hasEstimateSection = !!(estimateTask && estimateTask.status === 'completed' && estimateMetaStage)
+  // Блок запуска живёт внутри секции «Смета» — прямо под сметой, которую оптимизируем.
+  const nestedLaunch = canStart && hasEstimateSection
+
+  const launchBlock = (
+    <div style={nestedLaunch
+      ? { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #e2e8f0' }
+      : undefined}
+    >
+      {nestedLaunch && (
+        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#c2410c', marginBottom: '4px' }}>
+          Оптимизация
+        </div>
+      )}
+      <TaskStatusBadge task={task} />
+      {canStart && (
+        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
+          <div style={{ marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Использовать смету из предыдущей стадии:</div>
+            <ActionButton onClick={handleUsePrevious} disabled={!estimateCompleted || submitting}>
+              {submitting ? 'Запускаю…' : 'Использовать смету'}
+            </ActionButton>
+            {!estimateCompleted && (
+              <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '4px' }}>
+                Сначала создайте смету на стадии «Смета»
+              </div>
+            )}
+          </div>
+          <div>
+            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Или загрузить смету с ПК:</div>
+            <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
+              <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
+            </div>
+            {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
+            {file && (
+              <div style={{ marginTop: '6px' }}>
+                <ActionButton onClick={handleUpload} disabled={submitting}>
+                  {submitting ? 'Запускаю…' : 'Загрузить и оптимизировать'}
+                </ActionButton>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <div>
       {/* Исходный файл (если карточка пришла из перечня) */}
@@ -1158,52 +1210,23 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
         />
       )}
 
-      {/* Смета (если есть из стадии Смета) */}
-      {estimateTask && estimateTask.status === 'completed' && estimateMetaStage && (
+      {/* Смета (если есть из стадии Смета) — блок запуска оптимизации живёт внутри */}
+      {hasEstimateSection && (
         <ResultFilesSection
-          stage={estimateMetaStage}
-          taskId={estimateTask.id}
+          stage={estimateMetaStage!}
+          taskId={estimateTask!.id}
           navigateToCard={navigateToCard}
           onOpenEditor={onOpenEditor}
           label="Смета"
           color="#0f766e"
           fallbackSlot="result"
-          defaultExpanded={false}
+          defaultExpanded={nestedLaunch}
+          footer={nestedLaunch ? launchBlock : undefined}
         />
       )}
 
-      {/* Оптимизация */}
-      <TaskStatusBadge task={task} />
-
-      {canStart && (
-        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
-          <div style={{ marginBottom: '8px' }}>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Использовать смету из предыдущей стадии:</div>
-            <ActionButton onClick={handleUsePrevious} disabled={!estimateCompleted || submitting}>
-              {submitting ? 'Запускаю…' : 'Использовать смету'}
-            </ActionButton>
-            {!estimateCompleted && (
-              <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '4px' }}>
-                Сначала создайте смету на стадии «Смета»
-              </div>
-            )}
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Или загрузить смету с ПК:</div>
-            <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
-              <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
-            </div>
-            {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
-            {file && (
-              <div style={{ marginTop: '6px' }}>
-                <ActionButton onClick={handleUpload} disabled={submitting}>
-                  {submitting ? 'Запускаю…' : 'Загрузить и оптимизировать'}
-                </ActionButton>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Оптимизация — на уровне стадии, если смета из предыдущей стадии недоступна */}
+      {!nestedLaunch && launchBlock}
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
