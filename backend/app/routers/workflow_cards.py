@@ -134,7 +134,7 @@ def _apply_soft_delete_filter(card: WorkflowCard) -> None:
 async def _check_card_access(card: WorkflowCard, db: AsyncSession, current_user: dict) -> None:
     """Доступ к карточке определяется владельцем её проекта (у WorkflowCard нет owner_id)."""
     proj = await db.get(Project, card.project_id)
-    if proj is None or not can_access(proj.owner_id, current_user):
+    if proj is None or not can_access(proj.owner_id, current_user, proj.is_shared):
         raise HTTPException(status_code=404, detail="Карточка не найдена")
 
 
@@ -147,7 +147,7 @@ async def get_workflow_cards(
     current_user: dict = Depends(get_current_user),
 ):
     proj = await db.get(Project, project_id)
-    if proj is None or not can_access(proj.owner_id, current_user):
+    if proj is None or not can_access(proj.owner_id, current_user, proj.is_shared):
         raise HTTPException(status_code=404, detail="Проект не найден")
 
     stmt = (
@@ -190,7 +190,7 @@ async def create_workflow_card(
     current_user: dict = Depends(get_current_user),
 ):
     proj = await db.get(Project, project_id)
-    if proj is None or not can_access(proj.owner_id, current_user):
+    if proj is None or not can_access(proj.owner_id, current_user, proj.is_shared):
         raise HTTPException(status_code=404, detail="Проект не найден")
 
     card = WorkflowCard(
@@ -304,7 +304,7 @@ async def get_trash_cards(
     items = []
     for card in cards:
         proj = await db.get(Project, card.project_id)
-        if not can_access(proj.owner_id if proj else None, current_user):
+        if not proj or not can_access(proj.owner_id, current_user, proj.is_shared):
             continue
         task_count = sum(1 for tid in [
             card.list_task_id,
@@ -340,7 +340,7 @@ async def restore_workflow_card(
         raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
 
     proj = await db.get(Project, card.project_id)
-    if proj is None or not can_access(proj.owner_id, current_user):
+    if proj is None or not can_access(proj.owner_id, current_user, proj.is_shared):
         raise HTTPException(status_code=404, detail="Карточка не найдена в корзине")
     if proj.deleted_at is not None:
         raise HTTPException(status_code=400, detail="Проект удалён — восстановление невозможно")
@@ -421,7 +421,7 @@ async def set_primary_version(
             raise HTTPException(status_code=404, detail="Версия сметы не найдена")
         # Версия должна принадлежать доступной задаче — не ссылаемся на чужую.
         ver_task = await db.get(Task, ver.task_id)
-        if ver_task is None or not can_access(ver_task.owner_id, current_user):
+        if ver_task is None or not can_access(ver_task.owner_id, current_user, ver_task.is_shared):
             raise HTTPException(status_code=404, detail="Версия сметы не найдена")
 
     card.primary_version_id = body.version_id

@@ -55,7 +55,7 @@ async def _get_task_or_404(
     task = result.scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if current_user is not None and not can_access(task.owner_id, current_user):
+    if current_user is not None and not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     return task
 

@@ -27,7 +27,7 @@ router = APIRouter(tags=["summary"])
 
 async def _project_or_404(project_id: str, db: AsyncSession, current_user: dict) -> Project:
     proj = await db.get(Project, project_id)
-    if proj is None or not can_access(proj.owner_id, current_user):
+    if proj is None or not can_access(proj.owner_id, current_user, proj.is_shared):
         raise HTTPException(status_code=404, detail="Проект не найден")
     return proj
 

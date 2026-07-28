@@ -77,6 +77,33 @@ async def test_pm_archived_list(async_client, rbac_users):
 
 
 @pytest.mark.asyncio
+async def test_pm_sees_and_opens_shared_company_data(async_client, rbac_users, db_session):
+    # Старые данные компании: владелец — админ, в архиве, помечены общими.
+    shared_p = Project(name="Старый общий проект", owner_id=rbac_users["admin"],
+                       is_archived=True, is_shared=True)
+    shared_t = Task(owner_id=rbac_users["admin"], user_role="admin", task_type="LIST_FROM_GRAND",
+                    status="completed", input_files=[], input_file_data=[], chat_history=[],
+                    is_archived=True, is_shared=True)
+    db_session.add_all([shared_p, shared_t])
+    await db_session.commit()
+    pid, tid = str(shared_p.id), str(shared_t.id)
+    hdr = _auth(rbac_users["pm1"], "project_manager", "pm1")
+
+    # ПМ видит общий проект в архиве (не своё, но общее) и может открыть.
+    arch = await async_client.get("/projects?archived=true", headers=hdr)
+    assert any(p["id"] == pid for p in arch.json())
+    assert (await async_client.get(f"/projects/{pid}", headers=hdr)).status_code == 200
+
+    # ПМ видит общую задачу в архиве «Без проекта».
+    arch_t = await async_client.get("/projects/unassigned?archived=true", headers=hdr)
+    assert any(t["id"] == tid for t in arch_t.json())
+
+    # В активных общее не мелькает (оно архивное).
+    active = await async_client.get("/projects", headers=hdr)
+    assert all(p["id"] != pid for p in active.json())
+
+
+@pytest.mark.asyncio
 async def test_manager_sees_all_active_projects(async_client, rbac_users):
     r = await async_client.get("/projects", headers=_auth(rbac_users["head"], "head_of_sales", "head"))
     assert r.status_code == 200
@@ -276,10 +303,10 @@ async def test_backfill_moves_shared_owned_to_admin_archive(db_session, monkeypa
     for tid in (tid_shared, tid_orphan):
         row = (await db_session.execute(select(Task).where(Task.id == tid))).scalar_one()
         await db_session.refresh(row)
-        assert row.owner_id == admin.id and row.is_archived is True
+        assert row.owner_id == admin.id and row.is_archived is True and row.is_shared is True
     proj = (await db_session.execute(select(Project).where(Project.id == pid))).scalar_one()
     await db_session.refresh(proj)
-    assert proj.owner_id == admin.id and proj.is_archived is True
+    assert proj.owner_id == admin.id and proj.is_archived is True and proj.is_shared is True
     # Общий аккаунт деактивирован.
     sh = (await db_session.execute(select(User).where(User.id == shared_id))).scalar_one()
     await db_session.refresh(sh)

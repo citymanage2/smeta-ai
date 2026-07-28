@@ -34,6 +34,10 @@ class Task(Base):
     is_archived: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
+    # Общий: True → видна всем сотрудникам поверх изоляции (старые данные компании).
+    is_shared: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
     task_type: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     input_files: Mapped[list] = mapped_column(JSON, default=list, nullable=False)

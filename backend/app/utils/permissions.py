@@ -9,7 +9,6 @@
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from sqlalchemy import false
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.utils.auth import get_current_user, current_user_id
@@ -47,24 +46,30 @@ def can_reassign(role: Optional[str]) -> bool:
 def visibility_filter(model, current_user: dict) -> Optional[ColumnElement]:
     """SQLAlchemy-условие фильтра по владельцу для списков.
 
-    None → без фильтра (менеджер видит всё). Для ПМ — только свои строки.
-    ПМ без owner_id (legacy shared-токен) не видит ничего персонального.
-    Архив здесь НЕ учитывается — фильтр по is_archived роутер добавляет отдельно.
+    None → без фильтра (менеджер видит всё). Для ПМ — свои строки ИЛИ общие
+    (is_shared=true, старые данные компании). ПМ без owner_id (legacy shared-токен)
+    видит только общие. Архив здесь НЕ учитывается — по is_archived роутер
+    фильтрует отдельно.
     """
     if is_manager(current_user.get("role")):
         return None
+    shared = model.is_shared.is_(True)
     uid = current_user_id(current_user)
     if uid is None:
-        return false()
-    return model.owner_id == uid
+        return shared
+    return (model.owner_id == uid) | shared
 
 
-def can_access(resource_owner_id: Optional[int], current_user: dict) -> bool:
-    """Может ли пользователь видеть/править конкретный ресурс (по его owner_id).
+def can_access(
+    resource_owner_id: Optional[int], current_user: dict, is_shared: bool = False
+) -> bool:
+    """Может ли пользователь видеть/править конкретный ресурс.
 
-    Видимость и правка совпадают: ПМ работает только со своими ресурсами,
-    менеджер — с любыми.
+    Общие ресурсы (is_shared=true, старые данные компании) доступны всем.
+    Иначе: менеджер — любой ресурс; ПМ — только свой (по owner_id).
     """
+    if is_shared:
+        return True
     if is_manager(current_user.get("role")):
         return True
     uid = current_user_id(current_user)

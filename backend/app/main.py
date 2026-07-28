@@ -95,15 +95,18 @@ async def _initialize_users() -> None:
             "owner_id IS NULL OR owner_id IN "
             "(SELECT id FROM users WHERE username IS NULL)"
         )
+        # is_shared=true → старые данные компании видны всем сотрудникам в архиве.
         res_p = await db.execute(
             text(
-                f"UPDATE projects SET owner_id = :aid, is_archived = true WHERE {legacy_owner}"
+                "UPDATE projects SET owner_id = :aid, is_archived = true, is_shared = true "
+                f"WHERE {legacy_owner}"
             ),
             {"aid": admin_id},
         )
         res_t = await db.execute(
             text(
-                f"UPDATE tasks SET owner_id = :aid, is_archived = true WHERE {legacy_owner}"
+                "UPDATE tasks SET owner_id = :aid, is_archived = true, is_shared = true "
+                f"WHERE {legacy_owner}"
             ),
             {"aid": admin_id},
         )

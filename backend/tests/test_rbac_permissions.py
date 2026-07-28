@@ -54,11 +54,26 @@ def test_visibility_filter_pm_scopes_to_owner():
     assert "owner_id" in compiled and "5" in compiled
 
 
-def test_visibility_filter_pm_without_uid_sees_nothing():
-    # legacy shared-токен: sub = 'project_manager' (не число) → uid None → false()
+def test_visibility_filter_pm_without_uid_sees_only_shared():
+    # legacy shared-токен: uid None → видит только общие (is_shared).
     cond = perm.visibility_filter(Task, {"role": "project_manager", "sub": "project_manager"})
     compiled = str(cond.compile(compile_kwargs={"literal_binds": True})).lower()
-    assert "false" in compiled or "0 = 1" in compiled or compiled.strip() in ("false", "0")
+    assert "is_shared" in compiled
+
+
+def test_visibility_filter_pm_includes_shared():
+    cond = perm.visibility_filter(Project, _user("project_manager", 5))
+    compiled = str(cond.compile(compile_kwargs={"literal_binds": True})).lower()
+    assert "owner_id" in compiled and "is_shared" in compiled
+
+
+def test_can_access_shared_visible_to_everyone():
+    # общий ресурс доступен любому ПМ, даже чужой owner_id
+    pm = _user("project_manager", 7)
+    assert perm.can_access(999, pm, is_shared=True)
+    assert perm.can_access(None, pm, is_shared=True)
+    # без флага — чужой недоступен
+    assert not perm.can_access(999, pm, is_shared=False)
 
 
 # --- can_access / can_edit ---

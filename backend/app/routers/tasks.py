@@ -240,7 +240,7 @@ async def create_task(
         src = (
             await db.execute(select(Task).where(Task.id == source_task_id))
         ).scalar_one_or_none()
-        if not src or not can_access(src.owner_id, current_user):
+        if not src or not can_access(src.owner_id, current_user, src.is_shared):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Исходная задача не найдена",
@@ -361,7 +361,7 @@ async def create_task(
         proj_check = await db.execute(select(Project).where(Project.id == project_id))
         proj = proj_check.scalar_one_or_none()
         if proj:
-            if not can_access(proj.owner_id, current_user):
+            if not can_access(proj.owner_id, current_user, proj.is_shared):
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Проект не найден",
@@ -413,7 +413,7 @@ async def get_task_status(
             detail="Задача не найдена",
         )
 
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -465,7 +465,7 @@ async def check_completeness(
             detail="Исходная задача не найдена",
         )
 
-    if not can_access(source_task.owner_id, current_user):
+    if not can_access(source_task.owner_id, current_user, source_task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Исходная задача не найдена",
@@ -606,7 +606,7 @@ async def check_project_completeness(
             detail="Исходная задача не найдена",
         )
 
-    if not can_access(source_task.owner_id, current_user):
+    if not can_access(source_task.owner_id, current_user, source_task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Исходная задача не найдена",
@@ -704,7 +704,7 @@ async def cancel_task(
             detail="Задача не найдена",
         )
 
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -741,7 +741,7 @@ async def resume_task(
             detail="Задача не найдена",
         )
 
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -795,7 +795,7 @@ async def restart_task(
             detail="Задача не найдена",
         )
 
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -835,7 +835,7 @@ async def send_message(
             detail="Задача не найдена",
         )
 
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Задача не найдена",
@@ -879,7 +879,7 @@ async def upload_file_to_slot(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     mime = _get_mime_type(file)
@@ -957,7 +957,7 @@ async def delete_file_from_slot(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     existing = await db.execute(
@@ -999,7 +999,7 @@ async def update_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     if body.name is not None:
         task.name = body.name.strip() or None
@@ -1021,7 +1021,7 @@ async def archive_task(
     """В архив / вернуть из архива. Право = право редактирования (владелец или менеджер)."""
     result = await db.execute(select(Task).where(Task.id == task_id))
     task = result.scalar_one_or_none()
-    if not task or not can_access(task.owner_id, current_user):
+    if not task or not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     task.is_archived = body.archived
     await db.commit()
@@ -1057,7 +1057,7 @@ async def rename_slot_file(
     task_owner = (
         await db.execute(select(Task).where(Task.id == task_id))
     ).scalar_one_or_none()
-    if task_owner is None or not can_access(task_owner.owner_id, current_user):
+    if task_owner is None or not can_access(task_owner.owner_id, current_user, task_owner.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     task_result.file_name = body.name.strip()
     await db.commit()
@@ -1081,7 +1081,7 @@ async def confirm_estimation(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     slot_result = await db.execute(
@@ -1111,13 +1111,13 @@ async def link_task_to_project(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     if body.project_id is not None:
         proj_result = await db.execute(select(Project).where(Project.id == body.project_id))
         target_proj = proj_result.scalar_one_or_none()
-        if target_proj is None or not can_access(target_proj.owner_id, current_user):
+        if target_proj is None or not can_access(target_proj.owner_id, current_user, target_proj.is_shared):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Проект не найден",
@@ -1145,7 +1145,7 @@ async def download_file_from_slot(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     # Source slot: serve original uploaded file from task_input_files
@@ -1197,7 +1197,7 @@ async def download_input_file(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     # Try new storage first (task_input_files table)
@@ -1233,7 +1233,7 @@ async def delete_input_file(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     if task.status == "processing":
@@ -1289,7 +1289,7 @@ async def add_input_file(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
 
     if task.status == "processing":
@@ -1361,7 +1361,7 @@ async def optimize_analyze(
     task = (
         await db.execute(select(Task).where(Task.id == task_id))
     ).scalar_one_or_none()
-    if task is None or not can_access(task.owner_id, current_user):
+    if task is None or not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     result = await db.execute(
@@ -1636,7 +1636,7 @@ async def optimize_run(
 ):
     """Start background optimization: search lower prices for the same items and generate optimized xlsx."""
     task = await db.get(Task, task_id)
-    if task is None or not can_access(task.owner_id, current_user):
+    if task is None or not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     result = await db.execute(
@@ -1691,7 +1691,7 @@ async def fix_empty_prices(
     Возвращает 202 немедленно; задача переходит в status=processing на время работы.
     """
     task = await db.get(Task, task_id)
-    if task is None or not can_access(task.owner_id, current_user):
+    if task is None or not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
@@ -1738,7 +1738,7 @@ async def update_estimate_items(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
@@ -1792,7 +1792,7 @@ async def reprice_estimate_item(
     task = task_row.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
@@ -1904,7 +1904,7 @@ async def get_task_history(
 ):
     """Return list of history entries for a task (without file_data_b64)."""
     task = await db.get(Task, task_id)
-    if task is None or not can_access(task.owner_id, current_user):
+    if task is None or not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     result = await db.execute(
@@ -1946,7 +1946,7 @@ async def revert_history(
     import base64 as _b64
 
     task = await db.get(Task, task_id)
-    if task is None or not can_access(task.owner_id, current_user):
+    if task is None or not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     entry_result = await db.execute(
@@ -2140,7 +2140,7 @@ async def soft_delete_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     task.deleted_at = datetime.now(timezone.utc)
     await db.commit()
@@ -2158,7 +2158,7 @@ async def restore_my_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена или не удалена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена или не удалена")
     task.deleted_at = None
     await db.commit()
@@ -2176,7 +2176,7 @@ async def permanent_delete_my_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
-    if not can_access(task.owner_id, current_user):
+    if not can_access(task.owner_id, current_user, task.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
     await db.delete(task)
     await db.commit()

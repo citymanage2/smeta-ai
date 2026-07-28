@@ -28,6 +28,11 @@ class Project(Base):
     is_archived: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
+    # Общий: True → виден всем сотрудникам поверх изоляции по владельцу
+    # (старые данные компании). Обычные проекты — false.
+    is_shared: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

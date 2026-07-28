@@ -158,7 +158,7 @@ async def _get_project_or_404(
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
     # Изоляция по владельцу: чужой проект для ПМ = 404 (не раскрываем существование).
-    if current_user is not None and not can_access(project.owner_id, current_user):
+    if current_user is not None and not can_access(project.owner_id, current_user, project.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
     return project
 
@@ -522,7 +522,7 @@ async def restore_project(
         select(Project).where(Project.id == project_id, Project.deleted_at.is_not(None))
     )
     project = result.scalar_one_or_none()
-    if not project or not can_access(project.owner_id, current_user):
+    if not project or not can_access(project.owner_id, current_user, project.is_shared):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден или не удалён")
     project.deleted_at = None
     await db.commit()
