@@ -57,7 +57,7 @@ e-mail/Telegram, учащение тика (детально — в research). �
 Гейт: `pytest backend/tests/test_resume_poller.py backend/tests/test_balance_pause*.py
 backend/tests/test_paused_resume_dead_end.py -q`.
 
-## Фаза 3 — Эндпоинт `GET /notifications/system` `[ ]`
+## Фаза 3 — Эндпоинт `GET /notifications/system` `[x]`
 
 - `backend/app/routers/notifications.py`, префикс `/notifications`, зависимость
   `get_current_user`.
@@ -65,8 +65,10 @@ backend/tests/test_paused_resume_dead_end.py -q`.
 - Логика: выбрать события `id > since_id` по возрастанию → для каждого подтянуть
   задачи по `payload.resumed_task_ids` с `visibility_filter(Task, user)` → если
   пользователь не менеджер и видимых задач нет, событие пропускается (AC8).
-- Ответ: `[{id, kind, created_at, resumed_count, tasks: [{id, name}]}]`,
+- Ответ: `{cursor, events: [{id, kind, created_at, resumed_count, tasks: [{id, name}]}]}`,
   где `resumed_count` — число видимых пользователю задач (менеджеру — всех).
+  Отклонение от плана: курсор вынесен в ответ отдельным полем — событие может
+  быть скрыто по правам, и без явного курсора фронт запрашивал бы его вечно.
 - Регистрация роутера в `backend/app/main.py`.
 
 Гейт: `pytest backend/tests/test_system_notifications.py -q`.
