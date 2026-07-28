@@ -13,6 +13,7 @@ const TaskStatus = lazy(() => import('./pages/TaskStatus'));
 const EstimateOptimizer = lazy(() => import('./pages/EstimateOptimizer'));
 const Admin = lazy(() => import('./pages/Admin'));
 const Projects = lazy(() => import('./pages/Projects'));
+const Archive = lazy(() => import('./pages/Archive'));
 const ProjectDetail = lazy(() => import('./pages/ProjectDetail'));
 const ProjectCardPage = lazy(() => import('./pages/ProjectCardPage'));
 const Calculator = lazy(() => import('./pages/Calculator'));
@@ -81,6 +82,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <Projects />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/archive"
+          element={
+            <ProtectedRoute>
+              <Archive />
             </ProtectedRoute>
           }
         />

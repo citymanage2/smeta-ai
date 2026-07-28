@@ -113,6 +113,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <button onClick={() => navigate('/projects')} style={headerBtnStyle}>
             Проекты
           </button>
+          <button onClick={() => navigate('/archive')} style={headerBtnStyle}>
+            Архив
+          </button>
           <button onClick={() => navigate('/calculator')} style={headerBtnStyle}>
             Калькулятор
           </button>
