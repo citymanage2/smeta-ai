@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { useAuthStore } from '../stores/auth';
 import { useGlobalTaskPoller } from '../hooks/useGlobalTaskPoller';
+import { useSystemNotifications } from '../hooks/useSystemNotifications';
 import { ROLE_LABELS } from '../api/adminUsers';
 import ProjectsSidebar from './ProjectsSidebar';
 
@@ -14,6 +15,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
   const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
   useGlobalTaskPoller();
+  useSystemNotifications();
 
   const roleLabel = (role && ROLE_LABELS[role]) || 'Сотрудник';
 

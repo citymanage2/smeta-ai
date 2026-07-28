@@ -73,7 +73,7 @@ backend/tests/test_paused_resume_dead_end.py -q`.
 
 Гейт: `pytest backend/tests/test_system_notifications.py -q`.
 
-## Фаза 4 — Фронт: хук + toast `[ ]`
+## Фаза 4 — Фронт: хук + toast `[x]`
 
 - `frontend/src/api/notifications.ts`: тип `SystemNotification` + `getSystemNotifications(sinceId)`.
 - `frontend/src/hooks/useSystemNotifications.ts`: self-scheduling поллинг раз в 30 с,
