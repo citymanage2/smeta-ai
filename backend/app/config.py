@@ -55,7 +55,12 @@ class Settings(BaseSettings):
     JOB_VISIBILITY_TIMEOUT_S: int = 900  # зависшая running-job (без heartbeat) → reclaim
     JOB_POLL_INTERVAL_S: float = 2.0     # интервал опроса очереди worker'ом
     JOB_MAX_ATTEMPTS: int = 3            # после стольких attempts job → failed
-    JOB_DRAIN_TIMEOUT_S: int = 25        # сколько ждём текущие job при SIGTERM (< грейса Timeweb)
+    # Сколько ждём текущие job при SIGTERM. Остаток грейса Timeweb (~30 с) уходит на
+    # отмену обработчиков и возврат job в очередь — см. requeue_after_shutdown.
+    JOB_DRAIN_TIMEOUT_S: int = 20
+    # Задача «в работе» без живой job дольше этого → считается осиротевшей (failed).
+    # 30 мин: заведомо больше окна между enqueue и claim даже при полной очереди.
+    TASK_ORPHAN_GRACE_S: int = 1800
     # Пул asyncpg под число слотов (env, чтобы поднять при масштабировании воркеров).
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10

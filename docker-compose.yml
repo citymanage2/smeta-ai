@@ -70,3 +70,8 @@ services:
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     # Обработка задач: без alembic, без веб-порта. SIGTERM → graceful drain.
     command: python -m app.worker
+    # Дефолт Docker — 10 с, этого не хватает: worker дренирует текущие job
+    # JOB_DRAIN_TIMEOUT_S=20 с, затем отменяет обработчики и возвращает их job в
+    # очередь, не списывая попытку. При грейсе 10 с SIGKILL прилетал бы посреди
+    # дренажа, и деплой снова сжигал бы попытки (см. plans/2026-07-29-…).
+    stop_grace_period: 30s

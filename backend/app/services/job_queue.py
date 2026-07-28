@@ -8,9 +8,13 @@ Claim-паттерн: короткая атомарная транзакция (
 
 Fairness (round-robin по владельцу): кандидат — из владельца с наименьшим числом
 running-job; тай-брейк priority DESC, created_at ASC.
+
+Связь с доменным слоем: `jobs.status` — транспорт, `tasks.status` — то, что видит
+пользователь. Терминальные переходы транспорта ОБЯЗАНЫ отражаться в домене, иначе
+задача навсегда виснет в «Обработке» (см. plans/2026-07-29-osirotevshie-zadachi-v-obrabotke.md).
 """
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Iterable, Optional
 
 import structlog
 from sqlalchemy import select, update, func
@@ -18,12 +22,53 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job
+from app.models.task import Task
 
 logger = structlog.get_logger()
+
+# Статусы задачи, при которых она считается «в работе»: только их и вправе
+# перевести в failed слой очереди. Guard защищает от гонки — завершившуюся,
+# отменённую или поставленную на паузу задачу мы не портим.
+ACTIVE_TASK_STATUSES = ("pending", "processing")
+
+# Batch-режим: задача штатно живёт БЕЗ своей job (пачка считается на серверах
+# Anthropic, досчитывает batch_poller). Единственное значение `_stage`, при
+# котором отсутствие job — норма, а не сирота.
+_BATCH_PENDING_STAGE = "batch_pending"
+
+# Тексты для пользователя, не для лога: менеджер должен понять, что делать.
+_ERR_JOB_FAILED = "Обработка прервана и не возобновилась. Запустите задачу заново."
+_ERR_MAX_ATTEMPTS = (
+    "Обработка прерывалась несколько раз подряд (обычно из-за перезапуска сервиса) "
+    "и была остановлена. Запустите задачу заново."
+)
+_ERR_ORPHANED = (
+    "Обработка прервалась и не возобновилась — задача больше не выполняется. "
+    "Запустите её заново."
+)
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _fail_linked_tasks(db: AsyncSession, task_ids: Iterable[Optional[str]], error: str) -> int:
+    """Пометить задачи failed. Guard по статусу — не трогаем уже завершённые.
+
+    Не коммитит: вызывающий сам решает границы транзакции.
+    """
+    ids = [t for t in task_ids if t]
+    if not ids:
+        return 0
+    res = await db.execute(
+        update(Task)
+        .where(Task.id.in_(ids), Task.status.in_(ACTIVE_TASK_STATUSES))
+        .values(status="failed", error_message=error[:1000])
+    )
+    n = res.rowcount or 0
+    if n:
+        logger.info("Tasks marked failed by queue layer", count=n, task_ids=ids)
+    return n
 
 
 def _is_postgres(db: AsyncSession) -> bool:
@@ -120,10 +165,20 @@ async def complete(db: AsyncSession, job_id: int) -> None:
 
 
 async def fail(db: AsyncSession, job_id: int, error: str) -> None:
-    """Терминально пометить job failed (без ретрая)."""
+    """Терминально пометить job failed (без ретрая) и уронить связанную задачу.
+
+    Без второго шага задача осталась бы в `processing` навсегда: собственный
+    except-обработчик `TaskProcessor` не выполняется, если процесс убит.
+    """
     await db.execute(
         update(Job).where(Job.id == job_id).values(status="failed", last_error=(error or "")[:1000])
     )
+    job = (await db.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if job is not None:
+        detail = f" Причина: {error}" if error else ""
+        await _fail_linked_tasks(
+            db, [(job.payload or {}).get("task_id")], _ERR_JOB_FAILED + detail
+        )
     await db.commit()
 
 
@@ -140,16 +195,37 @@ async def reclaim_stale(db: AsyncSession, timeout_s: int, max_attempts: int) -> 
     """
     cutoff = _now() - timedelta(seconds=timeout_s)
 
-    # Исчерпаны попытки → терминальный failed.
-    failed = await db.execute(
-        update(Job)
-        .where(
-            Job.status == "running",
-            Job.claimed_at < cutoff,
-            Job.attempts >= max_attempts,
+    # Исчерпаны попытки → терминальный failed. Payload нужен, чтобы уронить и
+    # связанную задачу, поэтому читаем кандидатов отдельным SELECT, а не через
+    # UPDATE..RETURNING: с ORM-enabled UPDATE состав RETURNING зависит от стратегии
+    # synchronize_session и диалекта, а отключение синхронизации оставляет в сессии
+    # протухшие объекты. Здесь важна предсказуемость на обоих диалектах.
+    stale_exhausted = (
+        await db.execute(
+            select(Job.id, Job.payload).where(
+                Job.status == "running",
+                Job.claimed_at < cutoff,
+                Job.attempts >= max_attempts,
+            )
         )
-        .values(status="failed", last_error="Превышено число попыток (reclaim)")
-    )
+    ).all()
+    n_failed = 0
+    if stale_exhausted:
+        ids = [jid for jid, _ in stale_exhausted]
+        # Guard `status='running'` сохраняет атомарность: параллельно завершённую
+        # job UPDATE не тронет. Её задача при этом уже переведена в терминальный
+        # статус самим обработчиком, поэтому guard в _fail_linked_tasks не даст
+        # испортить её и в этом узком окне.
+        res = await db.execute(
+            update(Job)
+            .where(Job.id.in_(ids), Job.status == "running")
+            .values(status="failed", last_error="Превышено число попыток (reclaim)")
+        )
+        n_failed = res.rowcount or 0
+        if n_failed:
+            await _fail_linked_tasks(
+                db, [(p or {}).get("task_id") for _, p in stale_exhausted], _ERR_MAX_ATTEMPTS
+            )
     # Ещё есть попытки → назад в очередь.
     requeued = await db.execute(
         update(Job)
@@ -161,7 +237,6 @@ async def reclaim_stale(db: AsyncSession, timeout_s: int, max_attempts: int) -> 
         .values(status="queued", claimed_by=None, claimed_at=None)
     )
 
-    n_failed = failed.rowcount or 0
     n_requeued = requeued.rowcount or 0
     count = n_failed + n_requeued
     if count:
@@ -169,3 +244,87 @@ async def reclaim_stale(db: AsyncSession, timeout_s: int, max_attempts: int) -> 
         logger.info("Reclaimed stale jobs", requeued=n_requeued, failed=n_failed)
     # count==0 → изменений нет; транзакцию закроет владелец сессии (async with).
     return count
+
+
+async def sweep_orphaned_tasks(db: AsyncSession, grace_s: int) -> int:
+    """Уронить задачи «в работе», за которыми не стоит ни одна живая job.
+
+    Второй эшелон после `fail()`/`reclaim_stale()`: ловит случаи, до которых те не
+    дотягиваются — потерянная запись job, сироты, накопленные до этого механизма.
+    Без него задача висит в «Обработке» вечно, показывая пользователю ложный
+    прогресс. Возвращает число помеченных задач.
+
+    Кого НЕ трогаем:
+    - свежие (updated_at внутри grace) — job могла ещё не быть захвачена;
+    - `_stage='batch_pending'` — batch by design живёт без job, досчитает поллер;
+    - `paused` (ждёт пополнения баланса) и терминальные — не в ACTIVE_TASK_STATUSES;
+    - удалённые (`deleted_at`).
+    """
+    cutoff = _now() - timedelta(seconds=grace_s)
+
+    candidates = (
+        await db.execute(
+            select(Task.id, Task.progress_data).where(
+                Task.status.in_(ACTIVE_TASK_STATUSES),
+                Task.updated_at < cutoff,
+                Task.deleted_at.is_(None),
+            )
+        )
+    ).all()
+    # Фильтр по progress_data — на стороне Python: JSON-предикаты диалектозависимы,
+    # а кандидатов единицы (задачи «в работе»). Тот же приём в batch_poller.
+    ids = [
+        tid
+        for tid, pdata in candidates
+        if (pdata or {}).get("_stage") != _BATCH_PENDING_STAGE
+    ]
+    if not ids:
+        return 0
+
+    live_payloads = (
+        await db.execute(select(Job.payload).where(Job.status.in_(("queued", "running"))))
+    ).scalars().all()
+    live_task_ids = {(p or {}).get("task_id") for p in live_payloads}
+
+    orphans = [tid for tid in ids if tid not in live_task_ids]
+    if not orphans:
+        return 0
+
+    n = await _fail_linked_tasks(db, orphans, _ERR_ORPHANED)
+    if n:
+        await db.commit()
+        logger.info("Swept orphaned tasks", count=n)
+    return n
+
+
+async def requeue_after_shutdown(
+    db: AsyncSession, job_ids: Iterable[int], worker_id: str
+) -> int:
+    """Вернуть в очередь недоигранные job при штатной остановке, НЕ списав попытку.
+
+    Плановый рестарт (деплой) — не сбой обработки, и не должен расходовать бюджет
+    ретраев: длинная задача иначе не переживает трёх деплоев подряд и умирает по
+    `attempts >= JOB_MAX_ATTEMPTS`. `attempts - 1` компенсирует инкремент, сделанный
+    в `claim_one`.
+
+    Guard'ы: только свои (`claimed_by == worker_id`) и только всё ещё `running` —
+    успевшую завершиться в дренаже job не воскрешаем.
+    """
+    ids = list(job_ids)
+    if not ids:
+        return 0
+    res = await db.execute(
+        update(Job)
+        .where(
+            Job.id.in_(ids),
+            Job.status == "running",
+            Job.claimed_by == worker_id,
+            Job.attempts > 0,
+        )
+        .values(status="queued", claimed_by=None, claimed_at=None, attempts=Job.attempts - 1)
+    )
+    n = res.rowcount or 0
+    if n:
+        await db.commit()
+        logger.info("Requeued jobs after shutdown", count=n, worker=worker_id)
+    return n

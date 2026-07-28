@@ -30,6 +30,11 @@ WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
 # Событие остановки: poll-loop перестаёт брать новые job.
 _shutdown = asyncio.Event()
 
+# id job, которые прямо сейчас исполняются этим процессом. Нужен на остановке:
+# недоигранные возвращаем в очередь, не списывая попытку (плановый рестарт —
+# не сбой обработки). См. plans/2026-07-29-osirotevshie-zadachi-v-obrabotke.md.
+_inflight_job_ids: set[int] = set()
+
 
 # ---------------------------------------------------------------------------
 # Реестр обработчиков: kind → async handler(payload, db)
@@ -176,9 +181,11 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
             continue
 
         async def _run_and_release(j: Job) -> None:
+            _inflight_job_ids.add(j.id)
             try:
                 await run_job(j)
             finally:
+                _inflight_job_ids.discard(j.id)
                 sem.release()
 
         task = asyncio.create_task(_run_and_release(job))
@@ -197,6 +204,18 @@ async def _reclaim_job() -> None:
         )
     if n:
         logger.info("Reclaimed stale jobs", count=n)
+
+
+async def _sweep_orphans_job() -> None:
+    """Второй эшелон: задачи «в работе», за которыми не стоит ни одна живая job.
+
+    reclaim возвращает job в очередь, но если job ушла в терминальный failed или
+    её запись потеряна — задача осталась бы в «Обработке» навсегда.
+    """
+    async with AsyncSessionLocal() as db:
+        n = await job_queue.sweep_orphaned_tasks(db, settings.TASK_ORPHAN_GRACE_S)
+    if n:
+        logger.warning("Orphaned tasks marked failed", count=n)
 
 
 async def _cleanup_price_cache() -> None:
@@ -226,6 +245,7 @@ def _build_scheduler():
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(_reclaim_job, "interval", seconds=60, max_instances=1)
+    scheduler.add_job(_sweep_orphans_job, "interval", minutes=5, max_instances=1)
     scheduler.add_job(poll_batch_tasks, "interval", seconds=60, max_instances=1)
     scheduler.add_job(resume_paused_tasks, "interval", minutes=10, max_instances=1)
     scheduler.add_job(_cleanup_price_cache, "interval", hours=24, max_instances=1)
@@ -259,18 +279,46 @@ async def main() -> None:
         scheduler.shutdown(wait=False)
         if inflight:
             # Ограниченный дренаж: ждём завершения текущих job не дольше
-            # JOB_DRAIN_TIMEOUT_S (меньше SIGKILL-грейса Timeweb). Кого не успели —
-            # процесс убьют, но их корректно вернёт reclaim_stale (P2).
+            # JOB_DRAIN_TIMEOUT_S (меньше SIGKILL-грейса Timeweb).
             try:
                 await asyncio.wait_for(
-                    asyncio.gather(*inflight, return_exceptions=True),
+                    asyncio.gather(*list(inflight), return_exceptions=True),
                     timeout=settings.JOB_DRAIN_TIMEOUT_S,
                 )
             except asyncio.TimeoutError:
-                logger.warning(
-                    "Drain timeout — оставшиеся job вернёт reclaim", remaining=len(inflight)
-                )
+                await _abort_undrained(inflight)
         logger.info("Worker stopped")
+
+
+async def _abort_undrained(inflight: set) -> None:
+    """Не успели доиграть за дренаж — вернуть job в очередь, не списав попытку.
+
+    Порядок важен: сначала ОТМЕНЯЕМ обработчики, только потом возвращаем job в
+    очередь. Иначе при деплое (старый и новый контейнеры сосуществуют) новый
+    worker забрал бы job, которую этот процесс ещё считает, — двойной прогон и
+    двойная стоимость API.
+
+    `CancelledError` — BaseException, поэтому `except Exception` в TaskProcessor
+    её не проглотит и ложного `failed` у задачи не будет: она вернётся в работу
+    вместе с job. Снимок id берём ДО отмены — `_run_and_release` чистит множество
+    в своём finally.
+    """
+    stuck_ids = list(_inflight_job_ids)
+    pending = [t for t in inflight if not t.done()]
+    logger.warning("Drain timeout — отменяем обработчики", remaining=len(pending))
+
+    for t in pending:
+        t.cancel()
+    try:
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=3.0)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        logger.warning("Не дождались отмены обработчиков", remaining=len(stuck_ids))
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await job_queue.requeue_after_shutdown(db, stuck_ids, WORKER_ID)
+    except Exception as e:  # noqa: BLE001 — БД может быть уже недоступна; job вернёт reclaim
+        logger.warning("Requeue on shutdown failed, will rely on reclaim", error=str(e))
 
 
 if __name__ == "__main__":
