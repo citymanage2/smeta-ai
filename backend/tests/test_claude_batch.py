@@ -8,7 +8,23 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 import app.services.claude_service as cs
+
+
+@pytest.fixture
+def batches(monkeypatch):
+    """Заглушка SDK-клиента: cs._get_client() → объект с .messages.batches.
+
+    Клиент создаётся лениво (_get_client, с 25.07 — обход геоблока через
+    посредника), поэтому подменяем фабрику, а не модульную переменную _client:
+    в тестах она None до первого реального вызова.
+    """
+    batches_ns = SimpleNamespace()
+    client = SimpleNamespace(messages=SimpleNamespace(batches=batches_ns))
+    monkeypatch.setattr(cs, "_get_client", lambda: client)
+    return batches_ns
 
 
 # --------------------------------------------------------------------------
@@ -21,6 +37,45 @@ def test_batch_cost_is_half_of_regular():
     assert batch < regular
     # batch ≈ regular/2 в пределах округления до 6 знаков
     assert abs(regular - batch * 2) <= Decimal("0.000002")
+
+
+# --------------------------------------------------------------------------
+# Стоимость web search — отдельная от токенов статья ($10 / 1000 поисков)
+# --------------------------------------------------------------------------
+
+def test_web_search_adds_flat_fee_on_top_of_tokens():
+    no_search = cs._calc_cost("claude-sonnet-4-6", 1000, 500, 200, 300)
+    with_search = cs._calc_cost("claude-sonnet-4-6", 1000, 500, 200, 300, web_search_requests=7)
+    assert with_search - no_search == Decimal("0.07")
+
+
+def test_web_search_fee_not_halved_by_batch():
+    """Скидка batch — на токены; на поиски её консервативно НЕ применяем."""
+    only_search = cs._calc_cost("claude-sonnet-4-6", 0, 0, 0, 0, batch=True, web_search_requests=10)
+    assert only_search == Decimal("0.1")
+
+
+def test_web_search_tool_has_max_uses_cap():
+    """Без max_uses поиск бесконтрольный — 22% счёта Anthropic на 28.07.2026."""
+    assert cs.WEB_SEARCH_TOOL["max_uses"] >= 1
+
+
+def test_extract_usage_reads_web_search_requests():
+    usage = SimpleNamespace(
+        input_tokens=10, output_tokens=20,
+        cache_read_input_tokens=30, cache_creation_input_tokens=40,
+        server_tool_use=SimpleNamespace(web_search_requests=5),
+    )
+    assert cs._extract_usage(usage) == (10, 20, 30, 40, 5)
+
+
+def test_extract_usage_without_server_tool_use():
+    """Вызов без web search: поля server_tool_use в usage нет вовсе."""
+    usage = SimpleNamespace(
+        input_tokens=10, output_tokens=20,
+        cache_read_input_tokens=0, cache_creation_input_tokens=0,
+    )
+    assert cs._extract_usage(usage) == (10, 20, 0, 0, 0)
 
 
 # --------------------------------------------------------------------------
@@ -50,14 +105,14 @@ def test_build_batch_request_shape():
 # submit — возвращает batch_id и прокидывает requests
 # --------------------------------------------------------------------------
 
-async def test_submit_claude_batch_returns_id(monkeypatch):
+async def test_submit_claude_batch_returns_id(batches):
     captured = {}
 
     async def fake_create(*, requests):
         captured["requests"] = requests
         return SimpleNamespace(id="msgbatch_abc123")
 
-    monkeypatch.setattr(cs._client.messages.batches, "create", fake_create)
+    batches.create = fake_create
 
     reqs = [cs.build_batch_request(custom_id="c1", messages=[{"role": "user", "content": "x"}])]
     batch_id = await cs.submit_claude_batch(reqs)
@@ -70,12 +125,8 @@ async def test_submit_claude_batch_returns_id(monkeypatch):
 # poll — возвращает processing_status
 # --------------------------------------------------------------------------
 
-async def test_poll_claude_batch_status(monkeypatch):
-    monkeypatch.setattr(
-        cs._client.messages.batches,
-        "retrieve",
-        AsyncMock(return_value=SimpleNamespace(processing_status="ended")),
-    )
+async def test_poll_claude_batch_status(batches):
+    batches.retrieve = AsyncMock(return_value=SimpleNamespace(processing_status="ended"))
     status = await cs.poll_claude_batch("msgbatch_abc123")
     assert status == "ended"
 
@@ -96,7 +147,7 @@ class _FakeResults:
         return _gen()
 
 
-async def test_collect_claude_batch_keys_by_custom_id(monkeypatch):
+async def test_collect_claude_batch_keys_by_custom_id(batches):
     ok = SimpleNamespace(
         custom_id="c1",
         result=SimpleNamespace(
@@ -108,6 +159,7 @@ async def test_collect_claude_batch_keys_by_custom_id(monkeypatch):
                     output_tokens=50,
                     cache_read_input_tokens=0,
                     cache_creation_input_tokens=200,
+                    server_tool_use=SimpleNamespace(web_search_requests=3),
                 ),
             ),
         ),
@@ -115,11 +167,7 @@ async def test_collect_claude_batch_keys_by_custom_id(monkeypatch):
     errored = SimpleNamespace(custom_id="c2", result=SimpleNamespace(type="errored"))
 
     # порядок перемешан: errored раньше succeeded
-    monkeypatch.setattr(
-        cs._client.messages.batches,
-        "results",
-        lambda batch_id: _FakeResults([errored, ok]),
-    )
+    batches.results = lambda batch_id: _FakeResults([errored, ok])
 
     out = await cs.collect_claude_batch("msgbatch_abc123")  # db=None → без логирования
 
@@ -128,14 +176,15 @@ async def test_collect_claude_batch_keys_by_custom_id(monkeypatch):
     assert out["c1"]["error"] is None
     assert out["c2"]["error"] == "errored"
     assert out["c2"]["text"] is None
+    assert out["c1"]["usage"]["web_search_requests"] == 3
 
 
 # --------------------------------------------------------------------------
 # cancel — зовёт SDK с batch_id
 # --------------------------------------------------------------------------
 
-async def test_cancel_claude_batch(monkeypatch):
+async def test_cancel_claude_batch(batches):
     cancel_mock = AsyncMock()
-    monkeypatch.setattr(cs._client.messages.batches, "cancel", cancel_mock)
+    batches.cancel = cancel_mock
     await cs.cancel_claude_batch("msgbatch_abc123")
     cancel_mock.assert_awaited_once_with("msgbatch_abc123")

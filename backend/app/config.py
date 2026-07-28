@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     # Только для СВОЕГО прокси: прокидывается как заголовок X-Proxy-Secret,
     # чтобы прокси не был открытым. Агрегатору не нужен — оставить пустым.
     ANTHROPIC_PROXY_SECRET: str = ""
+    # Потолок поисков web_search внутри ОДНОГО вызова Claude. Без него модель
+    # гоняет поиск сколько сочтёт нужным: за неделю 22% счёта Anthropic ушло на
+    # поиск ($35.88 из $161.06 на 28.07.2026), плюс контент страниц оседает в
+    # cache_creation-токенах. Снижать до 5 можно через env, без деплоя кода.
+    WEB_SEARCH_MAX_USES: int = 8
     OPENAI_API_KEY: str = ""
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost/smeta_ai"
     JWT_SECRET: str = "changeme-use-strong-secret-in-production"

@@ -25,6 +25,9 @@ class ApiCallLog(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cache_creation_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Число web-поисков в вызове. Тарифицируется отдельно от токенов ($10/1000)
+    # и до 28.07.2026 не учитывалось вовсе — на нём терялось 22% счёта Anthropic.
+    web_search_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=Decimal("0"))
     # Длительность синхронного API-вызова в миллисекундах (наблюдаемость).
     # NULL для batch-вызовов: пачка считается на серверах Anthropic асинхронно.

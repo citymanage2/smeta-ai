@@ -82,6 +82,10 @@ def _raise_if_insufficient_balance(e: "anthropic.APIStatusError") -> None:
             api_message=(err_msg or str(e) or "")[:300],
         ) from e
 
+# Плата за один web-поиск: $10 / 1000 запросов. В токенах НЕ отражается —
+# считается отдельной строкой счёта Anthropic (Total web search cost).
+WEB_SEARCH_COST_PER_REQUEST = 10.0 / 1000
+
 # USD per token for cost calculation
 _COST_PER_TOKEN: dict[str, dict[str, float]] = {
     "claude-sonnet-4-6": {
@@ -107,6 +111,7 @@ def _calc_cost(
     cache_read_t: int,
     cache_creation_t: int,
     batch: bool = False,
+    web_search_requests: int = 0,
 ) -> Decimal:
     rates = _COST_PER_TOKEN.get(model, _COST_PER_TOKEN["default"])
     total = (
@@ -118,6 +123,9 @@ def _calc_cost(
     # Batch API — 50% скидка на все токены.
     if batch:
         total *= 0.5
+    # Поиски тарифицируются отдельно от токенов. Скидку batch на них НЕ применяем:
+    # это консервативная оценка — лучше слегка завысить, чем снова не увидеть 22%.
+    total += web_search_requests * WEB_SEARCH_COST_PER_REQUEST
     return Decimal(str(round(total, 6)))
 
 
@@ -138,13 +146,20 @@ def _extract_result_text(content) -> str:
     return "".join(text_parts)
 
 
-def _extract_usage(usage) -> tuple[int, int, int, int]:
-    """(input, output, cache_read, cache_creation) из usage-объекта ответа."""
+def _extract_usage(usage) -> tuple[int, int, int, int, int]:
+    """(input, output, cache_read, cache_creation, web_search_requests) из usage.
+
+    web_search_requests лежит в usage.server_tool_use.web_search_requests и есть
+    только когда в вызове был web search; иначе 0.
+    """
+    server_tool_use = getattr(usage, "server_tool_use", None)
+    searches = getattr(server_tool_use, "web_search_requests", 0) or 0 if server_tool_use else 0
     return (
         getattr(usage, "input_tokens", 0) or 0,
         getattr(usage, "output_tokens", 0) or 0,
         getattr(usage, "cache_read_input_tokens", 0) or 0,
         getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        int(searches),
     )
 
 
@@ -157,18 +172,23 @@ async def _log_api_call(
     cache_creation_t: int,
     batch: bool = False,
     duration_ms: Optional[int] = None,
+    web_search_requests: int = 0,
 ) -> None:
     """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5.
 
     duration_ms — длительность самого API-вызова (None для batch: там нет
     синхронного времени ответа, пачка считается на серверах Anthropic).
+    web_search_requests — число поисков; тарифицируется отдельно от токенов.
     """
     if db is None or task_id is None:
         return
     try:
         from app.models.api_call_log import ApiCallLog
         from app.database import AsyncSessionLocal
-        cost = _calc_cost(CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t, batch=batch)
+        cost = _calc_cost(
+            CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t,
+            batch=batch, web_search_requests=web_search_requests,
+        )
         log_entry = ApiCallLog(
             task_id=task_id,
             model=CLAUDE_MODEL,
@@ -176,6 +196,7 @@ async def _log_api_call(
             output_tokens=output_t,
             cache_read_tokens=cache_read_t,
             cache_creation_tokens=cache_creation_t,
+            web_search_requests=web_search_requests,
             cost_usd=cost,
             duration_ms=duration_ms,
         )
@@ -199,6 +220,9 @@ RATE_LIMIT_MAX_WAIT = 900
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
     "name": "web_search",
+    # Потолок поисков внутри одного вызова. Без него web search — 22% счёта
+    # Anthropic (замер 28.07.2026), и он полностью невидим в api_call_log.
+    "max_uses": settings.WEB_SEARCH_MAX_USES,
 }
 
 # Single shared client with generous timeouts.
@@ -398,7 +422,9 @@ async def call_claude(
             # Extract the final text (prefer last block containing JSON).
             result = _extract_result_text(response.content)
 
-            input_t, output_t, cache_read_t, cache_creation_t = _extract_usage(response.usage)
+            input_t, output_t, cache_read_t, cache_creation_t, searches_t = _extract_usage(
+                response.usage
+            )
 
             logger.info(
                 "Claude API call successful",
@@ -406,12 +432,13 @@ async def call_claude(
                 attempt=attempt,
                 cache_read_tokens=cache_read_t,
                 cache_creation_tokens=cache_creation_t,
+                web_search_requests=searches_t,
                 duration_ms=call_duration_ms,
             )
 
             await _log_api_call(
                 task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
-                duration_ms=call_duration_ms,
+                duration_ms=call_duration_ms, web_search_requests=searches_t,
             )
 
             return result
@@ -634,7 +661,9 @@ async def collect_claude_batch(
         if rtype == "succeeded":
             msg = entry.result.message
             text = _extract_result_text(msg.content)
-            input_t, output_t, cache_read_t, cache_creation_t = _extract_usage(msg.usage)
+            input_t, output_t, cache_read_t, cache_creation_t, searches_t = _extract_usage(
+                msg.usage
+            )
             out[cid] = {
                 "text": text,
                 "error": None,
@@ -643,10 +672,12 @@ async def collect_claude_batch(
                     "output": output_t,
                     "cache_read": cache_read_t,
                     "cache_creation": cache_creation_t,
+                    "web_search_requests": searches_t,
                 },
             }
             await _log_api_call(
-                task_id, db, input_t, output_t, cache_read_t, cache_creation_t, batch=True
+                task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
+                batch=True, web_search_requests=searches_t,
             )
         else:
             # errored | canceled | expired

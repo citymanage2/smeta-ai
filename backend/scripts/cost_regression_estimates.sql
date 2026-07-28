@@ -132,20 +132,20 @@ SELECT
 FROM api_call_log;
 
 \echo ''
-\echo '=== 6. Оценка неучтённой платы за web search ($10 / 1000 поисков) ==='
--- Плата за поиск в cost_usd не входит вообще. Число поисков на вызов неизвестно —
--- даём вилку 2/4/6 поисков на вызов по вызовам смет.
-WITH c AS (
-    SELECT count(*) AS calls
-    FROM api_call_log l
-    JOIN tasks t ON t.id = l.task_id
-    WHERE t.task_type = 'ESTIMATE_FROM_LIST'
-)
-SELECT calls,
-       round(calls * 2 * 0.01, 2) AS search_usd_if_2,
-       round(calls * 4 * 0.01, 2) AS search_usd_if_4,
-       round(calls * 6 * 0.01, 2) AS search_usd_if_6
-FROM c;
+\echo '=== 6. Плата за web search ($10 / 1000 поисков) ==='
+-- До миграции 038 число поисков не писалось: у старых строк 0, и для них
+-- остаётся только вилка-оценка. У новых — факт из usage.server_tool_use.
+SELECT count(*)                                                    AS calls,
+       count(*) FILTER (WHERE l.web_search_requests > 0)           AS calls_with_known_searches,
+       sum(l.web_search_requests)                                  AS searches_known,
+       round(sum(l.web_search_requests) * 0.01, 2)                 AS search_usd_known,
+       round(avg(l.web_search_requests) FILTER (WHERE l.web_search_requests > 0), 1)
+                                                                   AS avg_searches_per_call,
+       round(count(*) FILTER (WHERE l.web_search_requests = 0) * 4 * 0.01, 2)
+                                                                   AS search_usd_estimate_for_old_rows
+FROM api_call_log l
+JOIN tasks t ON t.id = l.task_id
+WHERE t.task_type = 'ESTIMATE_FROM_LIST';
 
 \echo ''
 \echo '=== 7. Итог по месяцам и типам задач — для сверки со списанием у посредника ==='
