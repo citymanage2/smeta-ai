@@ -317,6 +317,49 @@ async def test_backfill_moves_shared_owned_to_admin_archive(db_session, monkeypa
     await db_session.commit()
 
 
+@pytest.mark.asyncio
+async def test_backfill_marks_existing_admin_archive_as_shared(db_session, monkeypatch):
+    """Данные, что прошлый backfill уже перенёс на админа и заархивировал (без
+    is_shared), догоняются: архив админа → общий. Активные админа не трогаются."""
+    from app import main as main_module
+    from app.config import settings
+    from tests.conftest import TestSessionLocal
+
+    for t in (Task, Project, User):
+        await db_session.execute(t.__table__.delete())
+    await db_session.commit()
+
+    admin = User(username="bossadmin", role="admin", is_active=True,
+                 password_hash=hash_password("pw12345"))
+    db_session.add(admin)
+    await db_session.flush()
+    archived = Task(owner_id=admin.id, user_role="admin", task_type="LIST_FROM_GRAND",
+                    status="completed", input_files=[], input_file_data=[], chat_history=[],
+                    is_archived=True, is_shared=False)
+    active = Task(owner_id=admin.id, user_role="admin", task_type="LIST_FROM_GRAND",
+                  status="completed", input_files=[], input_file_data=[], chat_history=[],
+                  is_archived=False, is_shared=False)
+    db_session.add_all([archived, active])
+    await db_session.commit()
+    arch_id, act_id = str(archived.id), str(active.id)
+
+    monkeypatch.setattr(settings, "ADMIN_USERNAME", "bossadmin")
+    monkeypatch.setattr(settings, "ADMIN_PASSWORD", "pw12345")
+    monkeypatch.setattr(main_module, "AsyncSessionLocal", TestSessionLocal)
+    await main_module._initialize_users()
+
+    arch_row = (await db_session.execute(select(Task).where(Task.id == arch_id))).scalar_one()
+    act_row = (await db_session.execute(select(Task).where(Task.id == act_id))).scalar_one()
+    await db_session.refresh(arch_row)
+    await db_session.refresh(act_row)
+    assert arch_row.is_shared is True   # архив админа → общий
+    assert act_row.is_shared is False   # активная админа — не трогаем
+
+    for t in (Task, Project, User):
+        await db_session.execute(t.__table__.delete())
+    await db_session.commit()
+
+
 # --- Вход именованного админа ---
 
 @pytest.mark.asyncio

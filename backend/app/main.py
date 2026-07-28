@@ -110,6 +110,23 @@ async def _initialize_users() -> None:
             ),
             {"aid": admin_id},
         )
+        # Догоняем данные, что прошлый backfill уже перенёс на админа и заархивировал,
+        # но без is_shared: архив админа = справочные данные компании, видны всем.
+        # Идемпотентно (guard is_shared = false). Активные данные админа не трогаем.
+        await db.execute(
+            text(
+                "UPDATE projects SET is_shared = true "
+                "WHERE owner_id = :aid AND is_archived = true AND is_shared = false"
+            ),
+            {"aid": admin_id},
+        )
+        await db.execute(
+            text(
+                "UPDATE tasks SET is_shared = true "
+                "WHERE owner_id = :aid AND is_archived = true AND is_shared = false"
+            ),
+            {"aid": admin_id},
+        )
         if res_p.rowcount or res_t.rowcount:
             logger.info(
                 "Backfilled legacy owners to admin",
