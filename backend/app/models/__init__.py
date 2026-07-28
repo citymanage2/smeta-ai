@@ -9,5 +9,6 @@ from app.models.estimate_version import EstimateVersion
 from app.models.api_call_log import ApiCallLog
 from app.models.summary_estimate import SummaryEstimate
 from app.models.job import Job
+from app.models.system_event import SystemEvent
 
-__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job"]
+__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent"]
