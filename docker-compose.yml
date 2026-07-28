@@ -9,22 +9,28 @@
 # Порядок первого деплоя: web на старте применяет миграции (alembic upgrade head
 # в CMD Dockerfile), worker миграции НЕ гонит и терпит недоступность БД до готовности
 # (poll-loop ретраит claim). Секреты задаются в панели Timeweb (env).
+# Все переменные окружения ниже — через ${VAR:-} (пустой дефолт). На Timeweb App
+# Platform реальные значения инжектятся в контейнер на рантайме из панели, а на
+# фазе build/teardown их нет — без дефолта compose сыпал предупреждениями
+# "The X variable is not set. Defaulting to a blank string" (шум, вводит в
+# заблуждение). Пустой дефолт их убирает и рантайм не меняет. Обязательность
+# секретов проверяет само приложение (pydantic settings) — упадёт с внятной ошибкой.
 services:
   web:
     build: ./backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-}
       DB_SSL_MODE: ${DB_SSL_MODE:-require}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Посредник для обхода геоблока Anthropic с РФ-IP (пусто → напрямую).
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       ANTHROPIC_PROXY_SECRET: ${ANTHROPIC_PROXY_SECRET:-}
-      COHERE_API_KEY: ${COHERE_API_KEY}
-      JWT_SECRET: ${JWT_SECRET}
-      USER_PASSWORD: ${USER_PASSWORD}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      USER_PASSWORD: ${USER_PASSWORD:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       USERS: ${USERS:-}
-      CORS_ORIGINS: ${CORS_ORIGINS}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-20}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
@@ -41,14 +47,14 @@ services:
   worker:
     build: ./backend
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-}
       DB_SSL_MODE: ${DB_SSL_MODE:-require}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # Посредник для обхода геоблока Anthropic с РФ-IP (worker гоняет ИИ-обработку).
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       ANTHROPIC_PROXY_SECRET: ${ANTHROPIC_PROXY_SECRET:-}
-      COHERE_API_KEY: ${COHERE_API_KEY}
-      JWT_SECRET: ${JWT_SECRET}
+      COHERE_API_KEY: ${COHERE_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-}
       USERS: ${USERS:-}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-20}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
