@@ -18,6 +18,7 @@ from app.services.claude_service import (
     submit_claude_batch,
     collect_claude_batch,
     InsufficientBalanceError,
+    ResponseTruncatedError,
 )
 from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
@@ -46,6 +47,11 @@ FAST_CHUNK_CONCURRENCY = _settings.FAST_CHUNK_CONCURRENCY
 # сохранять промежуточный чекпоинт claude_partial. При паузе на балансе resume
 # продолжит с последней группы — теряется максимум одна группа, а не вся смета.
 ESTIMATE_MAIN_CHECKPOINT_GROUP = 8
+# Размер чанка в проходе-доборе (пропущенные + нулевые цены). Было 5 в каждом из
+# двух отдельных проходов: мелкий чанк заново запускает полный набор web-поисков,
+# а платим мы за каждый поиск. Обрезка ответа теперь не фатальна — чанк дробится
+# пополам (ResponseTruncatedError), поэтому запас по max_tokens не критичен.
+ESTIMATE_RETRY_CHUNK = 10
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -821,6 +827,11 @@ class TaskProcessor:
             except InsufficientBalanceError:
                 # Баланс API исчерпан — ретраи не помогут; пробрасываем на паузу.
                 raise
+            except ResponseTruncatedError:
+                # Промпт не изменился → повтор снова упрётся в max_tokens.
+                # Ретрай здесь стоил бы трёх полных оплаченных вызовов; порцию
+                # данных уменьшает caller (дробит чанк).
+                raise
             except Exception as e:
                 last_error = e
                 if attempt < max_chunk_retries - 1:
@@ -865,6 +876,11 @@ class TaskProcessor:
                 raise
             except InsufficientBalanceError:
                 # Баланс API исчерпан — ретраи не помогут; пробрасываем на паузу.
+                raise
+            except ResponseTruncatedError:
+                # Промпт не изменился → повтор снова упрётся в max_tokens.
+                # Ретрай здесь стоил бы трёх полных оплаченных вызовов; порцию
+                # данных уменьшает caller (дробит чанк).
                 raise
             except Exception as e:
                 last_error = e
@@ -955,6 +971,92 @@ class TaskProcessor:
             if isinstance(r, BaseException):
                 raise r
         return results
+
+    async def _fetch_price_chunk(
+        self, chunk: list[dict], current_date: str, chunk_label: str
+    ) -> list[dict]:
+        """DB-free: отправить чанк позиций в Claude, вернуть список result-items.
+
+        НЕ обращается к self.db (безопасно под _run_chunks_parallel).
+        Ошибки чанка (кроме отмены/таймаута/баланса) поглощаются → [].
+        Используется и основным проходом сметы, и добором после batch-режима.
+        """
+        unmatched_json = json.dumps(
+            [{"id": it["_id"], "type": it["type"], "name": it["name"],
+              "unit": it["unit"], "quantity": it.get("quantity")}
+             for it in chunk],
+            ensure_ascii=False, indent=2,
+        )
+        prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
+            current_date=current_date,
+            unmatched_items_json=unmatched_json,
+        )
+        messages = [{"role": "user", "content": prompt_text}]
+        try:
+            # Non-interruptible вариант: НЕ поллит self.db (отмену ведёт общий
+            # watcher в _run_chunks_parallel). Логирование стоимости в call_claude
+            # использует независимую сессию — конкуренции по self.db нет.
+            data = await self._call_claude_json_with_retry(
+                messages,
+                system_prompt=SYSTEM_BASE,
+                use_web_search=True,
+                processing_timeout=1200.0,
+            )
+        except (TaskCancelledError, asyncio.TimeoutError):
+            raise
+        except InsufficientBalanceError:
+            # Баланс API исчерпан — не проглатываем чанк, пробрасываем на паузу.
+            raise
+        except ResponseTruncatedError:
+            # Ответ не поместился в max_tokens. Повторять тот же чанк
+            # бессмысленно и дорого — режем пополам и считаем половины.
+            if len(chunk) < 2:
+                logger.warning(
+                    "Single item response truncated, skipping",
+                    task_id=self.task_id,
+                    chunk_label=chunk_label,
+                    name=chunk[0].get("name") if chunk else None,
+                )
+                return []
+            mid = len(chunk) // 2
+            logger.warning(
+                "Chunk response truncated, splitting in half",
+                task_id=self.task_id,
+                chunk_label=chunk_label,
+                size=len(chunk),
+            )
+            left = await self._fetch_price_chunk(chunk[:mid], current_date, f"{chunk_label}a")
+            right = await self._fetch_price_chunk(chunk[mid:], current_date, f"{chunk_label}b")
+            return left + right
+        except Exception as chunk_error:
+            logger.warning(
+                "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
+                task_id=self.task_id,
+                chunk_label=chunk_label,
+                error=str(chunk_error),
+            )
+            return []
+        return data.get("items", [])
+
+    @staticmethod
+    def _ids_without_price(
+        unmatched_by_gidx: dict[int, dict], claude_results: dict[int, dict]
+    ) -> list[int]:
+        """Позиции, которые Claude пропустил или вернул с нулевой ценой.
+
+        Одна и та же проблема «цены нет» — раньше два отдельных прохода.
+        """
+        problem: list[int] = []
+        for gidx, item in unmatched_by_gidx.items():
+            cr = claude_results.get(gidx)
+            if cr is None:
+                problem.append(gidx)
+                continue
+            if item.get("type") == "Работа" and not cr.get("work_price"):
+                problem.append(gidx)
+            elif item.get("type") == "Материал" and not cr.get("material_price"):
+                problem.append(gidx)
+        return sorted(problem)
 
     async def _cache_priced_item(self, result_item: dict) -> None:
         """Сохранить цену позиции в кеш (self.db), если она валидна. Ошибки поглощает."""
@@ -1069,14 +1171,19 @@ class TaskProcessor:
         """Вызывается поллером (Phase 5), когда пачка завершена: собрать результаты,
         наполнить claude_results, сохранить pre_excel-чекпоинт и запустить step3.
 
-        MVP: одна проходка (без inline retry/null — их даёт fast-режим). Позиции,
-        которые Claude пропустил/оценил null, остаются без цены (step3 это допускает).
+        Позиции, которые пачка пропустила или вернула с нулевой ценой, добираются
+        синхронно тем же путём, что и в fast-режиме (обычно это единицы позиций —
+        второй часовой пачки ради них не нужно). Без добора смета выходила с
+        пустыми ценами, чего быть не должно.
+
         Идемпотентно: повторный вызов после рестарта повторно собирает ту же пачку.
         """
         _p = task.progress_data or {}
         batch_id = _p.get("batch_id")
         items: list[dict] = _p.get("items", [])
         matched = {int(k): v for k, v in _p.get("matched", {}).items()}
+        unmatched = {int(k): v for k, v in _p.get("unmatched", {}).items()}
+        current_date = _p.get("current_date") or _date.today().strftime("%d.%m.%Y")
 
         await self.update_progress("Batch завершён. Сбор результатов и формирование сметы...")
 
@@ -1095,6 +1202,61 @@ class TaskProcessor:
                 if item_id is not None:
                     claude_results[int(item_id)] = result_item
                     await self._cache_priced_item(result_item)
+
+        # Добор: позиции без цены после пачки. В fast-режиме это отдельный проход
+        # после основного; batch без него отдавал смету с пустыми ценами.
+        problem_ids = self._ids_without_price(unmatched, claude_results)
+        if problem_ids:
+            await self.update_progress(
+                f"Добор {len(problem_ids)} позиций без цены после пакетной обработки..."
+            )
+            problem_items = [unmatched[gidx] for gidx in problem_ids]
+            retry_chunks = [
+                problem_items[i:i + ESTIMATE_RETRY_CHUNK]
+                for i in range(0, len(problem_items), ESTIMATE_RETRY_CHUNK)
+            ]
+            total_retry = len(retry_chunks)
+            workers = [
+                (lambda c=c, k=k: self._fetch_price_chunk(
+                    c, current_date, f"batch-retry-{k + 1}/{total_retry}"
+                ))
+                for k, c in enumerate(retry_chunks)
+            ]
+            results = await self._run_chunks_parallel(
+                workers, concurrency=FAST_CHUNK_CONCURRENCY, return_exceptions=True
+            )
+            first_error: Optional[BaseException] = None
+            for chunk_result in results:
+                if isinstance(chunk_result, BaseException):
+                    if first_error is None:
+                        first_error = chunk_result
+                    continue
+                for result_item in chunk_result:
+                    item_id = result_item.get("id")
+                    if item_id is not None:
+                        claude_results[int(item_id)] = result_item
+                        await self._cache_priced_item(result_item)
+            if first_error is not None:
+                # Пачка уже оплачена — фиксируем всё собранное, чтобы повторный
+                # заход (пауза по балансу) не пересчитывал её заново.
+                await self._save_progress_data({
+                    "_stage": "pre_excel",
+                    "items": items,
+                    "matched": {str(k): v for k, v in matched.items()},
+                    "claude_results": {str(k): v for k, v in claude_results.items()},
+                })
+                if isinstance(first_error, asyncio.CancelledError):
+                    raise TaskCancelledError("Задача остановлена пользователем")
+                raise first_error
+
+            still_empty = self._ids_without_price(unmatched, claude_results)
+            if still_empty:
+                logger.warning(
+                    "Some items remain unpriced after batch retry",
+                    task_id=self.task_id,
+                    count=len(still_empty),
+                    names=[unmatched[g].get("name") for g in still_empty],
+                )
 
         # pre_excel-чекпоинт (тот же формат, что и fast-путь) — устойчивость к рестарту на step3.
         await self._save_progress_data({
@@ -2195,47 +2357,8 @@ class TaskProcessor:
         claude_results: dict[int, dict] = dict(_resume_claude_results)
 
         async def _fetch_chunk(chunk: list[dict], chunk_label: str) -> list[dict]:
-            """DB-free: отправить чанк в Claude, вернуть список result-items.
-
-            НЕ обращается к self.db (безопасно под _run_chunks_parallel).
-            Ошибки чанка (кроме отмены/таймаута/баланса) поглощаются → [].
-            """
-            unmatched_json = json.dumps(
-                [{"id": it["_id"], "type": it["type"], "name": it["name"],
-                  "unit": it["unit"], "quantity": it.get("quantity")}
-                 for it in chunk],
-                ensure_ascii=False, indent=2,
-            )
-            prompt_text = PROMPT_ESTIMATE_FROM_LIST.format(
-                current_date=current_date,
-                unmatched_items_json=unmatched_json,
-            )
-            messages = [{"role": "user", "content": prompt_text}]
-            try:
-                # Non-interruptible вариант: НЕ поллит self.db (отмену ведёт общий
-                # watcher в _run_chunks_parallel). Логирование стоимости в call_claude
-                # использует независимую сессию — конкуренции по self.db нет.
-                data = await self._call_claude_json_with_retry(
-                    messages,
-                    system_prompt=SYSTEM_BASE,
-                    use_web_search=True,
-                    processing_timeout=1200.0,
-                )
-            except (TaskCancelledError, asyncio.TimeoutError):
-                raise
-            except InsufficientBalanceError:
-                # Баланс API исчерпан — не проглатываем чанк, пробрасываем на паузу.
-                raise
-            except Exception as chunk_error:
-                err_str = str(chunk_error)
-                logger.warning(
-                    "Claude chunk failed for ESTIMATE_FROM_LIST, skipping",
-                    task_id=self.task_id,
-                    chunk_label=chunk_label,
-                    error=err_str,
-                )
-                return []
-            return data.get("items", [])
+            """Тонкая обёртка: та же оценка чанка, что и в доборе после batch."""
+            return await self._fetch_price_chunk(chunk, current_date, chunk_label)
 
         async def _apply_chunk_items(result_items: list[dict]) -> None:
             """Последовательно (self.db): заполнить claude_results и сохранить цены в кеш."""
@@ -2315,52 +2438,33 @@ class TaskProcessor:
                 await _process_chunks(group, label_prefix="", concurrency=concurrency)
                 await self._save_claude_partial(items, matched_by_gidx, claude_results)
 
-            # Retry any ids Claude skipped — in smaller batches of 5.
-            missing_ids = set(unmatched_by_gidx.keys()) - set(claude_results.keys())
-            if missing_ids:
+            # Один добор вместо двух проходов: пропущенные Claude и вернувшиеся с
+            # нулевой ценой — одна и та же проблема «цены нет». Раньше это были
+            # два отдельных прохода чанками по 5, то есть вдвое больше запросов и
+            # web-поисков; каждая позиция по-прежнему получает ровно одну
+            # дополнительную попытку.
+            problem_ids = self._ids_without_price(unmatched_by_gidx, claude_results)
+            if problem_ids:
                 await self.update_progress(
-                    f"Повторная обработка {len(missing_ids)} пропущенных позиций (батчи по 5)..."
+                    f"Повторная обработка {len(problem_ids)} позиций без цены "
+                    f"(батчи по {ESTIMATE_RETRY_CHUNK})..."
                 )
-                missing_items = [unmatched_by_gidx[gidx] for gidx in sorted(missing_ids)]
-                retry_chunks = [missing_items[i:i + 5] for i in range(0, len(missing_items), 5)]
+                problem_items = [unmatched_by_gidx[gidx] for gidx in problem_ids]
+                retry_chunks = [
+                    problem_items[i:i + ESTIMATE_RETRY_CHUNK]
+                    for i in range(0, len(problem_items), ESTIMATE_RETRY_CHUNK)
+                ]
                 await self._check_cancelled()
                 await _process_chunks(retry_chunks, label_prefix="retry-", concurrency=concurrency)
 
-            still_missing = set(unmatched_by_gidx.keys()) - set(claude_results.keys())
-            if still_missing:
+            still_without_price = self._ids_without_price(unmatched_by_gidx, claude_results)
+            if still_without_price:
                 logger.warning(
                     "Some items remain unpriced after retry",
                     task_id=self.task_id,
-                    count=len(still_missing),
-                    names=[unmatched_by_gidx[gidx].get("name") for gidx in sorted(still_missing)],
+                    count=len(still_without_price),
+                    names=[unmatched_by_gidx[g].get("name") for g in still_without_price],
                 )
-
-            # Retry items Claude returned but left with null/zero price.
-            null_price_ids = {
-                gidx for gidx, cr in claude_results.items()
-                if (unmatched_by_gidx[gidx].get("type") == "Работа" and not cr.get("work_price"))
-                or (unmatched_by_gidx[gidx].get("type") == "Материал" and not cr.get("material_price"))
-            }
-            if null_price_ids:
-                await self.update_progress(
-                    f"Повторная обработка {len(null_price_ids)} позиций с пустыми ценами..."
-                )
-                null_items = [unmatched_by_gidx[gidx] for gidx in sorted(null_price_ids)]
-                null_chunks = [null_items[i:i + 5] for i in range(0, len(null_items), 5)]
-                await self._check_cancelled()
-                await _process_chunks(null_chunks, label_prefix="null-price-", concurrency=concurrency)
-                still_null = {
-                    gidx for gidx in null_price_ids
-                    if (unmatched_by_gidx[gidx].get("type") == "Работа" and not claude_results.get(gidx, {}).get("work_price"))
-                    or (unmatched_by_gidx[gidx].get("type") == "Материал" and not claude_results.get(gidx, {}).get("material_price"))
-                }
-                if still_null:
-                    logger.warning(
-                        "Some items still have null prices after null-price retry",
-                        task_id=self.task_id,
-                        count=len(still_null),
-                        names=[unmatched_by_gidx[gidx].get("name") for gidx in sorted(still_null)],
-                    )
 
         # ── Чекпоинт: сохранить данные перед генерацией Excel ──────────────
         # Используем независимую сессию — основная сессия может быть в нестабильном состоянии
@@ -2744,6 +2848,23 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
             # пустыми ценами вместо паузы. Пробрасываем на паузу, как в основном
             # проходе сметы (_fetch_chunk).
             raise
+        except ResponseTruncatedError:
+            # Ответ не поместился — режем батч пополам вместо бессмысленного
+            # повтора того же запроса (тот же приём, что в _fetch_chunk).
+            if len(batch) < 2:
+                logger.warning(
+                    "Single item response truncated in fix_empty_prices, skipping",
+                    task_id=self.task_id, batch=label,
+                )
+                return []
+            mid = len(batch) // 2
+            logger.warning(
+                "fix_empty_prices batch truncated, splitting in half",
+                task_id=self.task_id, batch=label, size=len(batch),
+            )
+            return await _fetch_batch(batch[:mid], f"{label}a") + await _fetch_batch(
+                batch[mid:], f"{label}b"
+            )
         except Exception as e:
             logger.warning(
                 "fix_empty_prices batch failed, skipping",

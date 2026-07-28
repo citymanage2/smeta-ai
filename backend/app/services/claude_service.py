@@ -14,6 +14,19 @@ logger = structlog.get_logger()
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
 
+class ResponseTruncatedError(ValueError):
+    """Ответ упёрся в max_tokens и оборван на полуслове.
+
+    Отдельный тип, потому что повторять ТОТ ЖЕ запрос бессмысленно: промпт не
+    изменился, значит ответ снова не поместится. Раньше это был голый ValueError,
+    его ретраил _call_claude_json_with_retry — три полных вызова по 32k output
+    (~$1.44), все оплаченные и все обречённые. Caller должен уменьшить порцию
+    данных (разбить чанк), а не повторять запрос.
+
+    Наследуется от ValueError для обратной совместимости с `except ValueError`.
+    """
+
+
 class InsufficientBalanceError(RuntimeError):
     """Anthropic API отклонил запрос из-за исчерпанного баланса счёта.
 
@@ -429,7 +442,11 @@ async def call_claude(
                     response = await _get_client().messages.create(**kwargs)
             call_duration_ms = int((asyncio.get_event_loop().time() - attempt_start) * 1000)
 
-            # Detect output truncation before trying to use the response
+            input_t, output_t, cache_read_t, cache_creation_t, searches_t = _extract_usage(
+                response.usage
+            )
+
+            # Detect output truncation before trying to use the response.
             if response.stop_reason == "max_tokens":
                 logger.error(
                     "Claude response truncated: max_tokens limit reached",
@@ -437,17 +454,20 @@ async def call_claude(
                         len(b.text) for b in response.content if hasattr(b, "text")
                     ),
                     max_tokens=kwargs["max_tokens"],
+                    output_tokens=output_t,
                 )
-                raise ValueError(
+                # Оборванный ответ всё равно оплачен — логируем ДО падения,
+                # иначе эти токены не видны ни в метрике, ни в разборе трат.
+                await _log_api_call(
+                    task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
+                    duration_ms=call_duration_ms, web_search_requests=searches_t,
+                )
+                raise ResponseTruncatedError(
                     "Ответ слишком большой, разбейте выполнение на подэтапы"
                 )
 
             # Extract the final text (prefer last block containing JSON).
             result = _extract_result_text(response.content)
-
-            input_t, output_t, cache_read_t, cache_creation_t, searches_t = _extract_usage(
-                response.usage
-            )
 
             logger.info(
                 "Claude API call successful",

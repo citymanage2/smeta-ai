@@ -191,6 +191,23 @@ GROUP BY 1
 ORDER BY 1;
 
 \echo ''
+\echo '=== 9. Запас до обрезки ответа (можно ли увеличить чанк) ==='
+-- Основной проход идёт чанками по 10, значит output_tokens вызова — ответ на
+-- ~10 позиций. safe_chunk_by_peak: сколько позиций влезет в max_tokens=32000
+-- с запасом 20%, если считать по худшему наблюдавшемуся ответу.
+SELECT count(*)                                          AS calls,
+       round(avg(l.output_tokens))                       AS avg_out,
+       percentile_disc(0.95) WITHIN GROUP (ORDER BY l.output_tokens) AS p95_out,
+       max(l.output_tokens)                              AS max_out,
+       round(max(l.output_tokens) / 10.0, 1)             AS peak_out_per_item,
+       floor(32000 * 0.8 / nullif(max(l.output_tokens) / 10.0, 0)) AS safe_chunk_by_peak,
+       count(*) FILTER (WHERE l.output_tokens >= 31000)  AS calls_near_limit
+FROM api_call_log l
+JOIN tasks t ON t.id = l.task_id
+WHERE t.task_type = 'ESTIMATE_FROM_LIST'
+  AND l.output_tokens > 0;
+
+\echo ''
 \echo 'Сверка: сумму logged_usd за период сравнить с Total cost в консоли Anthropic'
 \echo '(platform.claude.com → Cost). После выката они должны почти совпасть: web search'
 \echo 'теперь входит в cost_usd. Расхождение сверх пары процентов = ещё одна'

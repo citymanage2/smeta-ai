@@ -9,6 +9,7 @@ from app.models.price import PriceWork, PriceMaterial
 from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
 from app.services.claude_service import claude_service as _claude_svc
 from app.utils.json_utils import extract_json
+from app.config import settings as _settings
 
 try:
     import numpy as np
@@ -22,7 +23,12 @@ async def call_claude(messages: list, system_prompt: str = "", use_web_search: b
 
 logger = structlog.get_logger()
 
-SIMILARITY_THRESHOLD = 0.82  # порог cosine similarity для embedding-поиска (multilingual-e5-base)
+# Порог cosine similarity для embedding-поиска (multilingual-e5-base).
+# 0.82 → 0.78 (28.07.2026): каждая позиция, найденная в локальном прайсе, не
+# уходит в Claude вообще — ни токенов, ни платных web-поисков. Обратная сторона —
+# риск подставить цену от похожей, но не той позиции, поэтому значение вынесено
+# в env: если в сметах пойдут неверные цены, поднять обратно без деплоя кода.
+SIMILARITY_THRESHOLD = _settings.PRICE_SIMILARITY_THRESHOLD
 
 # In-memory cache (price_works / price_materials)
 _works_cache: list[dict] = []

@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # поиск ($35.88 из $161.06 на 28.07.2026), плюс контент страниц оседает в
     # cache_creation-токенах. Снижать до 5 можно через env, без деплоя кода.
     WEB_SEARCH_MAX_USES: int = 8
+    # Порог cosine similarity для поиска позиции в локальном прайсе. Ниже порог →
+    # больше позиций находится без обращения к Claude (экономия токенов и платных
+    # web-поисков), но выше риск подставить цену от похожей, но не той позиции.
+    PRICE_SIMILARITY_THRESHOLD: float = 0.78
     OPENAI_API_KEY: str = ""
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost/smeta_ai"
     JWT_SECRET: str = "changeme-use-strong-secret-in-production"
