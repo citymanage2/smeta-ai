@@ -102,17 +102,18 @@ function SlotRow({ label, fileName, slot, onDownload, allowUpload, onUpload, onR
           editing ? (
             <>
               <input ref={inputRef} value={draft} onChange={e => setDraft(e.target.value)}
+                onClick={e => e.stopPropagation()}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveRename(); } if (e.key === 'Escape') setEditing(false); }}
                 style={{ border: '1px solid #93c5fd', borderRadius: 4, padding: '2px 6px', outline: 'none', fontSize: 12, flex: 1, minWidth: 0 }}
               />
-              <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={saveRename}><Check size={13} /></button>
-              <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={() => setEditing(false)}><X size={13} /></button>
+              <button style={{ ...iconBtnStyle, color: '#16a34a' }} onClick={e => { e.stopPropagation(); saveRename(); }}><Check size={13} /></button>
+              <button style={{ ...iconBtnStyle, color: '#dc2626' }} onClick={e => { e.stopPropagation(); setEditing(false); }}><X size={13} /></button>
             </>
           ) : (
             <>
               <span style={{ color: '#475569' }}>{fileName}</span>
               {onRename && slot !== 'source' && (
-                <button style={iconBtnStyle} onClick={() => { setDraft(fileName); setEditing(true); }}><Pencil size={11} /></button>
+                <button style={iconBtnStyle} onClick={e => { e.stopPropagation(); setDraft(fileName); setEditing(true); }}><Pencil size={11} /></button>
               )}
               <button onClick={e => { e.stopPropagation(); onDownload(); }}
                 style={{ padding: '2px 8px', backgroundColor: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
@@ -223,7 +224,9 @@ function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInb
 
   return (
     <div
-      style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}
+      onClick={() => navigate(`/tasks/${task.id}/status`)}
+      title="Открыть задачу"
+      style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', cursor: 'pointer' }}
       onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)')}
       onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
     >
@@ -233,7 +236,11 @@ function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInb
           <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 500, marginBottom: 3 }}>
             Без проекта · {taskLabel}
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b', marginBottom: 2 }}>
+          {/* Инлайн-переименование не должно проваливаться в переход по карточке */}
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ fontSize: 14, fontWeight: 600, color: '#1e293b', marginBottom: 2, cursor: 'default', display: 'inline-block' }}
+          >
             <InlineEditName
               value={taskDisplayName}
               onSave={name => inbox.onRenameTask(task.id, name)}
@@ -255,10 +262,7 @@ function UnassignedCard({ task, inbox }: { task: TaskBrief; inbox: UnassignedInb
           )}
         </div>
 
-        <div
-          onClick={() => navigate(`/tasks/${task.id}/status`)}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0, marginLeft: 12 }}
-        >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, marginLeft: 12 }}>
           {isEstimateType && task.estimation_status === 'estimated' && (
             <button
               onClick={e => { e.stopPropagation(); inbox.setOptimizingTaskId(task.id); }}

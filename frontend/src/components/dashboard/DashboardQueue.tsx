@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ActiveTask } from '../../api/dashboard';
 import { cancelTask } from '../../api/tasks';
 
@@ -37,6 +38,7 @@ interface Props {
 }
 
 const DashboardQueue: React.FC<Props> = ({ tasks, onCancel }) => {
+  const navigate = useNavigate();
   const [cancelling, setCancelling] = React.useState<Set<string>>(new Set());
 
   async function handleCancel(taskId: string) {
@@ -112,10 +114,15 @@ const DashboardQueue: React.FC<Props> = ({ tasks, onCancel }) => {
                 return (
                   <tr
                     key={task.id}
+                    onClick={() => navigate(`/tasks/${task.id}/status`)}
+                    title="Открыть задачу"
                     style={{
                       backgroundColor: bg,
                       borderBottom: i < tasks.length - 1 ? '1px solid #e2e8f0' : undefined,
+                      cursor: 'pointer',
                     }}
+                    onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#eff6ff')}
+                    onMouseLeave={e => (e.currentTarget.style.backgroundColor = bg)}
                   >
                     <td style={tdStyle}>{TASK_TYPE_LABELS[task.task_type] ?? task.task_type}</td>
                     <td style={{ ...tdStyle, color: '#64748b' }}>{task.project_name ?? '—'}</td>
@@ -128,7 +135,7 @@ const DashboardQueue: React.FC<Props> = ({ tasks, onCancel }) => {
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right' }}>
                       <button
-                        onClick={() => handleCancel(task.id)}
+                        onClick={e => { e.stopPropagation(); handleCancel(task.id); }}
                         disabled={cancelling.has(task.id)}
                         style={{
                           fontSize: 12,
