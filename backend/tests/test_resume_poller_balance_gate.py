@@ -11,6 +11,7 @@
 План: plans/2026-07-28-balance-restored-notification.md, Фаза 2.
 """
 import sys
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy import delete, select
@@ -205,6 +206,58 @@ async def test_batch_task_included_in_event(db_session):
 # ---------------------------------------------------------------------------
 # AC6 — захватывать нечего: события нет
 # ---------------------------------------------------------------------------
+
+async def test_repeated_restore_deduped_within_window(db_session):
+    """Остаток «в копейки»: ping (единицы токенов) проходит, рабочий запрос — нет.
+    Без дедупликации пользователь получал бы «баланс пополнен» каждые 10 минут."""
+    await _cleanup(db_session)
+    first = await _seed(db_session, progress_data={"chunks_done": 1})
+    await db_session.commit()
+    try:
+        await rp.resume_paused_tasks(
+            session_factory=_same_session_factory(db_session), pinger=_ping(True)
+        )
+        # Задача снова упала по балансу и вернулась в paused — имитируем.
+        await db_session.refresh(first)
+        first.status = "paused"
+        await db_session.commit()
+
+        await rp.resume_paused_tasks(
+            session_factory=_same_session_factory(db_session), pinger=_ping(True)
+        )
+
+        events = (await db_session.execute(select(SystemEvent))).scalars().all()
+        assert len(events) == 1, "второе событие в пределах окна — дубль"
+        # Возобновлению дедупликация не мешает: задача снова в работе.
+        await db_session.refresh(first)
+        assert first.status == "pending"
+    finally:
+        await _cleanup(db_session)
+
+
+async def test_restore_after_window_records_new_event(db_session):
+    """Настоящее пополнение спустя время — событие должно прийти снова."""
+    await _cleanup(db_session)
+    old = SystemEvent(
+        kind=KIND_BALANCE_RESTORED,
+        payload={"resumed_task_ids": ["old"]},
+        created_at=datetime.now(timezone.utc)
+        - timedelta(minutes=rp.DEDUPE_WINDOW_MINUTES + 1),
+    )
+    db_session.add(old)
+    task = await _seed(db_session, progress_data={"chunks_done": 1})
+    await db_session.commit()
+    try:
+        await rp.resume_paused_tasks(
+            session_factory=_same_session_factory(db_session), pinger=_ping(True)
+        )
+
+        events = (await db_session.execute(select(SystemEvent))).scalars().all()
+        assert len(events) == 2
+        assert events[-1].payload == {"resumed_task_ids": [task.id]}
+    finally:
+        await _cleanup(db_session)
+
 
 async def test_no_event_when_nothing_claimed(db_session):
     """Параллельный тик уже перехватил задачу: _claim вернёт False → событие о

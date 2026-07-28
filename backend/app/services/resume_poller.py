@@ -44,6 +44,9 @@ logger = structlog.get_logger()
 # текста «следующая проверка через N минут».
 POLL_INTERVAL_MINUTES = 10
 
+# Окно подавления повторных событий «баланс пополнен» (см. _record_balance_restored).
+DEDUPE_WINDOW_MINUTES = 30
+
 # Прод-сервер живёт в UTC, а пользователи — в Москве. Время в тексте показываем
 # московское, иначе «проверка в 07:12» читается как трёхчасовое опоздание.
 _MSK = timezone(timedelta(hours=3))
@@ -175,8 +178,32 @@ async def _record_balance_restored(session_factory, task_ids: list[str]) -> None
     """Зафиксировать переход «денег нет → деньги есть» как событие для фронта.
 
     Пишется только когда реально что-то возобновлено: событие без задач — шум.
+
+    Дедупликация по времени нужна из-за остатка «в копейки»: `api_ping` тратит
+    единицы токенов и проходит, а рабочий запрос со сметой — нет. Тогда каждый
+    тик выглядел бы как новое пополнение, и пользователь получал бы тост
+    «баланс пополнен» каждые 10 минут. Настоящее пополнение случается раз в
+    недели, поэтому окно в 30 минут ничего полезного не съедает.
     """
     async with session_factory() as db:
+        last_at = (
+            await db.execute(
+                select(SystemEvent.created_at)
+                .where(SystemEvent.kind == KIND_BALANCE_RESTORED)
+                .order_by(SystemEvent.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if last_at is not None:
+            # SQLite отдаёт naive datetime — приводим к UTC, иначе сравнение падает.
+            if last_at.tzinfo is None:
+                last_at = last_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - last_at < timedelta(minutes=DEDUPE_WINDOW_MINUTES):
+                logger.info(
+                    "Balance restored event skipped — duplicate within window",
+                    task_ids=task_ids,
+                )
+                return
         db.add(
             SystemEvent(
                 kind=KIND_BALANCE_RESTORED,
