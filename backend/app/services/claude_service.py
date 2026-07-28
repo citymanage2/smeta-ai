@@ -23,6 +23,46 @@ class InsufficientBalanceError(RuntimeError):
     совместимости с существующими `except RuntimeError`.
     """
 
+
+# Маркеры «баланс исчерпан» в тексте/коде ошибки. Anthropic шлёт "credit
+# balance"; но запросы могут идти через агрегатор/прокси (settings base_url),
+# который отдаёт свою формулировку/код — поэтому список шире. Держим его
+# КОНСЕРВАТИВНЫМ: ложное срабатывание => задача уходит в paused и поллер
+# ретраит её каждые 10 мин (вместо честного failed), поэтому сюда попадают
+# только однозначно балансовые сигналы, без общих слов вроде "quota"/"payment".
+_BALANCE_ERROR_MARKERS: tuple[str, ...] = (
+    "credit balance",
+    "insufficient balance",
+    "insufficient funds",
+    "insufficient_quota",
+    "balance is too low",
+    "out of credit",
+    "недостаточно средств",
+    "недостаточно баланса",
+)
+
+
+def _is_insufficient_balance(status_code: Optional[int], *texts: str) -> bool:
+    """True, если ошибка означает исчерпанный баланс. 402 Payment Required —
+    однозначный billing-статус; иначе — по маркерам в тексте/коде ошибки."""
+    if status_code == 402:
+        return True
+    haystack = " ".join(t for t in texts if t).lower()
+    return any(marker in haystack for marker in _BALANCE_ERROR_MARKERS)
+
+
+def _raise_if_insufficient_balance(e: "anthropic.APIStatusError") -> None:
+    """Если APIStatusError — про исчерпанный баланс, поднять InsufficientBalanceError.
+    Иначе ничего не делает (вызывающий код сам решает, что с исходной ошибкой)."""
+    body = getattr(e, "body", None) or {}
+    err = body.get("error", {}) if isinstance(body, dict) else {}
+    err_msg = err.get("message", "") if isinstance(err, dict) else ""
+    err_code = (err.get("code") or err.get("type") or "") if isinstance(err, dict) else ""
+    if _is_insufficient_balance(getattr(e, "status_code", None), err_msg, str(err_code), str(e)):
+        raise InsufficientBalanceError(
+            "Баланс API Anthropic меньше 0. Обратитесь к администратору сервиса"
+        ) from e
+
 # USD per token for cost calculation
 _COST_PER_TOKEN: dict[str, dict[str, float]] = {
     "claude-sonnet-4-6": {
@@ -426,12 +466,9 @@ async def call_claude(
                     response_body=getattr(e, "response", None) and e.response.text,
                     exc_info=True,
                 )
-                body = getattr(e, "body", None) or {}
-                err_msg = body.get("error", {}).get("message", "") if isinstance(body, dict) else ""
-                if "credit balance" in err_msg.lower() or "credit balance" in str(e).lower():
-                    raise InsufficientBalanceError(
-                        "Баланс API Anthropic меньше 0. Обратитесь к администратору сервиса"
-                    ) from e
+                # Билинг (исчерпанный баланс) → типизированная ошибка для paused;
+                # распознаётся расширенно (402 + маркеры), в т.ч. через прокси.
+                _raise_if_insufficient_balance(e)
                 raise
 
         except Exception as e:
@@ -479,9 +516,17 @@ def build_batch_request(
 
 
 async def submit_claude_batch(requests: list[dict]) -> str:
-    """Отправить пачку запросов. Возвращает batch_id (msgbatch_...)."""
+    """Отправить пачку запросов. Возвращает batch_id (msgbatch_...).
+
+    При исчерпанном балансе поднимает InsufficientBalanceError (не голый
+    APIStatusError) — чтобы batch-задача ушла в paused и авто-возобновилась
+    после пополнения, а не упала в failed."""
     async with _anthropic_semaphore:
-        batch = await _get_client().messages.batches.create(requests=requests)
+        try:
+            batch = await _get_client().messages.batches.create(requests=requests)
+        except anthropic.APIStatusError as e:
+            _raise_if_insufficient_balance(e)
+            raise
     logger.info("Claude batch submitted", batch_id=batch.id, count=len(requests))
     return batch.id
 

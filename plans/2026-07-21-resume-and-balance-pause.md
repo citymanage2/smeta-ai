@@ -213,6 +213,29 @@
   `ProjectDetail.test.tsx`/`TaskStatus.test.tsx` (мок `notificationSound`).
   Гейты: tsc 0, vitest **41 passed, 0 errors, exit 0**.
 - [ ] **Фаза 6 — Интеграция, гейты, ревью, ручная проверка сценариев.**
+- [x] **Фаза 7 (харденинг) — два пробела авто-возобновления по балансу.**
+  Ветка `feature/balance-pause-hardening`.
+  1. **Распознавание billing было только по подстроке `"credit balance"`.**
+     Запросы могут идти через агрегатор/прокси (`settings` base_url) с иной
+     формулировкой/кодом → billing-ошибка не опознавалась, задача уходила в
+     `failed`, а не `paused`. Введены в `claude_service.py`:
+     `_BALANCE_ERROR_MARKERS` (консервативный список: credit balance /
+     insufficient balance|funds|_quota / balance is too low / out of credit /
+     недостаточно средств|баланса), `_is_insufficient_balance(status, *texts)`
+     (+ статус **402 Payment Required**), `_raise_if_insufficient_balance(e)`.
+     Хелпер переиспользован в `call_claude` (заменил inline-проверку).
+  2. **Batch-режим не уводил billing в паузу.** (а) `submit_claude_batch`
+     оборачивает `batches.create` → `_raise_if_insufficient_balance` (billing →
+     `InsufficientBalanceError` → `process()` уводит в `paused`, а не `failed`).
+     (б) `_submit_estimate_batch` сохраняет resumable-чекпоинт `claude_partial`
+     **ДО** отправки — иначе paused-задачу не подхватил бы `resume_poller`
+     (`batch_pending` не в `RESUMABLE_STAGES`, а до submit его ещё нет).
+  Тесты: `tests/test_balance_pause_hardening.py` (15). Гейты: py_compile OK,
+  ruff (изменённые файлы) чист, 15/15 новых зелёные, регрессий в зонах
+  billing/batch нет (6 падений `_client`-фрагильности — предсуществующие,
+  подтверждено stash-прогоном на базе). **Не сделано (по договорённости):**
+  billing при poll/collect batch не мапится (сбор результатов не тарифицируется
+  — код ради кода).
 
 Фазы 1 и 2 независимы (можно параллельно). Фазы 3→4→5 последовательны
 (4 зависит от статуса `paused` из 3; 5 — от бэкенда 3–4).
