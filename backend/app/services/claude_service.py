@@ -21,7 +21,23 @@ class InsufficientBalanceError(RuntimeError):
     задачу на паузу (`paused`) и автоматически возобновить её после пополнения,
     вместо перевода в `failed`. Наследуется от RuntimeError для обратной
     совместимости с существующими `except RuntimeError`.
+
+    `status_code`/`api_message` — сырой ответ API. Нужны, чтобы показать в UI
+    ФАКТИЧЕСКУЮ причину: на сервере запросы идут через агрегатор
+    (`ANTHROPIC_BASE_URL`), и «баланс исчерпан» может означать баланс агрегатора,
+    а не Anthropic. Без этих деталей диагноз возможен только по логам worker'а.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        api_message: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.api_message = api_message
 
 
 # Маркеры «баланс исчерпан» в тексте/коде ошибки. Anthropic шлёт "credit
@@ -58,9 +74,12 @@ def _raise_if_insufficient_balance(e: "anthropic.APIStatusError") -> None:
     err = body.get("error", {}) if isinstance(body, dict) else {}
     err_msg = err.get("message", "") if isinstance(err, dict) else ""
     err_code = (err.get("code") or err.get("type") or "") if isinstance(err, dict) else ""
-    if _is_insufficient_balance(getattr(e, "status_code", None), err_msg, str(err_code), str(e)):
+    status_code = getattr(e, "status_code", None)
+    if _is_insufficient_balance(status_code, err_msg, str(err_code), str(e)):
         raise InsufficientBalanceError(
-            "Баланс API Anthropic меньше 0. Обратитесь к администратору сервиса"
+            "Баланс API Anthropic меньше 0. Обратитесь к администратору сервиса",
+            status_code=status_code,
+            api_message=(err_msg or str(e) or "")[:300],
         ) from e
 
 # USD per token for cost calculation
@@ -513,6 +532,60 @@ def build_batch_request(
         max_tokens=max_tokens,
     )
     return Request(custom_id=custom_id, params=MessageCreateParamsNonStreaming(**params))
+
+
+async def api_ping() -> dict:
+    """Пробный минимальный вызов API (max_tokens=1, без web search) — «есть ли
+    деньги и доступ прямо сейчас».
+
+    У Anthropic нет API проверки баланса, поэтому единственный честный способ —
+    сделать запрос. Стоимость пренебрежимо мала (единицы токенов). Возвращает
+    диагностический словарь БЕЗ секретов: куда идут запросы (base_url), заданы ли
+    ключ/секрет прокси, и сырой ответ при ошибке.
+    """
+    info: dict = {
+        "base_url": settings.ANTHROPIC_BASE_URL or "https://api.anthropic.com (напрямую)",
+        "via_proxy": bool(settings.ANTHROPIC_BASE_URL),
+        "api_key_set": bool(settings.ANTHROPIC_API_KEY),
+        "proxy_secret_set": bool(settings.ANTHROPIC_PROXY_SECRET),
+        "model": CLAUDE_MODEL,
+    }
+    try:
+        async with _anthropic_semaphore:
+            await _get_client().messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+            )
+        return {**info, "ok": True, "status_code": 200, "error": None, "is_balance_error": False}
+    except anthropic.APIStatusError as e:
+        body = getattr(e, "body", None) or {}
+        err = body.get("error", {}) if isinstance(body, dict) else {}
+        err_msg = err.get("message", "") if isinstance(err, dict) else ""
+        err_code = (err.get("code") or err.get("type") or "") if isinstance(err, dict) else ""
+        status_code = getattr(e, "status_code", None)
+        is_balance = _is_insufficient_balance(status_code, err_msg, str(err_code), str(e))
+        logger.warning(
+            "API ping failed", status_code=status_code, error=err_msg or str(e), is_balance=is_balance
+        )
+        return {
+            **info,
+            "ok": False,
+            "status_code": status_code,
+            "error": (err_msg or str(e) or "")[:500],
+            "error_code": str(err_code) or None,
+            "is_balance_error": is_balance,
+        }
+    except Exception as e:
+        logger.warning("API ping failed (non-status error)", error=str(e) or repr(e))
+        return {
+            **info,
+            "ok": False,
+            "status_code": None,
+            "error": (str(e) or repr(e))[:500],
+            "error_code": type(e).__name__,
+            "is_balance_error": False,
+        }
 
 
 async def submit_claude_batch(requests: list[dict]) -> str:

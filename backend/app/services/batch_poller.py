@@ -19,7 +19,7 @@ from app.services.claude_service import (
     cancel_claude_batch,
     InsufficientBalanceError,
 )
-from app.services.task_processor import TaskProcessor
+from app.services.task_processor import TaskProcessor, _balance_error_detail
 
 logger = structlog.get_logger()
 
@@ -82,17 +82,23 @@ async def _process_one(task_id: str, db) -> None:
             await processor._auto_fill_estimate_slot()
             await processor.update_status("completed")
             logger.info("Batch task completed", task_id=task_id, batch_id=batch_id)
-        except InsufficientBalanceError:
+        except InsufficientBalanceError as balance_error:
             # Баланс кончился на сборке пачки — не failed, а пауза: чекпоинт
             # batch_pending сохранён, resume_poller вернёт задачу в processing и
             # поллер доберёт те же (уже оплаченные) результаты.
-            logger.warning("Batch task paused — API balance exhausted", task_id=task_id)
+            logger.warning(
+                "Batch task paused — API balance exhausted",
+                task_id=task_id,
+                status_code=getattr(balance_error, "status_code", None),
+                api_message=getattr(balance_error, "api_message", None),
+            )
             await processor.update_status(
                 "paused",
                 error="Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.",
             )
             await processor.update_progress(
                 "⏸ На паузе: баланс API исчерпан. Возобновление произойдёт автоматически после пополнения."
+                + _balance_error_detail(balance_error)
             )
         except Exception as e:
             logger.error("Batch resume failed", task_id=task_id, error=str(e))

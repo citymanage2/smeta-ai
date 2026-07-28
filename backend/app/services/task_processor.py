@@ -51,6 +51,23 @@ _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 logger = structlog.get_logger()
 
+
+def _balance_error_detail(err: Exception) -> str:
+    """Хвост для сообщения о паузе с сырым ответом API (или пустая строка).
+
+    Нужен, потому что текст паузы фиксированный («баланс Anthropic исчерпан»), а
+    на сервере запросы идут через агрегатор (ANTHROPIC_BASE_URL) — без ответа API
+    непонятно, чей счёт пуст и не путаем ли мы билинг с другой 4xx-ошибкой.
+    """
+    status_code = getattr(err, "status_code", None)
+    api_message = (getattr(err, "api_message", None) or "").strip()
+    if not status_code and not api_message:
+        return ""
+    parts = [str(status_code) if status_code else "—"]
+    if api_message:
+        parts.append(api_message[:200])
+    return f" Ответ API: {' '.join(parts)}"
+
 # ---------------------------------------------------------------------------
 # System prompt — базовый для всех типов задач
 # ---------------------------------------------------------------------------
@@ -1131,11 +1148,16 @@ class TaskProcessor:
 
         except TaskCancelledError:
             logger.info("Task was cancelled by user", task_id=self.task_id)
-        except InsufficientBalanceError:
+        except InsufficientBalanceError as balance_error:
             # Баланс API исчерпан — не failed, а пауза. Чекпоинт (progress_data)
             # к этому моменту уже сохранён отдельными сессиями и переживает
             # rollback; планировщик возобновит задачу после пополнения счёта.
-            logger.warning("Task paused — Anthropic API balance exhausted", task_id=self.task_id)
+            logger.warning(
+                "Task paused — Anthropic API balance exhausted",
+                task_id=self.task_id,
+                status_code=getattr(balance_error, "status_code", None),
+                api_message=getattr(balance_error, "api_message", None),
+            )
             try:
                 await self.db.rollback()
             except Exception:
@@ -1144,7 +1166,13 @@ class TaskProcessor:
                 "paused",
                 error="Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.",
             )
-            await self.update_progress("⏸ На паузе: баланс API исчерпан. Возобновление произойдёт автоматически после пополнения.")
+            # Сырой ответ API — в шаг прогресса: на сервере запросы идут через
+            # агрегатор, и без этой строки нельзя понять, чей счёт пуст (диагноз
+            # иначе только по логам worker'а).
+            await self.update_progress(
+                "⏸ На паузе: баланс API исчерпан. Возобновление произойдёт автоматически после пополнения."
+                + _balance_error_detail(balance_error)
+            )
         except Exception as e:
             logger.error("Task processing failed", task_id=self.task_id, error=str(e))
             try:

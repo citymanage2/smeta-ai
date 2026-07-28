@@ -1174,3 +1174,85 @@ async def queue_health(
         verdict=verdict,
         hint=hint,
     )
+
+
+# ---------------------------------------------------------------------------
+# Диагностика: доступен ли AI-API прямо сейчас (баланс/ключ/прокси)
+# ---------------------------------------------------------------------------
+
+
+class ApiHealthResponse(BaseModel):
+    checked_at: datetime
+    ok: bool
+    status_code: Optional[int] = None
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+    is_balance_error: bool = False
+    base_url: str
+    via_proxy: bool
+    api_key_set: bool
+    proxy_secret_set: bool
+    model: str
+    paused_tasks: int
+    verdict: str  # ok | no_balance | auth | unavailable | misconfigured
+    hint: str
+
+
+@router.get("/api-health", response_model=ApiHealthResponse)
+async def api_health(
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Пробный минимальный вызов AI-API — «пополнение дошло или нет».
+
+    У Anthropic нет API проверки баланса, поэтому проверяем запросом (max_tokens=1,
+    стоимость пренебрежимо мала). Отвечает на вопрос, ради которого иначе надо
+    ждать 10 минут до следующего тика resume_poller: деньги есть или нет, и если
+    нет — что именно ответил API. Важно: на сервере запросы могут идти через
+    агрегатор (`base_url`), и «баланс исчерпан» тогда относится к его счёту, а не
+    к Anthropic.
+    """
+    from app.services.claude_service import api_ping
+
+    ping = await api_ping()
+    paused_count = (
+        await db.execute(select(func.count(Task.id)).where(Task.status == "paused"))
+    ).scalar_one() or 0
+
+    if ping["ok"]:
+        verdict = "ok"
+        hint = (
+            f"API отвечает. Задач на паузе: {paused_count} — "
+            "они возобновятся автоматически в течение 10 минут (resume_poller) "
+            "или сразу по кнопке «Продолжить сейчас»."
+        )
+    elif ping["is_balance_error"]:
+        verdict = "no_balance"
+        where = "агрегатора (base_url задан)" if ping["via_proxy"] else "Anthropic"
+        hint = (
+            f"Баланс {where} всё ещё исчерпан — пополнение не дошло или пополнен "
+            f"не тот счёт. Ответ API: {ping.get('status_code')} {ping.get('error') or ''}"
+        )
+    elif not ping["api_key_set"]:
+        verdict = "misconfigured"
+        hint = "ANTHROPIC_API_KEY не задан в env приложения."
+    elif ping["status_code"] in (401, 403):
+        verdict = "auth"
+        hint = (
+            "API отклонил ключ (401/403): неверный/отозванный ключ либо не принят "
+            f"X-Proxy-Secret. Ответ: {ping.get('error') or ''}"
+        )
+    else:
+        verdict = "unavailable"
+        hint = f"API недоступен: {ping.get('status_code')} {ping.get('error') or ''}"
+
+    return ApiHealthResponse(
+        checked_at=datetime.now(timezone.utc),
+        paused_tasks=paused_count,
+        verdict=verdict,
+        hint=hint,
+        **{k: ping.get(k) for k in (
+            "ok", "status_code", "error", "error_code", "is_balance_error",
+            "base_url", "via_proxy", "api_key_set", "proxy_secret_set", "model",
+        )},
+    )
