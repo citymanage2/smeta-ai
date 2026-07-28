@@ -2813,7 +2813,12 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
     total_empty = len(empty_indices)
     fixed_count = 0
 
-    batches = [empty_indices[i:i + 5] for i in range(0, len(empty_indices), 5)]
+    # Тот же размер, что и в доборе сметы: мелкий батч заново запускает полный
+    # набор платных web-поисков. Обрезка ответа не страшна — батч дробится пополам.
+    batches = [
+        empty_indices[i:i + ESTIMATE_RETRY_CHUNK]
+        for i in range(0, len(empty_indices), ESTIMATE_RETRY_CHUNK)
+    ]
 
     async def _fetch_batch(batch: list[int], label: str) -> list[dict]:
         """DB-free: отправить батч пустых цен в Claude, вернуть result-items ([] при ошибке)."""

@@ -212,10 +212,14 @@ async def test_fix_empty_prices_saves_paid_batches_before_balance_pause():
     Найденные цены должны попасть в progress_data ДО падения — иначе перезапуск
     задачи снова увидит их пустыми и оплатит те же позиции второй раз.
     """
-    # 6 позиций → два батча (по 5): первый успешный, второй падает.
+    # 12 позиций → два батча (ESTIMATE_RETRY_CHUNK=10 + 2): первый успешный,
+    # второй падает по балансу.
+    from app.services.task_processor import ESTIMATE_RETRY_CHUNK
+
+    size = ESTIMATE_RETRY_CHUNK
     items = [
         {"type": "Работа", "name": f"Работа {i}", "unit": "м3", "quantity": 1}
-        for i in range(6)
+        for i in range(size + 2)
     ]
     p, task = _proc_with_task(items)
 
@@ -224,7 +228,7 @@ async def test_fix_empty_prices_saves_paid_batches_before_balance_pause():
     async def fake_claude(messages, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {"items": [{"id": i, "work_price": 100 + i} for i in range(5)]}
+            return {"items": [{"id": i, "work_price": 100 + i} for i in range(size)]}
         raise InsufficientBalanceError("Баланс API Anthropic меньше 0")
 
     p._call_claude_json_with_retry = fake_claude  # type: ignore[assignment]
@@ -233,7 +237,10 @@ async def test_fix_empty_prices_saves_paid_batches_before_balance_pause():
         await p.fix_empty_prices()
 
     saved_items = task.progress_data["items"]
-    assert [it.get("work_price") for it in saved_items[:5]] == [100, 101, 102, 103, 104]
-    assert not saved_items[5].get("work_price")  # шестая осталась пустой — её батч упал
+    assert [it.get("work_price") for it in saved_items[:size]] == [
+        100 + i for i in range(size)
+    ]
+    # Позиции из упавшего батча остались пустыми — их пересчитает resume.
+    assert not saved_items[size].get("work_price")
     task_commit = p.db.commit
     assert task_commit.await_count >= 1, "цены не зафиксированы в БД перед падением"
