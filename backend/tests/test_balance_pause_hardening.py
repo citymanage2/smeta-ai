@@ -184,3 +184,56 @@ async def test_submit_estimate_batch_checkpoints_before_submit(monkeypatch):
     # Resumable-чекпоинт сохранён ДО упавшей отправки; batch_pending — нет.
     assert any(s.get("_stage") == "claude_partial" for s in saved), saved
     assert not any(s.get("_stage") == "batch_pending" for s in saved), saved
+
+
+# ---------------------------------------------------------------------------
+# fix_empty_prices — оплаченные батчи не теряются при исчерпании баланса
+# ---------------------------------------------------------------------------
+
+def _proc_with_task(items: list[dict]) -> tuple[TaskProcessor, MagicMock]:
+    """Процессор с замоканной БД: db.execute(...).scalar_one_or_none() → task."""
+    task = MagicMock()
+    task.progress_data = {"items": items}
+    task.processing_mode = "fast"
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = task
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+    db.commit = AsyncMock()
+    p = TaskProcessor("tid-fix-empty", db=db)
+    p.update_progress = AsyncMock()  # type: ignore[assignment]
+    p._check_cancelled = AsyncMock()  # type: ignore[assignment]
+    return p, task
+
+
+async def test_fix_empty_prices_saves_paid_batches_before_balance_pause():
+    """Первый батч оплачен и вернул цены, второй упал по балансу.
+
+    Найденные цены должны попасть в progress_data ДО падения — иначе перезапуск
+    задачи снова увидит их пустыми и оплатит те же позиции второй раз.
+    """
+    # 6 позиций → два батча (по 5): первый успешный, второй падает.
+    items = [
+        {"type": "Работа", "name": f"Работа {i}", "unit": "м3", "quantity": 1}
+        for i in range(6)
+    ]
+    p, task = _proc_with_task(items)
+
+    calls = {"n": 0}
+
+    async def fake_claude(messages, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"items": [{"id": i, "work_price": 100 + i} for i in range(5)]}
+        raise InsufficientBalanceError("Баланс API Anthropic меньше 0")
+
+    p._call_claude_json_with_retry = fake_claude  # type: ignore[assignment]
+
+    with pytest.raises(InsufficientBalanceError):
+        await p.fix_empty_prices()
+
+    saved_items = task.progress_data["items"]
+    assert [it.get("work_price") for it in saved_items[:5]] == [100, 101, 102, 103, 104]
+    assert not saved_items[5].get("work_price")  # шестая осталась пустой — её батч упал
+    task_commit = p.db.commit
+    assert task_commit.await_count >= 1, "цены не зафиксированы в БД перед падением"

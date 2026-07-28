@@ -93,3 +93,55 @@ async def test_real_exception_propagates():
 
     with pytest.raises(RuntimeError, match="Баланс"):
         await p._run_chunks_parallel([ok(), boom()], concurrency=4)
+
+
+# --------------------------------------------------------------------------
+# return_exceptions=True — ответы успешных чанков не теряются вместе с упавшим.
+# Они уже оплачены Anthropic: без этого resume оплачивал бы их повторно.
+# --------------------------------------------------------------------------
+
+async def test_return_exceptions_keeps_successful_results():
+    p = _proc()
+
+    def ok(v):
+        async def _w():
+            return v
+        return _w
+
+    def boom():
+        async def _w():
+            raise RuntimeError("Баланс API Anthropic меньше 0")
+        return _w
+
+    results = await p._run_chunks_parallel(
+        [ok("a"), boom(), ok("b")], concurrency=4, return_exceptions=True
+    )
+
+    assert results[0] == "a"
+    assert isinstance(results[1], RuntimeError)
+    assert results[2] == "b"
+
+
+async def test_return_exceptions_reports_cancellation_in_place():
+    """Отмена приходит как CancelledError в результатах, а не как raise:
+    caller сам решает, что успел сохранить, и уже потом падает."""
+    p = _proc()
+    p._check_cancelled = AsyncMock(side_effect=TaskCancelledError("stop"))
+
+    def fast():
+        async def _w():
+            return "done"
+        return _w
+
+    def slow():
+        async def _w():
+            await asyncio.sleep(5.0)
+            return "never"
+        return _w
+
+    results = await p._run_chunks_parallel(
+        [fast(), slow()], concurrency=4, cancel_check_interval=0.02, return_exceptions=True
+    )
+
+    assert results[0] == "done"
+    assert isinstance(results[1], asyncio.CancelledError)

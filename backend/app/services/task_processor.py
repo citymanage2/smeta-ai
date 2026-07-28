@@ -887,8 +887,14 @@ class TaskProcessor:
         workers: list,
         concurrency: int = FAST_CHUNK_CONCURRENCY,
         cancel_check_interval: float = 10.0,
+        return_exceptions: bool = False,
     ) -> list:
         """Выполнить db-free воркеры параллельно под Semaphore, вернуть результаты по порядку.
+
+        return_exceptions=True — не поднимать исключение воркера, а вернуть его на
+        месте результата (включая CancelledError при отмене задачи). Нужно там, где
+        ответы уже оплачены: caller обязан применить успешные и сохранить чекпоинт,
+        и только потом падать — иначе resume оплатит их второй раз.
 
         Каждый worker — zero-arg async callable, который НЕ обращается к self.db
         (иначе конкурентный доступ к AsyncSession сломает сессию). Отмена задачи
@@ -934,6 +940,11 @@ class TaskProcessor:
                 await watcher
             except (asyncio.CancelledError, Exception):
                 pass
+
+        if return_exceptions:
+            # Отмена приходит сюда как CancelledError в результатах: флаг ставится
+            # только когда есть незавершённые таски, и они тут же отменяются.
+            return results
 
         if cancelled["flag"]:
             raise TaskCancelledError("Задача остановлена пользователем")
@@ -2236,15 +2247,43 @@ class TaskProcessor:
 
         async def _process_chunks(chunk_list: list[list[dict]], label_prefix: str, concurrency: int) -> None:
             """fast → параллельно (Semaphore) с общим cancel-watcher; иначе последовательно.
-            Fetch (Claude) параллельно, применение результатов (self.db) — барьером после."""
+            Fetch (Claude) параллельно, применение результатов (self.db) — барьером после.
+
+            Упавший чанк (баланс/таймаут/отмена) НЕ отменяет остальные: их ответы уже
+            оплачены Anthropic, поэтому применяем их и сохраняем чекпоинт, и только
+            потом падаем. Иначе пауза по балансу обнуляла до ESTIMATE_MAIN_CHECKPOINT_GROUP
+            оплаченных чанков, и после пополнения они оплачивались повторно.
+            """
             total = len(chunk_list)
             workers = [
                 (lambda c=c, k=k: _fetch_chunk(c, f"{label_prefix}{k + 1}/{total}"))
                 for k, c in enumerate(chunk_list)
             ]
-            results = await self._run_chunks_parallel(workers, concurrency=concurrency)
-            for items in results:
-                await _apply_chunk_items(items)
+            results = await self._run_chunks_parallel(
+                workers, concurrency=concurrency, return_exceptions=True
+            )
+            first_error: Optional[BaseException] = None
+            applied = 0
+            for chunk_result in results:
+                if isinstance(chunk_result, BaseException):
+                    if first_error is None:
+                        first_error = chunk_result
+                    continue
+                await _apply_chunk_items(chunk_result)
+                applied += 1
+            if first_error is not None:
+                if applied:
+                    await self._save_claude_partial(items, matched_by_gidx, claude_results)
+                    logger.info(
+                        "Saved partial results before chunk failure",
+                        task_id=self.task_id,
+                        applied_chunks=applied,
+                        failed_chunks=len(results) - applied,
+                        error=str(first_error),
+                    )
+                if isinstance(first_error, asyncio.CancelledError):
+                    raise TaskCancelledError("Задача остановлена пользователем")
+                raise first_error
 
         if unmatched_by_gidx:
             unmatched_list = list(unmatched_by_gidx.values())
@@ -2699,6 +2738,12 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
             )
         except (TaskCancelledError, asyncio.TimeoutError):
             raise
+        except InsufficientBalanceError:
+            # Баланс исчерпан — ретраи не помогут. Раньше эта ошибка попадала в
+            # общий except ниже, батч молча терялся и задача завершалась с
+            # пустыми ценами вместо паузы. Пробрасываем на паузу, как в основном
+            # проходе сметы (_fetch_chunk).
+            raise
         except Exception as e:
             logger.warning(
                 "fix_empty_prices batch failed, skipping",
@@ -2717,11 +2762,18 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         (lambda b=b, k=k: _fetch_batch(b, f"{k + 1}/{len(batches)}"))
         for k, b in enumerate(batches)
     ]
-    all_results = await self._run_chunks_parallel(workers, concurrency=concurrency)
+    all_results = await self._run_chunks_parallel(
+        workers, concurrency=concurrency, return_exceptions=True
+    )
 
     # Применяем результаты последовательно (мутация items / fixed_count).
     empty_set = set(empty_indices)
+    first_error: Optional[BaseException] = None
     for result_items in all_results:
+        if isinstance(result_items, BaseException):
+            if first_error is None:
+                first_error = result_items
+            continue
         for result_item in result_items:
             raw_id = result_item.get("id")
             try:
@@ -2739,6 +2791,25 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
             elif orig.get("type") == "Материал" and mp:
                 items[orig_idx] = {**orig, "material_price": mp, "sources": result_item.get("sources", orig.get("sources", "")), "notes": result_item.get("notes", orig.get("notes", ""))}
                 fixed_count += 1
+
+    if first_error is not None:
+        # Успевшие батчи уже оплачены Anthropic — фиксируем найденные цены до
+        # падения, иначе перезапуск после паузы по балансу отправит те же
+        # позиции в Claude заново (они снова окажутся «пустыми»).
+        if fixed_count:
+            from sqlalchemy.orm.attributes import flag_modified
+            task.progress_data = {**(task.progress_data or {}), "items": items}
+            flag_modified(task, "progress_data")
+            await self.db.commit()
+            logger.info(
+                "Saved fixed prices before batch failure",
+                task_id=self.task_id,
+                fixed=fixed_count,
+                error=str(first_error),
+            )
+        if isinstance(first_error, asyncio.CancelledError):
+            raise TaskCancelledError("Задача остановлена пользователем")
+        raise first_error
 
     await self.update_progress(
         f"Исправлено {fixed_count} из {total_empty} пустых цен. Пересчёт сметы..."
