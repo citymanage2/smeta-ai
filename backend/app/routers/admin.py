@@ -1,6 +1,6 @@
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
@@ -11,7 +11,9 @@ from sqlalchemy import select, delete, update, func
 import openpyxl
 import structlog
 
+from app.config import settings
 from app.database import get_db
+from app.models.job import Job
 from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.services import storage_service
@@ -1048,3 +1050,127 @@ async def upload_prices(
 
     logger.info("Combined prices uploaded", works=len(works_data), materials=len(materials_data))
     return PriceUploadResponse(works_loaded=len(works_data), materials_loaded=len(materials_data))
+
+
+# ---------------------------------------------------------------------------
+# Queue health — диагностика durable-очереди jobs
+# ---------------------------------------------------------------------------
+
+# queued-job не должна ждать дольше этого при живом свободном worker'е; дольше —
+# признак, что очередь не разбирается (verdict "stalled").
+QUEUE_STALL_THRESHOLD_S = 120
+
+
+class QueueCounts(BaseModel):
+    queued: int = 0
+    running: int = 0
+    done: int = 0
+    failed: int = 0
+
+
+class QueuedInfo(BaseModel):
+    count: int
+    oldest_age_s: Optional[float]
+
+
+class RunningInfo(BaseModel):
+    count: int
+    oldest_claimed_age_s: Optional[float]
+    stale_count: int
+
+
+class QueueHealthResponse(BaseModel):
+    checked_at: datetime
+    counts: QueueCounts
+    queued: QueuedInfo
+    running: RunningInfo
+    visibility_timeout_s: int
+    verdict: str  # idle | ok | busy | stalled
+    hint: str
+
+
+def _age_s(dt, now: datetime) -> Optional[float]:
+    """Возраст в секундах; naive/строковые даты (SQLite) трактуем как UTC. None → None."""
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - dt).total_seconds())
+
+
+@router.get("/queue-health", response_model=QueueHealthResponse)
+async def queue_health(
+    db: AsyncSession = Depends(get_db),
+    admin: dict = Depends(get_admin_user),
+):
+    """Состояние durable-очереди `jobs` для быстрой диагностики «задача виснет в
+    Ожидании» без SQL по проду. verdict:
+    - idle    — очередь пуста, ничего не считается;
+    - ok      — очередь движется штатно (свежие queued либо идут running);
+    - busy    — есть бэклог, но worker жив (свежие running) — легитимно;
+    - stalled — есть старые queued и НЕТ живых running → worker не разбирает очередь.
+    """
+    now = datetime.now(timezone.utc)
+    vis = settings.JOB_VISIBILITY_TIMEOUT_S
+
+    # 1) Счётчики по статусам + возраст самой старой в каждом статусе.
+    rows = (
+        await db.execute(
+            select(Job.status, func.count(Job.id), func.min(Job.created_at)).group_by(Job.status)
+        )
+    ).all()
+    counts = QueueCounts()
+    oldest_created: dict[str, object] = {}
+    for status_val, cnt, oldest in rows:
+        if hasattr(counts, status_val):
+            setattr(counts, status_val, cnt)
+        oldest_created[status_val] = oldest
+
+    # 2) running: самый старый claimed_at + число протухших (кандидаты на reclaim).
+    stale_cutoff = now - timedelta(seconds=vis)
+    running_oldest_claim = (
+        await db.execute(select(func.min(Job.claimed_at)).where(Job.status == "running"))
+    ).scalar_one_or_none()
+    stale_count = (
+        await db.execute(
+            select(func.count(Job.id)).where(Job.status == "running", Job.claimed_at < stale_cutoff)
+        )
+    ).scalar_one() or 0
+
+    oldest_queued_age = _age_s(oldest_created.get("queued"), now)
+    running_info = RunningInfo(
+        count=counts.running,
+        oldest_claimed_age_s=_age_s(running_oldest_claim, now),
+        stale_count=stale_count,
+    )
+    live_running = counts.running - stale_count
+
+    if counts.queued == 0 and counts.running == 0:
+        verdict, hint = "idle", "Очередь пуста — задач в работе нет."
+    elif (
+        counts.queued > 0
+        and oldest_queued_age is not None
+        and oldest_queued_age > QUEUE_STALL_THRESHOLD_S
+        and live_running == 0
+    ):
+        verdict = "stalled"
+        hint = (
+            "Очередь не разбирается: есть queued-job, но нет живых running. "
+            "Проверьте контейнер worker и его логи (подключение к БД / SSL)."
+        )
+    elif counts.queued > 0 and live_running > 0:
+        verdict, hint = "busy", "Есть бэклог, но worker жив — задачи считаются."
+    else:
+        verdict, hint = "ok", "Очередь движется штатно."
+
+    return QueueHealthResponse(
+        checked_at=now,
+        counts=counts,
+        queued=QueuedInfo(count=counts.queued, oldest_age_s=oldest_queued_age),
+        running=running_info,
+        visibility_timeout_s=vis,
+        verdict=verdict,
+        hint=hint,
+    )
