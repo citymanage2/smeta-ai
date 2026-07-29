@@ -28,6 +28,7 @@ from app.services.embedding_service import (
     EmbeddingUnavailableError,
 )
 from app.utils.auth import get_current_user
+from app.utils.permissions import get_manager_user
 
 logger = structlog.get_logger()
 
@@ -213,7 +214,7 @@ async def list_catalog(
 async def create_work(
     body: CreateWorkBody,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_manager_user),
 ):
     prices = body.prices or {}
     positive = [v for v in prices.values() if v and v > 0]
@@ -245,7 +246,7 @@ async def create_work(
 async def create_material(
     body: CreateMaterialBody,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_manager_user),
 ):
     embedding = await _generate_embedding_safe(body.name)
 
@@ -273,7 +274,7 @@ async def update_work(
     work_id: int,
     body: UpdateWorkBody,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_manager_user),
 ):
     result = await db.execute(select(PriceWork).where(PriceWork.id == work_id))
     work = result.scalar_one_or_none()
@@ -310,7 +311,7 @@ async def update_material(
     material_id: int,
     body: UpdateMaterialBody,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_manager_user),
 ):
     result = await db.execute(select(PriceMaterial).where(PriceMaterial.id == material_id))
     material = result.scalar_one_or_none()
@@ -344,7 +345,7 @@ async def update_material(
 async def delete_work(
     work_id: int,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_manager_user),
 ):
     result = await db.execute(select(PriceWork).where(PriceWork.id == work_id))
     work = result.scalar_one_or_none()
@@ -363,7 +364,7 @@ async def delete_work(
 async def delete_material(
     material_id: int,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(get_current_user),
+    _user=Depends(get_manager_user),
 ):
     result = await db.execute(select(PriceMaterial).where(PriceMaterial.id == material_id))
     material = result.scalar_one_or_none()

@@ -926,7 +926,7 @@ function ImportButton({ onDone }: ImportButtonProps) {
 
 export default function PriceCatalog() {
   const navigate = useNavigate();
-  const { isAdmin } = useAuthStore();
+  const { isAdmin, isManager } = useAuthStore();
   const [tab, setTab] = useState<Tab>('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -1131,11 +1131,21 @@ export default function PriceCatalog() {
   // Table rendering
   // ---------------------------------------------------------------------------
 
+  // Каталог — общий корпоративный справочник: по нему считаются сметы всех
+  // пользователей. Менять его вправе только руководитель или админ (на бэкенде
+  // это get_manager_user). Рядовому исполнителю кнопки не показываем — иначе он
+  // нажмёт и получит 403 без объяснения.
   const actionsTd = (item: CatalogItem) => (
     <td style={{ ...s.td, whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
-      <TooltipBtn label="Редактировать" icon="✎" onClick={() => setEditItem(item)} />
-      {' '}
-      <TooltipBtn label="Удалить" icon="✕" onClick={() => setDeleteItem(item)} danger />
+      {isManager ? (
+        <>
+          <TooltipBtn label="Редактировать" icon="✎" onClick={() => setEditItem(item)} />
+          {' '}
+          <TooltipBtn label="Удалить" icon="✕" onClick={() => setDeleteItem(item)} danger />
+        </>
+      ) : (
+        <span style={{ color: '#94a3b8', fontSize: 12 }}>только просмотр</span>
+      )}
     </td>
   );
 
@@ -1258,12 +1268,14 @@ export default function PriceCatalog() {
                 <button style={s.btn} onClick={() => downloadTemplate('works')}>Шаблон работ</button>
                 <button style={s.btn} onClick={() => downloadTemplate('materials')}>Шаблон материалов</button>
               </div>
-              <button
-                style={{ ...s.btn, ...s.btnPrimary }}
-                onClick={() => setShowAdd(true)}
-              >
-                + Добавить позицию
-              </button>
+              {isManager && (
+                <button
+                  style={{ ...s.btn, ...s.btnPrimary }}
+                  onClick={() => setShowAdd(true)}
+                >
+                  + Добавить позицию
+                </button>
+              )}
             </div>
           )}
         </div>

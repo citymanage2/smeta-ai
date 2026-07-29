@@ -5,6 +5,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill
 
 from app.constants import TASK_TYPE_LABELS, ESTIMATION_STATUS_LABELS
+from app.utils.price_coercion import coerce_price, coerce_qty
 
 _HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -164,9 +165,13 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
     idx = 0
     for item in items:
         idx += 1
-        qty = item.get("quantity") or 0
-        work_price = item.get("work_price")
-        mat_price = item.get("material_price")
+        # Цены приходят из ответа ИИ и могут быть строкой, отрицательными или
+        # мусором. Раньше строка роняла round() — и задача становилась
+        # неизлечимой, потому что возобновление читало тот же чекпоинт и падало
+        # снова. Здесь последний рубеж: непригодная цена = «цены нет».
+        qty = coerce_qty(item.get("quantity"))
+        work_price = coerce_price(item.get("work_price"))
+        mat_price = coerce_price(item.get("material_price"))
         work_cost = round(qty * work_price, 2) if work_price is not None and qty else None
         mat_cost = round(qty * mat_price, 2) if mat_price is not None and qty else None
 
@@ -183,7 +188,9 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
             idx,
             item.get("name", ""),
             item.get("unit", ""),
-            item.get("quantity"),
+            # Приведённый объём, а не сырой: строка «3» попала бы в числовую
+            # колонку текстом, и Excel не сложил бы её в сумме.
+            qty if qty else None,
             work_price,
             work_cost,
             mat_price,

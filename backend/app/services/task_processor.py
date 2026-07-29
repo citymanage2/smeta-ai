@@ -26,6 +26,7 @@ from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
+from app.utils.price_coercion import coerce_price
 from app.utils.pdf_text_extractor import chunk_project_pdf
 from app.utils.pdf_ocr_extractor import (
     chunk_pdf_pages,
@@ -1170,9 +1171,12 @@ class TaskProcessor:
             if cr is None:
                 problem.append(gidx)
                 continue
-            if item.get("type") == "Работа" and not cr.get("work_price"):
+            # coerce_price, а не `not ...`: строка «мусор» и отрицательная цена
+            # тоже truthy, то есть раньше считались готовыми и уезжали в смету
+            # вместо того, чтобы попасть в добор и получить вторую попытку.
+            if item.get("type") == "Работа" and coerce_price(cr.get("work_price")) is None:
                 problem.append(gidx)
-            elif item.get("type") == "Материал" and not cr.get("material_price"):
+            elif item.get("type") == "Материал" and coerce_price(cr.get("material_price")) is None:
                 problem.append(gidx)
         return sorted(problem)
 
@@ -1183,18 +1187,22 @@ class TaskProcessor:
         _item_unit = result_item.get("unit")
         _item_sources = result_item.get("sources")
         try:
+            # coerce_price вместо float(...): непригодное значение раньше роняло
+            # float() и уходило в except ниже как «ошибка кеша», хотя это просто
+            # отсутствие цены. В кеш должны попадать только пригодные цены —
+            # иначе мусор от ИИ переиспользуется в следующих сметах.
             if _item_type_str == "Работа":
-                _item_price = result_item.get("work_price")
-                if _item_price is not None and float(_item_price) > 0:
+                _item_price = coerce_price(result_item.get("work_price"))
+                if _item_price is not None:
                     await _price_svc.save_to_cache(
-                        self.db, "work", _item_name, _item_unit, float(_item_price), _item_sources
+                        self.db, "work", _item_name, _item_unit, _item_price, _item_sources
                     )
                     logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
             elif _item_type_str == "Материал":
-                _item_price = result_item.get("material_price")
-                if _item_price is not None and float(_item_price) > 0:
+                _item_price = coerce_price(result_item.get("material_price"))
+                if _item_price is not None:
                     await _price_svc.save_to_cache(
-                        self.db, "material", _item_name, _item_unit, float(_item_price), _item_sources
+                        self.db, "material", _item_name, _item_unit, _item_price, _item_sources
                     )
                     logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
         except Exception as _cache_err:
@@ -2692,16 +2700,29 @@ class TaskProcessor:
                 continue
             cr = claude_results.get(gidx)
             if cr:
+                # Цены от ИИ приводим здесь, а не только при выводе: иначе
+                # непригодное значение уезжает в чекпоинт pre_excel, и
+                # возобновление читает его снова. Отбракованная цена = позиция
+                # без цены, что видно человеку и правится руками.
+                _wp = coerce_price(cr.get("work_price"))
+                _mp = coerce_price(cr.get("material_price"))
+                _ai_notes = cr.get("sources", "") or cr.get("notes", "")
+                if cr.get("work_price") is not None and _wp is None:
+                    _ai_notes = (_ai_notes + "; " if _ai_notes else "") + \
+                        f"ИИ вернул непригодную цену работ ({cr.get('work_price')!r}) — отброшена"
+                if cr.get("material_price") is not None and _mp is None:
+                    _ai_notes = (_ai_notes + "; " if _ai_notes else "") + \
+                        f"ИИ вернул непригодную цену материала ({cr.get('material_price')!r}) — отброшена"
                 enriched = {
                     "type": item.get("type", ""),
                     "name": str(item.get("name", "")).strip(),
                     "unit": cr.get("unit") or item.get("unit", ""),
                     "quantity": item.get("quantity"),
-                    "work_price": cr.get("work_price"),
-                    "material_price": cr.get("material_price"),
+                    "work_price": _wp,
+                    "material_price": _mp,
                     "price_list_name": "Интернет",
                     "sources": "",
-                    "notes": cr.get("sources", "") or cr.get("notes", ""),
+                    "notes": _ai_notes,
                 }
             else:
                 enriched = {

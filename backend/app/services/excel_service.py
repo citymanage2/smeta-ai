@@ -5,6 +5,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import structlog
 from app.config import settings
+from app.utils.price_coercion import coerce_price, coerce_qty
 
 logger = structlog.get_logger()
 
@@ -383,9 +384,9 @@ def generate_smeta_from_project(
 
     for i, item in enumerate(smeta_items, start=1):
         row = i + 1
-        qty = item.get("quantity") or 0
-        wp = item.get("work_price") or 0
-        mp = item.get("material_price") or 0
+        qty = coerce_qty(item.get("quantity"))
+        wp = coerce_price(item.get("work_price")) or 0
+        mp = coerce_price(item.get("material_price")) or 0
         work_total = qty * wp
         mat_total = qty * mp
         subtotal = work_total + mat_total
@@ -523,9 +524,9 @@ def generate_smeta_from_tz_project(
 
     for i, item in enumerate(smeta_items, start=1):
         row = i + 1
-        qty = item.get("quantity") or 0
-        wp = item.get("work_price") or 0
-        mp = item.get("material_price") or 0
+        qty = coerce_qty(item.get("quantity"))
+        wp = coerce_price(item.get("work_price")) or 0
+        mp = coerce_price(item.get("material_price")) or 0
         work_total = qty * wp
         mat_total = qty * mp
         subtotal = work_total + mat_total
@@ -690,9 +691,9 @@ def generate_smeta(items: list) -> bytes:
 
     for i, item in enumerate(items, start=1):
         row = i + 1
-        qty = item.get("quantity") or 0
-        wp = item.get("work_price") or 0
-        mp = item.get("material_price") or 0
+        qty = coerce_qty(item.get("quantity"))
+        wp = coerce_price(item.get("work_price")) or 0
+        mp = coerce_price(item.get("material_price")) or 0
 
         ws.cell(row=row, column=1, value=i)
         ws.cell(row=row, column=2, value=item.get("type", ""))
@@ -761,8 +762,8 @@ def generate_smeta(items: list) -> bytes:
 
     for i, item in enumerate(works, start=1):
         row = i + 1
-        qty = item.get("quantity") or 0
-        price = item.get("work_price") or 0
+        qty = coerce_qty(item.get("quantity"))
+        price = coerce_price(item.get("work_price")) or 0
         ws_w.cell(row=row, column=1, value=i)
         ws_w.cell(row=row, column=2, value=item.get("name", ""))
         ws_w.cell(row=row, column=3, value=item.get("unit", ""))
@@ -802,8 +803,8 @@ def generate_smeta(items: list) -> bytes:
 
     for i, item in enumerate(materials, start=1):
         row = i + 1
-        qty = item.get("quantity") or 0
-        price = item.get("material_price") or 0
+        qty = coerce_qty(item.get("quantity"))
+        price = coerce_price(item.get("material_price")) or 0
         ws_m.cell(row=row, column=1, value=i)
         ws_m.cell(row=row, column=2, value=item.get("name", ""))
         ws_m.cell(row=row, column=3, value=item.get("unit", ""))
@@ -892,9 +893,9 @@ def generate_smeta_detailed(items: list) -> bytes:
 
         for i, item in enumerate(rows, start=1):
             r = i + 2
-            qty = item.get("quantity") or 0
-            wp = item.get("work_price") or 0
-            mp = item.get("mat_price") or 0
+            qty = coerce_qty(item.get("quantity"))
+            wp = coerce_price(item.get("work_price")) or 0
+            mp = coerce_price(item.get("mat_price")) or 0
             usn = item.get("usn", False)
 
             wp_ex, wp_vat, wp_inc = _vat_triple(wp, usn)
@@ -974,8 +975,8 @@ def generate_smeta_detailed(items: list) -> bytes:
 
         for i, item in enumerate(works, start=1):
             r = i + 2
-            qty = item.get("quantity") or 0
-            wp = item.get("work_price") or 0
+            qty = coerce_qty(item.get("quantity"))
+            wp = coerce_price(item.get("work_price")) or 0
             usn = item.get("usn", False)
             wp_ex, wp_vat, wp_inc = _vat_triple(wp, usn)
             wt_ex = (wp_ex or 0) * qty or None
@@ -1043,8 +1044,8 @@ def generate_smeta_detailed(items: list) -> bytes:
 
         for i, item in enumerate(materials, start=1):
             r = i + 2
-            qty = item.get("quantity") or 0
-            mp = item.get("mat_price") or 0
+            qty = coerce_qty(item.get("quantity"))
+            mp = coerce_price(item.get("mat_price")) or 0
             usn = item.get("usn", False)
             mp_ex, mp_vat, mp_inc = _vat_triple(mp, usn)
             mt_ex = (mp_ex or 0) * qty or None
@@ -1215,10 +1216,18 @@ _VAT_RATE = 0.22
 
 
 def _row_cost_dict(row: dict) -> float:
-    qty = row.get("qty") or 0
-    pw = row.get("price_work") or 0
-    pm = row.get("price_material") or 0
-    return qty * (pw + pm)
+    """Стоимость строки, округлённая до копеек.
+
+    Округление именно здесь, а не только при выводе: Excel показывает 2 знака, но
+    складывает полные значения, поэтому «сумма показанных строк» расходилась с
+    «показанным итогом». Проверено: три строки по 33.4665 → пользователь видит
+    33.47 трижды (100.41), а итог печатался 100.40. На тендере такая копейка —
+    повод для придирки.
+    """
+    qty = coerce_qty(row.get("qty"))
+    pw = coerce_price(row.get("price_work")) or 0
+    pm = coerce_price(row.get("price_material")) or 0
+    return round(qty * (pw + pm), 2)
 
 
 def _safe_cell(value):

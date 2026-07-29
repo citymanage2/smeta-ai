@@ -60,6 +60,10 @@ _cache_materials_index_map: list[int] = []
 # Lock for atomic cache replacement — prevents readers from seeing partially replaced globals
 _cache_lock = asyncio.Lock()
 
+# Живые ссылки на фоновые задачи генерации эмбеддингов. Без них задача, созданная
+# через asyncio.create_task, может быть уничтожена сборщиком мусора до завершения.
+_background_tasks: set[asyncio.Task] = set()
+
 _CACHE_TTL_DAYS = 30
 
 
@@ -788,9 +792,18 @@ async def _generate_and_save_embedding(
                 await db.commit()
                 logger.info("Cache embedding saved", id=record_id, type=item_type)
 
-        # Reload in-memory cache so embedding is available for future searches
-        async with AsyncSessionLocal() as db:
-            await load_cache(db)
+        # ВАЖНО: полной перезагрузки кеша здесь быть не должно.
+        # Раньше стоял load_cache(db) — 4 полных SELECT без лимита по прайсам и
+        # кешам плюс пересборка numpy-матриц эмбеддингов. Вызывается это на
+        # КАЖДУЮ закешированную позицию, то есть смета на 458 позиций давала до
+        # 458 полных перезагрузок прайса. Это была заметная часть «часов
+        # обработки» и постоянная нагрузка на БД.
+        #
+        # Терять при этом нечего: сама запись уже добавлена в in-memory кеш
+        # точечно (см. save_to_cache), поэтому поиск по точному совпадению имени
+        # находит её сразу. Вектор нужен только семантическому поиску, и он
+        # подхватится при следующей штатной загрузке кеша (старт процесса или
+        # изменение прайса администратором).
     except Exception as e:
         logger.error("Cache embedding generation failed", id=record_id, error=str(e))
 
@@ -876,8 +889,14 @@ async def save_to_cache(
                     {"id": record_id, "name": name, "unit": unit, "price": price, "sources": sources, "updated_at": now}
                 )
 
-    # Generate embedding asynchronously — does not block the caller
-    asyncio.create_task(_generate_and_save_embedding(record_id, name, item_type))
+    # Generate embedding asynchronously — does not block the caller.
+    # Ссылку держим в модульном множестве: задача без ссылки может быть собрана
+    # сборщиком мусора на середине (документированное поведение CPython), и тогда
+    # вектор для позиции не сохранится, а она навсегда останется вне
+    # семантического поиска. discard в callback'е не даёт множеству расти.
+    _bg_task = asyncio.create_task(_generate_and_save_embedding(record_id, name, item_type))
+    _background_tasks.add(_bg_task)
+    _bg_task.add_done_callback(_background_tasks.discard)
 
 
 async def find_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
