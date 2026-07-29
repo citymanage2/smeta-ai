@@ -726,7 +726,7 @@ async def batch_embedding_match_cache_works(names: list[str]) -> "list[Optional[
             cache_idx = _cache_works_index_map[bidx]
             matched_name = _cache_works_cache[cache_idx]["name"] if _cache_works_cache else "?"
             if bscore >= SIMILARITY_THRESHOLD:
-                logger.info("Cache emb work HIT", query=names[i], matched=matched_name, score=bscore)
+                logger.debug("Cache emb work HIT", query=names[i], matched=matched_name, score=bscore)
                 results.append(_cache_works_cache[cache_idx])
             else:
                 logger.debug("Cache emb work MISS", query=names[i], best=matched_name, score=bscore)
@@ -767,7 +767,7 @@ async def batch_embedding_match_cache_materials(names: list[str]) -> "list[Optio
             cache_idx = _cache_materials_index_map[bidx]
             matched_name = _cache_materials_cache[cache_idx]["name"] if _cache_materials_cache else "?"
             if bscore >= SIMILARITY_THRESHOLD:
-                logger.info("Cache emb material HIT", query=names[i], matched=matched_name, score=bscore)
+                logger.debug("Cache emb material HIT", query=names[i], matched=matched_name, score=bscore)
                 results.append(_cache_materials_cache[cache_idx])
             else:
                 logger.debug("Cache emb material MISS", query=names[i], best=matched_name, score=bscore)

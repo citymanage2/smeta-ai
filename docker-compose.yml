@@ -18,6 +18,10 @@
 services:
   web:
     build: ./backend
+    # Упавший контейнер должен вставать сам. 29–30.07.2026 worker умер и не
+    # поднялся: очередь стояла 9 часов, задачи висели в «Ожидании», а вернуть
+    # сервис к жизни можно было только через панель.
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-}
       DB_SSL_MODE: ${DB_SSL_MODE:-require}
@@ -46,6 +50,7 @@ services:
 
   worker:
     build: ./backend
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-}
       DB_SSL_MODE: ${DB_SSL_MODE:-require}
