@@ -70,6 +70,23 @@ class Task(Base):
     )
     cost: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
     name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Границы фактической ОБРАБОТКИ (не жизни задачи): created_at→updated_at
+    # включает ожидание в очереди, которое бывает многочасовым, и для прогноза
+    # длительности негодно. started_at переставляется на каждый прогон —
+    # остаток считается от текущего, а не от первой попытки.
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    # Объём работы, замеренный при создании задачи: сколько позиций/страниц/строк
+    # предстоит обработать. Основа прогноза «через сколько будет результат».
+    # None — замерить не удалось (нестандартный файл), прогноз идёт по медиане типа.
+    volume_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    volume_kind: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

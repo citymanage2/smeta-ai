@@ -37,3 +37,8 @@ TASK_TYPE_TO_STAGE: dict[str, str] = {
     "ESTIMATE_FROM_LIST": "estimate",
     "ESTIMATE_OPTIMIZATION": "optimization",
 }
+
+# Терминальные статусы задачи: дальше сама она не изменится (перезапуск создаёт
+# новый прогон). В этот момент фиксируется finished_at — граница фактической
+# обработки, по которой калибруется прогноз времени (см. eta_service).
+TERMINAL_TASK_STATUSES: set[str] = {"completed", "failed", "cancelled"}

@@ -23,7 +23,7 @@ from app.services.claude_service import (
 )
 from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
-from app.constants import ESTIMATE_TASK_TYPES
+from app.constants import ESTIMATE_TASK_TYPES, TERMINAL_TASK_STATUSES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.price_coercion import coerce_price
@@ -530,8 +530,16 @@ class TaskProcessor:
         )
         task = result.scalar_one_or_none()
         if task:
+            now = datetime.now(timezone.utc)
             task.status = status
-            task.updated_at = datetime.now(timezone.utc)
+            task.updated_at = now
+            # Границы фактической обработки — основа прогноза времени (eta_service).
+            # started_at переставляем на КАЖДЫЙ прогон: после рестарта или resume
+            # остаток задачи считается от текущего запуска, а не от первой попытки.
+            if status == "processing":
+                task.started_at = now
+            elif status in TERMINAL_TASK_STATUSES:
+                task.finished_at = now
             if status == "completed":
                 task.progress_message = None
             if error:
