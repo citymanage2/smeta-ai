@@ -2366,7 +2366,7 @@ class TaskProcessor:
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = work_info.get("name")
                     matched_by_gidx[gidx] = enriched
-                    logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method="exact", price_entry=work_info.get("name"))
+                    logger.debug("Item MATCHED in price list", task_id=self.task_id, name=name, method="exact", price_entry=work_info.get("name"))
                 else:
                     need_emb_works.append((gidx, name))
 
@@ -2377,7 +2377,7 @@ class TaskProcessor:
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = name
                     matched_by_gidx[gidx] = enriched
-                    logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method="exact")
+                    logger.debug("Material MATCHED in price list", task_id=self.task_id, name=name, method="exact")
                 else:
                     need_emb_materials.append((gidx, name))
 
@@ -2396,10 +2396,10 @@ class TaskProcessor:
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = work_info.get("name")
                     matched_by_gidx[gidx] = enriched
-                    logger.info("Item MATCHED in price list", task_id=self.task_id, name=name, method="embedding", price_entry=work_info.get("name"))
+                    logger.debug("Item MATCHED in price list", task_id=self.task_id, name=name, method="embedding", price_entry=work_info.get("name"))
                 else:
                     unmatched_by_gidx[gidx] = enriched
-                    logger.info("Item NOT matched in price list", task_id=self.task_id, name=name, work_info_found=(work_info is not None))
+                    logger.debug("Item NOT matched in price list", task_id=self.task_id, name=name, work_info_found=(work_info is not None))
 
         # ── Проход 3: батч-эмбеддинг для материалов (1 вызов Cohere) ────────
         if need_emb_materials:
@@ -2412,19 +2412,30 @@ class TaskProcessor:
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = name
                     matched_by_gidx[gidx] = enriched
-                    logger.info("Material MATCHED in price list", task_id=self.task_id, name=name, method="embedding")
+                    logger.debug("Material MATCHED in price list", task_id=self.task_id, name=name, method="embedding")
                 else:
                     unmatched_by_gidx[gidx] = enriched
-                    logger.info("Material NOT matched in price list", task_id=self.task_id, name=name)
+                    logger.debug("Material NOT matched in price list", task_id=self.task_id, name=name)
 
         n_matched = len(matched_by_gidx)
         n_unmatched = len(unmatched_by_gidx)
+        # price_loaded — ключ к диагностике «прайс: 0 найдено»: пустой кэш в этом
+        # процессе выглядит ровно как «в прайсе ничего нет», и без этого признака
+        # причину не отличить (см. worker._warm_price_cache).
+        price_loaded = _price_svc.is_cache_loaded()
         logger.info(
             "Price lookup done",
             task_id=self.task_id,
             matched=n_matched,
             unmatched=n_unmatched,
+            price_loaded=price_loaded,
         )
+        if not price_loaded:
+            logger.warning(
+                "Прайс не загружен в память — все цены пойдут через ИИ",
+                task_id=self.task_id,
+                items=len(items),
+            )
         await self.update_progress(
             f"Прайс: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций."
         )
@@ -2449,7 +2460,7 @@ class TaskProcessor:
                     enriched["sources"] = cache_work_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
-                    logger.info("Item MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
+                    logger.debug("Item MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
                 else:
                     need_cache_emb_works.append((gidx, name))
 
@@ -2463,7 +2474,7 @@ class TaskProcessor:
                     enriched["sources"] = cache_mat_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
-                    logger.info("Material MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
+                    logger.debug("Material MATCHED in price cache", task_id=self.task_id, name=name, method="exact_cache")
                 else:
                     need_cache_emb_materials.append((gidx, name))
 
@@ -2481,7 +2492,7 @@ class TaskProcessor:
                     enriched["sources"] = cache_work_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
-                    logger.info("Item MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache", price_entry=cache_work_info.get("name"))
+                    logger.debug("Item MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache", price_entry=cache_work_info.get("name"))
 
         # ── Проход 6: батч-эмбеддинг для материалов в price_cache ────────────
         if need_cache_emb_materials:
@@ -2497,7 +2508,7 @@ class TaskProcessor:
                     enriched["sources"] = cache_mat_price.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
-                    logger.info("Material MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache")
+                    logger.debug("Material MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache")
 
         n_matched = len(matched_by_gidx)
         n_unmatched = len(unmatched_by_gidx)

@@ -1,3 +1,5 @@
+import { TaskEta } from '../utils/eta'
+
 export type KanbanStage = 'list' | 'completeness' | 'estimate' | 'optimization'
 
 export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused'
@@ -32,6 +34,8 @@ export interface TaskBrief {
   input_files: InputFileBrief[]
   progress_message: string | null
   progress_data?: ProgressSummary | null
+  /** Прогноз старта и готовности активной задачи (см. utils/eta). */
+  eta?: TaskEta | null
 }
 
 export interface WorkflowCard {

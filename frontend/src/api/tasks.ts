@@ -1,5 +1,6 @@
 import apiClient from './client';
 import { Task, TaskResult, HistoryEntry, RevertResponse } from '../types';
+import { TaskEta } from '../utils/eta';
 
 export interface InputFileMeta {
   name: string;
@@ -24,6 +25,8 @@ export interface TaskStatusResponse {
   input_files?: InputFileMeta[];
   /** Секунд назад обработчик подал признак жизни. null — живого обработчика нет. */
   worker_heartbeat_age_s?: number | null;
+  /** Прогноз старта и готовности. null — задача уже не активна. */
+  eta?: TaskEta | null;
 }
 
 export interface ChatMessage {

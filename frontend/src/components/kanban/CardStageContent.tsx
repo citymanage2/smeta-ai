@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, ChevronDown, ChevronUp, Download, Edit3, Eye, FileText } from 'lucide-react'
-import { WorkflowCard } from '../../types/workflow'
+import { TaskBrief, WorkflowCard } from '../../types/workflow'
+import { describeEta } from '../../utils/eta'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
 import { restartTask } from '../../api/tasks'
@@ -83,6 +84,22 @@ function ActionButton({
     <button style={{ ...base, ...variants[variant] }} onClick={onClick} disabled={disabled}>
       {children}
     </button>
+  )
+}
+
+/** Прогноз готовности активной задачи — строкой под счётчиком прогресса. */
+function EtaLine({ task }: { task: TaskBrief }) {
+  const view = describeEta(task.eta, task.status)
+  if (!view) return null
+  return (
+    <span
+      data-testid="card-eta"
+      title={view.hint}
+      style={{ display: 'block', fontSize: '10px', color: '#64748b', lineHeight: '1.4' }}
+    >
+      Готово {view.ready}
+      {view.start ? ` · ${view.start}` : ''}
+    </span>
   )
 }
 
@@ -546,6 +563,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
               {task.progress_message || 'В очереди…'}
             </span>
             <ProgressCounter data={task.progress_data} />
+            <EtaLine task={task} />
           </div>
           <ArrowBtn onClick={navigateToCard} />
         </div>
@@ -768,6 +786,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
                 </span>
               )}
               <ProgressCounter data={task.progress_data} />
+            <EtaLine task={task} />
             </div>
             <ArrowBtn onClick={navigateToCard} />
           </div>
@@ -981,6 +1000,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
               {task.progress_message || 'В очереди…'}
             </span>
             <ProgressCounter data={task.progress_data} />
+            <EtaLine task={task} />
           </div>
           <ArrowBtn onClick={navigateToCard} />
         </div>

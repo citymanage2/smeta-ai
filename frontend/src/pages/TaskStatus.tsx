@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { formatTaskError, formatApiDetail } from '../utils/formatError';
+import { describeEta } from '../utils/eta';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -800,6 +801,29 @@ const TaskStatusPage: React.FC = () => {
                   </button>
                 )}
               </div>
+
+              {/* Когда ждать результат. Рядом с таймером «сколько уже идёт»:
+                  прошедшее время без прогноза не отвечает на главный вопрос
+                  менеджера — можно ли обещать смету сегодня. */}
+              {(() => {
+                const view = describeEta(task.eta, task.status);
+                if (!view) return null;
+                return (
+                  <div
+                    data-testid="task-eta"
+                    title={view.hint}
+                    style={{ marginTop: '10px', fontSize: '13px', color: '#1e293b' }}
+                  >
+                    Результат {view.ready}
+                    {view.start && (
+                      <span style={{ color: '#64748b' }}> · {view.start}</span>
+                    )}
+                    {view.rough && (
+                      <span style={{ color: '#94a3b8' }}> · оценка грубая</span>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Признак жизни обработчика. Крутилка и растущий таймер есть и у
                   мёртвой задачи — по ним нельзя отличить работу от зависания.

@@ -5,7 +5,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
-from sqlalchemy import case, func, select, text
+from sqlalchemy import DateTime, case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -14,6 +14,8 @@ from app.models.price import PriceMaterial, PriceWork
 from app.models.price_list import PriceList
 from app.models.project import Project
 from app.models.task import Task
+from app.schemas.eta import TaskEta
+from app.services import eta_service
 from app.utils.permissions import get_manager_user
 
 logger = structlog.get_logger()
@@ -41,6 +43,8 @@ class ActiveTask(BaseModel):
     created_at: str
     project_id: Optional[str]
     project_name: Optional[str]
+    # Когда стартует и когда будет результат. None — прогноз построить не удалось.
+    eta: Optional[TaskEta] = None
 
 
 class FailedTask(BaseModel):
@@ -188,6 +192,12 @@ async def get_dashboard_stats(
         )
     ).all()
 
+    # Прогноз считается разом по всей очереди: старт задачи зависит от всех,
+    # кто впереди неё. Задачи уже загружены — второй раз их не читаем.
+    forecast = await eta_service.queue_forecast(
+        db, active_tasks=[t for t, _ in active_rows], now=now
+    )
+
     active_queue = [
         ActiveTask(
             id=str(t.id),
@@ -197,6 +207,7 @@ async def get_dashboard_stats(
             created_at=t.created_at.isoformat(),
             project_id=str(t.project_id) if t.project_id else None,
             project_name=pname,
+            eta=forecast.get(str(t.id)),
         )
         for t, pname in active_rows
     ]
@@ -345,7 +356,10 @@ async def get_dashboard_stats(
     chart_rows = (
         await db.execute(
             select(
-                func.date_trunc(text("'day'"), Task.created_at).label("day"),
+                # type_=DateTime — не для PostgreSQL (там тип и так timestamp), а
+                # чтобы результат приходил датой на любом диалекте: ниже вызывается
+                # .strftime(), и без объявленного типа SQLite отдал бы строку.
+                func.date_trunc(text("'day'"), Task.created_at, type_=DateTime).label("day"),
                 Task.task_type,
                 func.count(Task.id).label("count"),
             )

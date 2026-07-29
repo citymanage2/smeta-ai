@@ -242,6 +242,45 @@ async def _cleanup_price_cache() -> None:
         await price_service.load_cache(db)
 
 
+async def _warm_price_cache() -> None:
+    """Загрузить корпоративный прайс в память ДО того, как будет взята первая job.
+
+    Без этого шага обработчик считал сметы с ПУСТЫМ прайсом: поиск цены выходит
+    по `_works_embeddings is None` и мгновенно отвечает «не найдено» на все
+    позиции, а дальше каждая уходит в ИИ с платным web-поиском — часы обработки,
+    лишние деньги и цены не из корпоративного прайса. В web кэш грелся в lifespan
+    (main.py), а в worker `load_cache` вызывался ТОЛЬКО внутри суточной чистки
+    (`_cleanup_price_cache`), то есть впервые через 24 часа после старта — а
+    процесс перезапускается на каждом деплое, так что до чистки дело не доходило.
+
+    Ошибка не смертельна: на первом деплое БД может быть ещё не готова (web
+    только applies миграции). Poll-loop поднимется и без прайса, а прогрев
+    дожмёт `_ensure_price_cache`.
+    """
+    from app.services import price_service
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await price_service.load_cache(db)
+        logger.info("Price cache warmed")
+    except Exception as e:  # noqa: BLE001 — БД может быть недоступна на первом деплое
+        logger.warning("Price cache warmup failed — до прогрева сметы пойдут без прайса", error=str(e))
+
+
+async def _ensure_price_cache() -> None:
+    """Дожать прогрев, если при старте БД была недоступна.
+
+    Уже загруженный кэш не перезагружаем: полная перезагрузка — это 4 SELECT без
+    лимита плюс пересборка numpy-матриц, и гонять её по расписанию мы намеренно
+    перестали (коммит 04458b7). Здесь только добор пропущенного прогрева.
+    """
+    from app.services import price_service
+
+    if price_service.is_cache_loaded():
+        return
+    await _warm_price_cache()
+
+
 def _build_scheduler():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from app.services.batch_poller import poll_batch_tasks
@@ -252,6 +291,7 @@ def _build_scheduler():
     scheduler.add_job(_sweep_orphans_job, "interval", minutes=5, max_instances=1)
     scheduler.add_job(poll_batch_tasks, "interval", seconds=60, max_instances=1)
     scheduler.add_job(resume_paused_tasks, "interval", minutes=10, max_instances=1)
+    scheduler.add_job(_ensure_price_cache, "interval", minutes=5, max_instances=1)
     scheduler.add_job(_cleanup_price_cache, "interval", hours=24, max_instances=1)
     return scheduler
 
@@ -272,6 +312,10 @@ async def main() -> None:
 
     sem = asyncio.Semaphore(settings.WORKER_CONCURRENCY)
     inflight: set = set()
+
+    # ДО poll-loop: первая же job должна видеть прайс, иначе смета считается без
+    # корпоративных цен и уходит целиком в ИИ.
+    await _warm_price_cache()
 
     scheduler = _build_scheduler()
     scheduler.start()

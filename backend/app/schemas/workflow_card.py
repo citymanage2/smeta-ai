@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 
+from app.schemas.eta import TaskEta
+
 
 
 class InputFileBrief(BaseModel):
@@ -20,6 +22,8 @@ class TaskBrief(BaseModel):
     # Выжимка прогресса по белому списку (счётчики «N из M»), без чувствительных
     # полей progress_data. Заполняется через build_progress_summary().
     progress_data: Optional[dict] = None
+    # Прогноз старта и готовности — только у активных задач (см. eta_service).
+    eta: Optional[TaskEta] = None
 
     model_config = {"from_attributes": True}
 

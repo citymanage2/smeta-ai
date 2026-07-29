@@ -28,7 +28,7 @@ from app.models.result import TaskResult
 from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.models.workflow_card import WorkflowCard
-from app.services import storage_service
+from app.services import eta_service, storage_service
 from app.schemas.workflow_card import (
     WorkflowCardCreate,
     WorkflowCardResponse,
@@ -55,7 +55,11 @@ _LIST_TYPES = {"LIST_FROM_GRAND", "LIST_FROM_PROJECT"}
 _TASK_TYPE_TO_FIELD = TASK_TYPE_TO_FIELD
 
 
-def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
+def _build_card_response(
+    card: WorkflowCard, forecast: Optional[dict] = None
+) -> WorkflowCardResponse:
+    forecast = forecast or {}
+
     def _task_brief(task: Optional[Task]) -> Optional[TaskBrief]:
         if task is None:
             return None
@@ -78,6 +82,7 @@ def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
             input_files=files,
             progress_message=task.progress_message,
             progress_data=build_progress_summary(task.progress_data),
+            eta=forecast.get(str(task.id)),
         )
 
     return WorkflowCardResponse(
@@ -97,6 +102,22 @@ def _build_card_response(card: WorkflowCard) -> WorkflowCardResponse:
         created_at=card.created_at.isoformat(),
         updated_at=card.updated_at.isoformat(),
     )
+
+
+async def _card_forecast(db: AsyncSession, cards: list[WorkflowCard]) -> dict:
+    """Прогноз времени по задачам карточек — только если активные задачи есть.
+
+    На доске без активных задач это сэкономит два запроса на каждый поллинг.
+    """
+    stage_attrs = ("list_task", "completeness_task", "estimate_task", "optimization_task")
+    has_active = any(
+        (task := getattr(card, attr)) is not None and task.status in eta_service.ACTIVE_STATUSES
+        for card in cards
+        for attr in stage_attrs
+    )
+    if not has_active:
+        return {}
+    return await eta_service.queue_forecast(db)
 
 
 async def _load_card_with_tasks(
@@ -166,7 +187,8 @@ async def get_workflow_cards(
     cards = result.scalars().all()
     for card in cards:
         _apply_soft_delete_filter(card)
-    payload = [_build_card_response(c) for c in cards]
+    forecast = await _card_forecast(db, list(cards))
+    payload = [_build_card_response(c, forecast) for c in cards]
 
     # ETag: этот список поллится каждые 5с. Если данные не изменились — отдаём 304
     # без тела (клиент отдаёт из кэша). Cache-Control private — данные за авторизацией.
@@ -236,7 +258,7 @@ async def update_workflow_card(
 
     # Перезагружаем с task-relationship после commit
     card = await _load_card_with_tasks(card_id, db)
-    return _build_card_response(card)
+    return _build_card_response(card, await _card_forecast(db, [card]))
 
 
 @router.delete("/workflow-cards/{card_id}", status_code=204)
@@ -559,6 +581,8 @@ async def start_task(
     input_files_meta: list[dict] = []
     raw_files_bytes: list[bytes] = []
     resolved_prompt: Optional[str] = None
+    # Задача, из перечня которой берётся объём работы (позиции точнее строк файла).
+    volume_source_task_id: Optional[str] = None
 
     if task_type == "ESTIMATE_FROM_LIST":
         # Path B: берём файл из существующей задачи
@@ -575,6 +599,7 @@ async def start_task(
             {"path": "B", "source_task_id": src_task_id, "source_stage": src_stage},
             ensure_ascii=False,
         )
+        volume_source_task_id = str(src_task_id)
 
     elif task_type == "ESTIMATE_OPTIMIZATION" and use_previous_stage:
         # Берём файл из TaskResult estimate_task
@@ -608,6 +633,7 @@ async def start_task(
                 detail="Для проверки полноты необходим завершённый Перечень",
             )
         resolved_prompt = card.list_task_id
+        volume_source_task_id = str(card.list_task_id)
 
     elif files:
         # Загрузка одного или нескольких файлов (LIST_FROM_GRAND, LIST_FROM_PROJECT, ESTIMATE_OPTIMIZATION)
@@ -618,6 +644,16 @@ async def start_task(
             input_files_meta.append(
                 {"name": upload.filename or "file", "mime_type": mime, "size_bytes": len(content)}
             )
+
+    # Объём работы — пока файлы в памяти. Он же основа прогноза времени в очереди.
+    volume_units, volume_kind = await eta_service.measure_task_volume(
+        db,
+        files=[
+            (meta["mime_type"], meta["name"], raw)
+            for meta, raw in zip(input_files_meta, raw_files_bytes)
+        ],
+        source_task_id=volume_source_task_id,
+    )
 
     # --- Атомарная транзакция: создать Task + обновить карточку ---
     task_id = str(uuid.uuid4())
@@ -633,6 +669,8 @@ async def start_task(
         chat_history=[],
         estimation_status=estimation_status,
         project_id=card.project_id,
+        volume_units=volume_units,
+        volume_kind=volume_kind,
     )
     db.add(new_task)
     await db.flush()  # получаем task.id, не коммитим
@@ -664,4 +702,4 @@ async def start_task(
 
     # Возвращаем обновлённую карточку
     updated_card = await _load_card_with_tasks(card_id, db)
-    return _build_card_response(updated_card)
+    return _build_card_response(updated_card, await _card_forecast(db, [updated_card]))

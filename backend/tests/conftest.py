@@ -163,9 +163,24 @@ test_engine = create_async_engine(
 
 # Register gen_random_uuid() as a SQLite user-defined function so the Task
 # model's server_default=text("gen_random_uuid()") works at the DB level.
+def _sqlite_date_trunc(unit: str, value):
+    """Заглушка PostgreSQL-функции date_trunc для SQLite (нужна дашборду).
+
+    Поддержан только 'day' — единственная гранулярность, которой пользуется код.
+    Формат ответа — тот, что понимает DATETIME-процессор диалекта SQLite.
+    """
+    if value is None:
+        return None
+    text_value = str(value)
+    if unit != "day":
+        return text_value
+    return f"{text_value[:10]} 00:00:00.000000"
+
+
 @event.listens_for(test_engine.sync_engine, "connect")
 def _register_sqlite_functions(dbapi_connection, connection_record):
     dbapi_connection.create_function("gen_random_uuid", 0, lambda: str(uuid.uuid4()))
+    dbapi_connection.create_function("date_trunc", 2, _sqlite_date_trunc)
 
 
 TestSessionLocal = async_sessionmaker(

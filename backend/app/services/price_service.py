@@ -60,6 +60,18 @@ _cache_materials_index_map: list[int] = []
 # Lock for atomic cache replacement — prevents readers from seeing partially replaced globals
 _cache_lock = asyncio.Lock()
 
+
+def is_cache_loaded() -> bool:
+    """Загружен ли прайс в память ЭТОГО процесса.
+
+    Кэш — свой у каждого процесса (web и worker — разные контейнеры). Пустой кэш
+    не отличим от «в прайсе ничего не нашлось»: поиск выходит по
+    `_works_embeddings is None` и молча отдаёт «не найдено» на все позиции
+    (см. batch_embedding_match_works). Поэтому обработчику нужен явный признак —
+    греть кэш до первой задачи и дожимать прогрев, если БД была недоступна.
+    """
+    return _cache_loaded
+
 # Живые ссылки на фоновые задачи генерации эмбеддингов. Без них задача, созданная
 # через asyncio.create_task, может быть уничтожена сборщиком мусора до завершения.
 _background_tasks: set[asyncio.Task] = set()

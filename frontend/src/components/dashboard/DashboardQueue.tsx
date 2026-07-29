@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ActiveTask } from '../../api/dashboard';
 import { cancelTask } from '../../api/tasks';
+import { describeEta } from '../../utils/eta';
 
 const TASK_TYPE_LABELS: Record<string, string> = {
   LIST_FROM_GRAND: 'Перечень из Гранд-сметы',
@@ -102,6 +103,7 @@ const DashboardQueue: React.FC<Props> = ({ tasks, onCancel }) => {
                 <th style={thStyle}>Тип задачи</th>
                 <th style={thStyle}>Проект</th>
                 <th style={thStyle}>В очереди</th>
+                <th style={thStyle}>Готовность</th>
                 <th style={thStyle}>Прогресс</th>
                 <th style={thStyle}>Статус</th>
                 <th style={thStyle}></th>
@@ -127,6 +129,9 @@ const DashboardQueue: React.FC<Props> = ({ tasks, onCancel }) => {
                     <td style={tdStyle}>{TASK_TYPE_LABELS[task.task_type] ?? task.task_type}</td>
                     <td style={{ ...tdStyle, color: '#64748b' }}>{task.project_name ?? '—'}</td>
                     <td style={{ ...tdStyle, color: '#64748b', whiteSpace: 'nowrap' }}>{elapsed}</td>
+                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                      <EtaCell task={task} />
+                    </td>
                     <td style={{ ...tdStyle, color: '#64748b', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {task.progress_message ?? '—'}
                     </td>
@@ -159,6 +164,24 @@ const DashboardQueue: React.FC<Props> = ({ tasks, onCancel }) => {
         </div>
       )}
     </div>
+  );
+};
+
+/** Когда стартует и когда будет результат. Прочерк — прогноза нет. */
+const EtaCell: React.FC<{ task: ActiveTask }> = ({ task }) => {
+  const view = describeEta(task.eta, task.status);
+  if (!view) return <span style={{ color: '#94a3b8' }}>—</span>;
+
+  return (
+    <span title={view.hint} data-testid="queue-eta">
+      <span style={{ color: '#1e293b', fontWeight: 500 }}>{view.ready}</span>
+      {view.start && (
+        <span style={{ display: 'block', fontSize: 11, color: '#64748b' }}>{view.start}</span>
+      )}
+      {view.rough && (
+        <span style={{ display: 'block', fontSize: 11, color: '#94a3b8' }}>оценка грубая</span>
+      )}
+    </span>
   );
 };
 

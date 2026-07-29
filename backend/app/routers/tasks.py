@@ -34,7 +34,9 @@ from app.utils.permissions import visibility_filter, can_access
 from app.config import settings
 from app.services.task_processor import process_task
 from app.services.checkpoint import has_resumable_checkpoint, is_batch_pending
-from app.services import storage_service
+from app.services import eta_service, storage_service
+from app.schemas.eta import TaskEta
+from app.utils.volume_probe import UNIT_ITEMS as ETA_UNIT_ITEMS
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
@@ -116,6 +118,8 @@ class TaskStatusResponse(BaseModel):
     # Сколько секунд назад обработчик последний раз подал признак жизни.
     # None — живого обработчика за задачей нет (или он ещё не взял её в работу).
     worker_heartbeat_age_s: Optional[float] = None
+    # Прогноз старта и готовности. None — задача уже не активна.
+    eta: Optional[TaskEta] = None
 
 
 class TaskCreateResponse(BaseModel):
@@ -318,6 +322,17 @@ async def create_task(
     else:
         resolved_prompt = prompt
 
+    # Объём работы меряем сейчас, пока файлы в памяти: позже байты уедут в S3,
+    # а прогноз «через сколько будет результат» нужен сразу в очереди.
+    volume_units, volume_kind = await eta_service.measure_task_volume(
+        db,
+        files=[
+            (meta["mime_type"], meta["name"], raw)
+            for meta, raw in zip(input_file_data, raw_file_bytes)
+        ],
+        source_task_id=source_task_id if is_path_b else None,
+    )
+
     # Create task record
     task = Task(
         id=str(uuid.uuid4()),
@@ -332,6 +347,8 @@ async def create_task(
         estimation_status=estimation_status,
         processing_mode=resolved_mode,
         name=name.strip() if name and name.strip() else None,
+        volume_units=volume_units,
+        volume_kind=volume_kind,
     )
     db.add(task)
     await db.commit()
@@ -433,7 +450,14 @@ async def get_task_status(
         else None
     )
 
+    # Прогноз готовности — тоже только для активной задачи. Он требует всей
+    # очереди (старт зависит от тех, кто впереди), поэтому запрашивается разом.
+    eta = None
+    if task.status in eta_service.ACTIVE_STATUSES:
+        eta = (await eta_service.queue_forecast(db)).get(str(task.id))
+
     return TaskStatusResponse(
+        eta=eta,
         id=str(task.id),
         task_type=task.task_type,
         status=task.status,
@@ -498,6 +522,9 @@ async def check_completeness(
             detail=f"Исходная задача должна быть завершена (текущий статус: {source_task.status})",
         )
 
+    volume_units, volume_kind = await eta_service.measure_task_volume(
+        db, source_task_id=body.source_task_id
+    )
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
@@ -510,6 +537,8 @@ async def check_completeness(
         chat_history=[],
         estimation_status="not_applicable",
         project_id=source_task.project_id,
+        volume_units=volume_units,
+        volume_kind=volume_kind,
     )
     db.add(task)
     await db.commit()
@@ -639,6 +668,9 @@ async def check_project_completeness(
             detail=f"Исходная задача должна быть завершена (текущий статус: {source_task.status})",
         )
 
+    volume_units, volume_kind = await eta_service.measure_task_volume(
+        db, source_task_id=body.source_task_id
+    )
     task = Task(
         id=str(uuid.uuid4()),
         user_role=current_user.get("role", "user"),
@@ -651,6 +683,8 @@ async def check_project_completeness(
         chat_history=[],
         estimation_status="not_applicable",
         project_id=source_task.project_id,
+        volume_units=volume_units,
+        volume_kind=volume_kind,
     )
     db.add(task)
     await db.commit()
@@ -1688,13 +1722,21 @@ async def optimize_run(
     if task_result is None:
         raise HTTPException(status_code=404, detail="Файл сметы (слот estimate) не найден")
 
+    items_dicts = [item.model_dump() for item in body.items]
+
     # estimate_bytes здесь не читаем — worker до-читает его из БД перед оптимизацией.
     task.status = "processing"
     task.estimation_status = "optimizing"
     task.progress_message = "Начинаем оптимизацию..."
+    # Оптимизация меняет статус в обход TaskProcessor.update_status, поэтому
+    # границу прогона и объём проставляем здесь — иначе прогноз времени для неё
+    # не построится.
+    task.started_at = datetime.now(timezone.utc)
+    task.finished_at = None
+    if items_dicts:
+        task.volume_units = len(items_dicts)
+        task.volume_kind = ETA_UNIT_ITEMS
     await db.commit()
-
-    items_dicts = [item.model_dump() for item in body.items]
 
     from app.services import job_queue
     # estimate_bytes НЕ кладём в payload (крупный бинарь) — хендлер worker'а

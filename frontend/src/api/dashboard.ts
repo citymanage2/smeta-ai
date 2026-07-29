@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { TaskEta } from '../utils/eta';
 
 export interface PulseStats {
   created_today: number;
@@ -15,6 +16,8 @@ export interface ActiveTask {
   created_at: string;
   project_id: string | null;
   project_name: string | null;
+  /** Прогноз старта и готовности. null — прогноза нет. */
+  eta: TaskEta | null;
 }
 
 export interface FailedTask {
