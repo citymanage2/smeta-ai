@@ -8,9 +8,22 @@
 from datetime import datetime, timezone, timedelta
 
 import pytest
+from sqlalchemy import delete
 
-from app.models.job import Job  # noqa: F401 — регистрирует таблицу jobs в Base.metadata
+from app.models.job import Job  # регистрирует таблицу jobs в Base.metadata
 from app.config import settings
+
+
+@pytest.fixture(autouse=True)
+async def _clean_jobs(db_session):
+    """Очередь — глобальная таблица, и счётчики ниже считают ВСЕ строки в ней.
+
+    Тесты, создающие задачу через API (например, POST /tasks в test_admin.py),
+    коммитят job — он переживает откат db_session и протекает сюда: в одиночку
+    файл проходил, в полном прогоне те же тесты видели лишний queued.
+    """
+    await db_session.execute(delete(Job))
+    await db_session.flush()
 
 
 def _now() -> datetime:

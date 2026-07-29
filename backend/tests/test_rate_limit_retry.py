@@ -57,7 +57,7 @@ def _make_success_response(text: str = "ok") -> MagicMock:
 # Basic retry tests (pre-existing behaviour)
 # ---------------------------------------------------------------------------
 
-async def test_rate_limit_is_retried(monkeypatch):
+async def test_rate_limit_is_retried(monkeypatch, patch_claude_create):
     """call_claude retries at least once after a RateLimitError."""
     call_count = 0
 
@@ -68,7 +68,7 @@ async def test_rate_limit_is_retried(monkeypatch):
             raise _make_rate_limit_error(retry_after=0.01)
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     result = await call_claude([{"role": "user", "content": "hi"}])
@@ -76,19 +76,19 @@ async def test_rate_limit_is_retried(monkeypatch):
     assert call_count == 2
 
 
-async def test_rate_limit_exhausted_raises(monkeypatch):
+async def test_rate_limit_exhausted_raises(monkeypatch, patch_claude_create):
     """After all retries are exhausted, the RateLimitError is re-raised."""
     async def always_rate_limit(**kwargs):
         raise _make_rate_limit_error(retry_after=0.01)
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", always_rate_limit)
+    patch_claude_create(always_rate_limit)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     with pytest.raises(anthropic.RateLimitError):
         await call_claude([{"role": "user", "content": "hi"}])
 
 
-async def test_rate_limit_warning_is_logged(monkeypatch, capsys):
+async def test_rate_limit_warning_is_logged(monkeypatch, capsys, patch_claude_create):
     """A warning is logged when a rate limit is hit."""
     call_count = 0
 
@@ -99,7 +99,7 @@ async def test_rate_limit_warning_is_logged(monkeypatch, capsys):
             raise _make_rate_limit_error(retry_after=0.01)
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -110,7 +110,7 @@ async def test_rate_limit_warning_is_logged(monkeypatch, capsys):
     )
 
 
-async def test_default_sleep_used_when_no_retry_after_header(monkeypatch):
+async def test_default_sleep_used_when_no_retry_after_header(monkeypatch, patch_claude_create):
     """When retry-after header is absent, sleep for at least DEFAULT_RATE_LIMIT_DELAY seconds."""
     from app.services.claude_service import DEFAULT_RATE_LIMIT_DELAY
 
@@ -124,7 +124,7 @@ async def test_default_sleep_used_when_no_retry_after_header(monkeypatch):
             raise _make_rate_limit_error(retry_after=None)  # no header
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -139,7 +139,7 @@ async def test_default_sleep_used_when_no_retry_after_header(monkeypatch):
 # Change 4: Exponential backoff tests
 # ---------------------------------------------------------------------------
 
-async def test_retry_after_above_minimum_uses_header_value(monkeypatch):
+async def test_retry_after_above_minimum_uses_header_value(monkeypatch, patch_claude_create):
     """When retry-after > backoff minimum (60 s), the API header value is used."""
     sleep_mock = AsyncMock()
     call_count = 0
@@ -151,7 +151,7 @@ async def test_retry_after_above_minimum_uses_header_value(monkeypatch):
             raise _make_rate_limit_error(retry_after=300)  # well above 60 s minimum
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -162,7 +162,7 @@ async def test_retry_after_above_minimum_uses_header_value(monkeypatch):
     )
 
 
-async def test_backoff_minimum_60s_for_first_429(monkeypatch):
+async def test_backoff_minimum_60s_for_first_429(monkeypatch, patch_claude_create):
     """First 429: sleep at least 60 s even if retry-after is smaller."""
     sleep_mock = AsyncMock()
     call_count = 0
@@ -174,7 +174,7 @@ async def test_backoff_minimum_60s_for_first_429(monkeypatch):
             raise _make_rate_limit_error(retry_after=5)  # below 60 s minimum
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -185,7 +185,7 @@ async def test_backoff_minimum_60s_for_first_429(monkeypatch):
     )
 
 
-async def test_exponential_backoff_increases_per_consecutive_429(monkeypatch):
+async def test_exponential_backoff_increases_per_consecutive_429(monkeypatch, patch_claude_create):
     """Backoff minimum escalates: 1st 429 >= 60 s, 2nd >= 120 s, 3rd >= 240 s."""
     sleep_mock = AsyncMock()
     call_count = 0
@@ -197,7 +197,7 @@ async def test_exponential_backoff_increases_per_consecutive_429(monkeypatch):
             raise _make_rate_limit_error(retry_after=1)  # always below minimums
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -209,7 +209,7 @@ async def test_exponential_backoff_increases_per_consecutive_429(monkeypatch):
     assert sleep_calls[2] >= 240, f"3rd 429 should wait >= 240 s, got {sleep_calls[2]}"
 
 
-async def test_backoff_capped_at_900s(monkeypatch):
+async def test_backoff_capped_at_900s(monkeypatch, patch_claude_create):
     """Backoff is capped at 900 s even if retry-after is larger."""
     sleep_mock = AsyncMock()
     call_count = 0
@@ -221,7 +221,7 @@ async def test_backoff_capped_at_900s(monkeypatch):
             raise _make_rate_limit_error(retry_after=9999)  # absurdly large
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -232,7 +232,7 @@ async def test_backoff_capped_at_900s(monkeypatch):
     )
 
 
-async def test_rate_limit_log_includes_retry_after_and_actual_wait(monkeypatch, capsys):
+async def test_rate_limit_log_includes_retry_after_and_actual_wait(monkeypatch, capsys, patch_claude_create):
     """Log entry includes both the API retry-after value and the actual wait used."""
     call_count = 0
 
@@ -243,7 +243,7 @@ async def test_rate_limit_log_includes_retry_after_and_actual_wait(monkeypatch, 
             raise _make_rate_limit_error(retry_after=839)
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     await call_claude([{"role": "user", "content": "hi"}])
@@ -257,13 +257,13 @@ async def test_rate_limit_log_includes_retry_after_and_actual_wait(monkeypatch, 
 # Changes 1 & 2: processing_timeout tests
 # ---------------------------------------------------------------------------
 
-async def test_slow_api_call_triggers_processing_timeout(monkeypatch):
+async def test_slow_api_call_triggers_processing_timeout(monkeypatch, patch_claude_create):
     """When the API call itself takes longer than processing_timeout, TimeoutError is raised."""
     async def slow_create(**kwargs):
         await asyncio.sleep(10)  # real sleep inside the API call — causes timeout
         return _make_success_response()
 
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", slow_create)
+    patch_claude_create(slow_create)
     # NOT patching asyncio.sleep globally — the sleep inside slow_create is real
 
     with pytest.raises(asyncio.TimeoutError):
@@ -273,7 +273,7 @@ async def test_slow_api_call_triggers_processing_timeout(monkeypatch):
         )
 
 
-async def test_rate_limit_sleep_counted_in_cumulative_timeout(monkeypatch):
+async def test_rate_limit_sleep_counted_in_cumulative_timeout(monkeypatch, patch_claude_create):
     """Rate-limit sleep вычитается из cumulative processing_timeout.
 
     При замоканном sleep (= мгновенный, elapsed ≈ 0) и достаточном бюджете
@@ -289,7 +289,7 @@ async def test_rate_limit_sleep_counted_in_cumulative_timeout(monkeypatch):
         return _make_success_response()
 
     # Мокаем sleep — мгновенный, elapsed остаётся близким к 0
-    monkeypatch.setattr("app.services.claude_service._client.messages.create", fake_create)
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     # При большом бюджете (30 с) и мгновенном sleep — second attempt успешен

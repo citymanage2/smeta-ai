@@ -57,20 +57,18 @@ def test_insufficient_balance_is_runtimeerror_subclass():
     assert issubclass(InsufficientBalanceError, RuntimeError)
 
 
-async def test_credit_balance_4xx_raises_insufficient_balance(monkeypatch):
+async def test_credit_balance_4xx_raises_insufficient_balance(monkeypatch, patch_claude_create):
     async def fake_create(**kwargs):
         raise _make_credit_balance_error()
 
-    monkeypatch.setattr(
-        "app.services.claude_service._client.messages.create", fake_create
-    )
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     with pytest.raises(InsufficientBalanceError):
         await call_claude([{"role": "user", "content": "hi"}])
 
 
-async def test_non_balance_4xx_not_wrapped(monkeypatch):
+async def test_non_balance_4xx_not_wrapped(monkeypatch, patch_claude_create):
     """Прочие 4xx (не про баланс) НЕ превращаются в InsufficientBalanceError."""
     body = {"error": {"type": "invalid_request_error", "message": "bad request"}}
     raw = httpx.Response(
@@ -83,9 +81,7 @@ async def test_non_balance_4xx_not_wrapped(monkeypatch):
     async def fake_create(**kwargs):
         raise anthropic.APIStatusError("bad request", response=raw, body=body)
 
-    monkeypatch.setattr(
-        "app.services.claude_service._client.messages.create", fake_create
-    )
+    patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
 
     with pytest.raises(anthropic.APIStatusError):

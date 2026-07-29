@@ -25,6 +25,16 @@ html_class_mock.return_value.write_pdf = mock_write_pdf
 weasyprint_mock.HTML = html_class_mock
 sys.modules['weasyprint'] = weasyprint_mock
 
+# Настоящий PyMuPDF занимает sys.modules ДО тестовых модулей: часть из них делает
+# `sys.modules.setdefault("fitz", MagicMock())`, чтобы работать там, где pymupdf не
+# установлен. Без этого импорта первый же такой модуль подсовывал мок всему прогону,
+# и тесты растеризации (tests/test_pdf_ocr_extractor.py) падали на MagicMock —
+# но только в полном прогоне, а по одному файлу проходили.
+try:  # pragma: no cover - зависит от окружения
+    import fitz  # noqa: F401
+except ImportError:
+    pass
+
 from app.database import Base, get_db
 from app.models.task import Task          # noqa: F401  (registers with Base.metadata)
 from app.models.task_input_file import TaskInputFile  # noqa: F401
@@ -87,6 +97,30 @@ def fake_s3(monkeypatch):
     monkeypatch.setattr(storage_service, "_client", client)
     monkeypatch.setattr(storage_service.settings, "S3_ENABLED", True)
     return client
+
+
+@pytest.fixture
+def patch_claude_create(monkeypatch):
+    """Подменить `messages.create` у клиента Anthropic.
+
+    Клиент создаётся лениво (`claude_service._get_client`, с 25.07.2026 — ради
+    обхода геоблока через посредника), поэтому модульная переменная `_client`
+    до первого реального вызова равна None и патчить её по пути
+    `claude_service._client.messages.create` нельзя — monkeypatch падает с
+    ImportError. Подменяем саму фабрику.
+
+    Использование: `patch_claude_create(fake_create)`.
+    """
+    from types import SimpleNamespace
+
+    import app.services.claude_service as cs
+
+    def _apply(create_fn):
+        client = SimpleNamespace(messages=SimpleNamespace(create=create_fn))
+        monkeypatch.setattr(cs, "_get_client", lambda: client)
+        return client
+
+    return _apply
 
 
 async def store_result_row(db, task_id, slot, file_name, mime, data, **extra):
