@@ -103,6 +103,49 @@ export async function generateEmbeddings(type: 'works' | 'materials'): Promise<G
   return response.data;
 }
 
+// ---------------------------------------------------------------------------
+// Диагностика: доступность AI-API и состояние очереди.
+// Эндпоинты существовали на бэкенде, но кнопок в UI не было — админ не мог
+// проверить «дошло ли пополнение» и «разбирает ли worker очередь» без терминала.
+// ---------------------------------------------------------------------------
+
+export interface ApiHealth {
+  checked_at: string;
+  ok: boolean;
+  status_code: number | null;
+  error: string | null;
+  error_code: string | null;
+  is_balance_error: boolean;
+  base_url: string;
+  via_proxy: boolean;
+  api_key_set: boolean;
+  proxy_secret_set: boolean;
+  model: string;
+  paused_tasks: number;
+  verdict: 'ok' | 'no_balance' | 'auth' | 'unavailable' | 'misconfigured';
+  hint: string;
+}
+
+export interface QueueHealth {
+  checked_at: string;
+  counts: { queued: number; running: number; done: number; failed: number };
+  queued: { count: number; oldest_age_s: number | null };
+  running: { count: number; oldest_claimed_age_s: number | null; stale_count: number };
+  visibility_timeout_s: number;
+  verdict: 'idle' | 'ok' | 'busy' | 'stalled';
+  hint: string;
+}
+
+export async function getApiHealth(): Promise<ApiHealth> {
+  const response = await apiClient.get<ApiHealth>('/admin/api-health');
+  return response.data;
+}
+
+export async function getQueueHealth(): Promise<QueueHealth> {
+  const response = await apiClient.get<QueueHealth>('/admin/queue-health');
+  return response.data;
+}
+
 // Legacy combined upload kept for backward compatibility
 export async function uploadPrices(file: File): Promise<{ message: string }> {
   const formData = new FormData();

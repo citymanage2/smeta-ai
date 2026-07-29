@@ -8,7 +8,8 @@ import {
   getTrashTasks, restoreTask, permanentDeleteTask, clearTrash,
   getPriceListsInfo, uploadWorksPrice, uploadMaterialsPrice,
   downloadInputFile, generateEmbeddings,
-  PriceListInfo,
+  getApiHealth, getQueueHealth,
+  PriceListInfo, ApiHealth, QueueHealth,
 } from '../api/admin';
 import { getTaskResults, downloadResult } from '../api/tasks';
 import { useTaskSync } from '../stores/taskSync';
@@ -46,6 +47,155 @@ function formatSize(bytes: number): string {
 }
 
 const PAGE_SIZE = 20;
+
+// ---------------------------------------------------------------------------
+// Диагностика: «почему задача висит». Два вопроса, на которые админ иначе может
+// ответить только из логов сервера: отвечает ли AI-API (дошло ли пополнение)
+// и разбирает ли worker очередь.
+// ---------------------------------------------------------------------------
+
+const HEALTH_TONE: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+  good:  { bg: '#f0fdf4', border: '#86efac', text: '#15803d', icon: '✓' },
+  warn:  { bg: '#fffbeb', border: '#fcd34d', text: '#b45309', icon: '⚠' },
+  bad:   { bg: '#fef2f2', border: '#fca5a5', text: '#dc2626', icon: '✕' },
+};
+
+const API_VERDICT: Record<ApiHealth['verdict'], { label: string; tone: keyof typeof HEALTH_TONE }> = {
+  ok:            { label: 'AI-API отвечает',                 tone: 'good' },
+  no_balance:    { label: 'Баланс исчерпан',                 tone: 'bad'  },
+  auth:          { label: 'Ключ отклонён',                   tone: 'bad'  },
+  unavailable:   { label: 'AI-API недоступен',               tone: 'bad'  },
+  misconfigured: { label: 'Ключ не задан в настройках',      tone: 'bad'  },
+};
+
+const QUEUE_VERDICT: Record<QueueHealth['verdict'], { label: string; tone: keyof typeof HEALTH_TONE }> = {
+  idle:    { label: 'Очередь пуста',                tone: 'good' },
+  ok:      { label: 'Очередь движется штатно',      tone: 'good' },
+  busy:    { label: 'Очередь загружена, но живая',  tone: 'warn' },
+  stalled: { label: 'Очередь не разбирается',       tone: 'bad'  },
+};
+
+function formatAge(seconds: number | null): string {
+  if (seconds === null) return '—';
+  if (seconds < 60) return `${Math.round(seconds)} сек.`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} мин.`;
+  return `${(seconds / 3600).toFixed(1)} ч.`;
+}
+
+const HealthPanel: React.FC = () => {
+  const [api, setApi] = useState<ApiHealth | null>(null);
+  const [queue, setQueue] = useState<QueueHealth | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function runCheck() {
+    setLoading(true);
+    setError('');
+    try {
+      // Обе проверки разом: причина зависания может быть в любой из двух,
+      // и гонять их по очереди — лишний клик в момент, когда что-то сломалось.
+      const [a, q] = await Promise.all([getApiHealth(), getQueueHealth()]);
+      setApi(a);
+      setQueue(q);
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(formatApiDetail(detail, 'Не удалось выполнить проверку. Сервер не ответил.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const cardStyle = (tone: keyof typeof HEALTH_TONE): React.CSSProperties => ({
+    backgroundColor: HEALTH_TONE[tone].bg,
+    border: `1px solid ${HEALTH_TONE[tone].border}`,
+    borderRadius: '10px',
+    padding: '14px 16px',
+    flex: '1 1 320px',
+  });
+
+  return (
+    <div
+      style={{
+        backgroundColor: '#ffffff',
+        border: '1px solid #e2e8f0',
+        borderRadius: '10px',
+        padding: '16px 20px',
+        marginBottom: '20px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>Диагностика</div>
+        <div style={{ fontSize: '13px', color: '#64748b', flex: 1 }}>
+          Почему задача висит: отвечает ли ИИ и разбирается ли очередь
+        </div>
+        <button
+          onClick={runCheck}
+          disabled={loading}
+          style={{
+            padding: '8px 16px',
+            fontSize: '14px',
+            fontWeight: 600,
+            backgroundColor: loading ? '#93c5fd' : '#2563eb',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '8px',
+            cursor: loading ? 'default' : 'pointer',
+          }}
+        >
+          {loading ? 'Проверяем...' : 'Проверить сейчас'}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ marginTop: '12px', fontSize: '14px', color: '#dc2626' }}>{error}</div>
+      )}
+
+      {(api || queue) && (
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '14px' }}>
+          {api && (() => {
+            const v = API_VERDICT[api.verdict];
+            const tone = HEALTH_TONE[v.tone];
+            return (
+              <div style={cardStyle(v.tone)}>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: tone.text }}>
+                  {tone.icon} {v.label}
+                </div>
+                <div style={{ fontSize: '13px', color: '#334155', marginTop: '6px', lineHeight: 1.5 }}>
+                  {api.hint}
+                </div>
+                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px' }}>
+                  {api.via_proxy ? `Через посредника: ${api.base_url}` : 'Напрямую в Anthropic'}
+                  {' · '}Модель: {api.model}
+                  {' · '}Задач на паузе: {api.paused_tasks}
+                </div>
+              </div>
+            );
+          })()}
+
+          {queue && (() => {
+            const v = QUEUE_VERDICT[queue.verdict];
+            const tone = HEALTH_TONE[v.tone];
+            return (
+              <div style={cardStyle(v.tone)}>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: tone.text }}>
+                  {tone.icon} {v.label}
+                </div>
+                <div style={{ fontSize: '13px', color: '#334155', marginTop: '6px', lineHeight: 1.5 }}>
+                  {queue.hint}
+                </div>
+                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px' }}>
+                  В очереди: {queue.counts.queued} (старейшая {formatAge(queue.queued.oldest_age_s)})
+                  {' · '}В работе: {queue.counts.running} (дольше всех {formatAge(queue.running.oldest_claimed_age_s)})
+                  {queue.running.stale_count > 0 && ` · Потерянных: ${queue.running.stale_count}`}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface PriceUploadCardProps {
   title: string;
@@ -567,6 +717,9 @@ const AdminPage: React.FC = () => {
             Панель администратора
           </h2>
         </div>
+
+        {/* Диагностика «почему задача висит» — доступна на любой вкладке */}
+        <HealthPanel />
 
         {/* Tabs */}
         <div
