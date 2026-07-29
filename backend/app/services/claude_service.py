@@ -278,6 +278,31 @@ _http_client = httpx.AsyncClient(
 # разница только в env.
 _client: Optional[anthropic.AsyncAnthropic] = None
 
+# Хост, который Anthropic подставляет в абсолютные URL своих ответов.
+_ANTHROPIC_HOST = "api.anthropic.com"
+
+
+class _ProxiedAsyncAnthropic(anthropic.AsyncAnthropic):
+    """Клиент, у которого через посредника идут и абсолютные URL из ответов API.
+
+    Часть эндпоинтов SDK ходит не по относительному пути, а по абсолютному URL,
+    полученному от самого API: `messages.batches.results()` берёт `results_url`
+    пачки (`https://api.anthropic.com/v1/messages/batches/<id>/results`). Базовый
+    `_prepare_url` подставляет `base_url` ТОЛЬКО относительным путям, поэтому такой
+    запрос уходил напрямую на api.anthropic.com — и с РФ-сервера получал
+    `403 forbidden / Request not allowed` (геоблок), роняя весь batch-режим.
+
+    Приводим абсолютный URL Anthropic обратно к относительному пути — дальше
+    базовая реализация склеивает его с `base_url` посредника. Чужие хосты не
+    трогаем: посредник проксирует только API Anthropic.
+    """
+
+    def _prepare_url(self, url: str) -> httpx.URL:
+        parsed = httpx.URL(url)
+        if not parsed.is_relative_url and parsed.host == _ANTHROPIC_HOST:
+            url = parsed.raw_path.decode()  # path + query, без схемы и хоста
+        return super()._prepare_url(url)
+
 
 def _get_client() -> anthropic.AsyncAnthropic:
     global _client
@@ -296,7 +321,7 @@ def _get_client() -> anthropic.AsyncAnthropic:
             kwargs["base_url"] = settings.ANTHROPIC_BASE_URL
         if settings.ANTHROPIC_PROXY_SECRET:
             kwargs["default_headers"] = {"X-Proxy-Secret": settings.ANTHROPIC_PROXY_SECRET}
-        _client = anthropic.AsyncAnthropic(**kwargs)
+        _client = _ProxiedAsyncAnthropic(**kwargs)
     return _client
 
 # Глобальный лимит одновременных вызовов Anthropic на процесс. При N параллельных

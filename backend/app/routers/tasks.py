@@ -766,7 +766,15 @@ async def resume_task(
 
     # Пачка уже отправлена в Batch API и оплачена — не запускаем обработку заново,
     # возвращаем задачу в processing, результаты доберёт batch_poller.
-    if task.status == "paused" and is_batch_pending(progress_data):
+    #
+    # Не только для `paused`: задача попадает сюда и из `failed`, если сборка
+    # результатов упала (например, забор результатов уходил мимо посредника и
+    # ловил 403 — см. plans/2026-07-29-batch-results-via-proxy.md). Пачка при этом
+    # посчитана и оплачена, результаты живут у Anthropic 29 дней — перезапуск с
+    # нуля означал бы вторую оплату того же расчёта.
+    # `cancelled` сюда НЕ пускаем: там пачка целенаправленно отменяется поллером,
+    # и возврат в processing разошёлся бы с отменой гонкой.
+    if task.status in ("failed", "paused") and is_batch_pending(progress_data):
         task.status = "processing"
         task.error_message = None
         task.updated_at = datetime.now(timezone.utc)

@@ -50,6 +50,13 @@ const RESUMABLE_TASK_TYPES: string[] = [
   'ESTIMATE_FROM_LIST',
 ];
 
+// Пачка отправлена в Batch API и оплачена — продолжение не пересчитывает её, а
+// забирает готовый результат (см. is_batch_pending в backend/app/services/checkpoint.py).
+function isBatchPending(task: TaskStatusResponse): boolean {
+  const pd = task.progress_data;
+  return !!pd && pd._stage === 'batch_pending' && pd.batch_id != null;
+}
+
 // Есть ли у задачи сохранённый чекпоинт для продолжения без потери прогресса.
 function hasResumeCheckpoint(task: TaskStatusResponse): boolean {
   const pd = task.progress_data;
@@ -59,7 +66,8 @@ function hasResumeCheckpoint(task: TaskStatusResponse): boolean {
     pd.ocr_pages_partial != null ||
     pd.ocr_pages != null ||
     pd._stage === 'pre_excel' ||
-    pd._stage === 'claude_partial'
+    pd._stage === 'claude_partial' ||
+    isBatchPending(task)
   );
 }
 
@@ -994,7 +1002,34 @@ const TaskStatusPage: React.FC = () => {
                   )}
 
                   {/* Resume section — показываем «Продолжить» для любой resumable-задачи с чекпоинтом */}
-                  {isResumable(task) && (task.progress_data?._stage === 'pre_excel' || task.progress_data?._stage === 'claude_partial') ? (
+                  {isBatchPending(task) ? (
+                    <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
+                      <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
+                        Пакетный расчёт уже выполнен и оплачен — результат хранится у Anthropic.
+                        Продолжение заберёт готовый расчёт, позиции повторно считаться не будут.
+                        Перезапуск с начала оплатит тот же расчёт второй раз.
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <button
+                          data-testid="resume-batch-button"
+                          onClick={handleResume}
+                          disabled={resuming || restarting}
+                          style={{
+                            padding: '8px 20px',
+                            backgroundColor: resuming ? '#fca5a5' : '#dc2626',
+                            color: '#ffffff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: (resuming || restarting) ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {resuming ? 'Запуск...' : '▶ Продолжить — забрать готовый расчёт'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : isResumable(task) && (task.progress_data?._stage === 'pre_excel' || task.progress_data?._stage === 'claude_partial') ? (
                     <div style={{ marginTop: '16px', borderTop: '1px solid #fecaca', paddingTop: '14px' }}>
                       <div style={{ fontSize: '14px', color: '#7f1d1d', marginBottom: '12px', fontWeight: 500 }}>
                         Часть данных от Claude сохранена. Продолжение не будет пересчитывать

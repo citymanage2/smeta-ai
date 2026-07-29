@@ -164,6 +164,76 @@ async def test_resume_paused_batch_pending_goes_to_processing(
         await db_session.commit()
 
 
+async def test_resume_failed_batch_pending_goes_to_processing(
+    async_client, user_token, seed_users, db_session, monkeypatch
+):
+    """Сборка пачки упала (failed), но пачка оплачена → processing, не пересчёт.
+
+    Прод 29.07.2026: забор результатов уходил мимо посредника и падал с 403,
+    задача вставала в failed с чекпоинтом batch_pending. Единственной кнопкой
+    был перезапуск с нуля — вторая оплата уже посчитанной пачки.
+    План: plans/2026-07-29-batch-results-via-proxy.md, Фаза 2.
+    """
+    task_id = "d8000000-0000-0000-0000-000000000005"
+    task = await _seed_task(
+        db_session, task_id, status="failed",
+        progress_data={"_stage": "batch_pending", "batch_id": "msgbatch_y", "items": []},
+    )
+    monkeypatch.setattr(
+        "app.routers.tasks._run_task_in_background", AsyncMock(return_value=None)
+    )
+    try:
+        await db_session.execute(delete(Job))
+        await db_session.commit()
+
+        resp = await async_client.post(
+            f"/tasks/{task_id}/resume", headers={"Authorization": user_token}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "processing"
+
+        await db_session.refresh(task)
+        assert task.status == "processing"
+        assert task.error_message is None
+        assert task.progress_data["_stage"] == "batch_pending"
+
+        jobs = (
+            await db_session.execute(select(Job).where(Job.kind == "task.process"))
+        ).scalars().all()
+        assert jobs == [], "оплаченную пачку нельзя ставить в очередь на пересчёт"
+    finally:
+        await db_session.execute(delete(Job))
+        await db_session.execute(delete(Task).where(Task.id == task_id))
+        await db_session.commit()
+
+
+async def test_resume_cancelled_batch_pending_is_not_revived(
+    async_client, user_token, seed_users, db_session, monkeypatch
+):
+    """Отменённую задачу в processing не возвращаем: batch_poller отменяет её пачку,
+    возврат гонялся бы с отменой. Идём обычным путём — с чекпоинта."""
+    task_id = "d8000000-0000-0000-0000-000000000006"
+    task = await _seed_task(
+        db_session, task_id, status="cancelled",
+        progress_data={"_stage": "batch_pending", "batch_id": "msgbatch_z", "items": []},
+    )
+    monkeypatch.setattr(
+        "app.routers.tasks._run_task_in_background", AsyncMock(return_value=None)
+    )
+    try:
+        resp = await async_client.post(
+            f"/tasks/{task_id}/resume", headers={"Authorization": user_token}
+        )
+        # batch_pending не входит в RESUMABLE_STAGES → для cancelled это 409
+        assert resp.status_code == 409, resp.text
+        await db_session.refresh(task)
+        assert task.status == "cancelled"
+    finally:
+        await db_session.execute(delete(Job))
+        await db_session.execute(delete(Task).where(Task.id == task_id))
+        await db_session.commit()
+
+
 async def test_resume_failed_without_checkpoint_still_409(
     async_client, user_token, seed_users, db_session
 ):

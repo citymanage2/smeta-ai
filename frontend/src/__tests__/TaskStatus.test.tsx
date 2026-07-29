@@ -322,3 +322,62 @@ describe('TaskStatus — paused status (Phase 5)', () => {
     expect(await screen.findByText('На паузе')).toBeInTheDocument();
   });
 });
+
+// Прод 29.07.2026: сборка результатов пачки падала с 403 (запрос уходил мимо
+// посредника), задача вставала в failed с чекпоинтом batch_pending. Единственной
+// кнопкой был перезапуск с начала — вторая оплата уже посчитанной пачки.
+// План: plans/2026-07-29-batch-results-via-proxy.md, Фаза 2.
+describe('TaskStatus — failed batch task with a paid batch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getTaskResults).mockResolvedValue([]);
+  });
+
+  function failedBatchTask() {
+    return makeTaskResponse({
+      task_type: 'ESTIMATE_FROM_LIST' as any,
+      status: 'failed',
+      error_message: "Ошибка сборки сметы из batch: Error code: 403 - {'type': 'forbidden'}",
+      progress_data: { _stage: 'batch_pending', batch_id: 'msgbatch_y' } as any,
+    });
+  }
+
+  it('offers «Продолжить» instead of a paid recalculation', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(failedBatchTask());
+
+    renderPage();
+
+    const btn = await screen.findByTestId('resume-batch-button');
+    expect(btn).toHaveTextContent('забрать готовый расчёт');
+    expect(screen.getByText(/уже выполнен и оплачен/)).toBeInTheDocument();
+  });
+
+  it('«Продолжить» calls resumeTask, not restartTask', async () => {
+    const { resumeTask, restartTask } = await import('../api/tasks');
+    vi.mocked(resumeTask).mockResolvedValue({ task_id: 'x', status: 'processing' } as any);
+    vi.mocked(getTaskStatus).mockResolvedValue(failedBatchTask());
+
+    renderPage();
+
+    const btn = await screen.findByTestId('resume-batch-button');
+    btn.click();
+    expect(vi.mocked(resumeTask)).toHaveBeenCalledWith('aaaaaaaa-0000-0000-0000-000000000001');
+    expect(vi.mocked(restartTask)).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the batch resume without batch_id (nothing was paid for)', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        task_type: 'ESTIMATE_FROM_LIST' as any,
+        status: 'failed',
+        error_message: 'Ошибка',
+        progress_data: { _stage: 'batch_pending' } as any,
+      })
+    );
+
+    renderPage();
+
+    await screen.findByText(/Ошибка выполнения/i);
+    expect(screen.queryByTestId('resume-batch-button')).toBeNull();
+  });
+});

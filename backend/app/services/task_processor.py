@@ -1178,6 +1178,8 @@ class TaskProcessor:
 
         Идемпотентно: повторный вызов после рестарта повторно собирает ту же пачку.
         """
+        from datetime import date as _date
+
         _p = task.progress_data or {}
         batch_id = _p.get("batch_id")
         items: list[dict] = _p.get("items", [])
