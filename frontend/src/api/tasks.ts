@@ -22,6 +22,8 @@ export interface TaskStatusResponse {
   name?: string | null;
   progress_data?: Record<string, unknown>;
   input_files?: InputFileMeta[];
+  /** Секунд назад обработчик подал признак жизни. null — живого обработчика нет. */
+  worker_heartbeat_age_s?: number | null;
 }
 
 export interface ChatMessage {

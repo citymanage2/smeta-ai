@@ -516,6 +516,11 @@ async def call_claude(
             raise
 
         except anthropic.RateLimitError as e:
+            # Агрегатор (base_url) может отдать пустой счёт под видом 429. Ретраи
+            # денег не вернут, а бэкофф до 900 с × попытки × чанки растягивает
+            # задачу на часы — поэтому балансовый маркер проверяем ПЕРВЫМ.
+            _raise_if_insufficient_balance(e)
+
             rate_limit_count += 1
             last_error = e
 
@@ -561,6 +566,11 @@ async def call_claude(
                 await asyncio.sleep(delay)
 
         except anthropic.APIStatusError as e:
+            # Тот же случай, что и с 429: посредник вправе завернуть «нет денег»
+            # в 5xx. Без этой проверки ошибка выглядит как временный сбой сервера
+            # и уходит в ретраи вместо честной паузы.
+            _raise_if_insufficient_balance(e)
+
             if e.status_code >= 500:
                 last_error = e
                 logger.warning(
@@ -580,9 +590,8 @@ async def call_claude(
                     response_body=getattr(e, "response", None) and e.response.text,
                     exc_info=True,
                 )
-                # Билинг (исчерпанный баланс) → типизированная ошибка для paused;
-                # распознаётся расширенно (402 + маркеры), в т.ч. через прокси.
-                _raise_if_insufficient_balance(e)
+                # Балансовая ошибка сюда уже не дойдёт — отсечена проверкой в
+                # начале except (она покрывает 4xx, 5xx и 429 разом).
                 raise
 
         except Exception as e:

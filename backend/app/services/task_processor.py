@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +53,22 @@ ESTIMATE_MAIN_CHECKPOINT_GROUP = 8
 # а платим мы за каждый поиск. Обрезка ответа теперь не фатальна — чанк дробится
 # пополам (ResponseTruncatedError), поэтому запас по max_tokens не критичен.
 ESTIMATE_RETRY_CHUNK = 10
+
+# Предельный срок на одну пачку запросов к ИИ (см. Settings.CHUNK_STAGE_DEADLINE_S).
+CHUNK_STAGE_DEADLINE_S = _settings.CHUNK_STAGE_DEADLINE_S
+
+
+def _chunk_stage_deadline(n_chunks: int, concurrency: int) -> float:
+    """Дедлайн пачки, растущий вместе с её размером.
+
+    Фиксированное значение не годится: пачки бывают и на 8 чанков (главный проход
+    группами), и на 30+ (добор позиций без цены). При параллельности 4 тридцать
+    чанков — это 8 волн, штатно ~24 минуты, и жёсткие 30 минут обрывали бы
+    здоровую работу. Считаем по волнам, с щедрым запасом на волну: цель — поймать
+    зависание (часы), а не подгонять норматив.
+    """
+    waves = max(1, math.ceil(n_chunks / max(1, concurrency)))
+    return max(float(CHUNK_STAGE_DEADLINE_S), waves * 600.0)
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -423,6 +440,15 @@ class TaskCancelledError(Exception):
     """Raised when a task has been cancelled by the user."""
 
 
+class StageDeadlineError(Exception):
+    """Этап не уложился в отведённое время и был прерван.
+
+    Отдельный тип, а не TaskCancelledError: пользователю нельзя писать «вы
+    остановили задачу», когда её оборвал таймаут. Уже оплаченные чанки при этом
+    применяются и попадают в чекпоинт — перезапуск продолжит с них.
+    """
+
+
 class TaskProcessor:
     def __init__(self, task_id: str, db: AsyncSession):
         self.task_id = task_id
@@ -479,6 +505,23 @@ class TaskProcessor:
             task.updated_at = datetime.now(timezone.utc)
             await self.db.commit()
         logger.info("Task progress", task_id=self.task_id, message=message)
+
+    async def update_progress_message(self, message: str) -> None:
+        """Обновить ТОЛЬКО живую строку статуса, не дописывая её в историю.
+
+        Для часто меняющихся индикаторов («готово 7 из 38»): update_progress
+        добавляет каждое новое сообщение в progress_log, и тик раз в 10 секунд
+        распухал бы блок «ХОД ВЫПОЛНЕНИЯ» на сотни строк за один этап.
+        updated_at двигаем — по нему видно, что задача жива.
+        """
+        result = await self.db.execute(
+            select(Task).where(Task.id == self.task_id)
+        )
+        task = result.scalar_one_or_none()
+        if task:
+            task.progress_message = message
+            task.updated_at = datetime.now(timezone.utc)
+            await self.db.commit()
 
     async def update_status(self, status: str, error: Optional[str] = None) -> None:
         result = await self.db.execute(
@@ -904,6 +947,11 @@ class TaskProcessor:
         concurrency: int = FAST_CHUNK_CONCURRENCY,
         cancel_check_interval: float = 10.0,
         return_exceptions: bool = False,
+        progress_label: Optional[str] = None,
+        progress_tick: Optional[float] = None,
+        progress_offset: int = 0,
+        progress_total: Optional[int] = None,
+        deadline_s: Optional[float] = None,
     ) -> list:
         """Выполнить db-free воркеры параллельно под Semaphore, вернуть результаты по порядку.
 
@@ -917,25 +965,82 @@ class TaskProcessor:
         отслеживается одним общим watcher-ом (self.db читает только он) — при отмене
         воркеры отменяются и поднимается TaskCancelledError. concurrency=1 → фактически
         последовательно. Реальные (не-отмена) исключения воркеров пробрасываются.
+
+        progress_label — шаблон с полями {done}/{total}; если задан, watcher
+            публикует «сколько уже готово» по мере завершения воркеров. Публикует
+            именно watcher, а не воркеры: он и так единственный, кому разрешён
+            self.db, поэтому новых точек конкуренции по сессии не появляется.
+            Идёт в progress_message мимо progress_log — иначе история «ХОД
+            ВЫПОЛНЕНИЯ» распухла бы на сотни строк за один этап.
+
+        progress_offset / progress_total — сквозной счёт, когда пачка это лишь
+            часть работы задачи. Без них пользователь увидел бы «готово 8 из 8»,
+            а затем снова «готово 1 из 8» на следующей группе — счётчик, который
+            откатывается, хуже отсутствующего.
+
+        deadline_s — предельный срок на всю пачку. По истечении незавершённые
+            воркеры отменяются, и на их месте оказывается StageDeadlineError
+            (а не CancelledError) — чтобы caller отличил таймаут от нажатия
+            «Стоп» и не написал пользователю, будто тот сам остановил задачу.
+            Без него зависший API растягивает пачку на часы: автоповтор ждёт до
+            RATE_LIMIT_MAX_WAIT на попытку, и это умножается на число чанков.
         """
         if not workers:
             return []
 
         sem = asyncio.Semaphore(max(1, concurrency))
+        total = progress_total if progress_total is not None else len(workers)
+        done_count = {"n": 0}
 
         async def _guard(w):
             async with sem:
-                return await w()
+                try:
+                    return await w()
+                finally:
+                    # Счётчик в памяти: воркеру по-прежнему нельзя трогать self.db.
+                    done_count["n"] += 1
 
         tasks = [asyncio.create_task(_guard(w)) for w in workers]
         cancelled = {"flag": False}
+        timed_out = {"flag": False}
+
+        tick = progress_tick if progress_tick is not None else cancel_check_interval
+        started_at = asyncio.get_event_loop().time()
 
         async def _watch():
+            last_published = -1
             try:
                 while True:
-                    await asyncio.sleep(cancel_check_interval)
+                    await asyncio.sleep(tick)
                     if all(t.done() for t in tasks):
                         return
+
+                    if deadline_s is not None and (
+                        asyncio.get_event_loop().time() - started_at >= deadline_s
+                    ):
+                        timed_out["flag"] = True
+                        for t in tasks:
+                            if not t.done():
+                                t.cancel()
+                        return
+
+                    if progress_label and done_count["n"] != last_published:
+                        last_published = done_count["n"]
+                        try:
+                            await self.update_progress_message(
+                                progress_label.format(
+                                    done=progress_offset + last_published, total=total
+                                )
+                            )
+                        except Exception as pub_err:  # noqa: BLE001
+                            # Живой индикатор — вспомогательный: сбой его записи
+                            # не должен ронять уже оплаченную пачку.
+                            logger.warning(
+                                "Failed to publish chunk progress",
+                                task_id=self.task_id,
+                                error=str(pub_err),
+                            )
+
                     try:
                         await self._check_cancelled()
                     except TaskCancelledError:
@@ -956,6 +1061,19 @@ class TaskProcessor:
                 await watcher
             except (asyncio.CancelledError, Exception):
                 pass
+
+        # Отмена по дедлайну доходит до gather как CancelledError — неотличимо от
+        # пользовательского «Стоп». Подменяем на типизированную ошибку, пока
+        # известна настоящая причина.
+        if timed_out["flag"]:
+            deadline_msg = (
+                f"Этап не уложился в отведённое время ({int(deadline_s or 0) // 60} мин.). "
+                "Обработано не всё; сохранённый результат можно продолжить перезапуском."
+            )
+            results = [
+                StageDeadlineError(deadline_msg) if isinstance(r, asyncio.CancelledError) else r
+                for r in results
+            ]
 
         if return_exceptions:
             # Отмена приходит сюда как CancelledError в результатах: флаг ставится
@@ -1225,7 +1343,9 @@ class TaskProcessor:
                 for k, c in enumerate(retry_chunks)
             ]
             results = await self._run_chunks_parallel(
-                workers, concurrency=FAST_CHUNK_CONCURRENCY, return_exceptions=True
+                workers, concurrency=FAST_CHUNK_CONCURRENCY, return_exceptions=True,
+                progress_label="Добор цен: готово {done} из {total} частей...",
+                deadline_s=_chunk_stage_deadline(total_retry, FAST_CHUNK_CONCURRENCY),
             )
             first_error: Optional[BaseException] = None
             for chunk_result in results:
@@ -1323,6 +1443,22 @@ class TaskProcessor:
 
         except TaskCancelledError:
             logger.info("Task was cancelled by user", task_id=self.task_id)
+        except StageDeadlineError as deadline_error:
+            # Этап оборвался по таймауту. Не paused: пауза означает «ждём
+            # пополнения счёта», и resume_poller крутил бы такую задачу каждые
+            # 10 минут по кругу. Честный failed + сохранённый чекпоинт: перезапуск
+            # продолжит с последней группы, уже оплаченное не оплачивается снова.
+            logger.error(
+                "Task failed — stage deadline exceeded",
+                task_id=self.task_id,
+                error=str(deadline_error),
+            )
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            await self.update_status("failed", error=str(deadline_error))
+            await self.update_progress(f"⏱ {deadline_error}")
         except InsufficientBalanceError as balance_error:
             # Баланс API исчерпан — не failed, а пауза. Чекпоинт (progress_data)
             # к этому моменту уже сохранён отдельными сессиями и переживает
@@ -2370,7 +2506,14 @@ class TaskProcessor:
                     claude_results[int(item_id)] = result_item
                     await self._cache_priced_item(result_item)
 
-        async def _process_chunks(chunk_list: list[list[dict]], label_prefix: str, concurrency: int) -> None:
+        async def _process_chunks(
+            chunk_list: list[list[dict]],
+            label_prefix: str,
+            concurrency: int,
+            progress_label: Optional[str] = None,
+            progress_offset: int = 0,
+            progress_total: Optional[int] = None,
+        ) -> None:
             """fast → параллельно (Semaphore) с общим cancel-watcher; иначе последовательно.
             Fetch (Claude) параллельно, применение результатов (self.db) — барьером после.
 
@@ -2385,7 +2528,11 @@ class TaskProcessor:
                 for k, c in enumerate(chunk_list)
             ]
             results = await self._run_chunks_parallel(
-                workers, concurrency=concurrency, return_exceptions=True
+                workers, concurrency=concurrency, return_exceptions=True,
+                progress_label=progress_label,
+                progress_offset=progress_offset,
+                progress_total=progress_total,
+                deadline_s=_chunk_stage_deadline(total, concurrency),
             )
             first_error: Optional[BaseException] = None
             applied = 0
@@ -2437,7 +2584,14 @@ class TaskProcessor:
             for _gi in range(0, len(pending), ESTIMATE_MAIN_CHECKPOINT_GROUP):
                 group = pending[_gi:_gi + ESTIMATE_MAIN_CHECKPOINT_GROUP]
                 await self._check_cancelled()
-                await _process_chunks(group, label_prefix="", concurrency=concurrency)
+                await _process_chunks(
+                    group, label_prefix="", concurrency=concurrency,
+                    # Счёт сквозной по всей задаче: группы — деталь реализации
+                    # (чекпоинт каждые 8 чанков), пользователю о них знать нечего.
+                    progress_label="Расчёт цен: готово {done} из {total} частей...",
+                    progress_offset=_gi,
+                    progress_total=len(pending),
+                )
                 await self._save_claude_partial(items, matched_by_gidx, claude_results)
 
             # Один добор вместо двух проходов: пропущенные Claude и вернувшиеся с
@@ -2457,7 +2611,10 @@ class TaskProcessor:
                     for i in range(0, len(problem_items), ESTIMATE_RETRY_CHUNK)
                 ]
                 await self._check_cancelled()
-                await _process_chunks(retry_chunks, label_prefix="retry-", concurrency=concurrency)
+                await _process_chunks(
+                    retry_chunks, label_prefix="retry-", concurrency=concurrency,
+                    progress_label="Повторный расчёт: готово {done} из {total} частей...",
+                )
 
             still_without_price = self._ids_without_price(unmatched_by_gidx, claude_results)
             if still_without_price:
@@ -2891,7 +3048,9 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         for k, b in enumerate(batches)
     ]
     all_results = await self._run_chunks_parallel(
-        workers, concurrency=concurrency, return_exceptions=True
+        workers, concurrency=concurrency, return_exceptions=True,
+        progress_label="Исправление пустых цен: готово {done} из {total} батчей...",
+        deadline_s=_chunk_stage_deadline(len(batches), concurrency),
     )
 
     # Применяем результаты последовательно (мутация items / fixed_count).

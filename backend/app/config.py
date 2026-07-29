@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     ANTHROPIC_MAX_CONCURRENCY: int = 6   # глобальный семафор вызовов Anthropic (защита от 429)
     FAST_CHUNK_CONCURRENCY: int = 4      # параллельность чанков внутри задачи (было в task_processor)
     JOB_VISIBILITY_TIMEOUT_S: int = 900  # зависшая running-job (без heartbeat) → reclaim
+    # Предельный срок на одну пачку чанков (запросы к ИИ). Без него недоступный
+    # API растягивает задачу на часы: автоповтор ждёт до RATE_LIMIT_MAX_WAIT на
+    # попытку, и это умножается на число чанков. Пачка — до
+    # ESTIMATE_MAIN_CHECKPOINT_GROUP=8 запросов при параллельности 4, то есть
+    # 2 волны; штатно это минуты, 30 мин — это уже гарантированная поломка.
+    CHUNK_STAGE_DEADLINE_S: int = 1800
     JOB_POLL_INTERVAL_S: float = 2.0     # интервал опроса очереди worker'ом
     JOB_MAX_ATTEMPTS: int = 3            # после стольких attempts job → failed
     # Сколько ждём текущие job при SIGTERM. Остаток грейса Timeweb (~30 с) уходит на

@@ -122,7 +122,11 @@ async def _heartbeat_loop(job_id: int, interval: float) -> None:
 
 async def run_job(job: Job) -> None:
     """Выполнить одну захваченную job: handler → complete, либо requeue/fail."""
-    hb_interval = max(30.0, settings.JOB_VISIBILITY_TIMEOUT_S / 3)
+    # Раз в минуту, а не раз в visibility/3 (=300 с): claimed_at теперь ещё и
+    # признак жизни в карточке задачи, и с пятиминутным шагом индикатор большую
+    # часть времени показывал бы «сигнала нет N минут» у здоровой задачи.
+    # Для reclaim'а частый heartbeat только надёжнее — он смотрит на порог 900 с.
+    hb_interval = min(60.0, max(5.0, settings.JOB_VISIBILITY_TIMEOUT_S / 3))
     hb = asyncio.create_task(_heartbeat_loop(job.id, hb_interval))
     try:
         handler = HANDLERS.get(job.kind)

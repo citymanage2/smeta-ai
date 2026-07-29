@@ -150,6 +150,47 @@ async def claim_one(db: AsyncSession, worker_id: str, max_tries: int = 5) -> Opt
     return None
 
 
+async def live_heartbeat_age_s(db: AsyncSession, task_id: str) -> Optional[float]:
+    """Сколько секунд прошло с последнего сигнала обработчика этой задачи.
+
+    `claimed_at` running-job продлевается `heartbeat()`, поэтому его возраст —
+    честный признак жизни процесса: свежий = задача обрабатывается, старый =
+    обработчик умер или застрял. Отдаётся в карточку задачи, чтобы пользователь
+    видел разницу между «работает» и «висит» (раньше heartbeat писался только
+    в лог сервера и наружу не выходил).
+
+    None — сигнала нет: живой job нет вовсе, либо она ещё `queued` (не захвачена,
+    `claimed_at` пуст). Ноль в этом случае был бы ложью про живость.
+
+    Фильтр по `payload.task_id` — на стороне Python: JSON-предикаты
+    диалектозависимы (JSONB в проде, JSON в SQLite), а running-job единицы.
+    Тот же приём в `sweep_orphaned_tasks`.
+    """
+    rows = (
+        await db.execute(
+            select(Job.payload, Job.claimed_at).where(Job.status == "running")
+        )
+    ).all()
+
+    claimed = [
+        c for payload, c in rows
+        if c is not None and (payload or {}).get("task_id") == task_id
+    ]
+    if not claimed:
+        return None
+
+    # Задачу может вести только одна job, но при реклейме кратко бывает две —
+    # берём самый свежий сигнал: живость определяет лучший из имеющихся.
+    return _age_s(max(claimed))
+
+
+def _age_s(dt: datetime) -> float:
+    """Возраст в секундах; naive-даты (SQLite) трактуем как UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (_now() - dt).total_seconds())
+
+
 async def heartbeat(db: AsyncSession, job_id: int) -> None:
     """Продлить визибилити running-job (сдвинуть claimed_at на now)."""
     await db.execute(

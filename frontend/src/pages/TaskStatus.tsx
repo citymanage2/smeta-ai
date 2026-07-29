@@ -40,6 +40,22 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
   paused: { bg: '#fffbeb', text: '#b45309', border: '#fcd34d' },
 };
 
+// Через сколько секунд молчания обработчика считаем задачу подозрительной.
+// Worker продлевает jobs.claimed_at раз в 60 с (app/worker.py: hb_interval),
+// поэтому 180 с — три пропущенных сигнала подряд, а не случайная задержка.
+const HEARTBEAT_STALE_S = 180;
+
+// Отсрочка перед первым предупреждением: только что созданная задача считаные
+// секунды ждёт свободный обработчик, и это норма, а не поломка.
+const HEARTBEAT_GRACE_S = 60;
+
+function formatAgo(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)} сек. назад`;
+  const min = Math.floor(seconds / 60);
+  if (min < 60) return `${min} мин. назад`;
+  return `${(min / 60).toFixed(1)} ч. назад`;
+}
+
 // Типы задач, которые бэкенд умеет продолжать с чекпоинта (см. RESUMABLE_TYPES
 // в backend/app/routers/tasks.py). Должен совпадать с бэкендом.
 const RESUMABLE_TASK_TYPES: string[] = [
@@ -784,6 +800,83 @@ const TaskStatusPage: React.FC = () => {
                   </button>
                 )}
               </div>
+
+              {/* Признак жизни обработчика. Крутилка и растущий таймер есть и у
+                  мёртвой задачи — по ним нельзя отличить работу от зависания.
+                  Здесь показан факт: когда обработчик последний раз отчитался. */}
+              {(task.status === 'pending' || task.status === 'processing') && (() => {
+                const age = task.worker_heartbeat_age_s;
+                const alive = age !== null && age !== undefined && age <= HEARTBEAT_STALE_S;
+
+                // Пачка отправлена в Batch API: она обрабатывается на стороне
+                // Anthropic, и живого обработчика за задачей нет ПО ЗАМЫСЛУ
+                // (то же исключение, что в sweep_orphaned_tasks на бэкенде).
+                // Тревожить тут нечем — прогресс показывает BatchProgressBar.
+                if (isBatchPending(task)) return null;
+
+                // Свежесозданная задача ждёт свободный обработчик считаные
+                // секунды. Без этой отсрочки жёлтая плашка мигала бы на каждой
+                // новой задаче и обесценивала бы предупреждение.
+                if (!alive && elapsedSeconds < HEARTBEAT_GRACE_S) return null;
+
+                if (alive) {
+                  return (
+                    <div
+                      data-testid="worker-alive"
+                      style={{ marginTop: '10px', fontSize: '13px', color: '#15803d' }}
+                    >
+                      ● Обработчик на связи{age! >= 5 ? ` — сигнал ${formatAgo(age!)}` : ''}
+                    </div>
+                  );
+                }
+
+                // Сигнала нет: либо задача ещё не взята в работу (pending), либо
+                // обработчик умер/застрял. Второе — то, из-за чего задача висит
+                // часами, поэтому предлагаем перезапуск сразу здесь.
+                const neverStarted = age === null || age === undefined;
+                return (
+                  <div
+                    data-testid="worker-stale"
+                    style={{
+                      marginTop: '12px',
+                      padding: '12px 14px',
+                      backgroundColor: '#fffbeb',
+                      border: '1px solid #fcd34d',
+                      borderRadius: '8px',
+                    }}
+                  >
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#b45309' }}>
+                      ⚠ {neverStarted
+                        ? (task.status === 'pending'
+                            ? 'Задача ещё не взята в обработку'
+                            : 'Обработчик не отвечает')
+                        : `Обработчик молчит ${formatAgo(age!)}`}
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#78350f', marginTop: '4px', lineHeight: 1.5 }}>
+                      {neverStarted && task.status === 'pending'
+                        ? 'Ждёт свободный обработчик. Если это надолго — проверьте очередь в панели администратора.'
+                        : 'Возможно, задача зависла. Перезапуск продолжит с последнего сохранённого шага — уже посчитанное не считается заново.'}
+                    </div>
+                    <button
+                      onClick={handleRestart}
+                      disabled={restarting}
+                      style={{
+                        marginTop: '10px',
+                        padding: '6px 14px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        backgroundColor: restarting ? '#e2e8f0' : '#b45309',
+                        color: restarting ? '#94a3b8' : '#ffffff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor: restarting ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {restarting ? 'Перезапуск...' : '↻ Перезапустить'}
+                    </button>
+                  </div>
+                );
+              })()}
 
               {/* Current progress message — shown directly, independent of progressLog */}
               {(task.status === 'pending' || task.status === 'processing') && task.progress_message && (

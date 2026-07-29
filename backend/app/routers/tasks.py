@@ -113,6 +113,9 @@ class TaskStatusResponse(BaseModel):
     name: Optional[str] = None
     progress_data: Optional[dict] = None
     input_files: list[InputFileMeta] = []
+    # Сколько секунд назад обработчик последний раз подал признак жизни.
+    # None — живого обработчика за задачей нет (или он ещё не взял её в работу).
+    worker_heartbeat_age_s: Optional[float] = None
 
 
 class TaskCreateResponse(BaseModel):
@@ -419,10 +422,22 @@ async def get_task_status(
             detail="Задача не найдена",
         )
 
+    from app.services import job_queue
+
+    # Признак жизни обработчика — только для задач «в работе»: у завершённой
+    # задачи вопрос «а она не зависла?» не стоит, а лишний запрос к jobs идёт
+    # на каждый опрос статуса (раз в 3 с на открытую карточку).
+    heartbeat_age = (
+        await job_queue.live_heartbeat_age_s(db, str(task.id))
+        if task.status in ("pending", "processing")
+        else None
+    )
+
     return TaskStatusResponse(
         id=str(task.id),
         task_type=task.task_type,
         status=task.status,
+        worker_heartbeat_age_s=heartbeat_age,
         progress_message=task.progress_message,
         progress_log=list(task.progress_log or []),
         error_message=task.error_message,
