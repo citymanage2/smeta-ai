@@ -232,6 +232,44 @@ async def fail(db: AsyncSession, job_id: int, error: str) -> None:
     await db.commit()
 
 
+async def note_retry_on_task(
+    db: AsyncSession, task_id: Optional[str], attempts_done: int, max_attempts: int, error: str
+) -> bool:
+    """Показать в карточке задачи, что прогон сорвался и идёт повторная попытка.
+
+    Без этого сбой обработки был виден ТОЛЬКО в логе контейнера: job тихо
+    возвращалась в очередь, а задача оставалась в «Обработке» с прежним шагом —
+    пользователь видел замерший прогресс и не мог знать ни что случилось, ни что
+    попытка уже вторая. Именно так выглядело «задачи повисли и висели бы вечно»
+    (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+
+    Не коммитит: вызывающий сам решает границы транзакции. Guard по статусу — не
+    пишем в завершённую или отменённую задачу.
+    """
+    if not task_id:
+        return False
+    task = (
+        await db.execute(
+            select(Task).where(Task.id == task_id, Task.status.in_(ACTIVE_TASK_STATUSES))
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        return False
+
+    detail = (error or "").strip().replace("\n", " ")[:300]
+    message = (
+        f"⚠ Сбой обработки (попытка {attempts_done} из {max_attempts}), "
+        f"пробуем ещё раз. {detail}"
+    ).strip()
+    task.progress_message = message
+    log = list(task.progress_log or [])
+    if not log or log[-1] != message:
+        log.append(message)
+        task.progress_log = log
+    task.updated_at = _now()
+    return True
+
+
 async def reclaim_stale(db: AsyncSession, timeout_s: int, max_attempts: int) -> int:
     """Вернуть в очередь зависшие running-job (claimed_at старше timeout).
 
@@ -462,6 +500,35 @@ async def supersede_jobs_for_task(db: AsyncSession, task_id: str) -> int:
         await db.commit()
         logger.info("Jobs superseded by restart", count=n, task_id=task_id)
     return n
+
+
+async def drop_duplicate_job(db: AsyncSession, job_id: int, task_id: str) -> bool:
+    """Снять job, дублирующую живой прогон этой же задачи в этом же процессе.
+
+    Откуда берётся дубль: `reclaim_stale` возвращает в очередь job, чей heartbeat
+    протух. Под нагрузкой heartbeat опаздывает не потому, что прогон умер, а потому
+    что процессу не дают процессор — и тогда реклейм выдаёт ВТОРОЙ прогон живой
+    задачи. Нагрузка растёт, heartbeat опаздывает сильнее, появляется третий
+    прогон: петля с положительной обратной связью. 30.07.2026 её видно в логе одной
+    задачи — три записи «Начало обработки задачи...» и два разных набора чанков,
+    отправленных в ИИ (то есть двойная оплата).
+
+    Обработчик в контейнере один, поэтому «эта задача уже считается здесь» —
+    достоверный признак дубля, и его можно снять, не спрашивая никого.
+    """
+    res = await db.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.status == "running")
+        .values(
+            status="superseded",
+            last_error="Задача уже считается этим обработчиком (дубль снят)",
+        )
+    )
+    n = res.rowcount or 0
+    if n:
+        await db.commit()
+        logger.warning("Duplicate job dropped", job_id=job_id, task_id=task_id)
+    return bool(n)
 
 
 async def requeue_after_shutdown(

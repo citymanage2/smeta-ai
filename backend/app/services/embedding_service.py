@@ -4,9 +4,12 @@
 Используется для семантического поиска по прайс-листу.
 Векторы генерируются один раз при загрузке прайса и хранятся в БД.
 """
+import logging
+import os
 import re
 import threading
-import logging
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,38 @@ def normalize_name(text: str) -> str:
     return result.lower()
 
 
+def _embedding_threads() -> int:
+    """Сколько ядер отдаём ONNX под эмбеддинги.
+
+    По умолчанию onnxruntime забирает ВСЕ ядра. Считаем мы эмбеддинги из потоков
+    обработчика, и при нескольких задачах разом машина уходила в полку: web живёт
+    на той же машине и переставал отвечать — 30.07.2026 страница задачи не
+    загружалась совсем, хотя обработчик был жив
+    (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+
+    `EMBEDDING_THREADS=0` — отдать решение onnxruntime (прежнее поведение).
+    """
+    configured = getattr(settings, "EMBEDDING_THREADS", 0)
+    if configured and configured > 0:
+        return int(configured)
+    cores = os.cpu_count() or 2
+    return max(1, cores - 1)
+
+
+def _make_fastembed(text_embedding_cls, model_path: str):
+    """Создать модель fastembed с ограничением по числу потоков.
+
+    Старые версии fastembed не знают параметра `threads` — тогда создаём как
+    раньше: ограничение полезно, но не ценой неработающего поиска цен.
+    """
+    threads = _embedding_threads()
+    try:
+        return text_embedding_cls(model_path, threads=threads)
+    except TypeError:
+        logger.warning("fastembed без параметра threads — модель без ограничения ядер")
+        return text_embedding_cls(model_path)
+
+
 def _get_model():
     global _model, _model_type
     if _model is not None:
@@ -65,7 +100,7 @@ def _get_model():
             return _model
         try:
             from fastembed import TextEmbedding
-            _model = TextEmbedding(_current_model_path)
+            _model = _make_fastembed(TextEmbedding, _current_model_path)
             _model_type = "fastembed"
             return _model
         except ImportError:

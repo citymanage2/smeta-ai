@@ -15,6 +15,7 @@ boto3 синхронный — блокирующие вызовы обёрну�
 from __future__ import annotations
 
 import re
+import threading
 import uuid
 from typing import Optional
 
@@ -33,25 +34,40 @@ class StorageError(Exception):
 # Ленивая инициализация клиента: не требуем креды при импорте, легко подменить в тестах.
 _client = None
 
+# СОЗДАНИЕ клиента boto3 потокобезопасным НЕ является (сами вызовы — да): botocore
+# при первом создании подгружает модели сервиса в общие кеши. А читаем мы файлы из
+# потоков (`run_in_threadpool`), и на свежем деплое три задачи разом входят сюда
+# одновременно — первым же делом каждая грузит свой входной файл. Без замка это
+# гонка на пустом месте: либо три клиента вместо одного, либо исключение в загрузке
+# файла у живой задачи. Ровно такой профиль был у инцидента 30.07.2026
+# (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+_client_lock = threading.Lock()
+
 
 def _get_client():
     global _client
     if _client is None:
-        import boto3
-        from botocore.config import Config
-
-        _client = boto3.client(
-            "s3",
-            endpoint_url=settings.S3_ENDPOINT_URL,
-            region_name=settings.S3_REGION,
-            aws_access_key_id=settings.S3_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
-            config=Config(
-                signature_version="s3v4",
-                retries={"max_attempts": 3, "mode": "standard"},
-            ),
-        )
+        with _client_lock:
+            if _client is None:
+                _client = _build_client()
     return _client
+
+
+def _build_client():
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.S3_ENDPOINT_URL,
+        region_name=settings.S3_REGION,
+        aws_access_key_id=settings.S3_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY,
+        config=Config(
+            signature_version="s3v4",
+            retries={"max_attempts": 3, "mode": "standard"},
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

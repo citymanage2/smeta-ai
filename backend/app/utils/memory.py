@@ -90,29 +90,51 @@ def rss_mb() -> Optional[float]:
         return None
 
 
-def container_limit_mb() -> Optional[float]:
-    """Сколько памяти отпущено контейнеру, МБ. None — лимита нет / не прочитать.
+def _meminfo_mb(field: str) -> Optional[float]:
+    """Поле из /proc/meminfo в МБ (значения там в килобайтах)."""
+    raw = _read("/proc/meminfo")
+    if not raw:
+        return None
+    prefix = f"{field}:"
+    for line in raw.splitlines():
+        if line.startswith(prefix):
+            try:
+                return round(int(line.split()[1]) / 1024, 1)
+            except (IndexError, ValueError):
+                return None
+    return None
 
-    Порядок: cgroup v2 → cgroup v1 → MemTotal хоста. Последнее нужно, потому что
-    без лимита «сколько задач влезет» всё равно считается от чего-то реального.
+
+def container_limit_mb() -> "tuple[Optional[float], Optional[str]]":
+    """Сколько памяти отпущено, МБ, и ОТКУДА эта цифра.
+
+    Источник обязателен: `cgroup` — личный лимит контейнера, и тогда цифра целиком
+    наша; `host` — лимита нет, это память всей машины, которую делят web,
+    обработчик и всё остальное. Разница принципиальна при разборе: 30.07.2026
+    диагностика показала «лимит памяти 3911.8 МБ», и это была память машины, а не
+    контейнера — вывод «памяти вдоволь» из неё делать нельзя.
     """
     v2 = _read_int(f"{_CGROUP_V2}/memory.max")
     if v2 is not None and v2 > 0:
-        return round(v2 / _MB, 1)
+        return round(v2 / _MB, 1), "cgroup"
 
     v1 = _read_int(f"{_CGROUP_V1}/memory.limit_in_bytes")
     if v1 is not None and 0 < v1 < _V1_UNLIMITED_THRESHOLD:
-        return round(v1 / _MB, 1)
+        return round(v1 / _MB, 1), "cgroup"
 
-    raw = _read("/proc/meminfo")
-    if raw:
-        for line in raw.splitlines():
-            if line.startswith("MemTotal:"):
-                try:
-                    return round(int(line.split()[1]) / 1024, 1)
-                except (IndexError, ValueError):
-                    break
-    return None
+    total = _meminfo_mb("MemTotal")
+    if total is not None:
+        return total, "host"
+    return None, None
+
+
+def available_mb() -> Optional[float]:
+    """Сколько памяти реально можно занять прямо сейчас (MemAvailable), МБ.
+
+    На машине без личного лимита контейнера это единственная честная мера запаса:
+    она учитывает и web-контейнер, и всё остальное, что уже занято.
+    """
+    return _meminfo_mb("MemAvailable")
 
 
 def container_usage_mb() -> Optional[float]:
@@ -136,6 +158,11 @@ class MemorySnapshot:
     rss_mb: Optional[float]
     usage_mb: Optional[float]
     limit_mb: Optional[float]
+    # 'cgroup' — личный лимит контейнера; 'host' — память всей машины (лимита нет).
+    limit_source: Optional[str] = None
+    # Свободно прямо сейчас (MemAvailable). Единственная честная мера запаса, когда
+    # личного лимита нет: учитывает и соседей по машине.
+    available_mb: Optional[float] = None
 
     @property
     def used_mb(self) -> Optional[float]:
@@ -154,20 +181,38 @@ class MemorySnapshot:
             return None
         return round(used / limit, 3)
 
+    @property
+    def headroom_mb(self) -> Optional[float]:
+        """Сколько ещё можно занять до потолка. None — считать не из чего.
+
+        С личным лимитом контейнера это «лимит минус занятое». Без лимита (общая
+        машина) — MemAvailable: цифра машины минус наша занятость соврала бы, потому
+        что остальное съедают соседи, а не мы.
+        """
+        if self.limit_source == "cgroup" and self.limit_mb:
+            used = self.used_mb
+            return None if used is None else round(self.limit_mb - used, 1)
+        return self.available_mb
+
     def as_dict(self) -> dict:
         """Для payload системного события и ответа диагностики."""
         return {
             "rss_mb": self.rss_mb,
             "usage_mb": self.usage_mb,
             "limit_mb": self.limit_mb,
+            "limit_source": self.limit_source,
+            "available_mb": self.available_mb,
             "ratio": self.ratio,
         }
 
 
 def snapshot() -> MemorySnapshot:
     """Снять текущее состояние памяти. Никогда не бросает."""
+    limit, source = container_limit_mb()
     return MemorySnapshot(
         rss_mb=rss_mb(),
         usage_mb=container_usage_mb(),
-        limit_mb=container_limit_mb(),
+        limit_mb=limit,
+        limit_source=source,
+        available_mb=available_mb(),
     )

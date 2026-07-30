@@ -37,6 +37,12 @@ KIND_WORKER_MEMORY_HIGH = "worker_memory_high"
 # недоступен. Череда таких событий за час = «памяти не хватает на столько задач
 # параллельно» (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
 KIND_WORKER_STARTED = "worker_started"
+# Сигнал жизни обработчика не записался в БД. Это ровно то, из-за чего живая
+# задача показывает «Обработчик молчит N минут»: сам прогон идёт, а продлить
+# `claimed_at` не удалось (пул соединений, обрыв, отказ БД). Ошибку heartbeat
+# намеренно не считаем фатальной — но раньше она уходила только в лог контейнера,
+# и отличить «обработчик умер» от «heartbeat не пишется» было нельзя.
+KIND_WORKER_HEARTBEAT_FAILED = "worker_heartbeat_failed"
 
 
 class SystemEvent(Base):

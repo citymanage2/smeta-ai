@@ -77,6 +77,12 @@ services:
       # пауза между захватами — крутилки этого механизма
       # (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
       WORKER_MEM_HIGH_RATIO: ${WORKER_MEM_HIGH_RATIO:-0.8}
+      WORKER_MEM_MIN_FREE_MB: ${WORKER_MEM_MIN_FREE_MB:-512}
+      # Ядра под эмбеддинги: 0 — сколько возьмёт onnxruntime (все). Держим одно
+      # ядро свободным, чтобы интерфейс отвечал во время обработки.
+      EMBEDDING_THREADS: ${EMBEDDING_THREADS:-0}
+      # Дублирующие ограничители на случай, если onnxruntime не увидит параметр.
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-2}
       WORKER_TASK_MEM_MB: ${WORKER_TASK_MEM_MB:-400}
       WORKER_CLAIM_STAGGER_S: ${WORKER_CLAIM_STAGGER_S:-60}
       WORKER_CRASH_RECLAIM_AGE_S: ${WORKER_CRASH_RECLAIM_AGE_S:-90}
@@ -87,7 +93,13 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
     # Обработка задач: без alembic, без веб-порта. SIGTERM → graceful drain.
-    command: python -m app.worker
+    #
+    # `nice -n 10`: web и обработчик делят одну машину, а обработка — это плотный
+    # счёт (эмбеддинги, парсинг). 30.07.2026 несколько задач разом заняли процессор
+    # целиком, и страница задачи перестала загружаться совсем. Пониженный приоритет
+    # ничего не отнимает у обработки, когда машина свободна, но отдаёт процессор
+    # интерфейсу, когда занята. Права не нужны: понижать приоритет можно всем.
+    command: nice -n 10 python -m app.worker
     # Дефолт Docker — 10 с, этого не хватает: worker дренирует текущие job
     # JOB_DRAIN_TIMEOUT_S=20 с, затем отменяет обработчики и возвращает их job в
     # очередь, не списывая попытку. При грейсе 10 с SIGKILL прилетал бы посреди

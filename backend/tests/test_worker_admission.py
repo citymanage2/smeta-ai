@@ -17,10 +17,21 @@ from app.utils.memory import MemorySnapshot
 pytestmark = pytest.mark.asyncio
 
 
-def _snap(monkeypatch, rss=None, usage=None, limit=None):
+def _snap(monkeypatch, rss=None, usage=None, limit=None, source=None, available=None):
+    """Подменить измерение памяти.
+
+    `source='cgroup'` — у контейнера есть личный лимит; `source='host'` — лимита
+    нет, цифра относится ко всей машине, и запас показывает только `available`
+    (ровно так на проде 30.07.2026).
+    """
+    if source is None and limit is not None:
+        source = "cgroup"
     monkeypatch.setattr(
         worker, "memory_snapshot",
-        lambda: MemorySnapshot(rss_mb=rss, usage_mb=usage, limit_mb=limit),
+        lambda: MemorySnapshot(
+            rss_mb=rss, usage_mb=usage, limit_mb=limit,
+            limit_source=source, available_mb=available,
+        ),
     )
 
 
@@ -79,6 +90,69 @@ async def test_brake_off_when_idle_even_if_over_ratio(monkeypatch):
     _snap(monkeypatch, rss=2000.0, usage=2000.0, limit=2048.0)
 
     assert worker._memory_brake_engaged() is False
+
+
+# ---------------------------------------------------------------------------
+# Общая машина без личного лимита контейнера — случай прода 30.07.2026
+# ---------------------------------------------------------------------------
+
+async def test_brake_on_when_host_memory_almost_gone(monkeypatch):
+    """Лимита у контейнера нет, свободного на машине мало — не берём новую задачу.
+
+    Диагностика 30.07.2026 показала «лимит 3911.8 МБ» — это была память ВСЕЙ
+    машины (её делят web и обработчик), поэтому доля от лимита ничего не значила.
+    Честный признак тесноты здесь — MemAvailable.
+    """
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
+    monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 0)
+    monkeypatch.setattr(worker, "_inflight_job_ids", {1})
+    _snap(monkeypatch, rss=600.0, usage=None, limit=3911.8, source="host", available=300.0)
+
+    assert worker._memory_brake_engaged() is True
+
+
+async def test_brake_off_when_host_has_room(monkeypatch):
+    """Свободной памяти вдоволь — параллельность работает."""
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
+    monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 0)
+    monkeypatch.setattr(worker, "_inflight_job_ids", {1})
+    _snap(monkeypatch, rss=600.0, usage=None, limit=3911.8, source="host", available=2500.0)
+
+    assert worker._memory_brake_engaged() is False
+
+
+async def test_brake_on_when_cgroom_headroom_small(monkeypatch):
+    """С личным лимитом запас считается как «лимит минус занятое»."""
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
+    monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0.95)
+    monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 0)
+    monkeypatch.setattr(worker, "_inflight_job_ids", {1})
+    _snap(monkeypatch, rss=1700.0, usage=1800.0, limit=2048.0, source="cgroup")
+
+    assert worker._memory_brake_engaged() is True
+
+
+async def test_slots_from_available_memory_on_shared_host(monkeypatch):
+    """Слоты на общей машине считаются от свободного, а не от её общего размера.
+
+    (2500 − 512) / 400 = 4 → но настроено 3, значит 3.
+    """
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 3)
+    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
+    _snap(monkeypatch, rss=200.0, limit=3911.8, source="host", available=2500.0)
+
+    assert worker._effective_slots() == 3
+
+
+async def test_slots_shrink_when_shared_host_is_tight(monkeypatch):
+    """Мало свободного на машине — меньше слотов: (1200 − 512) / 400 = 1."""
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
+    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
+    _snap(monkeypatch, rss=200.0, limit=3911.8, source="host", available=1200.0)
+
+    assert worker._effective_slots() == 1
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,13 @@ _inflight_job_ids: set[int] = set()
 # по занятости в первые секунды бессмысленно.
 _inflight_started_at: dict[int, float] = {}
 
+# job_id → task_id исполняемых сейчас задач. Нужен, чтобы этот процесс не начал
+# считать одну и ту же задачу дважды: под нагрузкой heartbeat опаздывает, реклейм
+# принимает живой прогон за мёртвый и выдаёт второй — нагрузка растёт, опоздание
+# усиливается, появляется третий. Петлю видно в логе задачи как повторяющееся
+# «Начало обработки задачи...» (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+_inflight_task_ids: dict[int, str] = {}
+
 
 def _monotonic() -> float:
     """Монотонные секунды. Отдельной функцией — чтобы подменять в тестах."""
@@ -147,35 +154,30 @@ def _rss_fields(rss_before: Optional[float]) -> dict:
     return fields
 
 
-async def _report_memory_if_high(rss: Optional[float]) -> None:
-    """Записать жалобу на память, чтобы её было видно в админке.
+async def _record_event_throttled(kind: str, payload: dict, min_interval_s: float) -> bool:
+    """Записать системное событие, но не чаще раза в `min_interval_s`.
 
-    Раньше расход памяти не измерялся вообще, и вопрос «сколько задач считать
-    параллельно» решался наугад. Web память воркера измерить не может (другой
-    контейнер), поэтому единственный канал — строка в БД, её читает
-    `/admin/queue-health`. Пишем только при превышении порога и не чаще раза в
-    30 минут: диагностика не должна сама создавать нагрузку.
+    Общий механизм для всех сигналов обработчика в БД: web — другой контейнер и
+    лога воркера не видит, а лог Timeweb пользователю недоступен. Поэтому всё, что
+    надо знать при разборе («памяти много», «heartbeat не пишется»), едет строкой в
+    `system_events` и читается диагностикой админки. Троттлинг — чтобы диагностика
+    не создавала нагрузку сама.
+
+    Возвращает True, если запись сделана. Никогда не бросает: диагностика не важнее
+    самой работы.
     """
-    threshold = settings.WORKER_RSS_WARN_MB
-    if rss is None or threshold <= 0 or rss < threshold:
-        return
-
     from datetime import datetime, timedelta, timezone
 
     from sqlalchemy import select
 
-    from app.models.system_event import KIND_WORKER_MEMORY_HIGH, SystemEvent
+    from app.models.system_event import SystemEvent
 
-    logger.warning(
-        "Worker memory high", rss_mb=rss, threshold_mb=threshold,
-        concurrency=settings.WORKER_CONCURRENCY,
-    )
     try:
         async with AsyncSessionLocal() as db:
             last_at = (
                 await db.execute(
                     select(SystemEvent.created_at)
-                    .where(SystemEvent.kind == KIND_WORKER_MEMORY_HIGH)
+                    .where(SystemEvent.kind == kind)
                     .order_by(SystemEvent.id.desc())
                     .limit(1)
                 )
@@ -183,28 +185,47 @@ async def _report_memory_if_high(rss: Optional[float]) -> None:
             if last_at is not None:
                 if last_at.tzinfo is None:  # SQLite отдаёт naive
                     last_at = last_at.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - last_at < timedelta(minutes=30):
-                    return
-            db.add(
-                SystemEvent(
-                    kind=KIND_WORKER_MEMORY_HIGH,
-                    payload={
-                        "rss_mb": rss,
-                        "threshold_mb": threshold,
-                        "concurrency": settings.WORKER_CONCURRENCY,
-                        # Лимит контейнера: без него «1200 МБ» ничего не говорит —
-                        # это может быть и половина пресета, и его потолок.
-                        **{
-                            k: v
-                            for k, v in memory_snapshot().as_dict().items()
-                            if k != "rss_mb"
-                        },
-                    },
-                )
-            )
+                if datetime.now(timezone.utc) - last_at < timedelta(seconds=min_interval_s):
+                    return False
+            db.add(SystemEvent(kind=kind, payload=payload))
             await db.commit()
-    except Exception as e:  # noqa: BLE001 — жалоба на память не важнее самой работы
-        logger.warning("Worker memory event not recorded", error=str(e))
+            return True
+    except Exception as e:  # noqa: BLE001 — диагностика не важнее самой работы
+        logger.warning("System event not recorded", kind=kind, error=str(e))
+        return False
+
+
+async def _report_memory_if_high(rss: Optional[float]) -> None:
+    """Записать жалобу на память, чтобы её было видно в админке.
+
+    Раньше расход памяти не измерялся вообще, и вопрос «сколько задач считать
+    параллельно» решался наугад. Web память воркера измерить не может (другой
+    контейнер), поэтому единственный канал — строка в БД, её читает
+    `/admin/queue-health`.
+    """
+    threshold = settings.WORKER_RSS_WARN_MB
+    if rss is None or threshold <= 0 or rss < threshold:
+        return
+
+    from app.models.system_event import KIND_WORKER_MEMORY_HIGH
+
+    logger.warning(
+        "Worker memory high", rss_mb=rss, threshold_mb=threshold,
+        concurrency=settings.WORKER_CONCURRENCY,
+    )
+    await _record_event_throttled(
+        KIND_WORKER_MEMORY_HIGH,
+        {
+            "rss_mb": rss,
+            "threshold_mb": threshold,
+            "concurrency": settings.WORKER_CONCURRENCY,
+            "running": len(_inflight_job_ids),
+            # Лимит контейнера: без него «1200 МБ» ничего не говорит — это может
+            # быть и половина пресета, и его потолок.
+            **{k: v for k, v in memory_snapshot().as_dict().items() if k != "rss_mb"},
+        },
+        min_interval_s=settings.WORKER_EVENT_THROTTLE_S,
+    )
 
 
 async def _heartbeat_loop(job_id: int, interval: float) -> None:
@@ -220,10 +241,29 @@ async def _heartbeat_loop(job_id: int, interval: float) -> None:
             await asyncio.sleep(interval)
             async with AsyncSessionLocal() as db:
                 await job_queue.heartbeat(db, job_id)
+            # Заодно замеряем память по ходу задачи, а не только в её конце: если
+            # процесс умрёт, последний замер останется единственным свидетельством
+            # того, сколько он съел (в конце job писать будет уже некому).
+            await _report_memory_if_high(rss_mb())
         except asyncio.CancelledError:
             break
         except Exception as e:  # noqa: BLE001 — транзиентный сбой: логируем и продолжаем
             logger.warning("Heartbeat failed, will retry", job_id=job_id, error=str(e))
+            # И в БД: именно непишущийся heartbeat выглядит в карточке как
+            # «Обработчик молчит N минут» у живой задачи. Без этой записи «умер» и
+            # «жив, но не может отчитаться» неотличимы.
+            from app.models.system_event import KIND_WORKER_HEARTBEAT_FAILED
+
+            await _record_event_throttled(
+                KIND_WORKER_HEARTBEAT_FAILED,
+                {
+                    "job_id": job_id,
+                    "worker_id": WORKER_ID,
+                    "error": str(e)[:500],
+                    "running": len(_inflight_job_ids),
+                },
+                min_interval_s=settings.WORKER_EVENT_THROTTLE_S,
+            )
 
 
 async def run_job(job: Job) -> None:
@@ -270,6 +310,16 @@ async def run_job(job: Job) -> None:
                     .where(Job.id == job.id)
                     .values(status="queued", claimed_by=None, claimed_at=None, last_error=str(e)[:1000])
                 )
+                # И сказать об этом пользователю: молчаливая повторная попытка
+                # выглядит как зависшая задача — прогресс замирает на прежнем шаге,
+                # а причина остаётся в логе контейнера, куда он не смотрит.
+                await job_queue.note_retry_on_task(
+                    db,
+                    (job.payload or {}).get("task_id"),
+                    job.attempts,
+                    settings.JOB_MAX_ATTEMPTS,
+                    str(e),
+                )
                 await db.commit()
     finally:
         hb.cancel()
@@ -289,10 +339,13 @@ def _memory_brake_engaged() -> bool:
     задачи идут по одной, в спокойное время занимаются все слоты. Задачи не
     теряются — ждут в очереди.
 
-    Два независимых предохранителя:
-    - доля от РЕАЛЬНОГО лимита контейнера (cgroup) — главный: пресет Timeweb может
-      быть любым, и порог в мегабайтах угадывал его вслепую;
-    - прежний абсолютный порог RSS — резерв там, где cgroup недоступна.
+    Три независимых предохранителя:
+    - ЗАПАС памяти (главный): при личном лимите контейнера это «лимит минус
+      занятое», без лимита — MemAvailable машины. Второе важно: 30.07.2026
+      выяснилось, что на контейнере лимита нет и 3,9 ГБ делят web с обработчиком,
+      поэтому доля «от лимита» без MemAvailable ничего не значила;
+    - доля от лимита — работает, когда лимит контейнеру задан;
+    - прежний абсолютный порог RSS — резерв там, где нет ни того, ни другого.
 
     Пустой процесс не тормозим никогда: иначе высокая база (загруженный прайс,
     матрицы эмбеддингов) заперла бы очередь навсегда — брать было бы нечего, а
@@ -302,6 +355,16 @@ def _memory_brake_engaged() -> bool:
         return False
 
     snap = memory_snapshot()
+    min_free = settings.WORKER_MEM_MIN_FREE_MB
+    headroom = snap.headroom_mb
+    if min_free > 0 and headroom is not None and headroom < min_free:
+        logger.info(
+            "Memory brake — новую задачу не берём (мало свободной памяти)",
+            running=len(_inflight_job_ids), headroom_mb=headroom, min_free_mb=min_free,
+            **snap.as_dict(),
+        )
+        return True
+
     ratio_limit = settings.WORKER_MEM_HIGH_RATIO
     if ratio_limit > 0 and snap.ratio is not None and snap.ratio >= ratio_limit:
         logger.info(
@@ -346,31 +409,77 @@ def _claim_stagger_blocked() -> bool:
     return True
 
 
-def _effective_slots() -> int:
-    """Сколько задач этот контейнер реально может считать разом.
+def _duplicate_task_id(job: Job) -> Optional[str]:
+    """task_id, если эту задачу прямо сейчас уже считает этот же процесс.
 
-    `WORKER_CONCURRENCY` — потолок, заданный человеком; лимит памяти контейнера —
-    физика. Берём меньшее из двух: на маленьком пресете четыре слота означают
-    OOM-kill, а не производительность. Лимита не видно (локально, macOS) →
+    None — дубля нет. Проверка в памяти процесса и потому надёжная: обработчик в
+    контейнере один, и второй прогон той же задачи — всегда ошибка (реклейм принял
+    голодающий по процессору прогон за мёртвый).
+    """
+    task_id = (job.payload or {}).get("task_id")
+    if not task_id:
+        return None
+    return task_id if task_id in _inflight_task_ids.values() else None
+
+
+def _cpu_slots_cap() -> Optional[int]:
+    """Сколько задач разом отпускает процессор. None — число ядер неизвестно.
+
+    Одно ядро оставляем не воркеру: web живёт на той же машине, и когда обработчик
+    занимает все ядра (эмбеддинги — чистый счёт), интерфейс перестаёт отвечать —
+    30.07.2026 страница задачи не загружалась вовсе, хотя обработчик был жив.
+    """
+    cores = os.cpu_count()
+    if not cores:
+        return None
+    return max(1, cores - 1)
+
+
+def _effective_slots() -> int:
+    """Сколько задач этот обработчик реально может считать разом.
+
+    `WORKER_CONCURRENCY` — потолок, заданный человеком; свободная память — физика.
+    Берём меньшее из двух: на тесном сервере четыре слота означают OOM-kill, а не
+    производительность.
+
+    Бюджет считаем по-разному, и это важно: с личным лимитом контейнера — «доля
+    лимита минус занятое»; без лимита (общая машина, как на Timeweb 30.07.2026) —
+    MemAvailable минус неприкосновенный запас, потому что остальную память
+    занимают соседи по машине, а не мы. Цифр нет вовсе (локально, macOS) →
     поведение как раньше.
     """
     configured = max(1, settings.WORKER_CONCURRENCY)
+    cpu_cap = _cpu_slots_cap()
+    if cpu_cap is not None and cpu_cap < configured:
+        logger.warning(
+            "Слотов меньше настроенного — столько отпускает процессор",
+            slots=cpu_cap, configured=configured, cores=os.cpu_count(),
+        )
+        configured = cpu_cap
+
     snap = memory_snapshot()
     per_task = settings.WORKER_TASK_MEM_MB
     ratio = settings.WORKER_MEM_HIGH_RATIO
     # ratio<=0 — механизм памяти выключен целиком (как и тормоз): в этом случае
     # считать слоты «от нулевого запаса» и оставлять один было бы не отключением,
     # а самым жёстким ограничением.
-    if not snap.limit_mb or per_task <= 0 or ratio <= 0:
+    if per_task <= 0 or ratio <= 0:
         return configured
 
-    headroom = snap.limit_mb * ratio - (snap.used_mb or 0.0)
-    by_memory = max(1, int(headroom // per_task))
+    if snap.limit_source == "cgroup" and snap.limit_mb:
+        budget = snap.limit_mb * ratio - (snap.used_mb or 0.0)
+    elif snap.available_mb is not None:
+        budget = snap.available_mb - max(0, settings.WORKER_MEM_MIN_FREE_MB)
+    else:
+        return configured
+
+    by_memory = max(1, int(budget // per_task))
     slots = min(configured, by_memory)
     if slots != configured:
         logger.warning(
-            "Слотов меньше настроенного — столько отпускает память контейнера",
-            slots=slots, configured=configured, per_task_mb=per_task, **snap.as_dict(),
+            "Слотов меньше настроенного — столько отпускает свободная память",
+            slots=slots, configured=configured, per_task_mb=per_task,
+            budget_mb=round(budget, 1), **snap.as_dict(),
         )
     return slots
 
@@ -407,6 +516,19 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
                 pass
             continue
 
+        # Дубль живого прогона этой же задачи не запускаем ни при каких условиях:
+        # два прогона пишут в одну задачу, вдвое жгут процессор и ДВАЖДЫ платят за
+        # запросы к ИИ. Снимаем дубль и идём дальше за следующей job.
+        dup_task_id = _duplicate_task_id(job)
+        if dup_task_id is not None:
+            try:
+                async with AsyncSessionLocal() as db:
+                    await job_queue.drop_duplicate_job(db, job.id, dup_task_id)
+            except Exception as e:  # noqa: BLE001 — снятие дубля не важнее работы
+                logger.warning("Duplicate job not dropped", job_id=job.id, error=str(e))
+            sem.release()
+            continue
+
         # Отмечаем задачу занятой СРАЗУ, а не внутри созданной ниже задачи:
         # `await sem.acquire()` на свободном слоте не отдаёт управление циклу,
         # поэтому следующий виток claim'а успел бы пройти раньше, чем корутина
@@ -414,6 +536,9 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
         # процесс. Ровно так три задачи и захватывались за секунды.
         _inflight_job_ids.add(job.id)
         _inflight_started_at[job.id] = _monotonic()
+        job_task_id = (job.payload or {}).get("task_id")
+        if job_task_id:
+            _inflight_task_ids[job.id] = job_task_id
 
         async def _run_and_release(j: Job) -> None:
             try:
@@ -421,6 +546,7 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
             finally:
                 _inflight_job_ids.discard(j.id)
                 _inflight_started_at.pop(j.id, None)
+                _inflight_task_ids.pop(j.id, None)
                 sem.release()
 
         task = asyncio.create_task(_run_and_release(job))

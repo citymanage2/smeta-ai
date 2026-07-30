@@ -17,8 +17,9 @@ def _fake_fs(monkeypatch, files: dict):
 
 
 def test_limit_from_cgroup_v2(monkeypatch):
+    """Личный лимит контейнера — источник обязателен: цифра целиком наша."""
     _fake_fs(monkeypatch, {"/sys/fs/cgroup/memory.max": "2147483648\n"})
-    assert memory.container_limit_mb() == 2048.0
+    assert memory.container_limit_mb() == (2048.0, "cgroup")
 
 
 def test_limit_v2_max_means_no_limit_fallback_to_meminfo(monkeypatch):
@@ -27,12 +28,14 @@ def test_limit_v2_max_means_no_limit_fallback_to_meminfo(monkeypatch):
         "/sys/fs/cgroup/memory.max": "max\n",
         "/proc/meminfo": "MemTotal:        4194304 kB\nMemFree: 100 kB\n",
     })
-    assert memory.container_limit_mb() == 4096.0
+    # Источник 'host': это память ВСЕЙ машины, её делят web и обработчик. Ровно
+    # эту цифру прод показал 30.07.2026 как «лимит памяти 3911.8 МБ».
+    assert memory.container_limit_mb() == (4096.0, "host")
 
 
 def test_limit_from_cgroup_v1(monkeypatch):
     _fake_fs(monkeypatch, {"/sys/fs/cgroup/memory/memory.limit_in_bytes": "1073741824"})
-    assert memory.container_limit_mb() == 1024.0
+    assert memory.container_limit_mb() == (1024.0, "cgroup")
 
 
 def test_limit_v1_unlimited_is_ignored(monkeypatch):
@@ -41,13 +44,13 @@ def test_limit_v1_unlimited_is_ignored(monkeypatch):
         "/sys/fs/cgroup/memory/memory.limit_in_bytes": "9223372036854771712",
         "/proc/meminfo": "MemTotal:        2097152 kB\n",
     })
-    assert memory.container_limit_mb() == 2048.0
+    assert memory.container_limit_mb() == (2048.0, "host")
 
 
 def test_limit_none_without_cgroup_and_meminfo(monkeypatch):
     """Платформа без cgroup (macOS, тесты) — не ошибка, а «цифры нет»."""
     _fake_fs(monkeypatch, {})
-    assert memory.container_limit_mb() is None
+    assert memory.container_limit_mb() == (None, None)
 
 
 def test_usage_counts_anon_not_page_cache(monkeypatch):
@@ -92,7 +95,8 @@ def test_snapshot_ratio_none_without_limit():
     snap = memory.MemorySnapshot(rss_mb=1024.0, usage_mb=None, limit_mb=None)
     assert snap.ratio is None
     assert snap.as_dict() == {
-        "rss_mb": 1024.0, "usage_mb": None, "limit_mb": None, "ratio": None,
+        "rss_mb": 1024.0, "usage_mb": None, "limit_mb": None,
+        "limit_source": None, "available_mb": None, "ratio": None,
     }
 
 
