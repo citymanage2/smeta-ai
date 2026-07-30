@@ -140,7 +140,16 @@ async def claim_one(db: AsyncSession, worker_id: str, max_tries: int = 5) -> Opt
             # Читаем строку ДО commit (в той же транзакции). Если re-fetch упадёт
             # (обрыв соединения), claim откатится и job останется queued — не
             # осиротеет в running без обработчика (P3-a).
-            claimed = (await db.execute(select(Job).where(Job.id == job_id))).scalar_one()
+            # populate_existing: если эта же job уже лежит в identity map сессии,
+            # обычный SELECT вернул бы её ПРЕЖНИЕ атрибуты — в частности старый
+            # attempts, по которому решается «исчерпаны ли попытки» и какое
+            # поколение прогона идёт. В проде каждый claim берёт свежую сессию, но
+            # полагаться на это нельзя.
+            claimed = (
+                await db.execute(
+                    select(Job).where(Job.id == job_id).execution_options(populate_existing=True)
+                )
+            ).scalar_one()
             await db.commit()
             logger.info("Job claimed", job_id=job_id, worker=worker_id, attempts=claimed.attempts)
             return claimed

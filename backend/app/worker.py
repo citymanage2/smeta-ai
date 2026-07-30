@@ -64,7 +64,12 @@ async def _handle_task_process(payload: dict, db) -> None:
     task_id = payload.get("task_id")
     if not task_id:
         raise ValueError("task.process: payload без task_id")
-    await process_task(task_id, db, job_id=payload.get("_job_id"))
+    await process_task(
+        task_id,
+        db,
+        job_id=payload.get("_job_id"),
+        job_attempt=payload.get("_job_attempt"),
+    )
 
 
 async def _handle_task_optimize(payload: dict, db) -> None:
@@ -242,10 +247,14 @@ async def run_job(job: Job) -> None:
         handler = HANDLERS.get(job.kind)
         if handler is None:
             raise ValueError(f"Неизвестный kind job: {job.kind}")
-        # `_job_id` в копии payload (саму запись не меняем): обработчику нужно
-        # знать, под какой job он идёт, чтобы остановиться, если его сменили.
+        # `_job_id` + `_job_attempt` в копии payload (саму запись не меняем):
+        # обработчику нужно знать, какой именно прогон он ведёт, чтобы
+        # остановиться, если задачу уже забрал кто-то другой.
         async with AsyncSessionLocal() as db:
-            await handler({**(job.payload or {}), "_job_id": job.id}, db)
+            await handler(
+                {**(job.payload or {}), "_job_id": job.id, "_job_attempt": job.attempts},
+                db,
+            )
         async with AsyncSessionLocal() as db:
             await job_queue.complete(db, job.id)
         logger.info(

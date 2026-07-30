@@ -451,7 +451,13 @@ class StageDeadlineError(Exception):
 
 
 class TaskProcessor:
-    def __init__(self, task_id: str, db: AsyncSession, job_id: Optional[int] = None):
+    def __init__(
+        self,
+        task_id: str,
+        db: AsyncSession,
+        job_id: Optional[int] = None,
+        job_attempt: Optional[int] = None,
+    ):
         self.task_id = task_id
         self.db = db
         # id job, под которой идёт ЭТОТ прогон. Признак поколения: «Перезапустить»
@@ -460,6 +466,10 @@ class TaskProcessor:
         # висящей задачи запускал ВТОРОЙ прогон параллельно первому — двойная
         # стоимость API и два обработчика, пишущих в одну задачу.
         self.job_id = job_id
+        # Номер попытки этой job на момент захвата. Деплой и reclaim возвращают ту
+        # же job в очередь, и следующий захват увеличивает attempts — по нему
+        # «зависший» прогон отличает себя от того, кто считает задачу сейчас.
+        self.job_attempt = job_attempt
         self._input_files_cache: list[dict] | None = None
 
     async def _load_input_files(self, task: Task) -> list[dict]:
@@ -508,17 +518,33 @@ class TaskProcessor:
             return
         from app.models.job import Job
 
-        job_status = (
-            await self.db.execute(select(Job.status).where(Job.id == self.job_id))
-        ).scalar_one_or_none()
-        if job_status is not None and job_status != "running":
+        row = (
+            await self.db.execute(
+                select(Job.status, Job.attempts).where(Job.id == self.job_id)
+            )
+        ).first()
+        if row is None:
+            return
+        job_status, job_attempts = row
+
+        # Номер попытки — точный признак поколения. Одну и ту же job могут выдать
+        # заново: деплой возвращает её в очередь, reclaim — тоже (через 15 минут
+        # без сигнала). Каждый новый захват увеличивает attempts, а heartbeat его
+        # не трогает. Если наш номер устарел, значит задачу уже считает кто-то
+        # другой, и продолжать — это второй прогон и вторая оплата запросов к ИИ.
+        superseded = job_status != "running" or (
+            self.job_attempt is not None and job_attempts != self.job_attempt
+        )
+        if superseded:
             logger.info(
-                "Run superseded — job больше не running",
+                "Run superseded — прогон заменён",
                 task_id=self.task_id,
                 job_id=self.job_id,
                 job_status=job_status,
+                job_attempts=job_attempts,
+                my_attempt=self.job_attempt,
             )
-            raise TaskCancelledError("Прогон заменён новым (перезапуск)")
+            raise TaskCancelledError("Прогон заменён новым")
 
     async def update_progress(self, message: str) -> None:
         result = await self.db.execute(
@@ -2993,13 +3019,19 @@ class TaskProcessor:
         await self.update_progress("Смета загружена. Редактор готов к работе.")
 
 
-async def process_task(task_id: str, db: AsyncSession, job_id: Optional[int] = None) -> None:
+async def process_task(
+    task_id: str,
+    db: AsyncSession,
+    job_id: Optional[int] = None,
+    job_attempt: Optional[int] = None,
+) -> None:
     """Wrapper function for backward compatibility with routers.
 
-    `job_id` — job, под которой идёт прогон (передаёт worker). По нему прогон
-    понимает, что его сменил перезапуск, и не считает параллельно новому.
+    `job_id` + `job_attempt` — какой именно прогон идёт (передаёт worker). По ним
+    прогон понимает, что его сменили — перезапуском, деплоем или reclaim'ом — и не
+    считает параллельно новому.
     """
-    processor = TaskProcessor(task_id, db, job_id=job_id)
+    processor = TaskProcessor(task_id, db, job_id=job_id, job_attempt=job_attempt)
     await processor.process()
 
 

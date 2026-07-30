@@ -40,7 +40,7 @@ async def test_run_job_completes(db_session, monkeypatch):
     assert await _status(db_session, job_id) == "done"
     # payload обработчика = payload job + `_job_id` текущего прогона: по нему
     # обработчик понимает, что его сменил перезапуск (см. test_restart_no_double_run).
-    assert seen["payload"] == {"x": 1, "_job_id": job_id}
+    assert seen["payload"] == {"x": 1, "_job_id": job_id, "_job_attempt": 1}
 
 
 async def test_run_job_requeues_then_fails(db_session, monkeypatch):

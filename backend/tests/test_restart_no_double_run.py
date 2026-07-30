@@ -98,6 +98,39 @@ async def test_live_run_continues(db_session):
     await processor._check_cancelled()  # не должно бросить
 
 
+async def test_reclaimed_run_stops_zombie(db_session):
+    """Ту же job выдали заново (деплой или reclaim) — прежний прогон выходит.
+
+    Деплой возвращает недоигранную job в очередь, reclaim делает то же через 15
+    минут без сигнала. Если прежний процесс всё-таки жив, он обязан заметить, что
+    задачу считает уже другой: иначе два прогона и двойная оплата запросов к ИИ.
+    Признак — номер попытки: каждый захват его увеличивает, heartbeat не трогает.
+    """
+    await _clear_jobs(db_session)
+    task_id = await _make_task(db_session, "d0000000-0000-0000-0000-000000000006")
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
+    first = await job_queue.claim_one(db_session, "w1")
+    job_id, first_attempt = first.id, first.attempts
+
+    # Деплой: job вернулась в очередь и её забрал новый процесс.
+    await db_session.execute(
+        Job.__table__.update()
+        .where(Job.id == job_id)
+        .values(status="queued", claimed_by=None, claimed_at=None)
+    )
+    await db_session.commit()
+    second = await job_queue.claim_one(db_session, "w2")
+    assert second.attempts > first_attempt
+
+    zombie = TaskProcessor(task_id, db_session, job_id=job_id, job_attempt=first_attempt)
+    with pytest.raises(TaskCancelledError):
+        await zombie._check_cancelled()
+
+    # А текущий прогон продолжается.
+    current = TaskProcessor(task_id, db_session, job_id=job_id, job_attempt=second.attempts)
+    await current._check_cancelled()
+
+
 async def test_run_without_job_id_is_not_stopped(db_session):
     """Прогон без job (прямой вызов из роутера) не должен падать на проверке."""
     task_id = await _make_task(db_session, "d0000000-0000-0000-0000-000000000003")
