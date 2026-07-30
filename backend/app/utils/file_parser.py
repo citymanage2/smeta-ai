@@ -45,15 +45,20 @@ def _col_score(header: str, keywords: list[str]) -> int:
     return sum(1 for kw in keywords if kw in h)
 
 
-def _find_header_row(ws) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]]:
+def _find_header_row(all_rows) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]]:
     """
     Сканируем первые 40 строк листа в поиске строки с заголовками колонок.
     Также сканируем следующие строки после найденного заголовка, чтобы найти
     колонку «всего с учётом коэффициентов» (в Гранд-Смете она в строке подзаголовков).
     Возвращает (header_row_idx, name_col, unit_col, qty_col, qty_total_col) — 0-based.
     qty_total_col — колонка итогового количества (или None если не найдена).
+
+    Принимает УЖЕ прочитанные строки, а не лист: раньше функция материализовала
+    их сама, и весь файл оказывался в памяти дважды (второй раз — в
+    `parse_xlsx_grand`). На гранд-смете в 20 000 строк это лишние ~50 МБ на каждую
+    задачу — при трёх задачах разом контейнер выходил за лимит и получал OOM-kill
+    (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
     """
-    all_rows = list(ws.iter_rows(values_only=True))
     scan_limit = min(80, len(all_rows))
 
     best_row_idx = None
@@ -150,7 +155,7 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
         ws = wb.active  # берём первый лист
 
         all_rows = list(ws.iter_rows(values_only=True))
-        header_row_idx, name_col, unit_col, qty_col, qty_total_col = _find_header_row(ws)
+        header_row_idx, name_col, unit_col, qty_col, qty_total_col = _find_header_row(all_rows)
 
         rows: list[dict] = []
 

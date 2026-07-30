@@ -8,14 +8,28 @@ import pytest
 
 from app import worker
 from app.config import settings
+from app.utils.memory import MemorySnapshot
 
 pytestmark = pytest.mark.asyncio
+
+
+def _rss(monkeypatch, value):
+    """Подменить измерение памяти: цифра процесса есть, лимита контейнера нет.
+
+    Именно так выглядит платформа без cgroup — и это тот случай, для которого
+    порог `WORKER_RSS_PAUSE_MB` и остался вторым предохранителем. Долю от лимита
+    проверяет tests/test_worker_admission.py.
+    """
+    monkeypatch.setattr(
+        worker, "memory_snapshot",
+        lambda: MemorySnapshot(rss_mb=value, usage_mb=None, limit_mb=None),
+    )
 
 
 async def test_brake_off_when_disabled(monkeypatch):
     """Порог 0 — тормоз выключен, поведение как раньше."""
     monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 0)
-    monkeypatch.setattr(worker, "rss_mb", lambda: 99999.0)
+    _rss(monkeypatch, 99999.0)
     monkeypatch.setattr(worker, "_inflight_job_ids", {1})
 
     assert worker._memory_brake_engaged() is False
@@ -28,7 +42,7 @@ async def test_brake_off_when_idle(monkeypatch):
     очередь навсегда: брать нечего, а память сама не упадёт.
     """
     monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 500)
-    monkeypatch.setattr(worker, "rss_mb", lambda: 99999.0)
+    _rss(monkeypatch, 99999.0)
     monkeypatch.setattr(worker, "_inflight_job_ids", set())
 
     assert worker._memory_brake_engaged() is False
@@ -37,7 +51,7 @@ async def test_brake_off_when_idle(monkeypatch):
 async def test_brake_off_below_limit(monkeypatch):
     """Память в норме — берём задачи как обычно."""
     monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 1536)
-    monkeypatch.setattr(worker, "rss_mb", lambda: 400.0)
+    _rss(monkeypatch, 400.0)
     monkeypatch.setattr(worker, "_inflight_job_ids", {1})
 
     assert worker._memory_brake_engaged() is False
@@ -46,7 +60,7 @@ async def test_brake_off_below_limit(monkeypatch):
 async def test_brake_on_above_limit_while_busy(monkeypatch):
     """Память выше порога и задача в работе — новую не берём."""
     monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 1536)
-    monkeypatch.setattr(worker, "rss_mb", lambda: 1600.0)
+    _rss(monkeypatch, 1600.0)
     monkeypatch.setattr(worker, "_inflight_job_ids", {1})
 
     assert worker._memory_brake_engaged() is True
@@ -55,7 +69,7 @@ async def test_brake_on_above_limit_while_busy(monkeypatch):
 async def test_brake_off_when_rss_unknown(monkeypatch):
     """Платформа не дала цифру → не тормозим (иначе встанет вся очередь)."""
     monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 1536)
-    monkeypatch.setattr(worker, "rss_mb", lambda: None)
+    _rss(monkeypatch, None)
     monkeypatch.setattr(worker, "_inflight_job_ids", {1})
 
     assert worker._memory_brake_engaged() is False

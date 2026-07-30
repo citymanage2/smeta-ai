@@ -82,7 +82,9 @@ function formatAge(seconds: number | null): string {
   return `${(seconds / 3600).toFixed(1)} ч.`;
 }
 
-const HealthPanel: React.FC = () => {
+// Экспортируется ради теста: панель — единственное место, где видно, что
+// обработчик умирает, и её вывод должен проверяться отдельно от всей страницы.
+export const HealthPanel: React.FC = () => {
   const [api, setApi] = useState<ApiHealth | null>(null);
   const [queue, setQueue] = useState<QueueHealth | null>(null);
   const [loading, setLoading] = useState(false);
@@ -214,6 +216,31 @@ const HealthPanel: React.FC = () => {
                     Память обработчика: {queue.worker_memory.rss_mb} МБ — выше порога{' '}
                     {queue.worker_memory.threshold_mb} МБ при {queue.worker_memory.concurrency}{' '}
                     задачах разом ({formatAge(queue.worker_memory.age_s)} назад)
+                  </div>
+                )}
+                {/* Перезапуски обработчика. Один старт на деплой — норма, поэтому
+                    строка спокойная; несколько за час — он умирает от памяти, и
+                    это ровно то, что видно как «все задачи повисли разом». */}
+                {queue.worker_restarts && (
+                  <div
+                    data-testid="worker-restarts"
+                    style={{
+                      fontSize: '12px',
+                      marginTop: '4px',
+                      color: queue.worker_restarts.starts_1h >= 2 ? '#b45309' : '#64748b',
+                      fontWeight: queue.worker_restarts.starts_1h >= 2 ? 600 : 400,
+                    }}
+                  >
+                    Обработчик: старт {formatAge(queue.worker_restarts.last_age_s)} назад,{' '}
+                    {queue.worker_restarts.starts_1h} за час
+                    {queue.worker_restarts.slots !== null &&
+                      `, слотов ${queue.worker_restarts.slots}`}
+                    {queue.worker_restarts.limit_mb !== null &&
+                      `, лимит памяти ${queue.worker_restarts.limit_mb} МБ`}
+                    {queue.worker_restarts.rss_mb !== null &&
+                      ` (на старте занято ${queue.worker_restarts.rss_mb} МБ)`}
+                    {!!queue.worker_restarts.requeued &&
+                      `, подобрано брошенных задач: ${queue.worker_restarts.requeued}`}
                   </div>
                 )}
               </div>

@@ -144,6 +144,17 @@ export interface QueueHealth {
     concurrency: number;
     age_s: number | null;
   } | null;
+  // Перезапуски обработчика. Один старт на деплой — норма; несколько за час = он
+  // умирает (почти всегда от памяти) и поднимается заново. При OOM-kill жалоба на
+  // память не пишется, поэтому это единственная улика. null — событий ещё нет.
+  worker_restarts: {
+    starts_1h: number;
+    last_age_s: number | null;
+    slots: number | null;
+    limit_mb: number | null;
+    rss_mb: number | null;
+    requeued: number | null;
+  } | null;
 }
 
 export async function getApiHealth(): Promise<ApiHealth> {

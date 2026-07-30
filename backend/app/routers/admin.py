@@ -1107,6 +1107,25 @@ class WorkerMemoryInfo(BaseModel):
     age_s: Optional[float]
 
 
+class WorkerRestartsInfo(BaseModel):
+    """Как часто перезапускался обработчик — прямая улика смерти контейнера.
+
+    При OOM-kill процесс убивают мгновенно: жалоба на память не пишется, свой лог
+    он записать не успевает, а лог Timeweb пользователю недоступен. Единственный
+    надёжный след — событие «обработчик стартовал» (`worker_started`). Один старт
+    после деплоя — норма; несколько за час без деплоя = контейнеру не хватает
+    памяти на выбранную параллельность
+    (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+    """
+
+    starts_1h: int
+    last_age_s: Optional[float]
+    slots: Optional[int]  # сколько задач разом берёт обработчик по своим цифрам
+    limit_mb: Optional[float]  # лимит памяти контейнера, как его видит cgroup
+    rss_mb: Optional[float]  # память процесса на момент старта (база)
+    requeued: Optional[int]  # сколько job подобрал за упавшим предшественником
+
+
 class QueueHealthResponse(BaseModel):
     checked_at: datetime
     counts: QueueCounts
@@ -1117,6 +1136,7 @@ class QueueHealthResponse(BaseModel):
     hint: str
     db_connections: Optional[DbConnectionsInfo] = None
     worker_memory: Optional[WorkerMemoryInfo] = None
+    worker_restarts: Optional[WorkerRestartsInfo] = None
 
 
 def _age_s(dt, now: datetime) -> Optional[float]:
@@ -1186,6 +1206,50 @@ async def _worker_memory(db: AsyncSession, now: datetime) -> Optional[WorkerMemo
     )
 
 
+async def _worker_restarts(db: AsyncSession, now: datetime) -> Optional[WorkerRestartsInfo]:
+    """Сколько раз обработчик стартовал за час + цифры памяти последнего старта.
+
+    None — событий нет вовсе (обработчик ещё не поднимался на этой версии).
+    """
+    from app.models.system_event import KIND_WORKER_STARTED, SystemEvent
+
+    hour_ago = now - timedelta(hours=1)
+    starts_1h = (
+        await db.execute(
+            select(func.count(SystemEvent.id)).where(
+                SystemEvent.kind == KIND_WORKER_STARTED,
+                SystemEvent.created_at >= hour_ago,
+            )
+        )
+    ).scalar_one() or 0
+
+    row = (
+        await db.execute(
+            select(SystemEvent.payload, SystemEvent.created_at)
+            .where(SystemEvent.kind == KIND_WORKER_STARTED)
+            .order_by(SystemEvent.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    payload, created_at = row
+    payload = payload or {}
+
+    def _num(key):
+        value = payload.get(key)
+        return None if value is None else float(value)
+
+    return WorkerRestartsInfo(
+        starts_1h=int(starts_1h),
+        last_age_s=_age_s(created_at, now),
+        slots=payload.get("slots"),
+        limit_mb=_num("limit_mb"),
+        rss_mb=_num("rss_mb"),
+        requeued=payload.get("requeued"),
+    )
+
+
 @router.get("/queue-health", response_model=QueueHealthResponse)
 async def queue_health(
     db: AsyncSession = Depends(get_db),
@@ -1251,6 +1315,17 @@ async def queue_health(
     else:
         verdict, hint = "ok", "Очередь движется штатно."
 
+    # Обработчик стартует один раз на деплой. Несколько стартов за час — он
+    # умирает и поднимается заново (почти всегда OOM-kill), и именно это
+    # пользователь видит как «задачи повисли все разом». Дописываем в подсказку:
+    # без этой строки диагноз пришлось бы искать в логах контейнера.
+    restarts = await _worker_restarts(db, now)
+    if restarts is not None and restarts.starts_1h >= 2:
+        hint += (
+            f" Обработчик перезапускался {restarts.starts_1h} раз(а) за час — "
+            "похоже, контейнеру не хватает памяти на такую параллельность."
+        )
+
     return QueueHealthResponse(
         checked_at=now,
         counts=counts,
@@ -1261,6 +1336,7 @@ async def queue_health(
         hint=hint,
         db_connections=await _db_connections(db),
         worker_memory=await _worker_memory(db, now),
+        worker_restarts=restarts,
     )
 
 

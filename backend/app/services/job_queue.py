@@ -296,6 +296,54 @@ async def reclaim_stale(db: AsyncSession, timeout_s: int, max_attempts: int) -> 
     return count
 
 
+async def reclaim_crashed_worker_jobs(
+    db: AsyncSession, worker_id: str, min_age_s: int
+) -> int:
+    """Вернуть в очередь job, захваченные умершим процессом НА ЭТОМ ЖЕ хосте.
+
+    Обработчик в контейнере один, а `claimed_by` = `hostname:pid`. Значит
+    running-job, помеченная нашим хостом, но ЧУЖИМ pid — это работа процесса,
+    которого на хосте больше нет: контейнер получил OOM-kill (или иначе умер) и
+    поднялся заново. Ждать `JOB_VISIBILITY_TIMEOUT_S` (15 мин) в этом случае
+    бессмысленно — задача точно брошена, и ровно эти 15 минут пользователь видел
+    как «висит вечно» (см. plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+
+    `min_age_s` (заведомо больше интервала heartbeat) — страховка на случай, если
+    платформа выдаст двум живым контейнерам одинаковый hostname: у живого соседа
+    heartbeat свежий, и его job мы не тронем.
+
+    Попытку НЕ возвращаем: смерть процесса — это сбой обработки, в отличие от
+    планового рестарта (там `requeue_after_shutdown` компенсирует инкремент).
+    Иначе бесконечный OOM-цикл крутился бы вечно вместо честного `failed`.
+    """
+    host = (worker_id or "").split(":")[0]
+    if not host:
+        return 0
+    cutoff = _now() - timedelta(seconds=min_age_s)
+
+    res = await db.execute(
+        update(Job)
+        .where(
+            Job.status == "running",
+            Job.claimed_by.is_not(None),
+            Job.claimed_by != worker_id,
+            Job.claimed_by.startswith(f"{host}:", autoescape=True),
+            Job.claimed_at < cutoff,
+        )
+        .values(status="queued", claimed_by=None, claimed_at=None)
+    )
+    n = res.rowcount or 0
+    if n:
+        await db.commit()
+        logger.warning(
+            "Requeued jobs of dead worker process on this host",
+            count=n,
+            worker=worker_id,
+            min_age_s=min_age_s,
+        )
+    return n
+
+
 async def sweep_orphaned_tasks(db: AsyncSession, grace_s: int) -> int:
     """Уронить задачи «в работе», за которыми не стоит ни одна живая job.
 

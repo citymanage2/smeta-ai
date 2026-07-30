@@ -71,6 +71,15 @@ services:
       DB_POOL_SIZE: ${DB_POOL_SIZE:-6}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       WORKER_RSS_WARN_MB: ${WORKER_RSS_WARN_MB:-1024}
+      # Параллельность по РЕАЛЬНОЙ памяти контейнера, а не по числу слотов:
+      # 30.07.2026 три возобновлённые задачи разом валили контейнер (OOM-kill), и
+      # задачи висели «в обработке» до reclaim'а. Доля лимита, запас на задачу и
+      # пауза между захватами — крутилки этого механизма
+      # (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+      WORKER_MEM_HIGH_RATIO: ${WORKER_MEM_HIGH_RATIO:-0.8}
+      WORKER_TASK_MEM_MB: ${WORKER_TASK_MEM_MB:-400}
+      WORKER_CLAIM_STAGGER_S: ${WORKER_CLAIM_STAGGER_S:-60}
+      WORKER_CRASH_RECLAIM_AGE_S: ${WORKER_CRASH_RECLAIM_AGE_S:-90}
       S3_ENABLED: ${S3_ENABLED:-false}
       S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-https://s3.twcstorage.ru}
       S3_REGION: ${S3_REGION:-ru-1}

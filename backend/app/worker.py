@@ -13,7 +13,6 @@ import asyncio
 import os
 import signal
 import socket
-import sys
 from typing import Awaitable, Callable, Optional
 
 import structlog
@@ -23,6 +22,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.job import Job
 from app.services import job_queue
+from app.utils.memory import rss_mb, snapshot as memory_snapshot
 
 # Логирование настраиваем и здесь: `structlog.configure` вызывался только в
 # main.py (web), поэтому строки обработчика шли в дефолтном формате — без ISO-времени
@@ -48,6 +48,18 @@ _shutdown = asyncio.Event()
 # недоигранные возвращаем в очередь, не списывая попытку (плановый рестарт —
 # не сбой обработки). См. plans/2026-07-29-osirotevshie-zadachi-v-obrabotke.md.
 _inflight_job_ids: set[int] = set()
+
+# Когда (монотонные секунды) начались исполняемые сейчас job — для разноса
+# захватов: память задачи проявляется не мгновенно, и решать «взять ли ещё одну»
+# по занятости в первые секунды бессмысленно.
+_inflight_started_at: dict[int, float] = {}
+
+
+def _monotonic() -> float:
+    """Монотонные секунды. Отдельной функцией — чтобы подменять в тестах."""
+    import time
+
+    return time.monotonic()
 
 
 # ---------------------------------------------------------------------------
@@ -124,30 +136,6 @@ HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
 # Исполнение одной job
 # ---------------------------------------------------------------------------
 
-def rss_mb() -> Optional[float]:
-    """Память процесса, МБ. None — платформа не дала цифру.
-
-    Без внешних зависимостей (psutil в проекте нет): на Linux, где живёт прод, —
-    честный текущий RSS из /proc/self/status; иначе — пиковый ru_maxrss из
-    resource (macOS отдаёт байты, Linux — килобайты).
-    """
-    try:
-        with open("/proc/self/status", encoding="ascii") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return round(int(line.split()[1]) / 1024, 1)
-    except OSError:
-        pass
-    try:
-        import resource
-
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
-        return round(peak / divisor, 1)
-    except Exception:  # noqa: BLE001 — измерение не обязано работать везде
-        return None
-
-
 def _rss_fields(rss_before: Optional[float]) -> dict:
     """Поля памяти для лога job: сколько сейчас и сколько прибавилось за задачу."""
     rss_after = rss_mb()
@@ -204,6 +192,13 @@ async def _report_memory_if_high(rss: Optional[float]) -> None:
                         "rss_mb": rss,
                         "threshold_mb": threshold,
                         "concurrency": settings.WORKER_CONCURRENCY,
+                        # Лимит контейнера: без него «1200 МБ» ничего не говорит —
+                        # это может быть и половина пресета, и его потолок.
+                        **{
+                            k: v
+                            for k, v in memory_snapshot().as_dict().items()
+                            if k != "rss_mb"
+                        },
                     },
                 )
             )
@@ -287,30 +282,97 @@ async def run_job(job: Job) -> None:
 # ---------------------------------------------------------------------------
 
 def _memory_brake_engaged() -> bool:
-    """Не брать НОВУЮ задачу, пока память выше порога и хоть одна уже считается.
+    """Не брать НОВУЮ задачу, пока память высока и хоть одна уже считается.
 
     Жёсткое число слотов не знает, что взяло: четыре тяжёлые сметы валят процесс,
     четыре лёгких — нет. Тормоз делает параллельность адаптивной: под нагрузкой
     задачи идут по одной, в спокойное время занимаются все слоты. Задачи не
     теряются — ждут в очереди.
 
+    Два независимых предохранителя:
+    - доля от РЕАЛЬНОГО лимита контейнера (cgroup) — главный: пресет Timeweb может
+      быть любым, и порог в мегабайтах угадывал его вслепую;
+    - прежний абсолютный порог RSS — резерв там, где cgroup недоступна.
+
     Пустой процесс не тормозим никогда: иначе высокая база (загруженный прайс,
     матрицы эмбеддингов) заперла бы очередь навсегда — брать было бы нечего, а
     память сама не упадёт.
     """
-    limit = settings.WORKER_RSS_PAUSE_MB
-    if limit <= 0 or not _inflight_job_ids:
+    if not _inflight_job_ids:
         return False
-    rss = rss_mb()
-    if rss is None or rss < limit:
+
+    snap = memory_snapshot()
+    ratio_limit = settings.WORKER_MEM_HIGH_RATIO
+    if ratio_limit > 0 and snap.ratio is not None and snap.ratio >= ratio_limit:
+        logger.info(
+            "Memory brake — новую задачу не берём (доля лимита контейнера)",
+            running=len(_inflight_job_ids), **snap.as_dict(),
+        )
+        return True
+
+    limit = settings.WORKER_RSS_PAUSE_MB
+    if limit > 0 and snap.rss_mb is not None and snap.rss_mb >= limit:
+        logger.info(
+            "Memory brake — новую задачу не берём (порог RSS)",
+            rss_mb=snap.rss_mb, limit_mb=limit, running=len(_inflight_job_ids),
+        )
+        return True
+    return False
+
+
+def _claim_stagger_blocked() -> bool:
+    """Не брать вторую задачу, пока первая младше WORKER_CLAIM_STAGGER_S.
+
+    Тормоз по памяти смотрит на ТЕКУЩУЮ занятость, а очередь опрашивается раз в
+    2 секунды: три возобновлённые задачи захватывались почти одновременно — когда
+    память первой ещё не выросла, — и тормоз не срабатывал ни разу. Контейнер
+    получал OOM-kill, а задачи висели «в обработке». Разнос даёт памяти первой
+    задачи проявиться до захвата второй.
+
+    Слот при этом не занимается: задачи ждут в очереди и никуда не деваются.
+    """
+    gap = settings.WORKER_CLAIM_STAGGER_S
+    if gap <= 0 or not _inflight_started_at:
+        return False
+    youngest_age = _monotonic() - max(_inflight_started_at.values())
+    if youngest_age >= gap:
         return False
     logger.info(
-        "Memory brake — новую задачу не берём",
-        rss_mb=rss,
-        limit_mb=limit,
+        "Claim stagger — новую задачу берём не раньше чем через паузу",
+        youngest_age_s=round(youngest_age, 1),
+        stagger_s=gap,
         running=len(_inflight_job_ids),
     )
     return True
+
+
+def _effective_slots() -> int:
+    """Сколько задач этот контейнер реально может считать разом.
+
+    `WORKER_CONCURRENCY` — потолок, заданный человеком; лимит памяти контейнера —
+    физика. Берём меньшее из двух: на маленьком пресете четыре слота означают
+    OOM-kill, а не производительность. Лимита не видно (локально, macOS) →
+    поведение как раньше.
+    """
+    configured = max(1, settings.WORKER_CONCURRENCY)
+    snap = memory_snapshot()
+    per_task = settings.WORKER_TASK_MEM_MB
+    ratio = settings.WORKER_MEM_HIGH_RATIO
+    # ratio<=0 — механизм памяти выключен целиком (как и тормоз): в этом случае
+    # считать слоты «от нулевого запаса» и оставлять один было бы не отключением,
+    # а самым жёстким ограничением.
+    if not snap.limit_mb or per_task <= 0 or ratio <= 0:
+        return configured
+
+    headroom = snap.limit_mb * ratio - (snap.used_mb or 0.0)
+    by_memory = max(1, int(headroom // per_task))
+    slots = min(configured, by_memory)
+    if slots != configured:
+        logger.warning(
+            "Слотов меньше настроенного — столько отпускает память контейнера",
+            slots=slots, configured=configured, per_task_mb=per_task, **snap.as_dict(),
+        )
+    return slots
 
 
 async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
@@ -319,7 +381,7 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
         if _shutdown.is_set():
             sem.release()
             break
-        if _memory_brake_engaged():
+        if _memory_brake_engaged() or _claim_stagger_blocked():
             sem.release()
             try:
                 await asyncio.wait_for(_shutdown.wait(), timeout=settings.JOB_POLL_INTERVAL_S)
@@ -345,12 +407,20 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
                 pass
             continue
 
+        # Отмечаем задачу занятой СРАЗУ, а не внутри созданной ниже задачи:
+        # `await sem.acquire()` на свободном слоте не отдаёт управление циклу,
+        # поэтому следующий виток claim'а успел бы пройти раньше, чем корутина
+        # начнётся, — и тормоз по памяти с разносом захватов видели бы пустой
+        # процесс. Ровно так три задачи и захватывались за секунды.
+        _inflight_job_ids.add(job.id)
+        _inflight_started_at[job.id] = _monotonic()
+
         async def _run_and_release(j: Job) -> None:
-            _inflight_job_ids.add(j.id)
             try:
                 await run_job(j)
             finally:
                 _inflight_job_ids.discard(j.id)
+                _inflight_started_at.pop(j.id, None)
                 sem.release()
 
         task = asyncio.create_task(_run_and_release(job))
@@ -364,9 +434,16 @@ async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
 
 async def _reclaim_job() -> None:
     async with AsyncSessionLocal() as db:
+        # Сначала — job мёртвого процесса нашего же хоста: их не надо ждать 15
+        # минут, обработчика за ними точно нет (см. reclaim_crashed_worker_jobs).
+        crashed = await job_queue.reclaim_crashed_worker_jobs(
+            db, WORKER_ID, settings.WORKER_CRASH_RECLAIM_AGE_S
+        )
         n = await job_queue.reclaim_stale(
             db, settings.JOB_VISIBILITY_TIMEOUT_S, settings.JOB_MAX_ATTEMPTS
         )
+    if crashed:
+        logger.warning("Requeued jobs left by dead worker process", count=crashed)
     if n:
         logger.info("Reclaimed stale jobs", count=n)
 
@@ -461,8 +538,47 @@ def _build_scheduler():
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+async def _announce_start(slots: int) -> int:
+    """Записать факт старта обработчика и подобрать job мёртвого предшественника.
+
+    Зачем событие: web — другой контейнер, лога Timeweb пользователь не видит, и
+    смерть обработчика до сих пор не была видна НИГДЕ. При OOM-kill жалоба на
+    память не пишется (процесс убит мгновенно), поэтому единственная надёжная
+    улика — сам факт незапланированного старта. Череда таких строк в диагностике
+    админки = «контейнер умирает от памяти», и спор «сколько задач параллельно»
+    впервые опирается на цифры.
+
+    Возвращает число job, возвращённых в очередь за упавшим процессом.
+    """
+    from app.models.system_event import KIND_WORKER_STARTED, SystemEvent
+
+    requeued = 0
+    snap = memory_snapshot()
+    try:
+        async with AsyncSessionLocal() as db:
+            requeued = await job_queue.reclaim_crashed_worker_jobs(
+                db, WORKER_ID, settings.WORKER_CRASH_RECLAIM_AGE_S
+            )
+            db.add(
+                SystemEvent(
+                    kind=KIND_WORKER_STARTED,
+                    payload={
+                        "worker_id": WORKER_ID,
+                        "slots": slots,
+                        "configured_concurrency": settings.WORKER_CONCURRENCY,
+                        "requeued": requeued,
+                        **snap.as_dict(),
+                    },
+                )
+            )
+            await db.commit()
+    except Exception as e:  # noqa: BLE001 — на первом деплое БД может быть не готова
+        logger.warning("Worker start not recorded", error=str(e))
+    return requeued
+
+
 async def main() -> None:
-    logger.info("Worker starting", worker_id=WORKER_ID, concurrency=settings.WORKER_CONCURRENCY)
+    logger.info("Worker starting", worker_id=WORKER_ID)
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -471,12 +587,26 @@ async def main() -> None:
         except NotImplementedError:
             pass  # Windows
 
-    sem = asyncio.Semaphore(settings.WORKER_CONCURRENCY)
-    inflight: set = set()
-
     # ДО poll-loop: первая же job должна видеть прайс, иначе смета считается без
     # корпоративных цен и уходит целиком в ИИ.
     await _warm_price_cache()
+
+    # Слоты считаем ПОСЛЕ прогрева: прайс в памяти — это база, от которой зависит,
+    # сколько задач ещё влезает под лимит контейнера.
+    slots = _effective_slots()
+    logger.info(
+        "Worker ready",
+        worker_id=WORKER_ID,
+        slots=slots,
+        configured_concurrency=settings.WORKER_CONCURRENCY,
+        **memory_snapshot().as_dict(),
+    )
+    sem = asyncio.Semaphore(slots)
+    inflight: set = set()
+
+    # До poll-loop: job мёртвого предшественника надо вернуть в очередь раньше,
+    # чем начнём брать новые.
+    await _announce_start(slots)
 
     scheduler = _build_scheduler()
     scheduler.start()

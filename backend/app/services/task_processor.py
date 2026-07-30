@@ -793,7 +793,10 @@ class TaskProcessor:
             content_b64 = file_info.get("content_b64", "")
             if not content_b64:
                 continue
-            parsed = parse_file(name, mime_type, content_b64)
+            # В поток: parse_file — это openpyxl/PyMuPDF, синхронные и на больших
+            # файлах ощутимые. В корутине они блокировали весь процесс обработчика,
+            # включая heartbeat и прогресс параллельных задач.
+            parsed = await asyncio.to_thread(parse_file, name, mime_type, content_b64)
             content_blocks.append({"file_name": name, "content": parsed})
         return content_blocks
 
@@ -1659,7 +1662,11 @@ class TaskProcessor:
         partial_count: int = progress_data.get("partial_count", 0)
 
         # --- Парсим и разбиваем на чанки ---
-        rows = parse_xlsx_grand(excel_bytes)
+        # openpyxl синхронный и на большом файле считается секундами. Прямо в
+        # корутине он вставал поперёк ВСЕГО процесса: heartbeat не отправлялся,
+        # прогресс параллельных задач замирал, и живая задача выглядела зависшей
+        # (plans/2026-07-30-parallelnaya-obrabotka-umiraet.md).
+        rows = await asyncio.to_thread(parse_xlsx_grand, excel_bytes)
         if not rows:
             raise ValueError("Не удалось извлечь строки из Excel. Проверьте формат файла.")
 
