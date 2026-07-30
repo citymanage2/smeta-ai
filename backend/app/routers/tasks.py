@@ -112,6 +112,10 @@ class TaskStatusResponse(BaseModel):
     project_id: Optional[str]
     created_at: str
     updated_at: str
+    # Начало ТЕКУЩЕГО прогона (переставляется на каждый запуск/перезапуск).
+    # Таймер на карточке считает от него: created_at — время создания задачи, и
+    # после перезапуска он показывал бы возраст, а не длительность счёта.
+    started_at: Optional[str] = None
     name: Optional[str] = None
     progress_data: Optional[dict] = None
     input_files: list[InputFileMeta] = []
@@ -470,6 +474,7 @@ async def get_task_status(
         project_id=str(task.project_id) if task.project_id else None,
         created_at=task.created_at.isoformat(),
         updated_at=task.updated_at.isoformat(),
+        started_at=task.started_at.isoformat() if task.started_at else None,
         name=task.name,
         progress_data=task.progress_data,
         input_files=[
@@ -886,9 +891,20 @@ async def restart_task(
     task.progress_message = None
     task.progress_data = None
     task.progress_log = []
-    task.created_at = now
+    # created_at НЕ трогаем: это время создания задачи, а не прогона. Сброс врал
+    # про возраст (задача, висевшая 5 часов, показывала «1 мин»), портил колонку
+    # «В очереди» и историю длительностей, на которой калибруется прогноз.
+    # Длительность текущего прогона отсчитывается от started_at, его и сбрасываем.
+    task.started_at = None
+    task.finished_at = None
     task.updated_at = now
     await db.commit()
+
+    # Снять прежние job этой задачи, иначе рестарт добавит ВТОРОЙ прогон к живому:
+    # два обработчика на одну задачу и двойная оплата запросов к ИИ.
+    from app.services import job_queue
+
+    await job_queue.supersede_jobs_for_task(db, task_id)
 
     await _enqueue_task(db, task_id)
 

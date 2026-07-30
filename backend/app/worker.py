@@ -24,6 +24,19 @@ from app.database import AsyncSessionLocal
 from app.models.job import Job
 from app.services import job_queue
 
+# Логирование настраиваем и здесь: `structlog.configure` вызывался только в
+# main.py (web), поэтому строки обработчика шли в дефолтном формате — без ISO-времени
+# и в другом виде, чем строки web. В общем логе приложения (Timeweb показывает оба
+# контейнера вперемешку) это мешало сопоставлять события по времени.
+structlog.configure(
+    processors=[
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer(),
+    ]
+)
+
 logger = structlog.get_logger()
 
 WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
@@ -42,12 +55,16 @@ _inflight_job_ids: set[int] = set()
 # ---------------------------------------------------------------------------
 
 async def _handle_task_process(payload: dict, db) -> None:
-    """Основной пайплайн: 6 типов задач через TaskProcessor."""
+    """Основной пайплайн: 6 типов задач через TaskProcessor.
+
+    `_job_id` подкладывает `run_job` — по нему прогон отличает «меня сменили
+    перезапуском» от «всё в порядке» и не считает параллельно новому прогону.
+    """
     from app.services.task_processor import process_task
     task_id = payload.get("task_id")
     if not task_id:
         raise ValueError("task.process: payload без task_id")
-    await process_task(task_id, db)
+    await process_task(task_id, db, job_id=payload.get("_job_id"))
 
 
 async def _handle_task_optimize(payload: dict, db) -> None:
@@ -225,8 +242,10 @@ async def run_job(job: Job) -> None:
         handler = HANDLERS.get(job.kind)
         if handler is None:
             raise ValueError(f"Неизвестный kind job: {job.kind}")
+        # `_job_id` в копии payload (саму запись не меняем): обработчику нужно
+        # знать, под какой job он идёт, чтобы остановиться, если его сменили.
         async with AsyncSessionLocal() as db:
-            await handler(job.payload, db)
+            await handler({**(job.payload or {}), "_job_id": job.id}, db)
         async with AsyncSessionLocal() as db:
             await job_queue.complete(db, job.id)
         logger.info(
@@ -258,12 +277,46 @@ async def run_job(job: Job) -> None:
 # Poll-loop
 # ---------------------------------------------------------------------------
 
+def _memory_brake_engaged() -> bool:
+    """Не брать НОВУЮ задачу, пока память выше порога и хоть одна уже считается.
+
+    Жёсткое число слотов не знает, что взяло: четыре тяжёлые сметы валят процесс,
+    четыре лёгких — нет. Тормоз делает параллельность адаптивной: под нагрузкой
+    задачи идут по одной, в спокойное время занимаются все слоты. Задачи не
+    теряются — ждут в очереди.
+
+    Пустой процесс не тормозим никогда: иначе высокая база (загруженный прайс,
+    матрицы эмбеддингов) заперла бы очередь навсегда — брать было бы нечего, а
+    память сама не упадёт.
+    """
+    limit = settings.WORKER_RSS_PAUSE_MB
+    if limit <= 0 or not _inflight_job_ids:
+        return False
+    rss = rss_mb()
+    if rss is None or rss < limit:
+        return False
+    logger.info(
+        "Memory brake — новую задачу не берём",
+        rss_mb=rss,
+        limit_mb=limit,
+        running=len(_inflight_job_ids),
+    )
+    return True
+
+
 async def _poll_loop(sem: asyncio.Semaphore, inflight: set) -> None:
     while not _shutdown.is_set():
         await sem.acquire()
         if _shutdown.is_set():
             sem.release()
             break
+        if _memory_brake_engaged():
+            sem.release()
+            try:
+                await asyncio.wait_for(_shutdown.wait(), timeout=settings.JOB_POLL_INTERVAL_S)
+            except asyncio.TimeoutError:
+                pass
+            continue
         try:
             async with AsyncSessionLocal() as db:
                 job = await job_queue.claim_one(db, WORKER_ID)

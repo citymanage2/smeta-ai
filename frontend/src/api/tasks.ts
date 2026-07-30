@@ -20,6 +20,8 @@ export interface TaskStatusResponse {
   project_id?: string | null;
   created_at: string;
   updated_at: string;
+  /** Начало текущего прогона (переставляется на каждый запуск/перезапуск). */
+  started_at?: string | null;
   name?: string | null;
   progress_data?: Record<string, unknown>;
   input_files?: InputFileMeta[];

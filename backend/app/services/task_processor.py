@@ -451,9 +451,15 @@ class StageDeadlineError(Exception):
 
 
 class TaskProcessor:
-    def __init__(self, task_id: str, db: AsyncSession):
+    def __init__(self, task_id: str, db: AsyncSession, job_id: Optional[int] = None):
         self.task_id = task_id
         self.db = db
+        # id job, под которой идёт ЭТОТ прогон. Признак поколения: «Перезапустить»
+        # снимает старую job и ставит новую, и по нему прежний прогон понимает, что
+        # его сменили, и останавливается на ближайшем чекпоинте. Без этого рестарт
+        # висящей задачи запускал ВТОРОЙ прогон параллельно первому — двойная
+        # стоимость API и два обработчика, пишущих в одну задачу.
+        self.job_id = job_id
         self._input_files_cache: list[dict] | None = None
 
     async def _load_input_files(self, task: Task) -> list[dict]:
@@ -484,13 +490,35 @@ class TaskProcessor:
         return self._input_files_cache
 
     async def _check_cancelled(self) -> None:
-        """Raise TaskCancelledError if the task status is 'cancelled' in the DB."""
+        """Остановить прогон, если задачу отменили ИЛИ этот прогон сменили новым.
+
+        Второе — про «Перезапустить»: он снимает job текущего прогона и ставит
+        новую. Прежний обработчик об этом иначе не узнает и продолжит считать
+        параллельно новому: два прогона пишут в одну задачу, а запросы к ИИ
+        оплачиваются дважды. Своя job больше не `running` → нас сменили, выходим.
+        """
         result = await self.db.execute(
             select(Task).where(Task.id == self.task_id)
         )
         task = result.scalar_one_or_none()
         if task and task.status == "cancelled":
             raise TaskCancelledError("Задача остановлена пользователем")
+
+        if self.job_id is None:
+            return
+        from app.models.job import Job
+
+        job_status = (
+            await self.db.execute(select(Job.status).where(Job.id == self.job_id))
+        ).scalar_one_or_none()
+        if job_status is not None and job_status != "running":
+            logger.info(
+                "Run superseded — job больше не running",
+                task_id=self.task_id,
+                job_id=self.job_id,
+                job_status=job_status,
+            )
+            raise TaskCancelledError("Прогон заменён новым (перезапуск)")
 
     async def update_progress(self, message: str) -> None:
         result = await self.db.execute(
@@ -2965,9 +2993,13 @@ class TaskProcessor:
         await self.update_progress("Смета загружена. Редактор готов к работе.")
 
 
-async def process_task(task_id: str, db: AsyncSession) -> None:
-    """Wrapper function for backward compatibility with routers."""
-    processor = TaskProcessor(task_id, db)
+async def process_task(task_id: str, db: AsyncSession, job_id: Optional[int] = None) -> None:
+    """Wrapper function for backward compatibility with routers.
+
+    `job_id` — job, под которой идёт прогон (передаёт worker). По нему прогон
+    понимает, что его сменил перезапуск, и не считает параллельно новому.
+    """
+    processor = TaskProcessor(task_id, db, job_id=job_id)
     await processor.process()
 
 

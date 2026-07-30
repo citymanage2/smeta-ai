@@ -375,6 +375,38 @@ async def cancel_pending_jobs_for_task(db: AsyncSession, task_id: str) -> int:
     return n
 
 
+async def supersede_jobs_for_task(db: AsyncSession, task_id: str) -> int:
+    """Снять ВСЕ живые job задачи перед новым прогоном («Перезапустить»). Коммитит.
+
+    Отличие от `cancel_pending_jobs_for_task`: здесь снимается и `running`. Так
+    надо, потому что перезапускают обычно как раз висящую задачу: старая job
+    остаётся в очереди, и рестарт добавлял ВТОРУЮ — два прогона считали одну
+    задачу параллельно, писали друг поверх друга и оплачивали запросы дважды.
+
+    Прежний прогон, если он ещё жив, увидит, что его job больше не `running`
+    (`TaskProcessor._check_cancelled`), и выйдет на ближайшем чекпоинте.
+    """
+    rows = (
+        await db.execute(
+            select(Job.id, Job.payload).where(Job.status.in_(("queued", "running")))
+        )
+    ).all()
+    ids = [jid for jid, payload in rows if (payload or {}).get("task_id") == task_id]
+    if not ids:
+        return 0
+
+    res = await db.execute(
+        update(Job)
+        .where(Job.id.in_(ids), Job.status.in_(("queued", "running")))
+        .values(status="superseded", last_error="Заменена новым прогоном (перезапуск)")
+    )
+    n = res.rowcount or 0
+    if n:
+        await db.commit()
+        logger.info("Jobs superseded by restart", count=n, task_id=task_id)
+    return n
+
+
 async def requeue_after_shutdown(
     db: AsyncSession, job_ids: Iterable[int], worker_id: str
 ) -> int:

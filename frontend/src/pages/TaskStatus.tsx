@@ -256,8 +256,14 @@ const TaskStatusPage: React.FC = () => {
       }
 
       if (data.status === 'processing' || data.status === 'pending') {
-        if (!startTimeRef.current) {
-          startTimeRef.current = new Date(data.created_at).getTime();
+        // От начала ТЕКУЩЕГО прогона, а не от создания задачи: перезапуск
+        // переставляет started_at, и таймер показывает, сколько задача считается
+        // сейчас, а не сколько существует. Пока прогон не начался (pending)
+        // started_at пуст — считаем от создания. Якорь сверяем на каждом опросе:
+        // он меняется, когда прогон стартовал или его перезапустили.
+        const anchor = new Date(data.started_at ?? data.created_at).getTime();
+        if (startTimeRef.current !== anchor) {
+          startTimeRef.current = anchor;
         }
         setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
         if (!timerRef.current) {
