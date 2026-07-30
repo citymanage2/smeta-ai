@@ -81,3 +81,36 @@ describe('DashboardQueue — готовность', () => {
     expect(screen.queryByTestId('queue-eta')).not.toBeInTheDocument()
   })
 })
+
+/**
+ * Место в очереди в списке активных задач. Задачи считаются по одной, поэтому
+ * очередь читается как очередь.
+ *
+ * План: plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 8.
+ */
+describe('DashboardQueue — место в очереди', () => {
+  it('ожидающая задача показывает позицию', () => {
+    renderQueue([
+      makeTask({
+        status: 'pending',
+        eta: {
+          starts_in_s: 1800,
+          ready_in_s: 4200,
+          ready_at: new Date(Date.now() + 4200_000).toISOString(),
+          rough: false,
+          finishing: false,
+          units: 300,
+          unit_kind: 'rows',
+          queue_position: 2,
+        },
+      }),
+    ])
+
+    expect(screen.getByTestId('queue-position')).toHaveTextContent('2-я в очереди')
+  })
+
+  it('считающаяся задача позицию не показывает', () => {
+    renderQueue([makeTask()])
+    expect(screen.queryByTestId('queue-position')).toBeNull()
+  })
+})

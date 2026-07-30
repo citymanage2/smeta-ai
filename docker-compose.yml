@@ -36,6 +36,10 @@ services:
       USERS: ${USERS:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-20}
+      # Web сам задач не считает, но по этому числу СИМУЛИРУЕТ очередь: место в
+      # очереди и время ожидания. Разойдись оно с настройкой обработчика — прогноз
+      # врал бы (четыре слота вместо одного = «старт вот-вот» вместо часа).
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       S3_ENABLED: ${S3_ENABLED:-false}
@@ -62,7 +66,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       USERS: ${USERS:-}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-20}
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      # Одна задача за раз (решение 30.07.2026, см. config.WORKER_CONCURRENCY).
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       ANTHROPIC_MAX_CONCURRENCY: ${ANTHROPIC_MAX_CONCURRENCY:-6}
       FAST_CHUNK_CONCURRENCY: ${FAST_CHUNK_CONCURRENCY:-4}
       # Суммарно web+worker ≤ 31 соединение. Измерено 30.07.2026: БД разрешает

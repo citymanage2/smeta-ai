@@ -155,3 +155,44 @@ describe('TaskStatus — прогноз готовности', () => {
     expect(screen.queryByTestId('task-eta')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Место в очереди в карточке задачи: «меня возьмут третьей» отвечает на вопрос
+ * ожидания точнее, чем минуты (те — оценка).
+ *
+ * План: plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 8.
+ */
+describe('TaskStatus — место в очереди', () => {
+  it('ожидающая задача показывает позицию, старт и результат', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(
+      makeTaskResponse({
+        status: 'pending' as TaskStatus,
+        worker_heartbeat_age_s: null,
+        eta: {
+          starts_in_s: 1800,
+          ready_in_s: 4200,
+          ready_at: new Date(Date.now() + 4200_000).toISOString(),
+          rough: false,
+          finishing: false,
+          units: 1220,
+          unit_kind: 'items',
+          queue_position: 3,
+        },
+      })
+    );
+    renderPage();
+
+    expect(await screen.findByTestId('task-queue-position')).toHaveTextContent('3-я в очереди');
+    const eta = screen.getByTestId('task-eta');
+    expect(eta).toHaveTextContent('старт ≈ через 30 мин');
+    expect(eta).toHaveTextContent('через 1 ч 10 мин');
+  });
+
+  it('считающаяся задача позицию не показывает', async () => {
+    vi.mocked(getTaskStatus).mockResolvedValue(makeTaskResponse());
+    renderPage();
+
+    await screen.findByTestId('task-eta');
+    expect(screen.queryByTestId('task-queue-position')).toBeNull();
+  });
+});

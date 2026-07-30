@@ -76,7 +76,9 @@ async def test_repeated_starts_flagged_in_hint(async_client, admin_token, db_ses
 
     assert body["worker_restarts"]["starts_1h"] == 3
     assert "перезапускался 3" in body["hint"]
-    assert "памяти" in body["hint"]
+    # Причину не утверждаем: деплой — это тоже перезапуск, и уверенное «не хватает
+    # памяти» один раз уже увело разбор в сторону (30.07.2026).
+    assert "После деплоя это норма" in body["hint"]
 
 
 async def test_old_starts_not_counted_but_last_shown(async_client, admin_token, db_session):

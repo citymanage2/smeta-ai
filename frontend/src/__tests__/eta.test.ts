@@ -4,7 +4,7 @@
  * План: plans/2026-07-30-eta-ocheredi-zadach.md, Фаза 5.
  */
 import { describe, it, expect } from 'vitest'
-import { describeEta, formatDuration, TaskEta } from '../utils/eta'
+import { describeEta, formatDuration, formatQueuePosition, TaskEta } from '../utils/eta'
 
 function makeEta(overrides: Partial<TaskEta> = {}): TaskEta {
   return {
@@ -76,5 +76,46 @@ describe('describeEta', () => {
     expect(describeEta(makeEta(), 'completed')).toBeNull()
     expect(describeEta(null, 'processing')).toBeNull()
     expect(describeEta(undefined, 'pending')).toBeNull()
+  })
+})
+
+/**
+ * Место в очереди. Задачи считаются строго по одной (решение 30.07.2026:
+ * параллельная обработка на этой машине не выживала), поэтому очередь читается
+ * как очередь, а «меня возьмут третьей» — факт, в отличие от оценки в минутах.
+ *
+ * План: plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 8.
+ */
+describe('место в очереди', () => {
+  it('первая в очереди названа «следующая», а не «1-я»', () => {
+    expect(formatQueuePosition(1)).toBe('следующая в очереди')
+  })
+
+  it('остальные — по номеру', () => {
+    expect(formatQueuePosition(3)).toBe('3-я в очереди')
+    expect(formatQueuePosition(11)).toBe('11-я в очереди')
+  })
+
+  it('нет позиции — нет строки', () => {
+    expect(formatQueuePosition(null)).toBe('')
+    expect(formatQueuePosition(undefined)).toBe('')
+    expect(formatQueuePosition(0)).toBe('')
+  })
+
+  it('ожидающая задача показывает позицию', () => {
+    const view = describeEta(makeEta({ starts_in_s: 1200, queue_position: 3 }), 'pending')!
+    expect(view.position).toBe('3-я в очереди')
+    expect(view.hint).toContain('Место в очереди: 3')
+  })
+
+  it('считающаяся задача позицию не показывает — она уже не в очереди', () => {
+    const view = describeEta(makeEta({ queue_position: 2 }), 'processing')!
+    expect(view.position).toBe('')
+  })
+
+  it('без позиции с бэкенда строка пустая, остальное работает', () => {
+    const view = describeEta(makeEta({ starts_in_s: 600 }), 'pending')!
+    expect(view.position).toBe('')
+    expect(view.start).toBe('старт ≈ через 10 мин')
   })
 })

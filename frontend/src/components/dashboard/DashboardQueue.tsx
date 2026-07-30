@@ -174,6 +174,16 @@ const EtaCell: React.FC<{ task: ActiveTask }> = ({ task }) => {
 
   return (
     <span title={view.hint} data-testid="queue-eta">
+      {/* Позиция — над временем: задачи считаются по одной, и очередь читается
+          именно как очередь. Минуты рядом — оценка, позиция — факт. */}
+      {view.position && (
+        <span
+          data-testid="queue-position"
+          style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#92400e' }}
+        >
+          {view.position}
+        </span>
+      )}
       <span style={{ color: '#1e293b', fontWeight: 500 }}>{view.ready}</span>
       {view.start && (
         <span style={{ display: 'block', fontSize: 11, color: '#64748b' }}>{view.start}</span>

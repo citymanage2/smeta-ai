@@ -387,13 +387,14 @@ def simulate_queue(
         busy_until.append(0.0)
     heapq.heapify(busy_until)
 
-    for task in pending:
+    for position, task in enumerate(pending, start=1):
         total_s, rough = estimate_duration_s(task, rates)
         starts_in = heapq.heappop(busy_until)
         ready_in = starts_in + total_s
         heapq.heappush(busy_until, ready_in)
         result[task.id] = _build_eta(
-            task, now, starts_in=starts_in, ready_in=ready_in, rough=rough, finishing=False
+            task, now, starts_in=starts_in, ready_in=ready_in, rough=rough,
+            finishing=False, queue_position=position,
         )
 
     return result
@@ -417,6 +418,7 @@ def _build_eta(
     ready_in: float,
     rough: bool,
     finishing: bool,
+    queue_position: Optional[int] = None,
 ) -> TaskEta:
     ready_in_rounded = _to_minutes(ready_in)
     # Абсолютное время тоже кладём на минутную сетку: иначе оно ползло бы каждую
@@ -432,6 +434,7 @@ def _build_eta(
         finishing=finishing,
         units=task.volume_units,
         unit_kind=task.volume_kind,
+        queue_position=queue_position,
     )
 
 

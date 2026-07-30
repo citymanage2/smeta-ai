@@ -820,6 +820,14 @@ const TaskStatusPage: React.FC = () => {
                     title={view.hint}
                     style={{ marginTop: '10px', fontSize: '13px', color: '#1e293b' }}
                   >
+                    {/* Место в очереди — первым: задачи считаются строго по одной,
+                        и «меня возьмут третьей» объясняет ожидание лучше, чем
+                        любые минуты (они-то оценка, а позиция — факт). */}
+                    {view.position && (
+                      <span data-testid="task-queue-position" style={{ fontWeight: 600 }}>
+                        {view.position[0].toUpperCase() + view.position.slice(1)} ·{' '}
+                      </span>
+                    )}
                     Результат {view.ready}
                     {view.start && (
                       <span style={{ color: '#64748b' }}> · {view.start}</span>

@@ -20,3 +20,8 @@ class TaskEta(BaseModel):
     # Что и в чём померили: 1200 «items», 48 «pages», 300 «rows».
     units: Optional[int] = None
     unit_kind: Optional[str] = None
+    # Место в очереди на запуск: 1 — следующая. None — задача уже считается (или
+    # ждёт ответа Batch API и слот не занимает). Нужна отдельно от `starts_in_s`:
+    # «третья в очереди» — это факт, а минуты ожидания — оценка, и на вопрос
+    # «меня вообще скоро возьмут?» отвечает именно факт.
+    queue_position: Optional[int] = None

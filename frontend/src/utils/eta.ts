@@ -20,6 +20,8 @@ export interface TaskEta {
   finishing: boolean
   units: number | null
   unit_kind: string | null
+  /** Место в очереди на запуск: 1 — следующая. null — задача уже считается. */
+  queue_position?: number | null
 }
 
 const UNIT_LABELS: Record<string, [string, string, string]> = {
@@ -72,6 +74,19 @@ export interface EtaView {
   hint: string
   /** Прогноз грубый — интерфейс показывает это явно. */
   rough: boolean
+  /**
+   * Место в очереди: «следующая в очереди» / «3-я в очереди». Пусто, если задача
+   * уже считается. В отличие от минут ожидания это факт, а не оценка — он и
+   * отвечает на «меня вообще скоро возьмут».
+   */
+  position: string
+}
+
+/** «следующая в очереди» / «3-я в очереди». Пусто, если позиции нет. */
+export function formatQueuePosition(position: number | null | undefined): string {
+  if (!position || position < 1) return ''
+  if (position === 1) return 'следующая в очереди'
+  return `${position}-я в очереди`
 }
 
 /**
@@ -93,7 +108,11 @@ export function describeEta(eta: TaskEta | null | undefined, status: string): Et
       : 'старт вот-вот'
   }
 
+  // Позицию показываем только ожидающим: у считающейся задачи её нет по смыслу.
+  const position = status === 'pending' ? formatQueuePosition(eta.queue_position) : ''
+
   const parts: string[] = []
+  if (position) parts.push(`Место в очереди: ${eta.queue_position}`)
   if (eta.units && eta.unit_kind && UNIT_LABELS[eta.unit_kind]) {
     parts.push(`Объём: ${eta.units} ${plural(eta.units, UNIT_LABELS[eta.unit_kind])}`)
   }
@@ -107,5 +126,5 @@ export function describeEta(eta: TaskEta | null | undefined, status: string): Et
       : 'Оценка по времени похожих задач'
   )
 
-  return { ready, start, hint: parts.join(' · '), rough: eta.rough }
+  return { ready, start, hint: parts.join(' · '), rough: eta.rough, position }
 }
