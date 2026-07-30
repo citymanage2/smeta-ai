@@ -24,16 +24,18 @@ def upgrade() -> None:
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ")
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS volume_units INTEGER")
     op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS volume_kind VARCHAR(16)")
-    # Калибровка ставок читает завершённые задачи по типу и времени завершения —
-    # индекс держит этот запрос дешёвым на каждом открытии дашборда.
+    # Два горячих запроса прогноза ходят по статусу: калибровка выбирает
+    # завершённые за 30 дней (status='completed' + finished_at), а очередь —
+    # активные (status IN ('pending','processing')). Оба поллятся каждые
+    # несколько секунд, поэтому индекс по (status, finished_at).
     op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_tasks_type_finished "
-        "ON tasks (task_type, finished_at)"
+        "CREATE INDEX IF NOT EXISTS ix_tasks_status_finished "
+        "ON tasks (status, finished_at DESC)"
     )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_tasks_type_finished")
+    op.execute("DROP INDEX IF EXISTS ix_tasks_status_finished")
     op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS volume_kind")
     op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS volume_units")
     op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS finished_at")

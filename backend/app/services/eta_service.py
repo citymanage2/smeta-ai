@@ -18,7 +18,7 @@ import heapq
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from statistics import median
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence, Union
 
 import structlog
 from sqlalchemy import select
@@ -92,6 +92,50 @@ _MIN_REMAINING_S = 60.0       # «вот-вот закончит» — не но
 # Доля выполненного, начиная с которой экстраполяция по факту честнее модели.
 _PROGRESS_TRUST_FRACTION = 0.15
 _PROGRESS_MIN_ELAPSED_S = 60.0
+
+
+@dataclass(frozen=True)
+class TaskSnapshot:
+    """То немногое из задачи, что нужно прогнозу.
+
+    Прогноз считается по ВСЕЙ активной очереди на каждый опрос статуса (раз в
+    3 с на открытую карточку). Тянуть ради этого полные строки задач нельзя:
+    в `progress_data` лежат позиции сметы и OCR-текст страниц — мегабайты на
+    задачу. Поэтому из JSON достаём только четыре скаляра.
+    """
+
+    id: str
+    task_type: str
+    status: str
+    processing_mode: str
+    volume_units: Optional[int]
+    volume_kind: Optional[str]
+    created_at: Optional[datetime]
+    started_at: Optional[datetime]
+    batch_pending: bool
+    chunks_done: Optional[int]
+    chunks_total: Optional[int]
+
+    @classmethod
+    def from_task(cls, task: Task) -> "TaskSnapshot":
+        pd = task.progress_data or {}
+        total = pd.get("total_chunks")
+        if not isinstance(total, int) or isinstance(total, bool):
+            total = pd.get("chunks_total")
+        done = pd.get("chunks_done")
+        return cls(
+            id=str(task.id),
+            task_type=task.task_type,
+            status=task.status,
+            processing_mode=_mode(task),
+            volume_units=task.volume_units,
+            volume_kind=task.volume_kind,
+            created_at=task.created_at,
+            started_at=task.started_at,
+            batch_pending=is_batch_pending(task.progress_data),
+            chunks_done=done if isinstance(done, int) and not isinstance(done, bool) else None,
+            chunks_total=total if isinstance(total, int) and not isinstance(total, bool) else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -245,7 +289,7 @@ async def load_rates(db: AsyncSession, now: Optional[datetime] = None) -> Rates:
 # Длительность одной задачи
 # ---------------------------------------------------------------------------
 
-def estimate_duration_s(task: Task, rates: Rates) -> tuple[float, bool]:
+def estimate_duration_s(task: Union[Task, TaskSnapshot], rates: Rates) -> tuple[float, bool]:
     """(сколько секунд считать задачу, грубая ли оценка)."""
     task_type = (task.task_type or "").upper()
     mode = _mode(task)
@@ -261,21 +305,14 @@ def estimate_duration_s(task: Task, rates: Rates) -> tuple[float, bool]:
     return flat, True
 
 
-def _progress_fraction(progress_data: Optional[dict]) -> Optional[float]:
+def _progress_fraction(done: Optional[int], total: Optional[int]) -> Optional[float]:
     """Доля сделанного по счётчику чанков, если он есть и осмыслен."""
-    pd = progress_data or {}
-    done = pd.get("chunks_done")
-    total = pd.get("total_chunks") or pd.get("chunks_total")
-    if not isinstance(done, int) or isinstance(done, bool):
-        return None
-    if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
-        return None
-    if done <= 0:
+    if not done or not total or total <= 0 or done <= 0:
         return None
     return min(done / total, 1.0)
 
 
-def remaining_s(task: Task, total_s: float, now: datetime) -> tuple[float, bool]:
+def remaining_s(task: TaskSnapshot, total_s: float, now: datetime) -> tuple[float, bool]:
     """Сколько осталось считающейся задаче: (секунды, «оценка исчерпана»).
 
     Если задача успела отчитаться о заметной доле чанков, экстраполируем по
@@ -284,7 +321,7 @@ def remaining_s(task: Task, total_s: float, now: datetime) -> tuple[float, bool]
     started = _as_utc(task.started_at)
     elapsed = max((now - started).total_seconds(), 0.0) if started else 0.0
 
-    fraction = _progress_fraction(task.progress_data)
+    fraction = _progress_fraction(task.chunks_done, task.chunks_total)
     if (
         fraction is not None
         and fraction >= _PROGRESS_TRUST_FRACTION
@@ -304,7 +341,7 @@ def remaining_s(task: Task, total_s: float, now: datetime) -> tuple[float, bool]
 # ---------------------------------------------------------------------------
 
 def simulate_queue(
-    tasks: Iterable[Task],
+    tasks: Iterable[Union[Task, TaskSnapshot]],
     rates: Rates,
     now: datetime,
     slots: Optional[int] = None,
@@ -315,9 +352,11 @@ def simulate_queue(
     держат слоты своим остатком, ожидающие занимают ближайший освободившийся.
     Порядок ожидающих — по created_at; настоящий round-robin по владельцам
     воспроизвести нельзя, отсюда «≈» в интерфейсе.
+
+    Принимает и ORM-задачи (у вызывающего они уже загружены), и лёгкие снимки.
     """
     slots = max(1, slots if slots is not None else settings.WORKER_CONCURRENCY)
-    tasks = list(tasks)
+    tasks = [t if isinstance(t, TaskSnapshot) else TaskSnapshot.from_task(t) for t in tasks]
 
     running = [t for t in tasks if t.status == "processing"]
     pending = sorted(
@@ -331,12 +370,12 @@ def simulate_queue(
     for task in running:
         total_s, rough = estimate_duration_s(task, rates)
         remaining, finishing = remaining_s(task, total_s, now)
-        result[str(task.id)] = _build_eta(
+        result[task.id] = _build_eta(
             task, now, starts_in=0.0, ready_in=remaining, rough=rough, finishing=finishing
         )
         # Batch-задача ждёт ответа Anthropic и слот воркера НЕ занимает —
         # иначе очередь выглядела бы забитой, когда воркер на самом деле свободен.
-        if not is_batch_pending(task.progress_data):
+        if not task.batch_pending:
             busy_until.append(remaining)
 
     # Занятых больше, чем слотов (перезапуск, чужие job, batch-хвосты) — держим
@@ -353,7 +392,7 @@ def simulate_queue(
         starts_in = heapq.heappop(busy_until)
         ready_in = starts_in + total_s
         heapq.heappush(busy_until, ready_in)
-        result[str(task.id)] = _build_eta(
+        result[task.id] = _build_eta(
             task, now, starts_in=starts_in, ready_in=ready_in, rough=rough, finishing=False
         )
 
@@ -371,7 +410,7 @@ def _to_minutes(seconds: float) -> int:
 
 
 def _build_eta(
-    task: Task,
+    task: TaskSnapshot,
     now: datetime,
     *,
     starts_in: float,
@@ -396,9 +435,57 @@ def _build_eta(
     )
 
 
+async def _load_active_snapshots(db: AsyncSession) -> list[TaskSnapshot]:
+    """Активная очередь в виде лёгких снимков.
+
+    Из `progress_data` берём четыре скаляра через JSON-доступ (SQLAlchemy сама
+    разложит его в `->>` на PostgreSQL и `json_extract` на SQLite), а не тянем
+    весь документ: там лежат позиции сметы и OCR-текст страниц.
+    """
+    rows = (
+        await db.execute(
+            select(
+                Task.id,
+                Task.task_type,
+                Task.status,
+                Task.processing_mode,
+                Task.volume_units,
+                Task.volume_kind,
+                Task.created_at,
+                Task.started_at,
+                Task.progress_data["_stage"].as_string().label("stage"),
+                Task.progress_data["batch_id"].as_string().label("batch_id"),
+                Task.progress_data["chunks_done"].as_integer().label("chunks_done"),
+                Task.progress_data["total_chunks"].as_integer().label("total_chunks"),
+                Task.progress_data["chunks_total"].as_integer().label("chunks_total"),
+            ).where(
+                Task.deleted_at.is_(None),
+                Task.status.in_(ACTIVE_STATUSES),
+            )
+        )
+    ).all()
+
+    return [
+        TaskSnapshot(
+            id=str(r.id),
+            task_type=r.task_type,
+            status=r.status,
+            processing_mode=(r.processing_mode or "fast").lower(),
+            volume_units=r.volume_units,
+            volume_kind=r.volume_kind,
+            created_at=r.created_at,
+            started_at=r.started_at,
+            batch_pending=r.stage == "batch_pending" and bool(r.batch_id),
+            chunks_done=r.chunks_done,
+            chunks_total=r.total_chunks if r.total_chunks else r.chunks_total,
+        )
+        for r in rows
+    ]
+
+
 async def queue_forecast(
     db: AsyncSession,
-    active_tasks: Optional[Sequence[Task]] = None,
+    active_tasks: Optional[Sequence[Union[Task, TaskSnapshot]]] = None,
     now: Optional[datetime] = None,
 ) -> dict[str, TaskEta]:
     """Прогноз по всей активной очереди: task_id → TaskEta.
@@ -408,14 +495,7 @@ async def queue_forecast(
     """
     now = now or datetime.now(timezone.utc)
     if active_tasks is None:
-        active_tasks = (
-            await db.execute(
-                select(Task).where(
-                    Task.deleted_at.is_(None),
-                    Task.status.in_(ACTIVE_STATUSES),
-                )
-            )
-        ).scalars().all()
+        active_tasks = await _load_active_snapshots(db)
     if not active_tasks:
         return {}
 

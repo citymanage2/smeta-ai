@@ -1730,7 +1730,8 @@ async def optimize_run(
     task.progress_message = "Начинаем оптимизацию..."
     # Оптимизация меняет статус в обход TaskProcessor.update_status, поэтому
     # границу прогона и объём проставляем здесь — иначе прогноз времени для неё
-    # не построится.
+    # не построится. finished_at гасим: завершение оптимизации его не выставит,
+    # и короткий прогон не попадёт в калибровку как «расчёт сметы».
     task.started_at = datetime.now(timezone.utc)
     task.finished_at = None
     if items_dicts:
@@ -1796,6 +1797,11 @@ async def fix_empty_prices(
     task.status = "processing"
     task.progress_message = f"Исправление {empty_count} пустых цен..."
     task.updated_at = datetime.now(timezone.utc)
+    # Дозапуск по уже готовой смете — новый прогон: отсчёт остатка ведётся от
+    # него. finished_at гасим, чтобы длительность этого короткого прогона не
+    # попала в калибровку ставок как длительность расчёта сметы целиком.
+    task.started_at = task.updated_at
+    task.finished_at = None
     await db.commit()
 
     from app.services import job_queue

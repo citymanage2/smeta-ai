@@ -6,7 +6,13 @@ import pytest
 
 from app.models.task import Task
 from app.services import eta_service
-from app.services.eta_service import Rates, estimate_duration_s, remaining_s, simulate_queue
+from app.services.eta_service import (
+    Rates,
+    TaskSnapshot,
+    estimate_duration_s,
+    remaining_s,
+    simulate_queue,
+)
 from app.utils.volume_probe import UNIT_ITEMS, UNIT_ROWS
 
 NOW = datetime(2026, 7, 30, 12, 0, tzinfo=timezone.utc)
@@ -23,6 +29,11 @@ async def clean_tasks(db_session):
     yield
     await db_session.execute(text("DELETE FROM tasks"))
     await db_session.commit()
+
+
+def _snapshot(**kw) -> TaskSnapshot:
+    """Прогноз работает с лёгким снимком задачи, а не с ORM-строкой."""
+    return TaskSnapshot.from_task(_task(**kw))
 
 
 def _task(**kw) -> Task:
@@ -88,14 +99,14 @@ def test_batch_mode_uses_its_own_rate():
 # --- остаток бегущей задачи ------------------------------------------------
 
 def test_remaining_subtracts_elapsed():
-    task = _task(status="processing", started_at=NOW - timedelta(seconds=600))
+    task = _snapshot(status="processing", started_at=NOW - timedelta(seconds=600))
     remaining, finishing = remaining_s(task, total_s=1000, now=NOW)
     assert remaining == pytest.approx(400)
     assert finishing is False
 
 
 def test_overdue_task_reports_finishing():
-    task = _task(status="processing", started_at=NOW - timedelta(hours=6))
+    task = _snapshot(status="processing", started_at=NOW - timedelta(hours=6))
     remaining, finishing = remaining_s(task, total_s=1000, now=NOW)
     assert finishing is True
     assert remaining > 0  # никаких «через −5 часов»
@@ -104,7 +115,7 @@ def test_overdue_task_reports_finishing():
 def test_progress_counter_beats_the_model():
     """Задача отчиталась о 50% за час — значит остался примерно час,
     что бы ни думала модель."""
-    task = _task(
+    task = _snapshot(
         status="processing",
         started_at=NOW - timedelta(hours=1),
         progress_data={"chunks_done": 5, "total_chunks": 10},
@@ -115,7 +126,7 @@ def test_progress_counter_beats_the_model():
 
 def test_early_progress_is_not_trusted():
     """1 чанк из 100 — слишком мало, чтобы экстраполировать."""
-    task = _task(
+    task = _snapshot(
         status="processing",
         started_at=NOW - timedelta(seconds=300),
         progress_data={"chunks_done": 1, "total_chunks": 100},
@@ -282,6 +293,38 @@ async def test_old_history_is_ignored(db_session):
 
     rates = await eta_service.load_rates(db_session, now=NOW)
     assert rates.per_unit == {}
+
+
+@pytest.mark.asyncio
+async def test_forecast_reads_progress_scalars_without_loading_the_whole_json(db_session):
+    """Из progress_data берутся только счётчики: сам документ (позиции, OCR)
+    в прогноз не тянется, но и не теряется по дороге."""
+    heavy = {
+        "_stage": "batch_pending",
+        "batch_id": "msgbatch_1",
+        "chunks_done": 5,
+        "total_chunks": 10,
+        "ocr_pages": ["очень много текста"] * 50,
+    }
+    batch = _task(
+        status="processing",
+        processing_mode="batch",
+        started_at=NOW - timedelta(hours=1),
+        progress_data=heavy,
+    )
+    waiting = _task(status="pending")
+    db_session.add_all([batch, waiting])
+    await db_session.commit()
+
+    snapshots = await eta_service._load_active_snapshots(db_session)
+    snap = next(s for s in snapshots if s.id == batch.id)
+
+    assert snap.batch_pending is True
+    assert (snap.chunks_done, snap.chunks_total) == (5, 10)
+
+    # Пачка слот не держит — ожидающая задача стартует сразу.
+    forecast = eta_service.simulate_queue(snapshots, Rates(), NOW, slots=1)
+    assert forecast[waiting.id].starts_in_s == 0
 
 
 @pytest.mark.asyncio
