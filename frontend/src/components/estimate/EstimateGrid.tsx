@@ -21,6 +21,7 @@ import './EstimateGrid.css';
 import { EstimateRow } from '../../types';
 import { applyWorkQuantityChange, buildNormComment } from '../../utils/estimateRecalc';
 import { billableQty, isNegativeQty } from '../../utils/negativeQty';
+import { formatQty } from '../../utils/formatQty';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -320,13 +321,13 @@ function QtyCell({ row }: RenderCellProps<EstimateRow>) {
       return (
         <div className="qty-cell-wrap">
           <div className="qty-cell-top">
-            <span className="cell-number">{fmt(qty as number)}</span>
+            <span className="cell-number">{formatQty(qty as number)}</span>
           </div>
           <div className="qty-cell-comment">не считается</div>
         </div>
       );
     }
-    return <span className="cell-number">{qty != null ? fmt(qty) : '—'}</span>;
+    return <span className="cell-number">{qty != null ? formatQty(qty) : '—'}</span>;
   }
 
   const currentRows = rowsRef.current;
@@ -343,7 +344,7 @@ function QtyCell({ row }: RenderCellProps<EstimateRow>) {
       title={row.norm_reference || undefined}
     >
       <div className="qty-cell-top">
-        <span className="cell-number">{qty != null ? fmt(qty) : '—'}</span>
+        <span className="cell-number">{qty != null ? formatQty(qty) : '—'}</span>
         {showRestoreBtn && (
           <button
             className="qty-restore-btn"

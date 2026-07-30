@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { billableQty, isNegativeQty } from '../utils/negativeQty';
+import { formatQty } from '../utils/formatQty';
 import { calcSummary } from '../stores/summaryEditorStore';
 import { DEFAULT_OVERRIDES } from '../types/summary';
 import { EstimateRow } from '../types';
@@ -24,6 +25,20 @@ describe('negativeQty', () => {
     expect(billableQty(-0.61)).toBe(0);
     expect(billableQty(3)).toBe(3);
     expect(billableQty(null)).toBe(0);
+  });
+});
+
+describe('formatQty', () => {
+  it('показывает дробный объём точно, а не округляет до целого', () => {
+    // Раньше Math.round печатал 0,61 как «1» — по такой сетке смету не проверить.
+    expect(formatQty(0.61)).toBe('0,61');
+    expect(formatQty(-1.1139)).toBe('-1,1139');
+    expect(formatQty(137.3)).toBe('137,3');
+  });
+
+  it('целые остаются без хвостовых нулей', () => {
+    expect(formatQty(50)).toBe('50');
+    expect(formatQty(0)).toBe('0');
   });
 });
 

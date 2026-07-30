@@ -1,4 +1,5 @@
 import { EstimateRow } from '../types';
+import { formatQty } from './formatQty';
 
 export interface RecalcResult {
   rows: EstimateRow[];
@@ -55,9 +56,5 @@ export function buildNormComment(row: EstimateRow, workUnit?: string): string {
   const matUnit = row.unit || '';
   const perUnit = workUnit || 'ед.';
 
-  return `авто: ${fmt(qty)} ${matUnit} (норм. ${norm} на ${perUnit})`.trim();
-}
-
-function fmt(n: number): string {
-  return Math.round(n).toLocaleString('ru-RU');
+  return `авто: ${formatQty(qty)} ${matUnit} (норм. ${norm} на ${perUnit})`.trim();
 }

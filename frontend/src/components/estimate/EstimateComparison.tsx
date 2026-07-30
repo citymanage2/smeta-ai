@@ -3,6 +3,7 @@ import { EstimateVersionSummary, EstimateVersionFull, EstimateRow } from '../../
 import { getVersion, exportComparison, CustomerEstimateExport } from '../../api/estimateVersions';
 import { SectionLoader } from '../ui/LumaSpin';
 import { billableQty } from '../../utils/negativeQty';
+import { formatQty } from '../../utils/formatQty';
 
 interface EstimateComparisonProps {
   taskId: string;
@@ -40,6 +41,11 @@ const VAT = 0.22;
 
 function fmt(n: number): string {
   return n.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+}
+
+/** Объём — с дробной частью (0,61), в отличие от денег, которые округляем до рубля. */
+function formatQtyOrDash(qty: number | null | undefined): string {
+  return qty != null ? formatQty(qty) : '—';
 }
 
 // billableQty: вычет (объём < 0) не имеет стоимости — иначе сравнение версий
@@ -524,7 +530,9 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
                       {ar.unit}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right', color: '#64748b', fontSize: '12px' }}>
-                      {origRow?.qty ?? (Object.values(ar.byVersion).find(Boolean) as EstimateRow | undefined)?.qty ?? '—'}
+                      {formatQtyOrDash(
+                        origRow?.qty ?? (Object.values(ar.byVersion).find(Boolean) as EstimateRow | undefined)?.qty,
+                      )}
                     </td>
                     {selectedVersions.map((v) => {
                       const row = ar.byVersion[v.id];
