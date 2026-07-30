@@ -20,6 +20,7 @@ import 'react-data-grid/lib/styles.css';
 import './EstimateGrid.css';
 import { EstimateRow } from '../../types';
 import { applyWorkQuantityChange, buildNormComment } from '../../utils/estimateRecalc';
+import { billableQty, isNegativeQty } from '../../utils/negativeQty';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,8 +94,11 @@ function calcColWidth(values: (number | null | undefined)[], minPx: number): num
 const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
 const fmtRub = (n: number) => Math.round(n).toLocaleString('ru-RU');
 
+// billableQty, а не row.qty: вычет (объём < 0) корректирует объём соседней
+// позиции, стоимости у него нет. Раньше он давал отрицательную сумму в колонке
+// «Стоимость» и занижал итог сметы.
 const calcCost = (row: EstimateRow): number =>
-  (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
+  billableQty(row.qty) * ((row.price_work ?? 0) + (row.price_material ?? 0));
 
 // ---------------------------------------------------------------------------
 // Cell editors
@@ -307,8 +311,21 @@ function QtyCell({ row }: RenderCellProps<EstimateRow>) {
   const { rowsRef, onQtyRestore } = useContext(GridContext);
 
   const qty = row.qty;
+  // Подпись у вычета: без неё пустая «Стоимость» выглядит как незаполненная
+  // цена, а не как сознательно пропущенная строка.
+  const negative = isNegativeQty(qty);
 
   if (row.type !== 'material') {
+    if (negative) {
+      return (
+        <div className="qty-cell-wrap">
+          <div className="qty-cell-top">
+            <span className="cell-number">{fmt(qty as number)}</span>
+          </div>
+          <div className="qty-cell-comment">не считается</div>
+        </div>
+      );
+    }
     return <span className="cell-number">{qty != null ? fmt(qty) : '—'}</span>;
   }
 
@@ -317,7 +334,7 @@ function QtyCell({ row }: RenderCellProps<EstimateRow>) {
     ? currentRows.find((r) => r.id === row.work_row_id)
     : null;
 
-  const comment = buildNormComment(row, workRow?.unit);
+  const comment = negative ? 'не считается' : buildNormComment(row, workRow?.unit);
   const showRestoreBtn = row.qty_manual_backup != null && workRow != null;
 
   return (
@@ -505,7 +522,7 @@ const EstimateGrid: React.FC<EstimateGridProps> = ({
     let sumMat = 0;
     for (const r of rows) {
       if (r.type === 'section') continue;
-      const qty = r.qty ?? 0;
+      const qty = billableQty(r.qty);
       sumWork += qty * (r.price_work ?? 0);
       sumMat += qty * (r.price_material ?? 0);
     }

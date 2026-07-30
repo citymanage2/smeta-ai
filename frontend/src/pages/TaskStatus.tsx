@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { formatTaskError, formatApiDetail } from '../utils/formatError';
 import { describeEta } from '../utils/eta';
+import { isNegativeQty } from '../utils/negativeQty';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -469,11 +470,6 @@ const TaskStatusPage: React.FC = () => {
   // Estimate helpers
   const fmtRub = (v: number | null | undefined) =>
     v != null ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(v) : '—';
-
-  // Объём меньше нуля — это вычет из соседней позиции, а не работа: цена по
-  // такой строке не ищется, стоимость не считается (иначе итог занижается на
-  // qty × цену). Правило то же, что в backend/app/utils/price_coercion.py.
-  const isNegativeQty = (qty: number | null | undefined) => qty != null && qty < 0;
 
   const computedTotals = React.useMemo(() => {
     let sumWork = 0;

@@ -8,11 +8,14 @@ import {
   DEFAULT_OVERRIDES,
 } from '../types/summary';
 import { getSummary, updateSummary } from '../api/summaryEstimate';
+import { billableQty } from '../utils/negativeQty';
 
 const MAX_HISTORY = 50;
 
 function rowAmount(value: number | null, qty: number | null): number {
-  return (value ?? 0) * (qty ?? 0);
+  // billableQty: строка с отрицательным объёмом — вычет, а не работа. Считать
+  // по ней стоимость нельзя, иначе сводная занижается на qty × цену.
+  return (value ?? 0) * billableQty(qty);
 }
 
 export function calcSummary(

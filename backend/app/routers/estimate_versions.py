@@ -19,6 +19,7 @@ from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.services import storage_service
 from app.utils.file_parser import parse_file as _parse_file
+from app.utils.price_coercion import is_negative_qty
 from app.schemas.estimate_version import (
     EstimateVersionResponse,
     EstimateVersionSummary,
@@ -1005,6 +1006,11 @@ async def _run_fill_prices_step(task_id: str) -> None:
             source_rows: list[dict] = list(source_version.rows or [])
 
             def _has_no_price(row: dict) -> bool:
+                # Вычет (объём < 0) корректирует объём соседней позиции —
+                # стоимость по нему не считается, поэтому и цена не нужна.
+                # Искать её значило бы платить за web-поиск впустую.
+                if is_negative_qty(row.get("qty")):
+                    return False
                 r_type = row.get("type", "")
                 if r_type == "work":
                     return not (row.get("price_work") or 0)

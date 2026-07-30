@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { EstimateRow } from '../../types';
+import { billableQty } from '../../utils/negativeQty';
 
 const VAT_RATE = 0.22;
 
@@ -27,13 +28,15 @@ const EstimateSummary: React.FC<EstimateSummaryProps> = ({
     vat,
     totalWithVat,
   } = useMemo(() => {
+    // billableQty: строка с отрицательным объёмом — вычет, стоимости у неё нет
+    // (иначе итог занижается на qty × цену).
     const worksTotal = rows
       .filter((r) => r.type === 'work')
-      .reduce((acc, r) => acc + (r.qty ?? 0) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
+      .reduce((acc, r) => acc + billableQty(r.qty) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
 
     const materialsTotal = rows
       .filter((r) => r.type === 'material')
-      .reduce((acc, r) => acc + (r.qty ?? 0) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
+      .reduce((acc, r) => acc + billableQty(r.qty) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
 
     const basis = worksTotal + materialsTotal;
     const overheadRub = (basis * overhead_pct) / 100;

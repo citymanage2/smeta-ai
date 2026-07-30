@@ -5,6 +5,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.models.summary_estimate import SummaryEstimate
+from app.utils.price_coercion import coerce_qty, coerce_qty_signed
 
 _HEADER_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -24,6 +25,16 @@ def _to_f(v) -> float:
 
 def _pct(v) -> float:
     return _to_f(v) / 100.0
+
+
+def _billable_qty(row: dict) -> float:
+    """Объём для умножения на цену: вычет (< 0) даёт 0.
+
+    Строка с отрицательным объёмом корректирует объём соседней позиции, а не
+    является работой: `qty × цена` по ней дала бы отрицательную сумму и занизила
+    сводную. Правило то же, что в `price_coercion.coerce_qty`.
+    """
+    return coerce_qty(row.get("quantity") or row.get("qty"))
 
 
 def generate_summary_xlsx(summary: SummaryEstimate) -> bytes:
@@ -62,7 +73,10 @@ def _write_section_sheet(ws, section: dict) -> None:
         ws.column_dimensions[get_column_letter(i)].width = w
 
     for idx, row in enumerate(section.get("rows") or [], 1):
-        qty = _to_f(row.get("quantity") or row.get("qty"))
+        qty = _billable_qty(row)
+        # В колонке «Кол-во» — исходное число со знаком: вычет должен остаться
+        # видимым, стоимости по нему просто нет.
+        qty_shown = coerce_qty_signed(row.get("quantity") or row.get("qty"))
         wp = _to_f(row.get("work_price") or row.get("price_work"))
         mp = _to_f(row.get("material_price") or row.get("price_material"))
         work_cost = round(qty * wp, 2)
@@ -71,7 +85,7 @@ def _write_section_sheet(ws, section: dict) -> None:
         fill = _WORK_FILL if is_work else None
         r = idx + 1
 
-        values = [idx, row.get("name", ""), row.get("unit", ""), qty or None,
+        values = [idx, row.get("name", ""), row.get("unit", ""), qty_shown or None,
                   wp or None, work_cost or None, mp or None, mat_cost or None]
         for col, val in enumerate(values, 1):
             cell = ws.cell(row=r, column=col, value=val)
@@ -93,7 +107,7 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
     for sec in sections:
         sw, sm = 0.0, 0.0
         for row in (sec.get("rows") or []):
-            qty = _to_f(row.get("quantity") or row.get("qty"))
+            qty = _billable_qty(row)
             sw += qty * _to_f(row.get("work_price") or row.get("price_work"))
             sm += qty * _to_f(row.get("material_price") or row.get("price_material"))
         total_works += sw

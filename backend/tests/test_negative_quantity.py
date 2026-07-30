@@ -78,6 +78,47 @@ def test_xlsx_negative_qty_does_not_lower_grand_total():
 
 
 # ---------------------------------------------------------------------------
+# Сводная (редактор версий → сводная xlsx): вычет не уменьшает итог
+# ---------------------------------------------------------------------------
+
+def _summary(rows: list[dict]) -> MagicMock:
+    s = MagicMock()
+    s.sections = [{"card_id": "c1", "card_name": "Раздел", "tax_pct": 0, "rows": rows}]
+    s.overrides = {}
+    return s
+
+
+def _row(qty, price_work=1000.0):
+    return {"type": "work", "name": "Работа", "unit": "м2",
+            "qty": qty, "price_work": price_work, "price_material": None}
+
+
+def test_summary_xlsx_ignores_negative_qty():
+    import io  # noqa: E401
+
+    import openpyxl
+
+    from app.utils.xlsx_summary import generate_summary_xlsx
+
+    only_positive = generate_summary_xlsx(_summary([_row(10)]))
+    with_negative = generate_summary_xlsx(_summary([_row(10), _row(-5)]))
+
+    def _grand(data: bytes) -> float:
+        ws = openpyxl.load_workbook(io.BytesIO(data))["Сводная"]
+        return max(
+            c.value for row in ws.iter_rows() for c in row
+            if isinstance(c.value, (int, float))
+        )
+
+    assert _grand(with_negative) == pytest.approx(_grand(only_positive))
+
+    # Объём вычета в листе раздела остаётся видимым — теряется только стоимость.
+    ws = openpyxl.load_workbook(io.BytesIO(with_negative))["Раздел"]
+    assert ws.cell(row=3, column=4).value == pytest.approx(-5)
+    assert ws.cell(row=3, column=6).value is None
+
+
+# ---------------------------------------------------------------------------
 # Шаг 3: строка собирается без цен и с примечанием
 # ---------------------------------------------------------------------------
 

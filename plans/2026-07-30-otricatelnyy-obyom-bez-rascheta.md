@@ -56,10 +56,28 @@
 
 ### [x] Фаза 4 — гейты
 
-- `pytest -q backend/tests`, `ruff check`, `npx tsc --noEmit`, `npm run lint`.
+- `pytest -q backend/tests`, `ruff check`, `npx tsc --noEmit`, `npm test`.
+
+### [x] Фаза 5 — то же правило в редакторе версий и сводной
+
+Схема строк там другая (`qty`, `price_work`, `price_material`), но правило одно.
+
+- `frontend/src/utils/negativeQty.ts` — общий помощник (`isNegativeQty`,
+  `billableQty` — зеркало backend-функции `coerce_qty`). `TaskStatus` переведён
+  на него, чтобы правило не разъехалось по копиям.
+- `EstimateGrid`: стоимость строки «—» вместо отрицательной, вычет не входит в
+  итоги, под объёмом подпись «не считается».
+- `EstimateSummary`, `EstimateComparison` — итоги и сравнение версий.
+- Сводная: `summaryEditorStore.rowAmount`, `CustomExportModal`,
+  `backend/app/utils/xlsx_summary.py` (объём печатается со знаком, стоимость не
+  считается).
+- `estimate_versions.fill_prices`: по вычетам цена не ищется.
+- Тесты: `frontend/src/__tests__/negativeQty.test.ts`, сводная xlsx в
+  `backend/tests/test_negative_quantity.py`.
+
+Не меняли: `_row_cost_dict` и экспорт версии в xlsx — там уже `coerce_qty`,
+минус обнуляется; ABC-анализ — у вычета цены нет, стоимость 0.
 
 ## Итог
 
-Реализовано целиком. Не входит в объём: редактор версий сметы
-(`EstimateGrid` / `estimate_versions.fill_prices`) — там своя схема строк (`qty`,
-`price_work`) и свои итоги; то же правило туда переносится отдельной задачей.
+Реализовано целиком: и расчёт сметы из перечня, и редактор версий со сводной.

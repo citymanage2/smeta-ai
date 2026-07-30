@@ -3,6 +3,7 @@ import { X, Download, ArrowRight, ArrowLeft, FileSpreadsheet } from 'lucide-reac
 import { SectionTab } from '../../types/summary'
 import { LumaSpin } from '../ui/LumaSpin'
 import { customExport } from '../../api/summaryEstimate'
+import { billableQty } from '../../utils/negativeQty'
 
 // ── Column definitions ──────────────────────────────────────────────────────
 
@@ -64,7 +65,9 @@ function buildExportRows(
       if (!rowTypes.includes(row.type)) continue
       if (row.is_excluded) continue
 
-      const qty = row.qty ?? 0
+      // billableQty: у вычета (объём < 0) стоимости нет — в выгрузке столбцы
+      // «Стоимость» по такой строке пустые, как и в самой смете.
+      const qty = billableQty(row.qty)
       const pw = row.price_work ?? null
       const pm = row.price_material ?? null
 
@@ -76,9 +79,9 @@ function buildExportRows(
         unit: row.unit ?? '',
         qty: row.qty ?? null,
         price_work: pw,
-        cost_work: pw != null ? Math.round(qty * pw * 100) / 100 : null,
+        cost_work: pw != null && qty ? Math.round(qty * pw * 100) / 100 : null,
         price_material: pm,
-        cost_material: pm != null ? Math.round(qty * pm * 100) / 100 : null,
+        cost_material: pm != null && qty ? Math.round(qty * pm * 100) / 100 : null,
       })
     }
   }

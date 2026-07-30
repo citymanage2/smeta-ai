@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { EstimateVersionSummary, EstimateVersionFull, EstimateRow } from '../../types';
 import { getVersion, exportComparison, CustomerEstimateExport } from '../../api/estimateVersions';
 import { SectionLoader } from '../ui/LumaSpin';
+import { billableQty } from '../../utils/negativeQty';
 
 interface EstimateComparisonProps {
   taskId: string;
@@ -41,9 +42,11 @@ function fmt(n: number): string {
   return n.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
 }
 
+// billableQty: вычет (объём < 0) не имеет стоимости — иначе сравнение версий
+// показывает по такой строке отрицательную сумму и заниженный итог.
 function rowCost(row: EstimateRow): number {
   if (row.is_excluded) return 0;
-  return (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
+  return billableQty(row.qty) * ((row.price_work ?? 0) + (row.price_material ?? 0));
 }
 
 function calcTotals(rows: EstimateRow[], meta: EstimateVersionSummary): VersionTotals {
@@ -51,8 +54,8 @@ function calcTotals(rows: EstimateRow[], meta: EstimateVersionSummary): VersionT
   let materials = 0;
   for (const r of rows) {
     if ((r.type === 'work' || r.type === 'material') && !r.is_excluded) {
-      works += (r.qty ?? 0) * (r.price_work ?? 0);
-      materials += (r.qty ?? 0) * (r.price_material ?? 0);
+      works += billableQty(r.qty) * (r.price_work ?? 0);
+      materials += billableQty(r.qty) * (r.price_material ?? 0);
     }
   }
   const base = works + materials;
@@ -533,7 +536,7 @@ const EstimateComparison: React.FC<EstimateComparisonProps> = ({ taskId, version
                         );
                       }
                       if (row.is_excluded) {
-                        const excludedCost = (row.qty ?? 0) * ((row.price_work ?? 0) + (row.price_material ?? 0));
+                        const excludedCost = billableQty(row.qty) * ((row.price_work ?? 0) + (row.price_material ?? 0));
                         return (
                           <td key={v.id} style={{ ...tdStyle, textAlign: 'right', background: 'rgba(254,202,202,0.35)' }}>
                             <span style={{ textDecoration: 'line-through', color: '#94a3b8' }}>
