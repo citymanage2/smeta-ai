@@ -78,6 +78,26 @@ input, textarea, select {
   outline-offset: 2px;
 }
 
+/* Sidebar: temporary expansion on hover slides in over the content */
+@keyframes sidebar-hover-slide-in {
+  from {
+    transform: translateX(-12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+.sidebar-hover-panel {
+  animation: sidebar-hover-slide-in 0.16s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-hover-panel {
+    animation: none;
+  }
+}
+
 /* Hide scrollbar in collapsed sidebar project list */
 .collapsed-project-list::-webkit-scrollbar {
   width: 0;

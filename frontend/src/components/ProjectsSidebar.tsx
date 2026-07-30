@@ -17,6 +17,9 @@ import { useTaskSync } from '../stores/taskSync';
 
 const SIDEBAR_WIDTH = 264;
 const SIDEBAR_COLLAPSED_WIDTH = 44;
+// Небольшая пауза перед сворачиванием: курсор может на мгновение
+// соскользнуть с панели (например, между иконками), меню не должно мигать.
+const HOVER_CLOSE_DELAY_MS = 200;
 
 const HIDDEN_TASK_TYPES = new Set(['CHECK_LIST_COMPLETENESS', 'CHECK_PROJECT_COMPLETENESS']);
 
@@ -67,6 +70,42 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle, showSystem = true })
   const expandedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => { expandedRef.current = expanded; }, [expanded]);
+
+  // ── Временное раскрытие по наведению (только когда меню не закреплено) ──
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  // Пока пользователь создаёт проект или переименовывает — не сворачиваем,
+  // иначе уход курсора потеряет введённый текст.
+  const keepOpenRef = useRef(false);
+  keepOpenRef.current = showCreate || editingProjectId !== null || editingTaskId !== null;
+
+  const cancelCloseTimer = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  // Закрепили меню кнопкой — временное состояние больше не нужно.
+  useEffect(() => {
+    if (open) { cancelCloseTimer(); setHoverOpen(false); }
+  }, [open]);
+
+  useEffect(() => cancelCloseTimer, []);
+
+  const handleRailMouseEnter = () => {
+    cancelCloseTimer();
+    setHoverOpen(true);
+  };
+
+  const handleRailMouseLeave = () => {
+    cancelCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      if (keepOpenRef.current) return;
+      setHoverOpen(false);
+    }, HOVER_CLOSE_DELAY_MS);
+  };
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -366,22 +405,20 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle, showSystem = true })
     );
   }
 
-  // ─── Collapsed sidebar ────────────────────────────────────────
-  if (!open) {
-    return (
+  // ─── Collapsed sidebar (узкая полоса с иконками) ──────────────
+  const collapsedRail = (
       <div
         style={{
           width: SIDEBAR_COLLAPSED_WIDTH,
           minWidth: SIDEBAR_COLLAPSED_WIDTH,
+          height: '100%',
           borderRight: '1px solid #e2e8f0',
           backgroundColor: '#ffffff',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           overflow: 'visible',
-          transition: 'width 0.22s ease',
-          position: 'relative',
-          zIndex: 10,
+          boxSizing: 'border-box',
         }}
       >
         {/* Action buttons */}
@@ -451,23 +488,11 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle, showSystem = true })
           <ExpandBtn onToggle={onToggle} />
         </div>
       </div>
-    );
-  }
+  );
 
-  // ─── Expanded sidebar ─────────────────────────────────────────
-  return (
-    <div
-      style={{
-        width: SIDEBAR_WIDTH,
-        minWidth: SIDEBAR_WIDTH,
-        borderRight: '1px solid #e2e8f0',
-        backgroundColor: '#ffffff',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        transition: 'width 0.22s ease',
-      }}
-    >
+  // ─── Expanded sidebar (содержимое развёрнутой панели) ─────────
+  const expandedContent = (
+    <>
       {/* Header */}
       <div style={{ padding: '10px 10px 8px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -561,8 +586,65 @@ const ProjectsSidebar: React.FC<Props> = ({ open, onToggle, showSystem = true })
         {showSystem && <SystemBtn onClick={() => navigate('/system')} active={location.pathname === '/system'} />}
         <CatalogBtn onClick={() => navigate('/catalog')} active={location.pathname === '/catalog'} />
         <TrashBtn onClick={() => navigate('/trash')} active={location.pathname === '/trash'} />
-        <CollapseBtn onToggle={onToggle} />
+        <CollapseBtn onToggle={onToggle} pinned={open} />
       </div>
+    </>
+  );
+
+  // ─── Меню закреплено кнопкой: обычная колонка в потоке ────────
+  if (open) {
+    return (
+      <div
+        style={{
+          width: SIDEBAR_WIDTH,
+          minWidth: SIDEBAR_WIDTH,
+          borderRight: '1px solid #e2e8f0',
+          backgroundColor: '#ffffff',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        {expandedContent}
+      </div>
+    );
+  }
+
+  // ─── Меню свёрнуто: узкая полоса, раскрытие поверх контента ───
+  return (
+    <div
+      style={{
+        width: SIDEBAR_COLLAPSED_WIDTH,
+        minWidth: SIDEBAR_COLLAPSED_WIDTH,
+        flexShrink: 0,
+        position: 'relative',
+        zIndex: 50,
+      }}
+      onMouseEnter={handleRailMouseEnter}
+      onMouseLeave={handleRailMouseLeave}
+    >
+      {collapsedRail}
+
+      {hoverOpen && (
+        <div
+          className="sidebar-hover-panel"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: SIDEBAR_WIDTH,
+            borderRight: '1px solid #e2e8f0',
+            backgroundColor: '#ffffff',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxShadow: '6px 0 20px rgba(15, 23, 42, 0.10)',
+          }}
+        >
+          {expandedContent}
+        </div>
+      )}
     </div>
   );
 };
@@ -1020,7 +1102,8 @@ const TrashBtn: React.FC<{ onClick: () => void; active: boolean }> = ({ onClick,
   );
 };
 
-const CollapseBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
+// Закреплённое меню сворачивается, временно раскрытое по наведению — закрепляется.
+const CollapseBtn: React.FC<{ onToggle: () => void; pinned: boolean }> = ({ onToggle, pinned }) => {
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -1034,8 +1117,10 @@ const CollapseBtn: React.FC<{ onToggle: () => void }> = ({ onToggle }) => {
         transition: 'background-color 0.12s',
       }}
     >
-      <DynamicIcon name="panel-left-close" size={14} color="#64748b" />
-      <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>Свернуть меню</span>
+      <DynamicIcon name={pinned ? 'panel-left-close' : 'pin'} size={14} color="#64748b" />
+      <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>
+        {pinned ? 'Свернуть меню' : 'Закрепить меню'}
+      </span>
     </button>
   );
 };
