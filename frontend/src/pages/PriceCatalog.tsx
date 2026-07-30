@@ -14,8 +14,10 @@ import {
   deleteMaterial,
   exportCatalog,
   downloadTemplate,
+  matchPreview,
   CatalogItem,
   CatalogParams,
+  MatchPreview,
 } from '../api/catalog';
 import {
   CacheItem,
@@ -921,6 +923,139 @@ function ImportButton({ onDone }: ImportButtonProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Проверка сопоставления: «почему позиция не нашлась в прайсе»
+//
+// 30.07.2026 из 1220 позиций сметы по прайсу нашлось 16, и по интерфейсу нельзя
+// было понять причину: нет такой позиции, нет векторов или порог похожести выше
+// фактического совпадения. Здесь видно ответ прайса на конкретное название.
+// ---------------------------------------------------------------------------
+
+function MatchChecker() {
+  const [name, setName] = useState('');
+  const [kind, setKind] = useState<'work' | 'material'>('work');
+  const [result, setResult] = useState<MatchPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function check() {
+    if (!name.trim() || loading) return;
+    setLoading(true);
+    setError('');
+    try {
+      setResult(await matchPreview(name.trim(), kind));
+    } catch (e: any) {
+      setError(formatApiDetail(e?.response?.data?.detail, 'Не удалось проверить.'));
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        border: '1px solid #e2e8f0',
+        borderRadius: 10,
+        padding: '14px 16px',
+        marginBottom: 20,
+        backgroundColor: '#ffffff',
+      }}
+    >
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Проверка прайса</div>
+        <div style={{ fontSize: 13, color: '#64748b', flex: 1 }}>
+          Найдётся ли позиция и с какой похожестью
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+        <input
+          style={{ ...s.searchInput, flex: '1 1 320px' }}
+          value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && check()}
+          placeholder="Название позиции из сметы, например «Устройство стяжек: цементных толщиной 20 мм»"
+        />
+        <Select value={kind} onValueChange={v => setKind(v as 'work' | 'material')} size="sm">
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="work">Работа</SelectItem>
+            <SelectItem value="material">Материал</SelectItem>
+          </SelectContent>
+        </Select>
+        <button
+          style={{ ...s.btn, ...s.btnPrimary, opacity: loading || !name.trim() ? 0.6 : 1 }}
+          onClick={check}
+          disabled={loading || !name.trim()}
+        >
+          {loading ? 'Проверяем...' : 'Проверить'}
+        </button>
+      </div>
+
+      {error && <div style={{ marginTop: 10, fontSize: 13, color: '#dc2626' }}>{error}</div>}
+
+      {result && (
+        <div style={{ marginTop: 12 }} data-testid="match-result">
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              color: result.matched ? '#15803d' : '#b45309',
+            }}
+          >
+            {result.matched ? '✓' : '⚠'} {result.hint}
+          </div>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+            Порог похожести: {result.threshold} · В каталоге: {result.catalog_size} ·{' '}
+            {result.vectors_ready ? 'векторы готовы' : 'векторов нет'}
+          </div>
+          {result.candidates.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 10 }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f8fafc' }}>
+                  <th style={{ ...thStyleLocal, width: '60%' }}>Кандидат из прайса</th>
+                  <th style={thStyleLocal}>Похожесть</th>
+                  <th style={thStyleLocal}>Ед.</th>
+                  <th style={thStyleLocal}>Цена</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.candidates.map((c, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid #e2e8f0' }}>
+                    <td style={{ padding: '6px 10px' }}>{c.name}</td>
+                    <td
+                      style={{
+                        padding: '6px 10px',
+                        fontWeight: 600,
+                        color: c.would_match ? '#15803d' : '#94a3b8',
+                      }}
+                    >
+                      {c.score}
+                    </td>
+                    <td style={{ padding: '6px 10px', color: '#64748b' }}>{c.unit ?? '—'}</td>
+                    <td style={{ padding: '6px 10px', color: '#64748b' }}>{c.price ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const thStyleLocal: React.CSSProperties = {
+  padding: '6px 10px',
+  textAlign: 'left',
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#64748b',
+};
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1279,6 +1414,9 @@ export default function PriceCatalog() {
             </div>
           )}
         </div>
+
+        {/* Почему позиция не находится в прайсе — доступно менеджерам */}
+        {isManager && !isCacheTab && <MatchChecker />}
 
         {/* Controls */}
         <div style={s.controls}>

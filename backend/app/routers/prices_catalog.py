@@ -207,6 +207,104 @@ async def list_catalog(
 
 
 # ---------------------------------------------------------------------------
+# POST /prices/match-preview — «почему позиция не нашлась в прайсе»
+# ---------------------------------------------------------------------------
+
+
+class MatchPreviewBody(BaseModel):
+    name: str
+    kind: Literal["work", "material"]
+
+
+class MatchCandidate(BaseModel):
+    name: str
+    score: float
+    unit: Optional[str] = None
+    price: Optional[float] = None
+    would_match: bool
+
+
+class MatchPreviewResponse(BaseModel):
+    threshold: float
+    catalog_size: int
+    vectors_ready: bool
+    matched: bool
+    candidates: list[MatchCandidate]
+    hint: str
+
+
+@router.post("/match-preview", response_model=MatchPreviewResponse)
+async def match_preview(
+    body: MatchPreviewBody,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_manager_user),
+):
+    """Показать, что прайс отвечает на конкретное название и с какой похожестью.
+
+    Нужен, чтобы отличать три разные причины «прайс: найдено 16 из 1220», которые
+    снаружи выглядят одинаково:
+    - в каталоге нет такой позиции (лучший кандидат — про другое);
+    - позиция есть, но похожесть чуть ниже порога (порог надо снизить);
+    - у прайса нет векторов, и поиск по смыслу вообще не работает.
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Пустое название")
+
+    if body.kind == "work":
+        catalog_size = len(price_service._works_cache)
+        vectors_ready = price_service._works_embeddings is not None
+        raw = await price_service.find_top_n_works(name, n=5)
+    else:
+        catalog_size = len(price_service._materials_cache)
+        vectors_ready = price_service._materials_embeddings is not None
+        raw = await price_service.find_top_n_materials(name, n=5)
+
+    threshold = price_service.SIMILARITY_THRESHOLD
+    candidates = [
+        MatchCandidate(
+            name=c.get("text", ""),
+            score=round(float(c.get("score") or 0.0), 3),
+            unit=c.get("unit"),
+            price=c.get("min_price") if body.kind == "work" else c.get("price"),
+            would_match=float(c.get("score") or 0.0) >= threshold,
+        )
+        for c in raw
+    ]
+    matched = any(c.would_match for c in candidates)
+    best = candidates[0].score if candidates else None
+
+    if not vectors_ready:
+        hint = (
+            "У прайса нет векторов — поиск по смыслу отключён, работает только "
+            "точное совпадение названия. Сгенерируйте векторы в админке."
+        )
+    elif catalog_size == 0:
+        hint = "Каталог пуст — сопоставлять не с чем."
+    elif matched:
+        hint = "Позиция нашлась бы в прайсе."
+    elif best is not None and best >= threshold - 0.08:
+        hint = (
+            f"Лучший кандидат чуть ниже порога ({best} против {threshold}). "
+            "Если он по смыслу тот же — стоит снизить порог PRICE_SIMILARITY_THRESHOLD."
+        )
+    else:
+        hint = (
+            "Похожих позиций в прайсе нет — лучший кандидат про другое. "
+            "Такую позицию цену придётся искать через ИИ, пока её не добавят в прайс."
+        )
+
+    return MatchPreviewResponse(
+        threshold=threshold,
+        catalog_size=catalog_size,
+        vectors_ready=vectors_ready,
+        matched=matched,
+        candidates=candidates,
+        hint=hint,
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /prices/catalog/works
 # ---------------------------------------------------------------------------
 

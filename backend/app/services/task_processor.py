@@ -500,12 +500,13 @@ class TaskProcessor:
         return self._input_files_cache
 
     async def _check_cancelled(self) -> None:
-        """Остановить прогон, если задачу отменили ИЛИ этот прогон сменили новым.
+        """Остановить прогон, если задачу отменили ИЛИ её уже считает другой прогон.
 
-        Второе — про «Перезапустить»: он снимает job текущего прогона и ставит
-        новую. Прежний обработчик об этом иначе не узнает и продолжит считать
-        параллельно новому: два прогона пишут в одну задачу, а запросы к ИИ
-        оплачиваются дважды. Своя job больше не `running` → нас сменили, выходим.
+        Второе — про «Перезапустить», деплой и автовозврат: они снимают или заново
+        выдают job, и прежний обработчик иначе продолжил бы считать параллельно
+        новому — два прогона пишут в одну задачу, а запросы к ИИ оплачиваются
+        дважды. Но останавливаемся только при НАЛИЧИИ сменщика: если считаем мы
+        одни, выход выбросил бы уже оплаченную работу.
         """
         result = await self.db.execute(
             select(Task).where(Task.id == self.task_id)
@@ -527,24 +528,62 @@ class TaskProcessor:
             return
         job_status, job_attempts = row
 
-        # Номер попытки — точный признак поколения. Одну и ту же job могут выдать
-        # заново: деплой возвращает её в очередь, reclaim — тоже (через 15 минут
-        # без сигнала). Каждый новый захват увеличивает attempts, а heartbeat его
-        # не трогает. Если наш номер устарел, значит задачу уже считает кто-то
-        # другой, и продолжать — это второй прогон и вторая оплата запросов к ИИ.
-        superseded = job_status != "running" or (
-            self.job_attempt is not None and job_attempts != self.job_attempt
+        # Быстрый путь: наша job всё ещё наша — работаем.
+        mine = job_status == "running" and (
+            self.job_attempt is None or job_attempts == self.job_attempt
         )
-        if superseded:
+        if mine:
+            return
+
+        # Наша запись жива, но с другим номером попытки — её уже перезахватил
+        # другой процесс (так работают деплой и автовозврат: та же строка, новый
+        # attempts). Продолжать здесь = два прогона и двойная оплата ИИ.
+        if job_status in ("queued", "running") and (
+            self.job_attempt is not None and job_attempts != self.job_attempt
+        ):
             logger.info(
-                "Run superseded — прогон заменён",
+                "Run superseded — job перезахвачена",
+                task_id=self.task_id,
+                job_id=self.job_id,
+                job_attempts=job_attempts,
+                my_attempt=self.job_attempt,
+            )
+            raise TaskCancelledError("Прогон заменён новым")
+
+        # Запись терминальная (снята рестартом, отменена, помечена ошибкой).
+        # Останавливаемся ТОЛЬКО если задачу действительно считает кто-то другой.
+        # Иначе мы единственный исполнитель, и выйти означало бы выбросить уже
+        # ОПЛАЧЕННУЮ работу: 30.07.2026 автовозврат пометил задачу ошибкой, пока
+        # живой обработчик спокойно доводил смету до конца — и правильно, что довёл.
+
+        rows = (
+            await self.db.execute(
+                select(Job.id, Job.payload).where(Job.status.in_(("queued", "running")))
+            )
+        ).all()
+        other_live = [
+            jid
+            for jid, payload in rows
+            if (payload or {}).get("task_id") == self.task_id and jid != self.job_id
+        ]
+        if other_live:
+            logger.info(
+                "Run superseded — задачу уже считает другой прогон",
                 task_id=self.task_id,
                 job_id=self.job_id,
                 job_status=job_status,
                 job_attempts=job_attempts,
                 my_attempt=self.job_attempt,
+                other_jobs=other_live,
             )
             raise TaskCancelledError("Прогон заменён новым")
+
+        logger.warning(
+            "Job запись потеряна, но другого прогона нет — доводим до конца",
+            task_id=self.task_id,
+            job_id=self.job_id,
+            job_status=job_status,
+        )
 
     async def update_progress(self, message: str) -> None:
         result = await self.db.execute(

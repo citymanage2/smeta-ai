@@ -74,13 +74,18 @@ async def _make_task(db, task_id: str, status: str = "processing") -> str:
 
 
 async def test_superseded_run_stops_at_checkpoint(db_session):
-    """Прогон, чью job сняли, выходит на ближайшей проверке отмены."""
+    """Прогон, чью job сняли рестартом, выходит на ближайшей проверке отмены.
+
+    Порядок как в `POST /tasks/{id}/restart`: снять прежние job, затем поставить
+    новую. Именно новая job и означает «задачу считает уже не ты».
+    """
     await _clear_jobs(db_session)
     task_id = await _make_task(db_session, "d0000000-0000-0000-0000-000000000001")
-    job = await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
     claimed = await job_queue.claim_one(db_session, "w1")
     job_id = claimed.id
     await job_queue.supersede_jobs_for_task(db_session, task_id)
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
 
     processor = TaskProcessor(task_id, db_session, job_id=job_id)
     with pytest.raises(TaskCancelledError):
@@ -129,6 +134,45 @@ async def test_reclaimed_run_stops_zombie(db_session):
     # А текущий прогон продолжается.
     current = TaskProcessor(task_id, db_session, job_id=job_id, job_attempt=second.attempts)
     await current._check_cancelled()
+
+
+async def test_lone_run_finishes_even_if_job_marked(db_session):
+    """Запись пометили, но другого прогона нет — доводим до конца.
+
+    30.07.2026 автовозврат пометил задачу ошибкой (исчерпаны попытки), пока живой
+    обработчик спокойно доводил смету до конца. Остановить его означало бы
+    выбросить уже ОПЛАЧЕННУЮ работу — смета в итоге получилась, и правильно.
+    """
+    await _clear_jobs(db_session)
+    task_id = await _make_task(db_session, "d0000000-0000-0000-0000-000000000007")
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
+    claimed = await job_queue.claim_one(db_session, "w1")
+    job_id, attempt = claimed.id, claimed.attempts
+    await db_session.execute(
+        Job.__table__.update().where(Job.id == job_id).values(status="failed")
+    )
+    await db_session.commit()
+
+    processor = TaskProcessor(task_id, db_session, job_id=job_id, job_attempt=attempt)
+    await processor._check_cancelled()  # не бросает — сменщика нет
+
+
+async def test_lone_run_stops_when_new_job_exists(db_session):
+    """Запись пометили И появилась новая job задачи — выходим, считает она."""
+    await _clear_jobs(db_session)
+    task_id = await _make_task(db_session, "d0000000-0000-0000-0000-000000000008")
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
+    claimed = await job_queue.claim_one(db_session, "w1")
+    job_id, attempt = claimed.id, claimed.attempts
+    await db_session.execute(
+        Job.__table__.update().where(Job.id == job_id).values(status="superseded")
+    )
+    await db_session.commit()
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
+
+    processor = TaskProcessor(task_id, db_session, job_id=job_id, job_attempt=attempt)
+    with pytest.raises(TaskCancelledError):
+        await processor._check_cancelled()
 
 
 async def test_run_without_job_id_is_not_stopped(db_session):

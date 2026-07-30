@@ -77,3 +77,31 @@ export async function downloadTemplate(type: 'works' | 'materials'): Promise<voi
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// ---------------------------------------------------------------------------
+// Диагностика сопоставления с прайсом. «Прайс: найдено 16 из 1220» выглядит
+// одинаково для трёх разных причин — пустой каталог, отсутствие векторов и
+// слишком высокий порог похожести. Этот запрос показывает, какая именно.
+// ---------------------------------------------------------------------------
+
+export interface MatchCandidate {
+  name: string;
+  score: number;
+  unit: string | null;
+  price: number | null;
+  would_match: boolean;
+}
+
+export interface MatchPreview {
+  threshold: number;
+  catalog_size: number;
+  vectors_ready: boolean;
+  matched: boolean;
+  candidates: MatchCandidate[];
+  hint: string;
+}
+
+export async function matchPreview(name: string, kind: 'work' | 'material'): Promise<MatchPreview> {
+  const res = await apiClient.post<MatchPreview>('/prices/match-preview', { name, kind });
+  return res.data;
+}

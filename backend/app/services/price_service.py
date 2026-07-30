@@ -35,6 +35,13 @@ _works_cache: list[dict] = []
 _materials_cache: list[dict] = []
 _cache_loaded: bool = False
 
+# Индексы «нормализованное имя → позиция» под точное совпадение за O(1).
+# Собираются в load_cache; заменяются атомарно вместе с остальным кэшем.
+_works_by_norm: dict[str, dict] = {}
+_materials_by_norm: dict[str, dict] = {}
+_cache_works_by_norm: dict[str, dict] = {}
+_cache_materials_by_norm: dict[str, dict] = {}
+
 # Embedding matrices (shape N×1024, float32). None if no vectors available.
 _works_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
 _materials_embeddings: "Optional[np.ndarray]" = None  # type: ignore[type-arg]
@@ -89,19 +96,14 @@ def normalize_text(text: str) -> str:
 
 
 def _exact_match_work(name: str) -> Optional[dict]:
-    norm = normalize_text(name)
-    for item in _works_cache:
-        if normalize_text(item["name"]) == norm:
-            return item
-    return None
+    """Точное совпадение по прайсу работ — за O(1) через индекс (см. load_cache)."""
+    return _works_by_norm.get(normalize_text(name))
 
 
 def _exact_match_material(name: str) -> Optional[float]:
-    norm = normalize_text(name)
-    for item in _materials_cache:
-        if normalize_text(item["name"]) == norm:
-            return item.get("price")
-    return None
+    """Точное совпадение по прайсу материалов — за O(1) через индекс."""
+    item = _materials_by_norm.get(normalize_text(name))
+    return item.get("price") if item is not None else None
 
 
 async def _embedding_match_work(name: str) -> Optional[dict]:
@@ -529,6 +531,7 @@ async def _web_search_material_price(name: str, user_prompt: str = "") -> Option
 async def load_cache(db: AsyncSession) -> None:
     """Load price data from DB into in-memory cache, including embedding matrices."""
     global _works_cache, _materials_cache, _cache_loaded
+    global _works_by_norm, _materials_by_norm, _cache_works_by_norm, _cache_materials_by_norm
     global _works_embeddings, _materials_embeddings, _works_row_norms, _materials_row_norms
     global _works_index_map, _materials_index_map
     global _cache_works_cache, _cache_materials_cache
@@ -649,8 +652,32 @@ async def load_cache(db: AsyncSession) -> None:
         new_cache_materials_embeddings = None
         new_cache_materials_row_norms = None
 
+    # 4b. Индексы «нормализованное имя → позиция» для точного совпадения.
+    #
+    # Раньше `_exact_match_*` линейно сканировали весь кэш и normalize_text() гнали
+    # на КАЖДУЮ строку кэша для КАЖДОЙ позиции сметы. На смете в 464 позиции против
+    # 2000 материалов и разросшегося кэша прошлых задач это миллионы регулярок в
+    # обычном (не асинхронном) цикле: событийный цикл worker'а стоял минутами,
+    # heartbeat не отправлялся, и задача выглядела зависшей, хотя считала.
+    # Теперь нормализация делается один раз при загрузке, а совпадение — за O(1).
+    # setdefault сохраняет прежнее правило «побеждает первая подходящая строка».
+    def _by_norm(items: list[dict]) -> dict[str, dict]:
+        index: dict[str, dict] = {}
+        for item in items:
+            index.setdefault(normalize_text(item["name"]), item)
+        return index
+
+    new_works_by_norm = _by_norm(new_works_cache)
+    new_materials_by_norm = _by_norm(new_materials_cache)
+    new_cache_works_by_norm = _by_norm(new_cache_works_cache)
+    new_cache_materials_by_norm = _by_norm(new_cache_materials_cache)
+
     # 5. Atomically replace globals — readers see either old or new consistent state
     async with _cache_lock:
+        _works_by_norm = new_works_by_norm
+        _materials_by_norm = new_materials_by_norm
+        _cache_works_by_norm = new_cache_works_by_norm
+        _cache_materials_by_norm = new_cache_materials_by_norm
         _works_cache = new_works_cache
         _works_embeddings = new_works_embeddings
         _works_row_norms = new_works_row_norms
@@ -681,19 +708,13 @@ async def load_cache(db: AsyncSession) -> None:
 
 
 def _exact_match_cache_work(name: str) -> Optional[dict]:
-    norm = normalize_text(name)
-    for item in _cache_works_cache:
-        if normalize_text(item["name"]) == norm:
-            return item
-    return None
+    """Точное совпадение по кэшу работ прошлых задач — за O(1) через индекс."""
+    return _cache_works_by_norm.get(normalize_text(name))
 
 
 def _exact_match_cache_material(name: str) -> Optional[dict]:
-    norm = normalize_text(name)
-    for item in _cache_materials_cache:
-        if normalize_text(item["name"]) == norm:
-            return item
-    return None
+    """Точное совпадение по кэшу материалов прошлых задач — за O(1) через индекс."""
+    return _cache_materials_by_norm.get(normalize_text(name))
 
 
 async def batch_embedding_match_cache_works(names: list[str]) -> "list[Optional[dict]]":
