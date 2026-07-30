@@ -769,6 +769,12 @@ async def cancel_task(
     task.error_message = "Задача остановлена пользователем"
     await db.commit()
 
+    # Снять задачу и с очереди, иначе worker подхватит её позже и она воскреснет
+    # в «Обработке» (см. job_queue.cancel_pending_jobs_for_task).
+    from app.services import job_queue
+
+    await job_queue.cancel_pending_jobs_for_task(db, task_id)
+
     logger.info("Task cancelled by user", task_id=task_id)
     return {"task_id": task_id, "status": "cancelled"}
 

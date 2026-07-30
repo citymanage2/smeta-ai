@@ -23,9 +23,14 @@ from app.database import Base
 # JSONB на PostgreSQL, JSON на SQLite (тесты) — как в models/job.py
 JSONB = _JSON().with_variant(_JSONB(), "postgresql")
 
-# Единственный вид событий на сегодня. Строкой, а не Enum: добавление нового вида
-# не должно требовать миграции.
+# Виды событий — строкой, а не Enum: добавление нового вида не должно требовать
+# миграции.
 KIND_BALANCE_RESTORED = "balance_restored"
+# Обработчик уперся в память. Пишет worker, читает диагностика в админке: web —
+# другой контейнер и память воркера измерить не может, а без цифры спор «сколько
+# задач считать параллельно» ведётся вслепую. В поток уведомлений браузера такое
+# событие не попадает: там показываются только события с `resumed_task_ids`.
+KIND_WORKER_MEMORY_HIGH = "worker_memory_high"
 
 
 class SystemEvent(Base):

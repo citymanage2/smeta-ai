@@ -1079,6 +1079,34 @@ class RunningInfo(BaseModel):
     stale_count: int
 
 
+class DbConnectionsInfo(BaseModel):
+    """Соединения к managed-PostgreSQL: сколько занято из разрешённого лимита.
+
+    В логе 29.07.2026 был `ConnectionResetError: Connection reset by peer` при
+    открытии нового соединения — база отказывала. Настройки пулов при этом
+    выставлены «на глаз» (web до 15, worker до 16), а фактический лимит тарифа
+    никто не знал. Здесь он виден кнопкой.
+    """
+
+    used: int
+    max_allowed: int
+    reserve: int  # сколько ещё можно открыть до отказа
+
+
+class WorkerMemoryInfo(BaseModel):
+    """Последняя жалоба обработчика на память (он пишет её в system_events).
+
+    Web и worker — разные контейнеры, поэтому память воркера web не измерит:
+    единственный канал — запись в БД. Пишется только при превышении порога,
+    поэтому None здесь означает «жалоб не было».
+    """
+
+    rss_mb: float
+    threshold_mb: int
+    concurrency: int
+    age_s: Optional[float]
+
+
 class QueueHealthResponse(BaseModel):
     checked_at: datetime
     counts: QueueCounts
@@ -1087,6 +1115,8 @@ class QueueHealthResponse(BaseModel):
     visibility_timeout_s: int
     verdict: str  # idle | ok | busy | stalled
     hint: str
+    db_connections: Optional[DbConnectionsInfo] = None
+    worker_memory: Optional[WorkerMemoryInfo] = None
 
 
 def _age_s(dt, now: datetime) -> Optional[float]:
@@ -1098,6 +1128,62 @@ def _age_s(dt, now: datetime) -> Optional[float]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return max(0.0, (now - dt).total_seconds())
+
+
+async def _db_connections(db: AsyncSession) -> Optional[DbConnectionsInfo]:
+    """Занятые/разрешённые соединения к БД. None — не PostgreSQL (тесты на SQLite).
+
+    Диагностика не должна падать из-за самой диагностики: если у роли нет прав на
+    pg_stat_activity или запрос не прошёл, отдаём None вместо 500 — вердикт по
+    очереди важнее этой строки.
+    """
+    from sqlalchemy import text
+
+    try:
+        if db.bind.dialect.name != "postgresql":
+            return None
+        max_allowed = int(
+            (await db.execute(text("SELECT current_setting('max_connections')::int"))).scalar_one()
+        )
+        used = int(
+            (
+                await db.execute(
+                    text("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()")
+                )
+            ).scalar_one()
+        )
+        return DbConnectionsInfo(
+            used=used, max_allowed=max_allowed, reserve=max(0, max_allowed - used)
+        )
+    except Exception as e:  # noqa: BLE001 — диагностика деградирует, но не ломается
+        logger.warning("DB connections probe failed", error=str(e))
+        return None
+
+
+async def _worker_memory(db: AsyncSession, now: datetime) -> Optional[WorkerMemoryInfo]:
+    """Последняя жалоба обработчика на память. None — жалоб не было."""
+    from app.models.system_event import KIND_WORKER_MEMORY_HIGH, SystemEvent
+
+    row = (
+        await db.execute(
+            select(SystemEvent.payload, SystemEvent.created_at)
+            .where(SystemEvent.kind == KIND_WORKER_MEMORY_HIGH)
+            .order_by(SystemEvent.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+    payload, created_at = row
+    payload = payload or {}
+    if payload.get("rss_mb") is None:
+        return None
+    return WorkerMemoryInfo(
+        rss_mb=float(payload["rss_mb"]),
+        threshold_mb=int(payload.get("threshold_mb") or 0),
+        concurrency=int(payload.get("concurrency") or 0),
+        age_s=_age_s(created_at, now),
+    )
 
 
 @router.get("/queue-health", response_model=QueueHealthResponse)
@@ -1173,6 +1259,8 @@ async def queue_health(
         visibility_timeout_s=vis,
         verdict=verdict,
         hint=hint,
+        db_connections=await _db_connections(db),
+        worker_memory=await _worker_memory(db, now),
     )
 
 

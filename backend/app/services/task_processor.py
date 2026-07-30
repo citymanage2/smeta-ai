@@ -1412,15 +1412,27 @@ class TaskProcessor:
             self._heartbeat(stop_event)
         )
         try:
-            await self.update_status("processing")
-            await self.update_progress("Начало обработки задачи...")
-
+            # Читаем задачу ДО перевода в `processing`: раньше статус ставился
+            # безусловно, и job отменённой (или удалённой в корзину) задачи
+            # воскрешала её в «Обработку» — со слотом воркера и оплаченными
+            # запросами. Отмена и удаление должны быть окончательными.
             result = await self.db.execute(
                 select(Task).where(Task.id == self.task_id)
             )
             task = result.scalar_one_or_none()
             if not task:
                 raise ValueError(f"Задача {self.task_id} не найдена")
+            if task.status == "cancelled" or task.deleted_at is not None:
+                logger.info(
+                    "Task not processed — cancelled or deleted",
+                    task_id=self.task_id,
+                    status=task.status,
+                    deleted=task.deleted_at is not None,
+                )
+                return
+
+            await self.update_status("processing")
+            await self.update_progress("Начало обработки задачи...")
 
             logger.info(
                 "Processing task",

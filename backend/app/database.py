@@ -51,6 +51,10 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
+    # Явно: ожидание свободного соединения не должно быть бесконечным и не должно
+    # быть «магической» константой библиотеки — потолок пулов мы считаем вручную
+    # под max_connections managed-БД (см. config.DB_POOL_SIZE).
+    pool_timeout=settings.DB_POOL_TIMEOUT_S,
     pool_recycle=1800,
     connect_args=_connect_args,
 )

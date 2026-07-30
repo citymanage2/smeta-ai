@@ -188,6 +188,34 @@ const HealthPanel: React.FC = () => {
                   {' · '}В работе: {queue.counts.running} (дольше всех {formatAge(queue.running.oldest_claimed_age_s)})
                   {queue.running.stale_count > 0 && ` · Потерянных: ${queue.running.stale_count}`}
                 </div>
+                {/* Соединения к БД: в логе 29.07.2026 база отказывала в новом
+                    соединении, а лимит тарифа никто не знал. Красным — когда
+                    запас на исходе: это и есть будущий отказ. */}
+                {queue.db_connections && (
+                  <div
+                    data-testid="db-connections"
+                    style={{
+                      fontSize: '12px',
+                      marginTop: '4px',
+                      color: queue.db_connections.reserve <= 5 ? '#dc2626' : '#64748b',
+                    }}
+                  >
+                    Соединения к БД: {queue.db_connections.used} из{' '}
+                    {queue.db_connections.max_allowed} (запас {queue.db_connections.reserve})
+                  </div>
+                )}
+                {/* Память обработчика: он в другом контейнере, поэтому цифра
+                    приходит записью в БД и только при превышении порога. */}
+                {queue.worker_memory && (
+                  <div
+                    data-testid="worker-memory"
+                    style={{ fontSize: '12px', color: '#b45309', marginTop: '4px' }}
+                  >
+                    Память обработчика: {queue.worker_memory.rss_mb} МБ — выше порога{' '}
+                    {queue.worker_memory.threshold_mb} МБ при {queue.worker_memory.concurrency}{' '}
+                    задачах разом ({formatAge(queue.worker_memory.age_s)} назад)
+                  </div>
+                )}
               </div>
             );
           })()}

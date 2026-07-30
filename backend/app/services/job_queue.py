@@ -338,6 +338,43 @@ async def sweep_orphaned_tasks(db: AsyncSession, grace_s: int) -> int:
     return n
 
 
+async def cancel_pending_jobs_for_task(db: AsyncSession, task_id: str) -> int:
+    """Снять с очереди ещё не взятые job отменённой задачи. Коммитит.
+
+    Без этого «Стоп» красил только `tasks.status`: queued-job оставалась в очереди,
+    рано или поздно её забирал worker, а `TaskProcessor.process()` первым делом
+    ставил `processing` — и отменённая задача воскресала, занимая слот и деньги.
+    Ровно это пользователь видел как «очистила очередь, а задачи всё равно висят».
+
+    Running-job НЕ трогаем: её обработчик сам заметит отмену на ближайшем чекпоинте
+    (`TaskProcessor._check_cancelled`) и завершится штатно. Снять её здесь значило бы
+    оставить задачу «в работе» без записи в очереди — и `sweep_orphaned_tasks`
+    пометил бы её failed поверх честного `cancelled`.
+
+    Фильтр по `payload.task_id` — на стороне Python: JSON-предикаты диалектозависимы
+    (JSONB в проде, JSON в SQLite). Тот же приём в `live_heartbeat_age_s`.
+    """
+    rows = (
+        await db.execute(select(Job.id, Job.payload).where(Job.status == "queued"))
+    ).all()
+    ids = [jid for jid, payload in rows if (payload or {}).get("task_id") == task_id]
+    if not ids:
+        return 0
+
+    # Guard `status='queued'`: job, которую worker забрал прямо сейчас, не портим —
+    # её остановит проверка отмены внутри обработчика.
+    res = await db.execute(
+        update(Job)
+        .where(Job.id.in_(ids), Job.status == "queued")
+        .values(status="cancelled", last_error="Остановлено пользователем")
+    )
+    n = res.rowcount or 0
+    if n:
+        await db.commit()
+        logger.info("Queued jobs cancelled with task", count=n, task_id=task_id)
+    return n
+
+
 async def requeue_after_shutdown(
     db: AsyncSession, job_ids: Iterable[int], worker_id: str
 ) -> int:

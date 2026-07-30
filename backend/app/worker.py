@@ -13,7 +13,8 @@ import asyncio
 import os
 import signal
 import socket
-from typing import Awaitable, Callable
+import sys
+from typing import Awaitable, Callable, Optional
 
 import structlog
 from sqlalchemy import update
@@ -101,6 +102,94 @@ HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
 # Исполнение одной job
 # ---------------------------------------------------------------------------
 
+def rss_mb() -> Optional[float]:
+    """Память процесса, МБ. None — платформа не дала цифру.
+
+    Без внешних зависимостей (psutil в проекте нет): на Linux, где живёт прод, —
+    честный текущий RSS из /proc/self/status; иначе — пиковый ru_maxrss из
+    resource (macOS отдаёт байты, Linux — килобайты).
+    """
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except OSError:
+        pass
+    try:
+        import resource
+
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+        return round(peak / divisor, 1)
+    except Exception:  # noqa: BLE001 — измерение не обязано работать везде
+        return None
+
+
+def _rss_fields(rss_before: Optional[float]) -> dict:
+    """Поля памяти для лога job: сколько сейчас и сколько прибавилось за задачу."""
+    rss_after = rss_mb()
+    if rss_after is None:
+        return {}
+    fields = {"rss_mb": rss_after}
+    if rss_before is not None:
+        fields["rss_delta_mb"] = round(rss_after - rss_before, 1)
+    return fields
+
+
+async def _report_memory_if_high(rss: Optional[float]) -> None:
+    """Записать жалобу на память, чтобы её было видно в админке.
+
+    Раньше расход памяти не измерялся вообще, и вопрос «сколько задач считать
+    параллельно» решался наугад. Web память воркера измерить не может (другой
+    контейнер), поэтому единственный канал — строка в БД, её читает
+    `/admin/queue-health`. Пишем только при превышении порога и не чаще раза в
+    30 минут: диагностика не должна сама создавать нагрузку.
+    """
+    threshold = settings.WORKER_RSS_WARN_MB
+    if rss is None or threshold <= 0 or rss < threshold:
+        return
+
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.models.system_event import KIND_WORKER_MEMORY_HIGH, SystemEvent
+
+    logger.warning(
+        "Worker memory high", rss_mb=rss, threshold_mb=threshold,
+        concurrency=settings.WORKER_CONCURRENCY,
+    )
+    try:
+        async with AsyncSessionLocal() as db:
+            last_at = (
+                await db.execute(
+                    select(SystemEvent.created_at)
+                    .where(SystemEvent.kind == KIND_WORKER_MEMORY_HIGH)
+                    .order_by(SystemEvent.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if last_at is not None:
+                if last_at.tzinfo is None:  # SQLite отдаёт naive
+                    last_at = last_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - last_at < timedelta(minutes=30):
+                    return
+            db.add(
+                SystemEvent(
+                    kind=KIND_WORKER_MEMORY_HIGH,
+                    payload={
+                        "rss_mb": rss,
+                        "threshold_mb": threshold,
+                        "concurrency": settings.WORKER_CONCURRENCY,
+                    },
+                )
+            )
+            await db.commit()
+    except Exception as e:  # noqa: BLE001 — жалоба на память не важнее самой работы
+        logger.warning("Worker memory event not recorded", error=str(e))
+
+
 async def _heartbeat_loop(job_id: int, interval: float) -> None:
     """Периодически продлевает claimed_at, пока job исполняется.
 
@@ -128,6 +217,10 @@ async def run_job(job: Job) -> None:
     # Для reclaim'а частый heartbeat только надёжнее — он смотрит на порог 900 с.
     hb_interval = min(60.0, max(5.0, settings.JOB_VISIBILITY_TIMEOUT_S / 3))
     hb = asyncio.create_task(_heartbeat_loop(job.id, hb_interval))
+    # Память до/после job: сколько стоит одна задача — единственный способ
+    # осознанно выбрать WORKER_CONCURRENCY вместо угадывания.
+    rss_before = rss_mb()
+    logger.info("Job starting", job_id=job.id, kind=job.kind, rss_mb=rss_before)
     try:
         handler = HANDLERS.get(job.kind)
         if handler is None:
@@ -136,9 +229,14 @@ async def run_job(job: Job) -> None:
             await handler(job.payload, db)
         async with AsyncSessionLocal() as db:
             await job_queue.complete(db, job.id)
-        logger.info("Job done", job_id=job.id, kind=job.kind)
+        logger.info(
+            "Job done", job_id=job.id, kind=job.kind, **_rss_fields(rss_before)
+        )
     except Exception as e:  # noqa: BLE001 — любая ошибка обработчика
-        logger.error("Job failed", job_id=job.id, kind=job.kind, error=str(e))
+        logger.error(
+            "Job failed", job_id=job.id, kind=job.kind, error=str(e),
+            **_rss_fields(rss_before),
+        )
         async with AsyncSessionLocal() as db:
             if job.attempts >= settings.JOB_MAX_ATTEMPTS:
                 await job_queue.fail(db, job.id, str(e))
@@ -153,6 +251,7 @@ async def run_job(job: Job) -> None:
     finally:
         hb.cancel()
         await asyncio.gather(hb, return_exceptions=True)
+        await _report_memory_if_high(rss_mb())
 
 
 # ---------------------------------------------------------------------------

@@ -134,6 +134,16 @@ export interface QueueHealth {
   visibility_timeout_s: number;
   verdict: 'idle' | 'ok' | 'busy' | 'stalled';
   hint: string;
+  // Занятые/разрешённые соединения к БД. null — не PostgreSQL или нет прав на
+  // pg_stat_activity (диагностика деградирует, но не падает).
+  db_connections: { used: number; max_allowed: number; reserve: number } | null;
+  // Последняя жалоба обработчика на память. null — жалоб не было.
+  worker_memory: {
+    rss_mb: number;
+    threshold_mb: number;
+    concurrency: number;
+    age_s: number | null;
+  } | null;
 }
 
 export async function getApiHealth(): Promise<ApiHealth> {
