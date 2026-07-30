@@ -40,6 +40,7 @@ from app.utils.volume_probe import UNIT_ITEMS as ETA_UNIT_ITEMS
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
+from app.utils.price_coercion import is_negative_qty
 
 logger = structlog.get_logger()
 
@@ -1805,6 +1806,10 @@ async def fix_empty_prices(
     items: list[dict] = (task.progress_data or {}).get("items", [])
 
     def _has_empty(it: dict) -> bool:
+        # Должно совпадать с _has_empty_price в task_processor: иначе кнопка
+        # обещает исправить N позиций, а обработчик не находит ни одной.
+        if is_negative_qty(it.get("quantity")):
+            return False
         if it.get("type") == "Работа":
             return not it.get("work_price")
         if it.get("type") == "Материал":
@@ -1911,6 +1916,14 @@ async def reprice_estimate_item(
         raise HTTPException(status_code=404, detail="Позиция не найдена")
 
     item = items[item_index]
+    if is_negative_qty(item.get("quantity")):
+        # Кнопка для таких строк в интерфейсе заблокирована; сюда можно попасть
+        # только прямым запросом. Отказ дешевле: цена вычету не нужна, а поиск —
+        # платный web-запрос.
+        raise HTTPException(
+            status_code=409,
+            detail="Отрицательный объём — цена для позиции не определяется",
+        )
     current_date = _date.today().strftime("%d.%m.%Y")
 
     prompt_text = (

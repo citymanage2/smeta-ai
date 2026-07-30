@@ -470,10 +470,16 @@ const TaskStatusPage: React.FC = () => {
   const fmtRub = (v: number | null | undefined) =>
     v != null ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(v) : '—';
 
+  // Объём меньше нуля — это вычет из соседней позиции, а не работа: цена по
+  // такой строке не ищется, стоимость не считается (иначе итог занижается на
+  // qty × цену). Правило то же, что в backend/app/utils/price_coercion.py.
+  const isNegativeQty = (qty: number | null | undefined) => qty != null && qty < 0;
+
   const computedTotals = React.useMemo(() => {
     let sumWork = 0;
     let sumMat = 0;
     for (const it of estimateItems) {
+      if (isNegativeQty(it.quantity)) continue;
       const qty = it.quantity ?? 0;
       if (it.work_price != null) sumWork += qty * it.work_price;
       if (it.material_price != null) sumMat += qty * it.material_price;
@@ -545,6 +551,10 @@ const TaskStatusPage: React.FC = () => {
 
   const emptyPriceCount = React.useMemo(() => {
     return estimateItems.filter((it) => {
+      // Тот же отбор, что в backend (_has_empty / _has_empty_price): вычет без
+      // цены — это норма, иначе кнопка обещает исправить позиции, которые
+      // обработчик даже не возьмёт.
+      if (isNegativeQty(it.quantity)) return false;
       if (it.type === 'Работа') return !it.work_price;
       if (it.type === 'Материал') return !it.material_price;
       return false;
@@ -1602,8 +1612,9 @@ const TaskStatusPage: React.FC = () => {
                 <tbody>
                   {estimateItems.map((item, idx) => {
                     const qty = item.quantity ?? 0;
-                    const wCost = item.work_price != null ? qty * item.work_price : null;
-                    const mCost = item.material_price != null ? qty * item.material_price : null;
+                    const negativeQty = isNegativeQty(item.quantity);
+                    const wCost = !negativeQty && item.work_price != null ? qty * item.work_price : null;
+                    const mCost = !negativeQty && item.material_price != null ? qty * item.material_price : null;
                     const isWork = item.type === 'Работа';
                     const isRepricing = repricing === idx;
                     const repriceResult = repricedResult[idx];
@@ -1637,6 +1648,11 @@ const TaskStatusPage: React.FC = () => {
                             onChange={(e) => updateItemField(idx, 'quantity', parseFloat(e.target.value) || null)}
                             style={{ width: '70px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
                           />
+                          {negativeQty && (
+                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap' }}>
+                              не считается
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
                           <input
@@ -1666,16 +1682,18 @@ const TaskStatusPage: React.FC = () => {
                         <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
                           <button
                             onClick={() => handleReprice(idx)}
-                            disabled={isRepricing || repricing != null}
-                            title="Переопределить цену через Claude"
+                            disabled={isRepricing || repricing != null || negativeQty}
+                            title={negativeQty
+                              ? 'Отрицательный объём — цена для позиции не определяется'
+                              : 'Переопределить цену через Claude'}
                             style={{
                               padding: '4px 10px',
                               fontSize: '12px',
-                              backgroundColor: isRepricing ? '#bfdbfe' : '#eff6ff',
-                              color: '#1d4ed8',
-                              border: '1px solid #bfdbfe',
+                              backgroundColor: isRepricing ? '#bfdbfe' : negativeQty ? '#f1f5f9' : '#eff6ff',
+                              color: negativeQty ? '#94a3b8' : '#1d4ed8',
+                              border: `1px solid ${negativeQty ? '#e2e8f0' : '#bfdbfe'}`,
                               borderRadius: '6px',
-                              cursor: (isRepricing || repricing != null) ? 'not-allowed' : 'pointer',
+                              cursor: (isRepricing || repricing != null || negativeQty) ? 'not-allowed' : 'pointer',
                               whiteSpace: 'nowrap',
                               display: 'flex',
                               alignItems: 'center',

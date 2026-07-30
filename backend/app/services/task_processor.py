@@ -26,7 +26,7 @@ from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES, TERMINAL_TASK_STATUSES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
-from app.utils.price_coercion import coerce_price
+from app.utils.price_coercion import coerce_price, is_negative_qty
 from app.utils.pdf_text_extractor import chunk_project_pdf
 from app.utils.pdf_ocr_extractor import (
     chunk_pdf_pages,
@@ -57,6 +57,10 @@ ESTIMATE_RETRY_CHUNK = 10
 
 # Предельный срок на одну пачку запросов к ИИ (см. Settings.CHUNK_STAGE_DEADLINE_S).
 CHUNK_STAGE_DEADLINE_S = _settings.CHUNK_STAGE_DEADLINE_S
+
+# Примечание для позиций с отрицательным объёмом. Без него строка без цены
+# выглядит как недоработка расчёта, а не как сознательно пропущенный вычет.
+NEGATIVE_QTY_NOTE = "Отрицательный объём — цена не определяется"
 
 
 def _chunk_stage_deadline(n_chunks: int, concurrency: int) -> float:
@@ -2458,6 +2462,9 @@ class TaskProcessor:
         need_emb_works: list[tuple[int, str]] = []      # (gidx, name)
         need_emb_materials: list[tuple[int, str]] = []  # (gidx, name)
         enriched_map: dict[int, dict] = {}
+        # Позиции-вычеты (объём < 0): ни в matched, ни в unmatched — цену им не
+        # ищем нигде. Считаем только ради сообщения о прогрессе.
+        n_negative_qty = 0
 
         # ── Проход 1: точное совпадение (sync, in-memory) ────────────────────
         for gidx, item in enumerate(items):
@@ -2470,6 +2477,17 @@ class TaskProcessor:
             enriched.setdefault("price_list_name", None)
             enriched.setdefault("sources", None)
             enriched_map[gidx] = enriched
+
+            if is_negative_qty(item.get("quantity")):
+                # Отрицательный объём — корректировка соседней позиции, а не
+                # работа. Цена по ней ничего не значит, а web-поиск за неё
+                # платный, поэтому позиция вообще не входит в поиск цен.
+                n_negative_qty += 1
+                logger.debug(
+                    "Item skipped: negative quantity",
+                    task_id=self.task_id, name=name, quantity=item.get("quantity"),
+                )
+                continue
 
             if item_type == "Работа":
                 work_info = _price_svc._exact_match_work(name)
@@ -2548,8 +2566,14 @@ class TaskProcessor:
                 task_id=self.task_id,
                 items=len(items),
             )
+        # Сумма «найдено + не найдено» меньше числа позиций ровно на вычеты —
+        # без этой оговорки расхождение в прогрессе выглядит как потеря строк.
+        neg_note = (
+            f" Пропущено {n_negative_qty} с отрицательным объёмом (цена не нужна)."
+            if n_negative_qty else ""
+        )
         await self.update_progress(
-            f"Прайс: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций."
+            f"Прайс: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций." + neg_note
         )
 
         # ── Проход 4: точное совпадение по price_cache ───────────────────────
@@ -2625,7 +2649,7 @@ class TaskProcessor:
         n_matched = len(matched_by_gidx)
         n_unmatched = len(unmatched_by_gidx)
         await self.update_progress(
-            f"Кеш: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций."
+            f"Кеш: найдено {n_matched}, не найдено {n_unmatched} из {len(items)} позиций." + neg_note
         )
 
         # ── Шаг 2: Claude для ненайденных позиций ───────────────────────────
@@ -2811,6 +2835,23 @@ class TaskProcessor:
 
         final_items: list[dict] = []
         for gidx, item in enumerate(items):
+            if is_negative_qty(item.get("quantity")):
+                # Проверка здесь, а не только в шаге 1: шаг 3 общий для обычного
+                # прогона, возобновления из чекпоинта и достройки после batch —
+                # правило должно работать во всех трёх, а чекпоинт хранит только
+                # matched/claude_results, куда такая позиция не попадает.
+                final_items.append({
+                    "type": item.get("type", ""),
+                    "name": str(item.get("name", "")).strip(),
+                    "unit": item.get("unit", ""),
+                    "quantity": item.get("quantity"),
+                    "work_price": None,
+                    "material_price": None,
+                    "price_list_name": None,
+                    "sources": "",
+                    "notes": NEGATIVE_QTY_NOTE,
+                })
+                continue
             if gidx in matched_by_gidx:
                 matched = matched_by_gidx[gidx]
                 source = matched.get("price_list_name", "")
@@ -3116,6 +3157,11 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         return
 
     def _has_empty_price(item: dict) -> bool:
+        # Вычет (объём < 0) без цены — это норма, а не пустая цена: отправлять
+        # его в ИИ значит платить за web-поиск ради строки, которая всё равно
+        # не участвует в стоимости.
+        if is_negative_qty(item.get("quantity")):
+            return False
         if item.get("type") == "Работа":
             return not item.get("work_price")
         if item.get("type") == "Материал":

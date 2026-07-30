@@ -5,7 +5,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill
 
 from app.constants import TASK_TYPE_LABELS, ESTIMATION_STATUS_LABELS
-from app.utils.price_coercion import coerce_price, coerce_qty
+from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
 
 _HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -169,7 +169,11 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
         # мусором. Раньше строка роняла round() — и задача становилась
         # неизлечимой, потому что возобновление читало тот же чекпоинт и падало
         # снова. Здесь последний рубеж: непригодная цена = «цены нет».
+        # coerce_qty обнуляет минус — стоимость по вычету не считается и в итог
+        # не попадает. Но показать в колонке «Кол-во» нужно исходное число со
+        # знаком: иначе строка выглядит как позиция с потерянным объёмом.
         qty = coerce_qty(item.get("quantity"))
+        qty_shown = coerce_qty_signed(item.get("quantity"))
         work_price = coerce_price(item.get("work_price"))
         mat_price = coerce_price(item.get("material_price"))
         work_cost = round(qty * work_price, 2) if work_price is not None and qty else None
@@ -190,7 +194,7 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
             item.get("unit", ""),
             # Приведённый объём, а не сырой: строка «3» попала бы в числовую
             # колонку текстом, и Excel не сложил бы её в сумме.
-            qty if qty else None,
+            qty_shown if qty_shown else None,
             work_price,
             work_cost,
             mat_price,
