@@ -130,6 +130,27 @@ def rows_to_items(rows: list) -> list[dict]:
     return [row_to_item(row) for row in (rows or []) if isinstance(row, dict)]
 
 
+def items_total(items: list) -> float:
+    """Итог сметы по позициям — та же формула, что в скачиваемом файле.
+
+    Нужна там, где строить целый xlsx ради одного числа расточительно (отчёт
+    миграции по всем сметам). Совпадение с генератором закреплено тестом.
+    """
+    works = 0.0
+    materials = 0.0
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        qty = coerce_qty(item.get("quantity"))
+        work_price = coerce_price(item.get("work_price"))
+        material_price = coerce_price(item.get("material_price"))
+        if work_price is not None and qty:
+            works += round(qty * work_price, 2)
+        if material_price is not None and qty:
+            materials += round(qty * material_price, 2)
+    return round(works + round(works * 0.03, 2) + materials + round(materials * 0.03, 2), 2)
+
+
 def items_signature(items: list) -> list[tuple]:
     """Сравнимый слепок сметы: только то, что влияет на цифры и на файл.
 
