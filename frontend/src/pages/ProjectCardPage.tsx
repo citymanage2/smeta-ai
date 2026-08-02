@@ -18,9 +18,9 @@ import { DocumentKind } from '../api/documents'
 
 // Этапы карточки и типы документов названы одинаково — отдельного отображения
 // не нужно, но список типов, уже переехавших в единый редактор, пока короче:
-// смета и оптимизация подключаются в фазах 5 и 6.
+// оптимизация подключается в Фазе 6.
 const EMBEDDED_EDITOR_STAGES: ReadonlySet<KanbanStage> = new Set<KanbanStage>([
-  'list', 'completeness',
+  'list', 'completeness', 'estimate',
 ])
 
 const STAGE_TITLE: Record<string, string> = {

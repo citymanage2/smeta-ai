@@ -289,6 +289,42 @@ class TestNumbersAgree:
 
 class TestLegacyEndpoint:
     @pytest.mark.asyncio
+    async def test_old_editor_save_rows_updates_cost_and_file(
+        self, db_session, est_env, async_client
+    ):
+        """Старый редактор сметы пишет туда же и тоже пересобирает файл и итог.
+
+        Иначе он остался бы щелью, через которую смета снова расходится:
+        строки версии новые, а `task.cost` и скачиваемый файл — старые.
+        """
+        task = await db_session.get(Task, est_env["task_id"])
+        version, _ = await estimate_store.write_items(db_session, task, _items())
+
+        rows = [dict(r) for r in version.rows]
+        rows[0]["price_work"] = 3000.0
+
+        response = await async_client.put(
+            f"/tasks/{est_env['task_id']}/estimate/versions/{version.id}/rows",
+            json={"rows": rows},
+            headers=_auth(est_env["pm"], "project_manager"),
+        )
+        assert response.status_code == 200, response.text
+
+        await db_session.refresh(task)
+        res = await db_session.execute(
+            select(TaskResult).where(
+                TaskResult.task_id == est_env["task_id"], TaskResult.slot == "estimate",
+            )
+        )
+        stored = res.scalar_one()
+        file_total = _grand_total_from_xlsx(await storage_service.load_bytes(stored.storage_key))
+
+        expected = round(12000 + 360 + 10000 + 300, 2)
+        assert float(task.cost) == expected
+        assert file_total == expected
+
+
+    @pytest.mark.asyncio
     async def test_patch_estimate_items_writes_into_version(
         self, db_session, est_env, async_client
     ):

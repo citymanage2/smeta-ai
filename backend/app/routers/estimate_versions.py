@@ -189,6 +189,7 @@ async def save_rows(
     """
     from datetime import datetime, timezone
     from app.models.result import TaskResult
+    from app.services import estimate_store
     from app.utils.xlsx_generic import rows_to_xlsx
 
     version = await _get_version_or_404(task_id, version_id, db)
@@ -217,6 +218,14 @@ async def save_rows(
                     task_id, "result", tr.file_name or "result.xlsx", tr.mime_type, xlsx_bytes
                 )
                 tr.size_bytes = len(xlsx_bytes)
+
+    # Смета: файл и итог задачи пересобираются вместе со строками. Без этого
+    # старый редактор остался бы щелью, через которую смета снова расходится —
+    # строки новые, а `task.cost` и скачиваемый файл старые (Фаза 5).
+    if version.file_slot == estimate_store.ESTIMATE_SLOT:
+        working = await estimate_store.get_working_version(db, task_id)
+        if working is not None and str(working.id) == str(version.id):
+            await estimate_store.sync_artifacts(db, task, body.rows)
 
     await db.commit()
     return {"version_id": version_id, "rows_count": len(body.rows)}

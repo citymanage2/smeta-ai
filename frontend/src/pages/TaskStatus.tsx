@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { formatTaskError, formatApiDetail } from '../utils/formatError';
 import { describeEta } from '../utils/eta';
-import { isNegativeQty } from '../utils/negativeQty';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
@@ -17,11 +16,7 @@ import {
   updateTask,
   resumeTask,
   restartTask,
-  patchEstimateItems,
-  repriceEstimateItem,
-  fixEmptyPrices,
   TaskStatusResponse,
-  EstimateItem,
 } from '../api/tasks';
 import { locateDocumentByTask } from '../api/documents';
 import {
@@ -157,18 +152,6 @@ const TaskStatusPage: React.FC = () => {
 
   // Ref to latest fetch callback — used by visibilitychange handler to avoid stale closures
   const fetchStatusRef = useRef<() => void>(() => {});
-
-  // Estimate items editing state (ESTIMATE_FROM_LIST)
-  const [estimateItems, setEstimateItems] = useState<EstimateItem[]>([]);
-  const [savingEstimate, setSavingEstimate] = useState(false);
-  const [estimateSaveError, setEstimateSaveError] = useState('');
-  const [repricing, setRepricing] = useState<number | null>(null);
-  const [repricedResult, setRepricedResult] = useState<Record<number, {
-    oldWork: number | null; newWork: number | null;
-    oldMat: number | null; newMat: number | null;
-  }>>({});
-  const [fixingPrices, setFixingPrices] = useState(false);
-  const [needsItemReload, setNeedsItemReload] = useState(false);
 
   useEffect(() => {
     if (!taskId || taskId === 'undefined') {
@@ -382,18 +365,6 @@ const TaskStatusPage: React.FC = () => {
     };
   }, [fetchStatus, taskId, navigate, stopTimers]);
 
-  // Load estimate items when ESTIMATE_FROM_LIST task completes (or after fix-empty-prices)
-  useEffect(() => {
-    if (task?.task_type === 'ESTIMATE_FROM_LIST' && task.status === 'completed') {
-      const items = (task.progress_data?.items as EstimateItem[] | undefined) ?? [];
-      if (items.length > 0 && (estimateItems.length === 0 || needsItemReload)) {
-        setEstimateItems(items);
-        setNeedsItemReload(false);
-        setFixingPrices(false);
-      }
-    }
-  }, [task, estimateItems.length, needsItemReload]);
-
   // Ref для чтения последнего task в cleanup без добавления task в deps —
   // иначе cleanup вызывается при каждом poll (каждые 3 сек) пока пользователь на странице
   const taskRef = useRef(task);
@@ -449,121 +420,6 @@ const TaskStatusPage: React.FC = () => {
       setError('Ошибка при скачивании исходного файла.');
     } finally {
       setDownloadingInputFile(null);
-    }
-  };
-
-  // Estimate helpers
-  const fmtRub = (v: number | null | undefined) =>
-    v != null ? new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(v) : '—';
-
-  const computedTotals = React.useMemo(() => {
-    let sumWork = 0;
-    let sumMat = 0;
-    for (const it of estimateItems) {
-      if (isNegativeQty(it.quantity)) continue;
-      const qty = it.quantity ?? 0;
-      if (it.work_price != null) sumWork += qty * it.work_price;
-      if (it.material_price != null) sumMat += qty * it.material_price;
-    }
-    const overhead = sumWork * 0.03;
-    const transport = sumMat * 0.03;
-    return { sumWork, overhead, sumMat, transport, grand: sumWork + overhead + sumMat + transport };
-  }, [estimateItems]);
-
-  const updateItemField = (idx: number, field: keyof EstimateItem, value: unknown) => {
-    setEstimateItems((prev) => {
-      const next = [...prev];
-      next[idx] = { ...next[idx], [field]: value };
-      return next;
-    });
-  };
-
-  const handleSaveEstimate = async () => {
-    if (!taskId) return;
-    setSavingEstimate(true);
-    setEstimateSaveError('');
-    try {
-      await patchEstimateItems(taskId, estimateItems);
-      setTaskCost(computedTotals.grand);
-    } catch {
-      setEstimateSaveError('Не удалось сохранить изменения. Попробуйте ещё раз.');
-    } finally {
-      setSavingEstimate(false);
-    }
-  };
-
-  const handleReprice = async (itemIdx: number) => {
-    if (!taskId) return;
-    const oldItem = estimateItems[itemIdx];
-    const oldWork = oldItem?.work_price ?? null;
-    const oldMat = oldItem?.material_price ?? null;
-    setRepricing(itemIdx);
-    try {
-      const res = await repriceEstimateItem(taskId, itemIdx);
-      setEstimateItems((prev) => {
-        const next = [...prev];
-        next[itemIdx] = {
-          ...next[itemIdx],
-          work_price: res.work_price,
-          material_price: res.material_price,
-          sources: res.sources,
-          notes: res.notes,
-          price_list_name: null,
-        };
-        return next;
-      });
-      setRepricedResult((prev) => ({
-        ...prev,
-        [itemIdx]: { oldWork, newWork: res.work_price, oldMat, newMat: res.material_price },
-      }));
-      setTimeout(() => {
-        setRepricedResult((prev) => {
-          const next = { ...prev };
-          delete next[itemIdx];
-          return next;
-        });
-      }, 5000);
-    } catch {
-      setEstimateSaveError('Ошибка при переопределении цены. Попробуйте ещё раз.');
-    } finally {
-      setRepricing(null);
-    }
-  };
-
-  const emptyPriceCount = React.useMemo(() => {
-    return estimateItems.filter((it) => {
-      // Тот же отбор, что в backend (_has_empty / _has_empty_price): вычет без
-      // цены — это норма, иначе кнопка обещает исправить позиции, которые
-      // обработчик даже не возьмёт.
-      if (isNegativeQty(it.quantity)) return false;
-      if (it.type === 'Работа') return !it.work_price;
-      if (it.type === 'Материал') return !it.material_price;
-      return false;
-    }).length;
-  }, [estimateItems]);
-
-  const handleFixEmptyPrices = async () => {
-    if (!taskId) return;
-    setFixingPrices(true);
-    setEstimateSaveError('');
-    try {
-      const res = await fixEmptyPrices(taskId);
-      if (res.status === 'no_empty_items') {
-        setFixingPrices(false);
-        return;
-      }
-      // Task is now processing — restart polling first, then fetch to confirm
-      // 'processing' status before setting needsItemReload. If we set the flag
-      // before fetching, the useEffect fires with stale task.status='completed'
-      // and reloads old items, clearing the flag prematurely.
-      if (!pollingRef.current) {
-        pollingRef.current = setInterval(fetchStatus, 3000);
-      }
-      await fetchStatus();
-      setNeedsItemReload(true);
-    } catch {
-      setEstimateSaveError('Не удалось запустить исправление цен. Попробуйте ещё раз.');
-      setFixingPrices(false);
     }
   };
 
@@ -1545,223 +1401,6 @@ const TaskStatusPage: React.FC = () => {
           </div>
         )}
 
-        {/* Estimate items table — shown after ESTIMATE_FROM_LIST completes */}
-        {task && task.status === 'completed' && task.task_type === 'ESTIMATE_FROM_LIST' && estimateItems.length > 0 && (
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: '12px',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
-              padding: '24px 28px',
-              border: '1px solid #e2e8f0',
-              marginBottom: '20px',
-            }}
-          >
-            <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
-              Позиции сметы
-            </h3>
-
-            {/* Totals block — top summary */}
-            <div style={{ marginBottom: '20px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px 20px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Итоги по смете
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 32px' }}>
-                {[
-                  { label: 'Сумма по работам:', value: computedTotals.sumWork },
-                  { label: 'Накладные расходы 3%:', value: computedTotals.overhead },
-                  { label: 'Сумма по материалам:', value: computedTotals.sumMat },
-                  { label: 'Транспортные расходы 3%:', value: computedTotals.transport },
-                ].map(({ label, value }) => (
-                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#475569' }}>
-                    <span>{label}</span>
-                    <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{fmtRub(value)} ₽</span>
-                  </div>
-                ))}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: 700, color: '#0f172a', marginTop: '10px', padding: '10px 0 0', borderTop: '2px solid #cbd5e1' }}>
-                <span>ИТОГО ПО СМЕТЕ:</span>
-                <span style={{ fontFamily: 'monospace', color: '#15803d' }}>{fmtRub(computedTotals.grand)} ₽</span>
-              </div>
-            </div>
-
-            {estimateSaveError && (
-              <div style={{ padding: '8px 14px', backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '13px', color: '#dc2626', marginBottom: '12px' }}>
-                {estimateSaveError}
-              </div>
-            )}
-
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f1f5f9' }}>
-                    {['№', 'Наименование', 'Ед.', 'Кол-во', 'Цена работ', 'Ст-ть работ', 'Цена матер.', 'Ст-ть матер.', 'Из прайса', ''].map((h) => (
-                      <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 600, color: '#374151', borderBottom: '1.5px solid #e2e8f0', whiteSpace: 'nowrap' }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {estimateItems.map((item, idx) => {
-                    const qty = item.quantity ?? 0;
-                    const negativeQty = isNegativeQty(item.quantity);
-                    const wCost = !negativeQty && item.work_price != null ? qty * item.work_price : null;
-                    const mCost = !negativeQty && item.material_price != null ? qty * item.material_price : null;
-                    const isWork = item.type === 'Работа';
-                    const isRepricing = repricing === idx;
-                    const repriceResult = repricedResult[idx];
-                    return (
-                      <tr key={idx} style={{ backgroundColor: isWork ? '#f0f9ff' : undefined }}>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: '#94a3b8' }}>{idx + 1}</td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontWeight: isWork ? 600 : 400, maxWidth: '260px' }}>
-                          {item.name}
-                          {item.sources && (
-                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }} title={item.sources}>
-                              {item.sources.slice(0, 60)}{item.sources.length > 60 ? '…' : ''}
-                            </div>
-                          )}
-                          {repriceResult && (
-                            <div style={{ marginTop: '4px', fontSize: '11px', color: '#15803d', backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '4px', padding: '2px 6px', whiteSpace: 'nowrap' }}>
-                              {repriceResult.oldWork !== repriceResult.newWork && repriceResult.newWork != null && (
-                                <span>работа: {repriceResult.oldWork != null ? fmtRub(repriceResult.oldWork) : '—'} → {fmtRub(repriceResult.newWork)} </span>
-                              )}
-                              {repriceResult.oldMat !== repriceResult.newMat && repriceResult.newMat != null && (
-                                <span>матер.: {repriceResult.oldMat != null ? fmtRub(repriceResult.oldMat) : '—'} → {fmtRub(repriceResult.newMat)} </span>
-                              )}
-                              · сохранено
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap' }}>{item.unit}</td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <input
-                            type="number"
-                            value={item.quantity ?? ''}
-                            onChange={(e) => updateItemField(idx, 'quantity', parseFloat(e.target.value) || null)}
-                            style={{ width: '70px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
-                          />
-                          {negativeQty && (
-                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap' }}>
-                              не считается
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <input
-                            type="number"
-                            value={item.work_price ?? ''}
-                            onChange={(e) => updateItemField(idx, 'work_price', parseFloat(e.target.value) || null)}
-                            style={{ width: '90px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
-                          />
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap', color: wCost != null ? '#1e293b' : '#cbd5e1' }}>
-                          {fmtRub(wCost)}
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <input
-                            type="number"
-                            value={item.material_price ?? ''}
-                            onChange={(e) => updateItemField(idx, 'material_price', parseFloat(e.target.value) || null)}
-                            style={{ width: '90px', padding: '3px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', fontSize: '13px' }}
-                          />
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', whiteSpace: 'nowrap', color: mCost != null ? '#1e293b' : '#cbd5e1' }}>
-                          {fmtRub(mCost)}
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: item.price_list_name ? '#15803d' : '#94a3b8' }}>
-                          {item.price_list_name ? 'Да' : 'Нет'}
-                        </td>
-                        <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <button
-                            onClick={() => handleReprice(idx)}
-                            disabled={isRepricing || repricing != null || negativeQty}
-                            title={negativeQty
-                              ? 'Отрицательный объём — цена для позиции не определяется'
-                              : 'Переопределить цену через Claude'}
-                            style={{
-                              padding: '4px 10px',
-                              fontSize: '12px',
-                              backgroundColor: isRepricing ? '#bfdbfe' : negativeQty ? '#f1f5f9' : '#eff6ff',
-                              color: negativeQty ? '#94a3b8' : '#1d4ed8',
-                              border: `1px solid ${negativeQty ? '#e2e8f0' : '#bfdbfe'}`,
-                              borderRadius: '6px',
-                              cursor: (isRepricing || repricing != null || negativeQty) ? 'not-allowed' : 'pointer',
-                              whiteSpace: 'nowrap',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                            }}
-                          >
-                            {isRepricing ? (
-                              <>
-                                <span style={{
-                                  display: 'inline-block',
-                                  width: '10px',
-                                  height: '10px',
-                                  border: '2px solid #93c5fd',
-                                  borderTopColor: '#1d4ed8',
-                                  borderRadius: '50%',
-                                  animation: 'spin 0.7s linear infinite',
-                                  flexShrink: 0,
-                                }} />
-                                Обновляю…
-                              </>
-                            ) : '↺ Цена'}
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Action buttons row */}
-            <div style={{ display: 'flex', gap: '12px', marginTop: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                onClick={handleSaveEstimate}
-                disabled={savingEstimate || fixingPrices}
-                style={{
-                  padding: '10px 24px',
-                  backgroundColor: savingEstimate ? '#6ee7b7' : '#16a34a',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: (savingEstimate || fixingPrices) ? 'not-allowed' : 'pointer',
-                  fontSize: '14px',
-                  fontWeight: 600,
-                }}
-              >
-                {savingEstimate ? 'Сохранение...' : '💾 Сохранить изменения'}
-              </button>
-
-              {emptyPriceCount > 0 && (
-                <button
-                  onClick={handleFixEmptyPrices}
-                  disabled={fixingPrices || savingEstimate || repricing != null}
-                  title={`Отправить ${emptyPriceCount} позиций с пустой ценой в Claude для получения рыночной цены`}
-                  style={{
-                    padding: '10px 20px',
-                    backgroundColor: fixingPrices ? '#fef3c7' : '#fffbeb',
-                    color: fixingPrices ? '#92400e' : '#d97706',
-                    border: `1px solid ${fixingPrices ? '#fcd34d' : '#fde68a'}`,
-                    borderRadius: '8px',
-                    cursor: (fixingPrices || savingEstimate || repricing != null) ? 'not-allowed' : 'pointer',
-                    fontSize: '14px',
-                    fontWeight: 600,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {fixingPrices
-                    ? '⏳ Исправляем цены...'
-                    : `🔧 Исправить пустые цены (${emptyPriceCount})`}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Editor card — shown after LIST_FROM_GRAND or LIST_FROM_PROJECT completes */}
         {task && task.status === 'completed' && (task.task_type === 'LIST_FROM_GRAND' || task.task_type === 'LIST_FROM_PROJECT') && (
           <div style={{
@@ -1802,8 +1441,11 @@ const TaskStatusPage: React.FC = () => {
           </div>
         )}
 
-        {/* Estimate editor card — shown when ESTIMATE_OPTIMIZATION completes */}
-        {task && task.status === 'completed' && task.task_type === 'ESTIMATE_OPTIMIZATION' && (
+        {/* Смета и оптимизация — таблица живёт в редакторе, не на этой странице.
+            Для задач внутри сметы сюда вообще не попадают: их открывает страница
+            карточки. Это путь для задач вне сметы («Входящий», архив). */}
+        {task && task.status === 'completed'
+          && (task.task_type === 'ESTIMATE_OPTIMIZATION' || task.task_type === 'ESTIMATE_FROM_LIST') && (
           <div style={{
             backgroundColor: '#f0fdf4',
             border: '1px solid #86efac',

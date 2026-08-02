@@ -18,7 +18,7 @@ import { EstimateEditorModal } from '../card/EstimateEditorModal'
 import DocumentEditor from '../editor/DocumentEditor'
 import { LumaSpin } from '../ui/LumaSpin'
 import { ProgressCounter } from './ProgressCounter'
-import { GENERIC_EDITOR_TASK_TYPES } from '../../types'
+import { UNIFIED_EDITOR_TASK_TYPES } from '../../types'
 import { kindFromTaskType } from '../../api/documents'
 
 // ---------------------------------------------------------------------------
@@ -1370,10 +1370,9 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
       })()}
 
       {editorModal && (
-        // Плоские документы (перечень, полнота) — единый редактор. Смета и
-        // оптимизация переезжают на него в фазах 5 и 6; до тех пор открываются
-        // прежним путём.
-        editorModal.taskType && GENERIC_EDITOR_TASK_TYPES.has(editorModal.taskType)
+        // Перечень, полнота и смета — единый редактор. Оптимизация переезжает
+        // на него в Фазе 6; до тех пор открывается прежним путём.
+        editorModal.taskType && UNIFIED_EDITOR_TASK_TYPES.has(editorModal.taskType)
           ? (
             <DocumentEditor
               cardId={card.id}

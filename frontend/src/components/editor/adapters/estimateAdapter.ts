@@ -36,11 +36,15 @@ const COLUMN_DEFS: Array<{
   { key: 'cost_material', name: 'Стоим. матер.', min: 100, max: 140, numeric: true, editable: false, computed: true },
 ];
 
+// Поля, которые проходят через редактор насквозь. Часть из них колонками не
+// показывается (источник цены, найденные ссылки, примечание), но пропасть при
+// сохранении не должна: их нашёл ИИ, и они попадают в скачиваемый файл.
 const STORED_FIELDS = [
   'lineage_id', 'num', 'type', 'name', 'unit', 'qty', 'price_work', 'price_material',
   'cost', 'selected', 'abc_group', 'optimization_note', 'optimization_confidence',
   'is_excluded', 'work_row_id', 'qty_per_work_unit', 'qty_overridden',
   'qty_manual_backup', 'norm_reference',
+  'price_list_name', 'sources', 'notes',
 ];
 
 const TYPE_TO_LABEL: Record<string, string> = {

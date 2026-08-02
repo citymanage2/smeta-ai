@@ -15,6 +15,7 @@ import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clip
 import EditorToolbar from './EditorToolbar';
 import EditorHistoryPanel from './EditorHistoryPanel';
 import { ConflictBanner, PresenceBanner, ReadonlyBanner } from './PresenceBanner';
+import PriceActions from './actions/PriceActions';
 import './DocumentEditor.css';
 
 const HEARTBEAT_MS = 20_000;
@@ -377,6 +378,19 @@ export const DocumentEditor: React.FC<Props> = ({
             onToggleFullscreen={() => (isOverlayMode ? handleClose() : setFullscreen((v) => !v))}
             onToggleHistory={() => setHistoryOpen((v) => !v)}
           />
+
+          {/* Цены ищет ИИ — действие есть только там, где у строки есть цена. */}
+          {canWrite && meta.row_format === 'estimate' && meta.task_id && (
+            <PriceActions
+              taskId={meta.task_id}
+              rows={rows}
+              selectedKeys={selectedKeys}
+              isDirty={isDirty}
+              onReload={() => load(documentRef)}
+              onNotice={setNotice}
+              onStarted={onApplied}
+            />
+          )}
 
           {totals && (
             <div className="de-totals">
