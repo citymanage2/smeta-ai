@@ -468,7 +468,9 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
   const submitting = submittingCardIds.has(card.id)
   const task = card.list_task
 
-  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  // Идём прямо на страницу сметы, на нужный этап: адрес задачи туда же
+  // и редиректит, но лишним переходом и морганием экрана.
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=list`)
 
   useEffect(() => {
     if (pending && files.length === 0) {
@@ -688,7 +690,9 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
   const task = card.completeness_task
   const listTask = card.list_task
 
-  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  // Идём прямо на страницу сметы, на нужный этап: адрес задачи туда же
+  // и редиректит, но лишним переходом и морганием экрана.
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=completeness`)
 
   const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
     ? 'Перечень из проекта'
@@ -861,7 +865,9 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
   const listTask = card.list_task
   const completenessTask = card.completeness_task
 
-  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  // Идём прямо на страницу сметы, на нужный этап: адрес задачи туда же
+  // и редиректит, но лишним переходом и морганием экрана.
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=estimate`)
 
   const listCompleted = listTask?.status === 'completed'
   const completenessCompleted = completenessTask?.status === 'completed'
@@ -1098,7 +1104,9 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
   const [archiveExpanded, setArchiveExpanded] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const navigateToCard = () => task?.id ? navigate(`/tasks/${task.id}/status`) : navigate(`/projects/${card.project_id}/cards/${card.id}`)
+  // Идём прямо на страницу сметы, на нужный этап: адрес задачи туда же
+  // и редиректит, но лишним переходом и морганием экрана.
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=optimization`)
 
   const estimateCompleted = estimateTask?.status === 'completed'
   const optimizationMeta = filesMeta?.optimization_stage

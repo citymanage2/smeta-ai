@@ -191,11 +191,13 @@ async def resolve_document(
 
 async def locate_by_task(
     db: AsyncSession, task_id: str, current_user: dict
-) -> tuple[str, str]:
-    """Задача → (карточка, тип документа).
+) -> tuple[str, str, str]:
+    """Задача → (проект, карточка, тип документа).
 
     Нужна там, где на руках только идентификатор задачи: старые ссылки вида
-    /tasks/{id}/... и точки входа, оставшиеся от прежней навигации.
+    /tasks/{id}/status и точки входа, оставшиеся от прежней навигации. Задача
+    без карточки (создана вне сметы) сюда не попадает — вызывающий показывает
+    прежнюю страницу задачи.
     """
     task = await db.get(Task, task_id)
     if task is None or not can_edit(task.owner_id, current_user, task.is_shared):
@@ -210,7 +212,7 @@ async def locate_by_task(
         )
         card = res.scalar_one_or_none()
         if card is not None:
-            return str(card.id), kind
+            return str(card.project_id), str(card.id), kind
 
     raise _not_found()
 

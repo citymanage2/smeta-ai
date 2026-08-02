@@ -11,7 +11,6 @@ import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS, Pro
 import {
   getTaskStatus,
   getTaskResults,
-  sendMessage,
   cancelTask,
   downloadResult,
   downloadInputFile,
@@ -22,9 +21,9 @@ import {
   repriceEstimateItem,
   fixEmptyPrices,
   TaskStatusResponse,
-  ChatMessage,
   EstimateItem,
 } from '../api/tasks';
+import { locateDocumentByTask } from '../api/documents';
 import {
   linkTaskToProject,
   listProjects,
@@ -115,17 +114,20 @@ function formatDate(iso: string): string {
   });
 }
 
+/**
+ * Задача, принадлежащая смете, живёт на странице карточки — там же её этапы,
+ * файлы и таблица. Эта страница остаётся только для задач вне сметы («Входящий»,
+ * архив) и как рабочая цель для старых ссылок из уведомлений и закладок.
+ */
 const TaskStatusPage: React.FC = () => {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
+  const [redirecting, setRedirecting] = useState(true);
   const addTask = useNotificationStore((state) => state.addTask);
   const removeTask = useNotificationStore((state) => state.removeTask);
 
   const [task, setTask] = useState<TaskStatusResponse | null>(null);
   const [results, setResults] = useState<TaskResult[]>([]);
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [message, setMessage] = useState('');
-  const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [downloading, setDownloading] = useState<number | null>(null);
   const [downloadingInputFile, setDownloadingInputFile] = useState<number | null>(null);
@@ -172,6 +174,23 @@ const TaskStatusPage: React.FC = () => {
     if (!taskId || taskId === 'undefined') {
       navigate('/task/create');
     }
+  }, [taskId, navigate]);
+
+  // Старая ссылка на задачу открывает страницу её сметы, на нужном этапе.
+  // Задача без карточки (создана вне сметы) остаётся здесь.
+  useEffect(() => {
+    if (!taskId || taskId === 'undefined') return;
+    let cancelled = false;
+    locateDocumentByTask(taskId)
+      .then((location) => {
+        if (cancelled) return;
+        navigate(
+          `/projects/${location.project_id}/cards/${location.card_id}?stage=${location.kind}`,
+          { replace: true },
+        );
+      })
+      .catch(() => { if (!cancelled) setRedirecting(false); });
+    return () => { cancelled = true };
   }, [taskId, navigate]);
 
   const stopTimers = useCallback(() => {
@@ -395,40 +414,6 @@ const TaskStatusPage: React.FC = () => {
     };
   }, [taskId, addTask]);
 
-  const handleSendMessage = async () => {
-    if (!taskId || !message.trim()) return;
-    setSending(true);
-    const trimmed = message.trim();
-    try {
-      await sendMessage(taskId, trimmed);
-
-      // Append message locally — backend response does not include chat_history
-      const newMsg: ChatMessage = { role: 'user', content: trimmed, timestamp: new Date().toISOString() };
-      setChatHistory((prev) => [...prev, newMsg]);
-      setMessage('');
-
-      // Reset state for re-processing
-      setResults([]);
-      setProgressLog(['Обработка уточнения...']);
-      setElapsedSeconds(0);
-      startTimeRef.current = null;
-
-      // Optimistically flip status so spinner shows immediately
-      setTask((prev) => prev ? { ...prev, status: 'processing', progress_message: 'Обработка уточнения...' } : prev);
-
-      // Restart polling (was stopped on completion)
-      if (!pollingRef.current) {
-        pollingRef.current = setInterval(fetchStatus, 3000);
-      }
-      // Fetch immediately so UI reflects new backend state without waiting 3 s
-      fetchStatus();
-    } catch {
-      setError('Не удалось отправить сообщение.');
-    } finally {
-      setSending(false);
-    }
-  };
-
   const handleCancel = async () => {
     if (!taskId || cancelling) return;
     setCancelling(true);
@@ -583,6 +568,18 @@ const TaskStatusPage: React.FC = () => {
   };
 
   const statusStyle = task ? STATUS_COLORS[task.status] : STATUS_COLORS.pending;
+
+  // Пока неизвестно, принадлежит ли задача смете, страницу не рисуем: иначе
+  // при переходе по старой ссылке мелькал бы экран, который тут же сменится.
+  if (redirecting) {
+    return (
+      <Layout>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '80px 0' }}>
+          <LumaSpin size="lg" color="#3b82f6" />
+        </div>
+      </Layout>
+    );
+  }
 
   return (
     <Layout>
@@ -1845,122 +1842,6 @@ const TaskStatusPage: React.FC = () => {
           </div>
         )}
 
-        {/* Chat section */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '12px',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
-            padding: '24px 28px',
-            border: '1px solid #e2e8f0',
-          }}
-        >
-          <h3 style={{ margin: '0 0 16px', fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
-            Уточнить задачу
-          </h3>
-
-          {/* Chat history */}
-          {chatHistory.length > 0 && (
-            <div
-              style={{
-                maxHeight: '320px',
-                overflowY: 'auto',
-                marginBottom: '16px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '10px',
-                padding: '4px 0',
-              }}
-            >
-              {chatHistory.map((msg, index) => (
-                <div
-                  key={index}
-                  style={{
-                    display: 'flex',
-                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                  }}
-                >
-                  <div
-                    style={{
-                      maxWidth: '80%',
-                      padding: '10px 14px',
-                      backgroundColor: msg.role === 'user' ? '#2563eb' : '#f1f5f9',
-                      color: msg.role === 'user' ? '#ffffff' : '#1e293b',
-                      borderRadius: msg.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-                      fontSize: '14px',
-                      lineHeight: '1.5',
-                    }}
-                  >
-                    <p style={{ margin: 0 }}>{msg.content}</p>
-                    <p
-                      style={{
-                        margin: '6px 0 0',
-                        fontSize: '11px',
-                        opacity: 0.6,
-                        textAlign: 'right',
-                      }}
-                    >
-                      {formatDate(msg.timestamp)}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Message input */}
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Введите уточнение или дополнительный вопрос..."
-              rows={3}
-              disabled={sending}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  handleSendMessage();
-                }
-              }}
-              style={{
-                flex: 1,
-                padding: '10px 14px',
-                fontSize: '14px',
-                color: '#1e293b',
-                border: '1.5px solid #e2e8f0',
-                borderRadius: '8px',
-                resize: 'vertical',
-                outline: 'none',
-                fontFamily: 'inherit',
-                backgroundColor: sending ? '#f1f5f9' : '#ffffff',
-                transition: 'border-color 0.15s',
-              }}
-              onFocus={(e) => { e.target.style.borderColor = '#2563eb'; }}
-              onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; }}
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={sending || !message.trim()}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: sending || !message.trim() ? '#93c5fd' : '#2563eb',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: sending || !message.trim() ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                fontWeight: 600,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
-            >
-              {sending ? 'Отправка...' : 'Уточнить'}
-            </button>
-          </div>
-          <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#94a3b8' }}>
-            Ctrl+Enter для отправки
-          </p>
-        </div>
       </div>
     </Layout>
   );

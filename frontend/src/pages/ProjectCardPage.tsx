@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Info } from 'lucide-react'
 import Layout from '../components/Layout'
 import { LumaSpin } from '../components/ui/LumaSpin'
@@ -11,7 +11,24 @@ import {
   stageTask,
 } from '../components/pipeline/PipelineStepper'
 import { CardStageContent } from '../components/kanban/CardStageContent'
+import StageProcessingPanel from '../components/card/StageProcessingPanel'
+import DocumentEditor from '../components/editor/DocumentEditor'
 import { WorkflowCard, KanbanStage } from '../types/workflow'
+import { DocumentKind } from '../api/documents'
+
+// Этапы карточки и типы документов названы одинаково — отдельного отображения
+// не нужно, но список типов, уже переехавших в единый редактор, пока короче:
+// смета и оптимизация подключаются в фазах 5 и 6.
+const EMBEDDED_EDITOR_STAGES: ReadonlySet<KanbanStage> = new Set<KanbanStage>([
+  'list', 'completeness',
+])
+
+const STAGE_TITLE: Record<string, string> = {
+  list: 'Перечень',
+  completeness: 'Полнота',
+  estimate: 'Смета',
+  optimization: 'Оптимизация',
+}
 
 // ---------------------------------------------------------------------------
 // Начальный выбранный этап: показываем то, что происходит/требует внимания
@@ -34,6 +51,7 @@ function defaultStage(card: WorkflowCard): KanbanStage {
 const ProjectCardPage: React.FC = () => {
   const { projectId, cardId } = useParams<{ projectId: string; cardId: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { cards, fetchCards } = useKanbanStore()
 
   const [initialLoad, setInitialLoad] = useState(true)
@@ -42,6 +60,14 @@ const ProjectCardPage: React.FC = () => {
   const initializedRef = useRef(false)
 
   const card = cards.find((c) => c.id === cardId) ?? null
+
+  const refetch = useCallback(() => {
+    if (projectId) fetchCards(projectId)
+  }, [projectId, fetchCards])
+
+  // Этап живёт в адресе: ссылку на конкретный этап можно скинуть коллеге,
+  // и по ней откроется ровно то, что было на экране.
+  const stageFromUrl = searchParams.get('stage') as KanbanStage | null
 
   // Загрузка + поллинг через тот же стор, что канбан/SmetaList — данные не дублируются.
   useEffect(() => {
@@ -80,9 +106,10 @@ const ProjectCardPage: React.FC = () => {
   useEffect(() => {
     if (card && !initializedRef.current) {
       initializedRef.current = true
-      setSelectedStage(defaultStage(card))
+      const known = PIPELINE_STAGES.includes(stageFromUrl as KanbanStage)
+      setSelectedStage(known ? (stageFromUrl as KanbanStage) : defaultStage(card))
     }
-  }, [card])
+  }, [card, stageFromUrl])
 
   if (initialLoad && !card) {
     return (
@@ -105,6 +132,10 @@ const ProjectCardPage: React.FC = () => {
   }
 
   const stageForContent: KanbanStage = selectedStage ?? card.stage
+  const currentTask = stageTask(card, stageForContent)
+  const showEditor = !!currentTask
+    && currentTask.status === 'completed'
+    && EMBEDDED_EDITOR_STAGES.has(stageForContent)
   const guard = computeGuard(card, stageForContent)
   const showSoft =
     guard.blockType === 'soft' && !stageTask(card, stageForContent) && !softDismissed
@@ -112,11 +143,17 @@ const ProjectCardPage: React.FC = () => {
   const handleSelect = (stage: KanbanStage) => {
     setSelectedStage(stage)
     setSoftDismissed(false)
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.set('stage', stage)
+      return next
+    }, { replace: true })
   }
 
   return (
     <Layout>
-      <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 16px' }}>
+      {/* Со встроенной таблицей странице нужна вся ширина: в 720 px смета не помещается. */}
+      <div style={{ maxWidth: showEditor ? 1400 : 720, margin: '0 auto', padding: '24px 16px' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
           <button
@@ -182,7 +219,26 @@ const ProjectCardPage: React.FC = () => {
           }}
         >
           <CardStageContent card={{ ...card, stage: stageForContent }} />
+
+          {/* Ход обработки этапа — переехал сюда со страницы задачи. */}
+          {currentTask?.id && (
+            <div style={{ marginTop: '14px' }}>
+              <StageProcessingPanel taskId={currentTask.id} onChanged={refetch} />
+            </div>
+          )}
         </div>
+
+        {/* Таблица этапа прямо на странице; «на весь экран» — в её панели. */}
+        {showEditor && (
+          <div style={{ marginTop: '16px' }}>
+            <DocumentEditor
+              cardId={card.id}
+              kind={stageForContent as DocumentKind}
+              title={STAGE_TITLE[stageForContent] ?? card.name}
+              onApplied={refetch}
+            />
+          </div>
+        )}
       </div>
     </Layout>
   )

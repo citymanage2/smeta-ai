@@ -604,7 +604,29 @@ async def test_locate_by_task_returns_card_and_kind(async_client, doc_env):
     r = await async_client.get(
         f"/documents/by-task/{doc_env['task_id']}", headers=_pm1(doc_env))
     assert r.status_code == 200
-    assert r.json() == {"card_id": doc_env["card_id"], "kind": "list"}
+    assert r.json() == {
+        "project_id": doc_env["project_id"],
+        "card_id": doc_env["card_id"],
+        "kind": "list",
+    }
+
+
+@pytest.mark.asyncio
+async def test_locate_by_task_404_for_task_without_card(
+    async_client, doc_env, db_session
+):
+    """Задача вне сметы карточки не имеет — старая страница задачи остаётся рабочей."""
+    orphan = Task(
+        owner_id=doc_env["pm1"], user_role="project_manager",
+        task_type="LIST_FROM_GRAND", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(orphan)
+    await db_session.commit()
+
+    r = await async_client.get(
+        f"/documents/by-task/{orphan.id}", headers=_pm1(doc_env))
+    assert r.status_code == 404
 
 
 @pytest.mark.asyncio

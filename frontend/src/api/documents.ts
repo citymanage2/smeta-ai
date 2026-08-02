@@ -171,12 +171,14 @@ export async function sendHeartbeat(ref: DocumentRef): Promise<LockInfo | null> 
 }
 
 /** Задача → документ. Для старых ссылок вида /tasks/{id}, где карточка неизвестна. */
-export async function locateDocumentByTask(
-  taskId: string,
-): Promise<{ card_id: string; kind: DocumentKind }> {
-  const res = await apiClient.get<{ card_id: string; kind: DocumentKind }>(
-    `/documents/by-task/${taskId}`,
-  );
+export interface DocumentLocation {
+  project_id: string;
+  card_id: string;
+  kind: DocumentKind;
+}
+
+export async function locateDocumentByTask(taskId: string): Promise<DocumentLocation> {
+  const res = await apiClient.get<DocumentLocation>(`/documents/by-task/${taskId}`);
   return res.data;
 }
 

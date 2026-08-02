@@ -41,8 +41,8 @@ async def locate_document_by_task(
     current_user: dict = Depends(get_current_user),
 ):
     """Какой документ соответствует задаче — для старых ссылок вида /tasks/{id}."""
-    card_id, kind = await svc.locate_by_task(db, task_id, current_user)
-    return {"card_id": card_id, "kind": kind}
+    project_id, card_id, kind = await svc.locate_by_task(db, task_id, current_user)
+    return {"project_id": project_id, "card_id": card_id, "kind": kind}
 
 
 @router.get("/{card_id}/{kind}", response_model=DocumentMeta)
