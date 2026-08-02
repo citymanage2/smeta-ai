@@ -145,6 +145,39 @@ class PriceListResponse(BaseModel):
     skipped_reasons: dict = Field(default_factory=dict)
 
 
+class AnalogRowIn(BaseModel):
+    """Позиция, отправленная на поиск аналогов."""
+    row_id: str
+    name: str
+    unit: Optional[str] = None
+    qty: Optional[float] = None
+    price: Optional[float] = None
+    kind: Optional[str] = None
+
+
+class AnalogsStartRequest(BaseModel):
+    rows: list[AnalogRowIn] = Field(default_factory=list)
+    version_id: Optional[str] = None
+
+
+class AnalogsStartResponse(BaseModel):
+    run_id: str
+    status: str
+    total: int
+    # Во что обойдётся запуск — человек видит это до подтверждения.
+    estimate: dict = Field(default_factory=dict)
+
+
+class AnalogsStateResponse(BaseModel):
+    run_id: Optional[str] = None
+    status: Optional[str] = None
+    processed: int = 0
+    total: int = 0
+    results: list[dict] = Field(default_factory=list)
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 class ChangeEntry(BaseModel):
     row_number: int
     row_id: Optional[str] = None

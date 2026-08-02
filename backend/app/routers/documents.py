@@ -16,6 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.document import (
+    AnalogsStartRequest,
+    AnalogsStartResponse,
+    AnalogsStateResponse,
     ApplyRequest,
     ApplyResponse,
     CoefficientRequest,
@@ -30,6 +33,7 @@ from app.schemas.document import (
     SaveDraftRequest,
     VersionBrief,
 )
+from app.services import analogs_service
 from app.services import document_service as svc
 from app.utils.auth import get_current_user
 from app.utils.xlsx_statement import generate_statement_xlsx
@@ -280,6 +284,61 @@ async def add_document_rows_to_price_list(
     doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
     items = [item.model_dump() for item in body.items]
     return await svc.add_to_price_list(db, doc, items, current_user)
+
+
+@router.post("/{card_id}/{kind}/analogs", response_model=AnalogsStartResponse)
+async def start_analogs_search(
+    card_id: str,
+    kind: str,
+    body: AnalogsStartRequest,
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Запустить поиск более дешёвых аналогов по выделенным позициям.
+
+    Работа фоновая: поиск идёт в интернете и занимает минуты. Документ она не
+    меняет — найденное человек принимает вручную.
+    """
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    run = await svc.start_analogs(
+        db, doc, body.version_id, [row.model_dump() for row in body.rows], current_user,
+    )
+    return AnalogsStartResponse(
+        run_id=str(run.id),
+        status=run.status,
+        total=run.total,
+        estimate=analogs_service.estimate_effort(run.total),
+    )
+
+
+@router.get("/{card_id}/{kind}/analogs", response_model=AnalogsStateResponse)
+async def get_analogs_state(
+    card_id: str,
+    kind: str,
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Ход поиска и найденные варианты. Прогона не было — пустой ответ."""
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    run = await analogs_service.latest_run(db, str(doc.task.id), doc.kind)
+    return AnalogsStateResponse(**analogs_service.run_to_dict(run))
+
+
+@router.post("/{card_id}/{kind}/analogs/cancel", response_model=AnalogsStateResponse)
+async def cancel_analogs_search(
+    card_id: str,
+    kind: str,
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Остановить идущий поиск. Уже найденные варианты остаются."""
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    await analogs_service.cancel_run(db, str(doc.task.id), doc.kind)
+    run = await analogs_service.latest_run(db, str(doc.task.id), doc.kind)
+    return AnalogsStateResponse(**analogs_service.run_to_dict(run))
 
 
 @router.get("/{card_id}/{kind}/history", response_model=list[HistoryEntryOut])

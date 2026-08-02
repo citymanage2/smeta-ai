@@ -979,6 +979,37 @@ async def add_to_price_list(
     return summary
 
 
+async def start_analogs(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    version_id: Optional[str],
+    rows: list,
+    current_user: dict,
+):
+    """Запустить поиск аналогов по позициям документа.
+
+    Действие есть только в смете и оптимизации: у перечня и полноты нет ни цен,
+    ни типов строк, а раздел сводной — снимок, правка которого исходную смету не
+    меняет (там аналоги вводили бы в заблуждение).
+
+    Права проверяются на чтение: поиск ничего не меняет в документе, а найденное
+    человек принимает вручную. Это же позволяет искать аналоги, пока смета
+    считается.
+    """
+    from app.services import analogs_service
+
+    if doc.kind not in (KIND_ESTIMATE, KIND_OPTIMIZATION):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Поиск аналогов доступен в смете и в версиях оптимизации",
+        )
+
+    user_name = await user_display_name(db, current_user)
+    return await analogs_service.start_run(
+        db, doc, version_id, rows, current_user, user_name,
+    )
+
+
 async def _stale_rev_error(db: AsyncSession, task_id: str, kind: str) -> HTTPException:
     """Принимает идентификаторы, а не ORM-объекты: вызывается в том числе после
     rollback, когда объекты сессии сброшены и любое обращение к их полям

@@ -21,6 +21,12 @@ vi.mock('../api/documents', async () => {
     discardDraft: vi.fn().mockResolvedValue(undefined),
     applyDocument: vi.fn(),
     sendHeartbeat: vi.fn().mockResolvedValue(null),
+    // Поиск аналогов опрашивает сервер при открытии редактора: без мока тест
+    // ждал бы реального отказа сети и падал под нагрузкой.
+    getAnalogsState: vi.fn().mockResolvedValue({
+      run_id: null, status: null, processed: 0, total: 0,
+      results: [], error: null, created_at: null,
+    }),
     getDocumentHistory: vi.fn().mockResolvedValue([]),
   };
 });

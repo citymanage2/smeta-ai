@@ -249,6 +249,82 @@ export async function addToPriceList(
   return res.data;
 }
 
+// --- Поиск аналогов через ИИ -------------------------------------------------
+
+export interface AnalogVariant {
+  name: string;
+  unit: string;
+  price: number;
+  /** Выгода в рублях по объёму позиции — считает сервер. */
+  delta: number;
+  reason: string;
+  source: string;
+}
+
+export interface AnalogResult {
+  row_id: string;
+  name: string;
+  unit: string;
+  price: number;
+  variants: AnalogVariant[];
+}
+
+export type AnalogStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface AnalogsState {
+  run_id: string | null;
+  status: AnalogStatus | null;
+  processed: number;
+  total: number;
+  results: AnalogResult[];
+  error: string | null;
+  created_at: string | null;
+}
+
+export interface AnalogRowIn {
+  row_id: string;
+  name: string;
+  unit: string | null;
+  qty: number | null;
+  price: number | null;
+  kind: 'work' | 'material';
+}
+
+export interface AnalogsStartResult {
+  run_id: string;
+  status: AnalogStatus;
+  total: number;
+  estimate: { positions: number; searches: number; minutes: number };
+}
+
+/** Запустить фоновый поиск аналогов. Документ при этом не меняется. */
+export async function startAnalogs(
+  ref: DocumentRef,
+  rows: AnalogRowIn[],
+  versionId?: string,
+): Promise<AnalogsStartResult> {
+  const res = await apiClient.post<AnalogsStartResult>(
+    `${base(ref)}/analogs`,
+    { rows, version_id: versionId ?? null },
+    { params: slotParams(ref) },
+  );
+  return res.data;
+}
+
+export async function getAnalogsState(ref: DocumentRef): Promise<AnalogsState> {
+  const res = await apiClient.get<AnalogsState>(`${base(ref)}/analogs`, {
+    params: slotParams(ref),
+  });
+  return res.data;
+}
+
+export async function cancelAnalogs(ref: DocumentRef): Promise<AnalogsState> {
+  const res = await apiClient.post<AnalogsState>(`${base(ref)}/analogs/cancel`, null, {
+    params: slotParams(ref),
+  });
+  return res.data;
+}
+
 /** Задача → документ. Для старых ссылок вида /tasks/{id}, где карточка неизвестна. */
 export interface DocumentLocation {
   project_id: string;

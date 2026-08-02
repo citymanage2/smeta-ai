@@ -7,7 +7,10 @@ import DataGrid, {
 } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import { X } from 'lucide-react';
-import { DocumentKind, DocumentRef, exportDocument } from '../../api/documents';
+import {
+  AnalogVariant, AnalogsState, DocumentKind, DocumentRef,
+  cancelAnalogs, exportDocument, getAnalogsState,
+} from '../../api/documents';
 import { useDocumentEditorStore } from '../../stores/documentEditor';
 import { LumaSpin } from '../ui/LumaSpin';
 import { EditorColumn, GridRow } from './adapters/types';
@@ -21,12 +24,17 @@ import PriceActions from './actions/PriceActions';
 import AddToPriceList from './actions/AddToPriceList';
 import AddFromPriceList from './actions/AddFromPriceList';
 import { PricePosition, buildPriceRows, insertRowsAfter } from './actions/priceInsert';
+import FindAnalogs from './actions/FindAnalogs';
+import AnalogsPanel from './AnalogsPanel';
+import { applyAnalogToRow } from './actions/analogsApply';
 import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
 import { columnsFromEditor, rowsFromEditor } from './exportBuilder';
 import './DocumentEditor.css';
 
 const HEARTBEAT_MS = 20_000;
+// Поиск аналогов идёт минутами — чаще спрашивать сервер незачем.
+const ANALOGS_POLL_MS = 5_000;
 
 interface Props {
   cardId: string;
@@ -100,6 +108,8 @@ export const DocumentEditor: React.FC<Props> = ({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [analogs, setAnalogs] = useState<AnalogsState | null>(null);
+  const [analogsOpen, setAnalogsOpen] = useState(false);
   // Сравнение версий занимает место таблицы: это другой взгляд на тот же
   // документ, а не отдельная страница.
   const [comparing, setComparing] = useState(false);
@@ -315,6 +325,69 @@ export const DocumentEditor: React.FC<Props> = ({
     setRows([...rows.slice(0, at), fresh, ...rows.slice(at)]);
   }, [adapter, columns, rows, setRows]);
 
+  // --- Поиск аналогов -------------------------------------------------------
+  //
+  // Работа фоновая: результат появляется через минуты. Пока прогон идёт,
+  // спрашиваем сервер о его состоянии; когда закончился — перестаём.
+
+  const supportsAnalogs = kind === 'estimate' || kind === 'optimization';
+  const analogsRunning = analogs?.status === 'running' || analogs?.status === 'queued';
+
+  // Ответ приходит асинхронно: если к этому моменту редактор закрыли, состояние
+  // трогать нельзя — обновлять уже нечего.
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
+  const refreshAnalogs = useCallback(async () => {
+    if (!supportsAnalogs) return;
+    try {
+      const state = await getAnalogsState(documentRef);
+      if (!aliveRef.current) return;
+      // Панель раскрываем сами только при первом появлении прогона: если её
+      // закрыли руками, опрос не должен открывать её обратно.
+      setAnalogs((previous) => {
+        if (state.status && previous === null) setAnalogsOpen(true);
+        return state;
+      });
+    } catch {
+      // Молча: состояние поиска — не повод ломать работу с таблицей.
+    }
+  }, [supportsAnalogs, documentRef]);
+
+  useEffect(() => { refreshAnalogs(); }, [refreshAnalogs]);
+
+  useEffect(() => {
+    if (!analogsRunning) return;
+    const timer = setInterval(refreshAnalogs, ANALOGS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [analogsRunning, refreshAnalogs]);
+
+  const handleCancelAnalogs = useCallback(async () => {
+    try {
+      setAnalogs(await cancelAnalogs(documentRef));
+      setNotice('Поиск аналогов остановлен');
+    } catch {
+      setNotice('Не удалось остановить поиск');
+    }
+  }, [documentRef]);
+
+  // Замена идёт в строку таблицы, то есть в черновик: она откатывается Ctrl+Z
+  // и не попадает в документ, пока человек не нажал «Применить».
+  const handleReplaceWithAnalog = useCallback((rowId: string, variant: AnalogVariant) => {
+    const index = rows.findIndex((row) => row.__key === rowId);
+    if (index < 0) {
+      setNotice('Эта позиция уже не в документе — заменить нечего');
+      return;
+    }
+    const next = [...rows];
+    next[index] = applyAnalogToRow(rows[index], variant, meta?.coefficient);
+    setRows(next);
+    setNotice(`Позиция заменена на «${variant.name}» — можно отменить через Ctrl+Z`);
+  }, [rows, setRows, meta?.coefficient]);
+
   // С чего начинать поиск по прайсу: наименование единственной отмеченной
   // строки. Отмечено несколько или ни одной — человек вводит запрос сам.
   const priceSearchSeed = useMemo(() => {
@@ -520,7 +593,41 @@ export const DocumentEditor: React.FC<Props> = ({
                 currentRowName={priceSearchSeed}
                 onInsert={handleInsertFromPriceList}
               />
+              {/* Аналоги ищет ИИ в интернете — действие есть только там, где
+                  правка меняет саму смету. Раздел сводной — снимок: замена в
+                  нём исходную смету не изменит, и предложение вводило бы в
+                  заблуждение. */}
+              {supportsAnalogs && meta.task_id && (
+                <FindAnalogs
+                  documentRef={documentRef}
+                  rows={rows}
+                  selectedKeys={selectedKeys}
+                  rowKind={adapter.rowKind}
+                  busy={analogsRunning}
+                  versionId={versionId ?? undefined}
+                  onStarted={() => { setAnalogsOpen(true); refreshAnalogs(); }}
+                  onNotice={setNotice}
+                />
+              )}
+              {/* Панель закрыли, а результаты остались — без этой кнопки
+                  вернуться к ним можно было бы только перезагрузкой страницы. */}
+              {supportsAnalogs && !analogsOpen && analogs?.status && (
+                <button className="de-btn" onClick={() => setAnalogsOpen(true)}>
+                  Показать найденные аналоги
+                </button>
+              )}
             </div>
+          )}
+
+          {/* Найденные аналоги: предложения, а не правки. В документ попадает
+              только то, что человек принял кнопкой «Заменить». */}
+          {analogsOpen && analogs?.status && (
+            <AnalogsPanel
+              state={analogs}
+              onReplace={handleReplaceWithAnalog}
+              onCancel={handleCancelAnalogs}
+              onClose={() => setAnalogsOpen(false)}
+            />
           )}
 
           {totals && (
