@@ -24,6 +24,8 @@ from app.schemas.document import (
     DocumentRows,
     HeartbeatResponse,
     HistoryEntryOut,
+    PriceListRequest,
+    PriceListResponse,
     ProjectSettings,
     SaveDraftRequest,
     VersionBrief,
@@ -259,6 +261,25 @@ async def export_document_statement(
                 f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}",
         },
     )
+
+
+@router.post("/{card_id}/{kind}/price-list", response_model=PriceListResponse)
+async def add_document_rows_to_price_list(
+    card_id: str,
+    kind: str,
+    body: PriceListRequest,
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Отправить выделенные позиции документа в общий прайс.
+
+    Работы уходят к псевдо-подрядчику «Из смет», материалы — ценой. Документ при
+    этом не меняется: права проверяются на чтение, как у выгрузки.
+    """
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    items = [item.model_dump() for item in body.items]
+    return await svc.add_to_price_list(db, doc, items, current_user)
 
 
 @router.get("/{card_id}/{kind}/history", response_model=list[HistoryEntryOut])

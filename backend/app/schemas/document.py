@@ -125,6 +125,26 @@ class ExportRequest(BaseModel):
     file_name: Optional[str] = None
 
 
+class PriceListItem(BaseModel):
+    """Позиция документа, отправленная в прайс."""
+    kind: str
+    name: str
+    unit: Optional[str] = None
+    price: Optional[float] = None
+
+
+class PriceListRequest(BaseModel):
+    items: list[PriceListItem] = Field(default_factory=list)
+
+
+class PriceListResponse(BaseModel):
+    added: int
+    updated: int
+    skipped: int
+    # Почему позиции пропущены — иначе «пропущено 4» ничего не объясняет.
+    skipped_reasons: dict = Field(default_factory=dict)
+
+
 class ChangeEntry(BaseModel):
     row_number: int
     row_id: Optional[str] = None

@@ -59,8 +59,8 @@ const LABEL_TO_TYPE: Record<string, string> = {
 // Исходные цены (без коэффициента) едут рядом со строкой таблицы. Без них
 // нельзя отличить «человек правил цену» от «цену показали умноженной», и
 // каждое сохранение множило бы её заново.
-const BASE_WORK = '__base_price_work';
-const BASE_MATERIAL = '__base_price_material';
+export const BASE_WORK = '__base_price_work';
+export const BASE_MATERIAL = '__base_price_material';
 
 function costOf(row: GridRow, priceKey: string): number {
   const qty = billableQty(toNumber(row.qty));

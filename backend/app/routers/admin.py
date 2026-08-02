@@ -21,6 +21,7 @@ from app.models.price import PriceWork, PriceMaterial
 from app.models.price_list import PriceList
 from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
 from app.utils.auth import get_admin_user
+from app.utils.price_min import compute_min_price
 from app.services import price_service
 from app.services.embedding_service import (
     normalize_name,
@@ -209,7 +210,10 @@ def _parse_price_rows(rows: list, is_works: bool) -> list[dict]:
                         prices[contractor_name] = float(row[col_idx])
                     except (ValueError, TypeError):
                         pass
-            min_price = min(prices.values()) if prices else None
+            # Правило выбора цены одно на весь прайс: приоритет у цены из смет
+            # (`utils/price_min.py`), иначе загрузка файлом вернула бы позиции
+            # к цене подрядчика.
+            min_price = compute_min_price(prices)
             result.append({"name": name, "unit": unit, "prices": prices, "min_price": min_price})
         else:
             price: Optional[float] = None
@@ -644,10 +648,9 @@ async def _handle_price_upload(
             existing = existing_by_norm[key]
             if is_works:
                 merged = {**existing["prices"], **item.get("prices", {})}
-                positive = [v for v in merged.values() if v and v > 0]
                 values: dict = {
                     "prices": merged,
-                    "min_price": min(positive) if positive else None,
+                    "min_price": compute_min_price(merged),
                     "unit": item.get("unit") or existing["unit"],
                     "embedding": emb,
                     "updated_at": now,

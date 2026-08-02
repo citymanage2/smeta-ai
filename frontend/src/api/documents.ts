@@ -216,6 +216,39 @@ export async function sendHeartbeat(ref: DocumentRef): Promise<LockInfo | null> 
   return res.data.lock;
 }
 
+// --- Прайс ------------------------------------------------------------------
+
+export interface PriceListItem {
+  kind: 'work' | 'material';
+  name: string;
+  unit: string | null;
+  price: number | null;
+}
+
+export interface PriceListSummary {
+  added: number;
+  updated: number;
+  skipped: number;
+  /** Почему позиции пропущены: «без цены» → 3. */
+  skipped_reasons: Record<string, number>;
+}
+
+/**
+ * Отправить позиции документа в общий прайс. Работы уходят к псевдо-подрядчику
+ * «Из смет», материалы — ценой; сам документ при этом не меняется.
+ */
+export async function addToPriceList(
+  ref: DocumentRef,
+  items: PriceListItem[],
+): Promise<PriceListSummary> {
+  const res = await apiClient.post<PriceListSummary>(
+    `${base(ref)}/price-list`,
+    { items },
+    { params: slotParams(ref) },
+  );
+  return res.data;
+}
+
 /** Задача → документ. Для старых ссылок вида /tasks/{id}, где карточка неизвестна. */
 export interface DocumentLocation {
   project_id: string;

@@ -18,6 +18,9 @@ import { ConflictBanner, PresenceBanner, ReadonlyBanner } from './PresenceBanner
 import EditorVersionPanel, { EditorComparison } from './EditorVersionPanel';
 import OptimizationPanel from './OptimizationPanel';
 import PriceActions from './actions/PriceActions';
+import AddToPriceList from './actions/AddToPriceList';
+import AddFromPriceList from './actions/AddFromPriceList';
+import { PricePosition, buildPriceRows, insertRowsAfter } from './actions/priceInsert';
 import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
 import { columnsFromEditor, rowsFromEditor } from './exportBuilder';
@@ -312,6 +315,23 @@ export const DocumentEditor: React.FC<Props> = ({
     setRows([...rows.slice(0, at), fresh, ...rows.slice(at)]);
   }, [adapter, columns, rows, setRows]);
 
+  // С чего начинать поиск по прайсу: наименование единственной отмеченной
+  // строки. Отмечено несколько или ни одной — человек вводит запрос сам.
+  const priceSearchSeed = useMemo(() => {
+    if (selectedKeys.size !== 1) return '';
+    const row = rows.find((item) => selectedKeys.has(item.__key));
+    return row ? String(row.name ?? '') : '';
+  }, [rows, selectedKeys]);
+
+  // Позиции из прайса встают сразу после текущей строки — как ожидается от
+  // вставки (решение пользователя 7.1).
+  const handleInsertFromPriceList = useCallback((positions: PricePosition[]) => {
+    const seed = `price-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const fresh = buildPriceRows(positions, adapter, columns, seed, meta?.coefficient);
+    setRows(insertRowsAfter(rows, anchorRef.current?.rowKey ?? null, fresh));
+    setNotice(`Вставлено позиций из прайса: ${fresh.length}`);
+  }, [adapter, columns, rows, setRows, meta?.coefficient]);
+
   const handleDeleteSelected = useCallback(() => {
     if (selectedKeys.size === 0) return;
     setRows(rows.filter((row) => !selectedKeys.has(row.__key)));
@@ -482,6 +502,25 @@ export const DocumentEditor: React.FC<Props> = ({
               onNotice={setNotice}
               onStarted={onApplied}
             />
+          )}
+
+          {/* Работа с общим прайсом. Есть везде, где у строк есть цены и типы:
+              смета, оптимизация и разделы сводной. В перечне и полноте цен нет,
+              отправлять туда нечего. */}
+          {canWrite && meta.row_format === 'estimate' && (
+            <div className="de-price-actions">
+              <AddToPriceList
+                documentRef={documentRef}
+                rows={rows}
+                selectedKeys={selectedKeys}
+                rowKind={adapter.rowKind}
+                onNotice={setNotice}
+              />
+              <AddFromPriceList
+                currentRowName={priceSearchSeed}
+                onInsert={handleInsertFromPriceList}
+              />
+            </div>
           )}
 
           {totals && (

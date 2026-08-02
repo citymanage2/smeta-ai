@@ -33,6 +33,7 @@ from app.models.summary_section_doc import SummarySectionDoc
 from app.models.task import Task
 from app.models.user import User
 from app.models.workflow_card import WorkflowCard
+from app.services import price_bulk
 from app.utils.auth import current_user_id
 from app.utils.permissions import can_edit
 
@@ -913,6 +914,69 @@ async def set_coefficient(
         card_id=str(doc.card.id), kind=doc.kind, coefficient=coefficient,
     )
     return {"coefficient": coefficient}
+
+
+async def add_to_price_list(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    items: list,
+    current_user: dict,
+) -> dict:
+    """Отправить позиции документа в общий прайс.
+
+    Документ при этом не меняется — ни строки, ни `rev`. Поэтому действие
+    доступно везде, где документ виден: во время расчёта и в режиме просмотра
+    оно ничего не ломает. Право на запись в прайс есть у любого менеджера
+    (решение пользователя), а чужой документ он и открыть не может.
+
+    В историю документа запись всё равно идёт: прайс общий на всех, и по нему
+    считаются будущие сметы — должно быть видно, кто и сколько туда добавил.
+    """
+    if doc.row_format != "estimate":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="У этого документа нет цен и типов строк — в прайс отправлять нечего",
+        )
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Не выбрано ни одной позиции",
+        )
+    if len(items) > price_bulk.MAX_ITEMS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"За один раз в прайс можно добавить не больше "
+                f"{price_bulk.MAX_ITEMS} позиций"
+            ),
+        )
+
+    summary = await price_bulk.add_items(db, items)
+
+    user_name = await user_display_name(db, current_user)
+    db.add(TaskHistory(
+        id=str(_uuid.uuid4()),
+        task_id=str(doc.task.id),
+        operation_type="document_price_list",
+        slot=doc.file_slot,
+        description=(
+            f"{user_name}: добавлено в прайс — новых {summary['added']}, "
+            f"обновлено {summary['updated']}, пропущено {summary['skipped']}"
+        ),
+        # Строки документа не менялись, откатывать нечего: снимка нет намеренно.
+        previous_value={},
+        new_value={"changes": [], "changes_count": 0, "price_list": summary},
+        user_id=current_user_id(current_user),
+        user_name=user_name,
+        document_kind=doc.kind,
+    ))
+    await db.commit()
+
+    logger.info(
+        "document_price_list_add",
+        card_id=str(doc.card.id), kind=doc.kind, user=user_name, **summary,
+    )
+    return summary
 
 
 async def _stale_rev_error(db: AsyncSession, task_id: str, kind: str) -> HTTPException:
