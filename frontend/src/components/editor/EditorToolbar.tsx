@@ -1,6 +1,7 @@
 import React from 'react';
 import {
-  Check, History, Loader2, Maximize2, Minimize2, Plus, Redo2, Search, Trash2, Undo2, X,
+  Check, FileSpreadsheet, History, Loader2, Maximize2, Minimize2, Plus, Redo2, Search,
+  Trash2, Undo2, X,
 } from 'lucide-react';
 import { DraftState, EditorTab } from '../../stores/documentEditor';
 
@@ -31,6 +32,7 @@ interface Props {
   onDeleteSelected: () => void;
   onToggleFullscreen: () => void;
   onToggleHistory: () => void;
+  onExport: () => void;
 }
 
 const DRAFT_LABEL: Record<DraftState, string> = {
@@ -45,6 +47,7 @@ export const EditorToolbar: React.FC<Props> = ({
   selectedCount, canWrite, isDirty, applying, draftState, canUndo, canRedo,
   fullscreen, historyOpen, onTabChange, onSearchChange, onUndo, onRedo,
   onApply, onDiscard, onAddRow, onDeleteSelected, onToggleFullscreen, onToggleHistory,
+  onExport,
 }) => (
   <div className="de-toolbar">
     {showTabs && (
@@ -115,6 +118,11 @@ export const EditorToolbar: React.FC<Props> = ({
             </button>
           </>
         )}
+
+        <button className="de-btn" onClick={onExport} title="Собрать ведомость и скачать">
+          <FileSpreadsheet size={14} />
+          Выгрузка
+        </button>
 
         <button
           className={`de-icon-btn${historyOpen ? ' de-icon-btn-active' : ''}`}

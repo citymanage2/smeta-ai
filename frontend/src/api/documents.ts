@@ -57,7 +57,7 @@ export interface DocumentMeta {
   has_draft: boolean;
   draft_updated_at: string | null;
   lock: LockInfo | null;
-  project: { overhead_pct: number; transport_pct: number };
+  project: { overhead_pct: number; transport_pct: number; name?: string };
 }
 
 export interface DocumentRows {
@@ -166,6 +166,25 @@ export async function setDocumentCoefficient(
     `${base(ref)}/coefficient`, payload, { params: slotParams(ref) },
   );
   return res.data;
+}
+
+/** Выгрузка-ведомость по документу: строки приходят из предпросмотра. */
+export async function exportDocument(
+  ref: DocumentRef,
+  payload: unknown,
+  fileName = 'export.xlsx',
+): Promise<void> {
+  const res = await apiClient.post(`${base(ref)}/export`, payload, {
+    params: slotParams(ref), responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(new Blob([res.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export async function getDocumentHistory(ref: DocumentRef): Promise<HistoryEntry[]> {

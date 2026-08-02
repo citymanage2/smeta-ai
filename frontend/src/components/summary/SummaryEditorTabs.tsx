@@ -2,10 +2,12 @@ import React, { useState } from 'react'
 import { Download, Save, Table2 } from 'lucide-react'
 import DocumentEditor from '../editor/DocumentEditor'
 import SummarySheet from './SummarySheet'
-import CustomExportModal from './CustomExportModal'
+import ExportBuilderModal from '../editor/ExportBuilderModal'
+import { ExportColumn, ExportRow } from '../editor/exportBuilder'
 import { useSummaryEditorStore, calcSummary } from '../../stores/summaryEditorStore'
-import { exportSummary } from '../../api/summaryEstimate'
+import { customExport, exportSummary } from '../../api/summaryEstimate'
 import { LumaSpin } from '../ui/LumaSpin'
+import { billableQty } from '../../utils/negativeQty'
 
 interface Props {
   projectId: string
@@ -14,6 +16,20 @@ interface Props {
 
 // -1 means the «Сводная» sheet is active
 const SUMMARY_IDX = -1
+
+// Колонки выгрузки по сводной. Раздел идёт первой колонкой: в выгрузке по
+// нескольким разделам без неё непонятно, откуда строка.
+const SUMMARY_EXPORT_COLUMNS: ExportColumn[] = [
+  { key: 'section_name', label: 'Раздел', numeric: false },
+  { key: 'num', label: '№', numeric: true },
+  { key: 'name', label: 'Наименование', numeric: false },
+  { key: 'unit', label: 'Ед. изм.', numeric: false },
+  { key: 'qty', label: 'Кол-во', numeric: true },
+  { key: 'price_work', label: 'Цена работ', numeric: true },
+  { key: 'cost_work', label: 'Стоим. работ', numeric: true },
+  { key: 'price_material', label: 'Цена матер.', numeric: true },
+  { key: 'cost_material', label: 'Стоим. матер.', numeric: true },
+]
 
 const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
   const {
@@ -59,6 +75,31 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
   }
 
   const calc = calcSummary(sections, summaryOverrides)
+
+  // Строки для выгрузки собираем из всех разделов: фильтр по разделам, типу
+  // строк и столбцам живёт уже в самом окне выгрузки.
+  const exportRows: ExportRow[] = sections.flatMap((section) => section.rows
+    .filter((row) => row.type !== 'section' && !row.is_excluded)
+    .map((row, index) => {
+      const qty = billableQty(row.qty)
+      const priceWork = row.price_work ?? null
+      const priceMaterial = row.price_material ?? null
+      return {
+        _id: `${section.card_id}:${row.id}`,
+        _kind: row.type,
+        _section: section.card_id,
+        section_name: section.card_name,
+        num: index + 1,
+        name: row.name ?? '',
+        unit: row.unit ?? '',
+        qty: row.qty ?? null,
+        price_work: priceWork,
+        cost_work: priceWork != null && qty ? Math.round(qty * priceWork * 100) / 100 : null,
+        price_material: priceMaterial,
+        cost_material: priceMaterial != null && qty
+          ? Math.round(qty * priceMaterial * 100) / 100 : null,
+      }
+    }))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -203,10 +244,15 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
       </div>
 
       {showCustomExport && (
-        <CustomExportModal
-          projectId={projectId}
+        <ExportBuilderModal
+          documentTitle="Ведомость по сводной"
           projectName={projectName}
-          sections={sections}
+          columns={SUMMARY_EXPORT_COLUMNS}
+          rows={exportRows}
+          sections={sections.map((section) => ({ id: section.card_id, name: section.card_name }))}
+          onExport={(payload) => customExport(
+            projectId, payload, payload.file_name ?? 'vygruzka.xlsx',
+          )}
           onClose={() => setShowCustomExport(false)}
         />
       )}

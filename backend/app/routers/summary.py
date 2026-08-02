@@ -1,5 +1,7 @@
 """API endpoints for SummaryEstimate."""
+import asyncio
 import io
+from urllib.parse import quote
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.project import Project
+from app.schemas.document import ExportRequest
 from app.schemas.summary_estimate import (
-    CustomExportRequest,
     SummaryEstimateCreate,
     SummaryEstimateResponse,
     SummaryEstimateUpdate,
@@ -18,7 +20,8 @@ from app.schemas.summary_estimate import (
 from app.services import summary_service
 from app.utils.auth import get_current_user
 from app.utils.permissions import can_access
-from app.utils.xlsx_summary import generate_custom_export_xlsx, generate_summary_xlsx
+from app.utils.xlsx_statement import generate_statement_xlsx
+from app.utils.xlsx_summary import generate_summary_xlsx
 
 logger = structlog.get_logger()
 
@@ -98,43 +101,41 @@ async def export_summary(
 @router.post("/projects/{project_id}/summary/custom-export")
 async def custom_export_summary(
     project_id: str,
-    body: CustomExportRequest,
+    body: ExportRequest,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    await _project_or_404(project_id, db, current_user)
+    """Выгрузка-ведомость по сводной.
 
-    flat_rows: list[dict] = []
-    section_groups: list[tuple[str, list[dict]]] = []
+    Тот же генератор, что у остальных документов (Фаза 9): столбцы и строки
+    приходят из предпросмотра, шапка настраивается. У сводной есть свой фильтр
+    «Разделы» — он применяется на клиенте, сюда строки приходят уже отобранными.
+    """
+    project = await _project_or_404(project_id, db, current_user)
+    if not body.rows:
+        raise HTTPException(status_code=422, detail="Нечего выгружать: не осталось ни одной строки")
+    if not body.columns:
+        raise HTTPException(status_code=422, detail="Выберите хотя бы один столбец")
 
-    for row in body.rows:
-        flat_rows.append({
-            "section": row.section_name or "",
-            "num": row.num,
-            "name": row.name,
-            "unit": row.unit,
-            "qty": row.qty,
-            "price_work": row.price_work,
-            "cost_work": row.cost_work,
-            "price_material": row.price_material,
-            "cost_material": row.cost_material,
-        })
-
-    # Группировка для многолистового вывода
-    seen: dict[str, list[dict]] = {}
-    for r in flat_rows:
-        sec = r.get("section") or "Раздел"
-        seen.setdefault(sec, []).append(r)
-    section_groups = list(seen.items())
-
-    xlsx_bytes = generate_custom_export_xlsx(
-        rows=flat_rows,
-        visible_columns=body.visible_columns,
-        section_groups=section_groups,
+    xlsx_bytes = await asyncio.to_thread(
+        generate_statement_xlsx,
+        [column.model_dump() for column in body.columns],
+        body.rows,
+        title=body.header.title,
+        object_name=body.header.object_name,
+        project_name=body.header.project_name or project.name,
+        show_date=body.header.show_date,
+        show_total=body.header.show_total,
+        sheet_name=body.sheet_name,
     )
 
+    ascii_name = "statement.xlsx"
+    utf8_name = quote(body.file_name or f"{body.header.title or 'Выгрузка'}.xlsx", safe="")
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=export.xlsx"},
+        headers={
+            "Content-Disposition":
+                f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}",
+        },
     )

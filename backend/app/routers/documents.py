@@ -4,10 +4,14 @@
 истории и присутствия живёт в `services/document_service.py`; здесь — только
 HTTP-обвязка.
 """
+import asyncio
+import io
 from typing import Optional
+from urllib.parse import quote
 
 import structlog
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -15,6 +19,7 @@ from app.schemas.document import (
     ApplyRequest,
     ApplyResponse,
     CoefficientRequest,
+    ExportRequest,
     DocumentMeta,
     DocumentRows,
     HeartbeatResponse,
@@ -25,6 +30,7 @@ from app.schemas.document import (
 )
 from app.services import document_service as svc
 from app.utils.auth import get_current_user
+from app.utils.xlsx_statement import generate_statement_xlsx
 
 logger = structlog.get_logger()
 
@@ -100,6 +106,7 @@ async def get_document_meta(
         project=ProjectSettings(
             overhead_pct=doc.project.overhead_pct,
             transport_pct=doc.project.transport_pct,
+            name=doc.project.name or "",
         ),
     )
 
@@ -200,6 +207,58 @@ async def set_document_coefficient(
         scope = body.scope if body.scope == "all" else [str(x) for x in (body.scope or [])]
         payload = {"work": body.work, "material": body.material, "scope": scope}
     return await svc.set_coefficient(db, doc, version, payload, current_user)
+
+
+@router.post("/{card_id}/{kind}/export")
+async def export_document_statement(
+    card_id: str,
+    kind: str,
+    body: ExportRequest,
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Выгрузка-ведомость по документу.
+
+    Строки приходят из предпросмотра — там человек их правит и удаляет, — а
+    цены в них уже с коэффициентом: его применяет редактор при показе. Права
+    проверяются на чтение: выгрузка ничего не меняет, поэтому доступна и там,
+    где документ править нельзя (идёт расчёт, чужая смета у руководителя).
+    """
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    if not body.rows:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Нечего выгружать: не осталось ни одной строки",
+        )
+    if not body.columns:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Выберите хотя бы один столбец",
+        )
+
+    xlsx_bytes = await asyncio.to_thread(
+        generate_statement_xlsx,
+        [column.model_dump() for column in body.columns],
+        body.rows,
+        title=body.header.title,
+        object_name=body.header.object_name,
+        project_name=body.header.project_name or doc.project.name,
+        show_date=body.header.show_date,
+        show_total=body.header.show_total,
+        sheet_name=body.sheet_name,
+    )
+
+    ascii_name = "statement.xlsx"
+    utf8_name = quote(body.file_name or f"{body.header.title or 'Выгрузка'}.xlsx", safe="")
+    return StreamingResponse(
+        io.BytesIO(xlsx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition":
+                f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}",
+        },
+    )
 
 
 @router.get("/{card_id}/{kind}/history", response_model=list[HistoryEntryOut])

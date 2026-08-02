@@ -7,7 +7,7 @@ import DataGrid, {
 } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 import { X } from 'lucide-react';
-import { DocumentKind, DocumentRef } from '../../api/documents';
+import { DocumentKind, DocumentRef, exportDocument } from '../../api/documents';
 import { useDocumentEditorStore } from '../../stores/documentEditor';
 import { LumaSpin } from '../ui/LumaSpin';
 import { EditorColumn, GridRow } from './adapters/types';
@@ -19,6 +19,8 @@ import EditorVersionPanel, { EditorComparison } from './EditorVersionPanel';
 import OptimizationPanel from './OptimizationPanel';
 import PriceActions from './actions/PriceActions';
 import CoefficientControl from './CoefficientControl';
+import ExportBuilderModal from './ExportBuilderModal';
+import { columnsFromEditor, rowsFromEditor } from './exportBuilder';
 import './DocumentEditor.css';
 
 const HEARTBEAT_MS = 20_000;
@@ -70,6 +72,15 @@ function TextEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<G
 
 const fmtRub = (n: number) => Math.round(n).toLocaleString('ru-RU');
 
+// Название документа для шапки выгрузки, когда заголовка на экране нет.
+const KIND_TITLES: Record<DocumentKind, string> = {
+  list: 'Перечень работ',
+  completeness: 'Проверка полноты',
+  estimate: 'Смета',
+  optimization: 'Смета (оптимизация)',
+  'summary-section': 'Раздел сводной',
+};
+
 // --- Компонент -------------------------------------------------------------
 
 export const DocumentEditor: React.FC<Props> = ({
@@ -84,6 +95,7 @@ export const DocumentEditor: React.FC<Props> = ({
 
   const [fullscreen, setFullscreen] = useState(startFullscreen);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // Сравнение версий занимает место таблицы: это другой взгляд на тот же
   // документ, а не отдельная страница.
@@ -421,7 +433,24 @@ export const DocumentEditor: React.FC<Props> = ({
             onDeleteSelected={handleDeleteSelected}
             onToggleFullscreen={() => (isOverlayMode ? handleClose() : setFullscreen((v) => !v))}
             onToggleHistory={() => setHistoryOpen((v) => !v)}
+            onExport={() => setExportOpen(true)}
           />
+
+          {/* Выгрузка-ведомость: колонки и строки берутся у документа, поэтому
+              окно одно на все типы. Цены в строках уже с коэффициентом. */}
+          {exportOpen && (
+            <ExportBuilderModal
+              documentTitle={title ?? KIND_TITLES[kind] ?? 'Выгрузка'}
+              projectName={meta.project.name}
+              columns={columnsFromEditor(columns)}
+              rows={rowsFromEditor(rows, columnsFromEditor(columns), adapter.rowKind)}
+              preselectedIds={selectedKeys}
+              onExport={(payload) => exportDocument(
+                documentRef, payload, payload.file_name ?? 'export.xlsx',
+              )}
+              onClose={() => setExportOpen(false)}
+            />
+          )}
 
           {/* Коэффициент к ценам — обратимая настройка документа. В разделе
               сводной его нет: у сводной свой коэффициент в бланке, и второй,

@@ -37,6 +37,8 @@ class ProjectSettings(BaseModel):
     """Проценты доп. расходов проекта — единый источник вместо трёх хардкодов."""
     overhead_pct: Decimal
     transport_pct: Decimal
+    # Имя проекта показывается в шапке выгрузки-ведомости.
+    name: str = ""
 
 
 class DocumentMeta(BaseModel):
@@ -96,6 +98,31 @@ class CoefficientRequest(BaseModel):
     material: float = Field(default=1.0, gt=0, le=100)
     # "all" — весь документ; список — только эти строки (галочки в таблице).
     scope: Any = "all"
+
+
+class ExportColumn(BaseModel):
+    """Колонка выгрузки. Приходит от документа: у перечня свои, у сметы свои."""
+    key: str
+    label: str = ""
+    numeric: bool = False
+
+
+class ExportHeader(BaseModel):
+    """Шапка ведомости. По умолчанию включено всё (решение пользователя 3.5)."""
+    title: str = ""
+    object_name: str = ""
+    project_name: str = ""
+    show_date: bool = True
+    show_total: bool = True
+
+
+class ExportRequest(BaseModel):
+    columns: list[ExportColumn] = Field(default_factory=list)
+    # Строки приходят из предпросмотра: человек мог их поправить или удалить.
+    rows: list[dict] = Field(default_factory=list)
+    header: ExportHeader = Field(default_factory=ExportHeader)
+    sheet_name: str = "Выгрузка"
+    file_name: Optional[str] = None
 
 
 class ChangeEntry(BaseModel):
