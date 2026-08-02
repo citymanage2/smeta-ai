@@ -81,13 +81,40 @@ async def create_summary(
     return summary
 
 
+def _merge_sections(stored: list, incoming: list) -> list:
+    """Сохранить настройки разделов, но не их строки.
+
+    Строки раздела правятся только через документный API (`summary-section`,
+    план 2026-08-02, Фаза 7). Если бы страница сводной продолжала присылать свой
+    снимок строк, у строки снова стало бы два писателя — ровно та беда, из-за
+    которой смета до Фазы 5 показывала три разных числа. Поэтому из присланного
+    берём состав и настройки разделов (налог, порядок, имя), а строки —
+    из хранилища.
+    """
+    rows_by_card = {}
+    for section in stored or []:
+        if isinstance(section, dict) and section.get("card_id") is not None:
+            rows_by_card[str(section["card_id"])] = section.get("rows") or []
+
+    merged: list[dict] = []
+    for section in incoming or []:
+        if not isinstance(section, dict):
+            continue
+        card_id = section.get("card_id")
+        kept = rows_by_card.get(str(card_id)) if card_id is not None else None
+        # Раздел, которого в хранилище ещё нет (добавлен вручную), приходит со
+        # своими строками — терять их нельзя.
+        merged.append({**section, "rows": kept if kept is not None else (section.get("rows") or [])})
+    return merged
+
+
 async def update_summary(
     summary: SummaryEstimate,
     data: SummaryEstimateUpdate,
     db: AsyncSession,
 ) -> SummaryEstimate:
     if data.sections is not None:
-        summary.sections = data.sections
+        summary.sections = _merge_sections(summary.sections, data.sections)
     if data.overrides is not None:
         summary.overrides = data.overrides.model_dump(mode="json")
     if data.total_for_customer is not None:

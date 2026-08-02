@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { EstimateRow } from '../types';
 import {
   SectionTab,
   SummaryOverrides,
@@ -9,8 +8,6 @@ import {
 } from '../types/summary';
 import { getSummary, updateSummary } from '../api/summaryEstimate';
 import { billableQty } from '../utils/negativeQty';
-
-const MAX_HISTORY = 50;
 
 function rowAmount(value: number | null, qty: number | null): number {
   // billableQty: строка с отрицательным объёмом — вычет, а не работа. Считать
@@ -171,6 +168,14 @@ export function calcSummary(
   };
 }
 
+/**
+ * Состояние страницы сводной.
+ *
+ * Строк разделов этот стор больше не правит: с Фазы 7 раздел — документ
+ * (`kind='summary-section'`), и его строки пишет только «Применить» в едином
+ * редакторе. Здесь остаётся то, что принадлежит бланку: настройки, налоги
+ * разделов, итог — и перечитывание разделов после правки.
+ */
 interface SummaryEditorState {
   projectId: string | null;
   summaryId: string | null;
@@ -178,17 +183,14 @@ interface SummaryEditorState {
   summaryOverrides: SummaryOverrides;
   activeTabIndex: number;
   isDirty: boolean;
-  undoStack: EstimateRow[][];
-  redoStack: EstimateRow[][];
 
   loadSummary: (projectId: string) => Promise<void>;
-  updateSectionRows: (sectionIndex: number, rows: EstimateRow[]) => void;
+  /** Перечитать строки разделов, не трогая несохранённые настройки бланка. */
+  refreshSections: () => Promise<void>;
   updateSectionTaxPct: (sectionIndex: number, taxPct: number) => void;
   updateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => void;
   setActiveTabIndex: (index: number) => void;
   save: () => Promise<void>;
-  undo: () => void;
-  redo: () => void;
   reset: () => void;
 }
 
@@ -199,8 +201,6 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
   summaryOverrides: { ...DEFAULT_OVERRIDES },
   activeTabIndex: 0,
   isDirty: false,
-  undoStack: [],
-  redoStack: [],
 
   loadSummary: async (projectId: string) => {
     const summary = await getSummary(projectId);
@@ -240,8 +240,6 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       summaryOverrides: overrides,
       activeTabIndex: summary.sections.length > 0 ? 0 : -1,
       isDirty: false,
-      undoStack: [],
-      redoStack: [],
     });
 
     // Auto-save total on first open so project card shows the sum immediately.
@@ -255,22 +253,28 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     }
   },
 
-  updateSectionRows: (sectionIndex: number, rows: EstimateRow[]) => {
-    const { sections, activeTabIndex, undoStack } = get();
-    const previousRows = sections[sectionIndex]?.rows ?? [];
-    const newSections = sections.map((sec, i) =>
-      i === sectionIndex ? { ...sec, rows } : sec,
-    );
-    if (sectionIndex === activeTabIndex) {
-      set({
-        sections: newSections,
-        undoStack: [...undoStack.slice(-(MAX_HISTORY - 1)), previousRows],
-        redoStack: [],
-        isDirty: true,
-      });
-    } else {
-      set({ sections: newSections, isDirty: true });
-    }
+  refreshSections: async () => {
+    const { projectId, summaryOverrides, isDirty, sections: local } = get();
+    if (!projectId) return;
+    const summary = await getSummary(projectId);
+    // С сервера берём только строки. Налог раздела и настройки бланка человек
+    // мог поменять и ещё не сохранить — перечитывание не должно их стирать.
+    const merged = summary.sections.map((remote) => {
+      const mine = local.find((section) => section.card_id === remote.card_id);
+      return mine ? { ...remote, tax_pct: mine.tax_pct } : remote;
+    });
+    set({ sections: merged });
+
+    if (isDirty) return;
+    // Итог показывается на карточке проекта, а считает его только `calcSummary`.
+    // Поэтому после правки строк сохраняем пересчитанное значение сразу — иначе
+    // карточка держала бы старую сумму до следующего «Сохранить».
+    const calc = calcSummary(summary.sections, summaryOverrides);
+    await updateSummary(projectId, {
+      sections: summary.sections,
+      overrides: summaryOverrides,
+      total_for_customer: calc.total_for_customer,
+    });
   },
 
   updateSectionTaxPct: (sectionIndex: number, taxPct: number) => {
@@ -290,7 +294,7 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
   },
 
   setActiveTabIndex: (index: number) => {
-    set({ activeTabIndex: index, undoStack: [], redoStack: [] });
+    set({ activeTabIndex: index });
   },
 
   save: async () => {
@@ -305,40 +309,6 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     set({ summaryId: updated.id, isDirty: false });
   },
 
-  undo: () => {
-    const { undoStack, redoStack, sections, activeTabIndex } = get();
-    if (undoStack.length === 0) return;
-    const newUndoStack = [...undoStack];
-    const previousRows = newUndoStack.pop()!;
-    const currentRows = sections[activeTabIndex]?.rows ?? [];
-    const newSections = sections.map((sec, i) =>
-      i === activeTabIndex ? { ...sec, rows: previousRows } : sec,
-    );
-    set({
-      undoStack: newUndoStack,
-      redoStack: [currentRows, ...redoStack.slice(0, MAX_HISTORY - 1)],
-      sections: newSections,
-      isDirty: true,
-    });
-  },
-
-  redo: () => {
-    const { undoStack, redoStack, sections, activeTabIndex } = get();
-    if (redoStack.length === 0) return;
-    const newRedoStack = [...redoStack];
-    const nextRows = newRedoStack.shift()!;
-    const currentRows = sections[activeTabIndex]?.rows ?? [];
-    const newSections = sections.map((sec, i) =>
-      i === activeTabIndex ? { ...sec, rows: nextRows } : sec,
-    );
-    set({
-      undoStack: [...undoStack.slice(-(MAX_HISTORY - 1)), currentRows],
-      redoStack: newRedoStack,
-      sections: newSections,
-      isDirty: true,
-    });
-  },
-
   reset: () =>
     set({
       projectId: null,
@@ -347,7 +317,5 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       summaryOverrides: { ...DEFAULT_OVERRIDES },
       activeTabIndex: 0,
       isDirty: false,
-      undoStack: [],
-      redoStack: [],
     }),
 }));

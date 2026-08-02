@@ -119,7 +119,9 @@ async def get_document_rows(
     return DocumentRows(
         version_id=str(version.id),
         rev=version.rev or 0,
-        rows=version.rows or [],
+        # Строки берёт сервис: у раздела сводной они лежат не в версии, а
+        # снимком внутри самой сводной.
+        rows=svc.read_rows(doc, version),
         draft_rows=version.draft_rows,
     )
 

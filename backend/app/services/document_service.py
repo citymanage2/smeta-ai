@@ -22,12 +22,14 @@ from typing import Any, Optional
 import structlog
 from fastapi import HTTPException, status
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document_lock import LOCK_TTL_SECONDS, DocumentLock
 from app.models.estimate_version import EstimateVersion
 from app.models.history import TaskHistory
 from app.models.project import Project
+from app.models.summary_section_doc import SummarySectionDoc
 from app.models.task import Task
 from app.models.user import User
 from app.models.workflow_card import WorkflowCard
@@ -42,10 +44,13 @@ KIND_LIST = "list"
 KIND_COMPLETENESS = "completeness"
 KIND_ESTIMATE = "estimate"
 KIND_OPTIMIZATION = "optimization"
+# Раздел сводной. Единственный тип, который живёт не в версиях: его строки —
+# снимок внутри `summary_estimates.sections`, см. `_resolve_summary_section`.
+KIND_SUMMARY_SECTION = "summary-section"
 
-# Фаза 7 добавит сюда 'summary-section' со своим хранилищем.
 DOCUMENT_KINDS: tuple[str, ...] = (
     KIND_LIST, KIND_COMPLETENESS, KIND_ESTIMATE, KIND_OPTIMIZATION,
+    KIND_SUMMARY_SECTION,
 )
 
 _KIND_TO_CARD_FIELD = {
@@ -61,6 +66,7 @@ _KIND_TO_FILE_SLOT = {
     KIND_COMPLETENESS: "result",
     KIND_ESTIMATE: "estimate",
     KIND_OPTIMIZATION: "result",
+    KIND_SUMMARY_SECTION: "summary",
 }
 
 _KIND_TO_ROW_FORMAT = {
@@ -68,6 +74,7 @@ _KIND_TO_ROW_FORMAT = {
     KIND_COMPLETENESS: "generic",
     KIND_ESTIMATE: "estimate",
     KIND_OPTIMIZATION: "estimate",
+    KIND_SUMMARY_SECTION: "estimate",
 }
 
 _KIND_LABEL = {
@@ -75,6 +82,7 @@ _KIND_LABEL = {
     KIND_COMPLETENESS: "Полнота",
     KIND_ESTIMATE: "Смета",
     KIND_OPTIMIZATION: "Оптимизация",
+    KIND_SUMMARY_SECTION: "Раздел сводной",
 }
 
 # Типы задач, у которых сохранение строк пересобирает xlsx результата.
@@ -117,7 +125,13 @@ class ResolvedDocument:
     file_slot: str
     row_format: str
     versions: list[EstimateVersion]
-    active: Optional[EstimateVersion]
+    # Носитель черновика и `rev`: версия сметы либо — у раздела сводной —
+    # запись `SummarySectionDoc`. Строки у них берутся из разных мест, поэтому
+    # чтение и запись строк идут через `read_rows` / `_store_rows`.
+    active: Optional[Any]
+    # Только для kind='summary-section': сама сводная и место раздела в ней.
+    summary: Optional[Any] = None
+    section_index: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +141,114 @@ class ResolvedDocument:
 def _not_found() -> HTTPException:
     # Чужой документ неотличим от несуществующего — как и везде в проекте.
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
+
+
+async def _section_anchor_task(
+    db: AsyncSession, card: WorkflowCard, section: dict
+) -> Optional[Task]:
+    """Задача, к которой привязывается история правок раздела.
+
+    У раздела своей задачи нет — он снимок сметы карточки. История правок живёт
+    в `task_history` (task_id обязателен), поэтому берём задачу, из версии
+    которой раздел собран; если версии уже нет — задачу сметы карточки.
+    """
+    version_id = section.get("version_id")
+    if version_id:
+        version = await db.get(EstimateVersion, str(version_id))
+        if version is not None:
+            task = await db.get(Task, str(version.task_id))
+            if task is not None:
+                return task
+
+    for field in ("estimate_task_id", "optimization_task_id"):
+        task_id = getattr(card, field, None)
+        if task_id:
+            task = await db.get(Task, str(task_id))
+            if task is not None:
+                return task
+    return None
+
+
+async def _ensure_section_doc(
+    db: AsyncSession, summary_id: str, card_id: str
+) -> SummarySectionDoc:
+    """Запись черновика и `rev` для раздела. Создаётся при первом открытии."""
+    res = await db.execute(
+        select(SummarySectionDoc).where(
+            SummarySectionDoc.summary_id == summary_id,
+            SummarySectionDoc.card_id == card_id,
+        )
+    )
+    doc_row = res.scalar_one_or_none()
+    if doc_row is not None:
+        return doc_row
+
+    doc_row = SummarySectionDoc(
+        id=str(_uuid.uuid4()), summary_id=summary_id, card_id=card_id, rev=0,
+    )
+    db.add(doc_row)
+    await db.flush()
+    return doc_row
+
+
+async def _resolve_summary_section(
+    db: AsyncSession, card_id: str, current_user: dict
+) -> ResolvedDocument:
+    """Раздел сводной как документ.
+
+    Хранилище у него своё: строки лежат снимком в `summary_estimates.sections`,
+    а не в версии. Право на правку даёт проект — сводная принадлежит проекту, а
+    не задаче, и не запирается на время расчёта сметы: раздел это снимок.
+    """
+    from app.models.summary_estimate import SummaryEstimate
+
+    card = await db.get(WorkflowCard, card_id)
+    if card is None or card.deleted_at is not None:
+        raise _not_found()
+
+    project = await db.get(Project, str(card.project_id))
+    if project is None or not can_edit(project.owner_id, current_user, project.is_shared):
+        raise _not_found()
+
+    res = await db.execute(
+        select(SummaryEstimate).where(SummaryEstimate.project_id == str(card.project_id))
+    )
+    summary = res.scalar_one_or_none()
+    if summary is None:
+        raise _not_found()
+
+    sections = list(summary.sections or [])
+    index = next(
+        (
+            i for i, section in enumerate(sections)
+            if isinstance(section, dict) and str(section.get("card_id")) == str(card_id)
+        ),
+        None,
+    )
+    if index is None:
+        raise _not_found()
+
+    task = await _section_anchor_task(db, card, sections[index])
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Раздел сводной не привязан к смете",
+        )
+
+    doc_row = await _ensure_section_doc(db, str(summary.id), str(card_id))
+
+    return ResolvedDocument(
+        card=card,
+        kind=KIND_SUMMARY_SECTION,
+        task=task,
+        project=project,
+        file_slot=_KIND_TO_FILE_SLOT[KIND_SUMMARY_SECTION],
+        row_format=_KIND_TO_ROW_FORMAT[KIND_SUMMARY_SECTION],
+        versions=[],
+        active=doc_row,
+        summary=summary,
+        section_index=index,
+    )
 
 
 async def resolve_document(
@@ -139,6 +261,15 @@ async def resolve_document(
 ) -> ResolvedDocument:
     if kind not in DOCUMENT_KINDS:
         raise _not_found()
+
+    if kind == KIND_SUMMARY_SECTION:
+        try:
+            return await _resolve_summary_section(db, card_id, current_user)
+        except IntegrityError:
+            # Двое открыли раздел одновременно и оба создали запись черновика:
+            # чужая уже в базе — перечитываем документ целиком.
+            await db.rollback()
+            return await _resolve_summary_section(db, card_id, current_user)
 
     card = await db.get(WorkflowCard, card_id)
     if card is None or card.deleted_at is not None:
@@ -229,6 +360,9 @@ async def ensure_versions(
     открывался одинаково из любой точки входа. Идемпотентно: при существующих
     версиях ничего не делает.
     """
+    # У раздела сводной версий нет — есть готовый снимок строк внутри сводной.
+    if doc.kind == KIND_SUMMARY_SECTION:
+        return doc
     if doc.versions or doc.task.status != "completed":
         return doc
 
@@ -329,6 +463,12 @@ async def ensure_versions(
 
 def write_state(doc: ResolvedDocument, current_user: dict) -> tuple[bool, Optional[str]]:
     """Можно ли писать в документ и почему нет. Решает сервер, не клиент."""
+    if doc.kind == KIND_SUMMARY_SECTION:
+        # Раздел принадлежит проекту, а не задаче: право даёт проект, и идущий
+        # пересчёт сметы раздел не запирает — он снимок и от расчёта не зависит.
+        if not can_edit(doc.project.owner_id, current_user, doc.project.is_shared):
+            return False, "no_permission"
+        return True, None
     if doc.file_slot == "input":
         return False, "input_readonly"
     if not can_edit(doc.task.owner_id, current_user, doc.task.is_shared):
@@ -357,7 +497,13 @@ def ensure_writable(doc: ResolvedDocument, current_user: dict) -> None:
     )
 
 
-def pick_version(doc: ResolvedDocument, version_id: Optional[str]) -> EstimateVersion:
+def pick_version(doc: ResolvedDocument, version_id: Optional[str]) -> Any:
+    if doc.kind == KIND_SUMMARY_SECTION:
+        # Версий у раздела нет: носитель черновика и `rev` всегда один.
+        if doc.active is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Раздел сводной не найден")
+        return doc.active
     if version_id:
         for v in doc.versions:
             if str(v.id) == str(version_id):
@@ -369,6 +515,49 @@ def pick_version(doc: ResolvedDocument, version_id: Optional[str]) -> EstimateVe
             detail="Для документа ещё нет данных. Дождитесь завершения задачи.",
         )
     return doc.active
+
+
+def read_rows(doc: ResolvedDocument, version: Any) -> list:
+    """Рабочие строки документа.
+
+    У всех типов, кроме раздела сводной, они лежат в версии; у раздела —
+    снимком внутри сводной. Второго хранилища ни у кого нет.
+    """
+    if doc.kind == KIND_SUMMARY_SECTION:
+        sections = list(doc.summary.sections or [])
+        if doc.section_index is None or doc.section_index >= len(sections):
+            return []
+        section = sections[doc.section_index]
+        return list(section.get("rows") or []) if isinstance(section, dict) else []
+    return list(version.rows or [])
+
+
+def _store_rows(doc: ResolvedDocument, version: Any, rows: list) -> None:
+    if doc.kind != KIND_SUMMARY_SECTION:
+        version.rows = rows
+        return
+
+    sections = list(doc.summary.sections or [])
+    section = sections[doc.section_index]
+    # Список пересобираем целиком: правка JSON «на месте» SQLAlchemy не замечает
+    # и запись молча не доехала бы до базы.
+    sections[doc.section_index] = {**section, "rows": rows}
+    doc.summary.sections = sections
+    doc.summary.updated_at = datetime.now(timezone.utc)
+
+
+async def _claim_rev(
+    db: AsyncSession, doc: ResolvedDocument, version_id: str, client_rev: int
+) -> int:
+    """Атомарная заявка на запись: `UPDATE ... WHERE rev = client_rev`."""
+    model = SummarySectionDoc if doc.kind == KIND_SUMMARY_SECTION else EstimateVersion
+    claim = await db.execute(
+        update(model)
+        .where(model.id == version_id, model.rev == client_rev)
+        .values(rev=client_rev + 1)
+        .execution_options(synchronize_session=False)
+    )
+    return claim.rowcount
 
 
 async def user_display_name(db: AsyncSession, current_user: dict) -> str:
@@ -387,7 +576,7 @@ async def user_display_name(db: AsyncSession, current_user: dict) -> str:
 async def save_draft(
     db: AsyncSession,
     doc: ResolvedDocument,
-    version: EstimateVersion,
+    version: Any,
     rows: list,
     current_user: dict,
 ) -> None:
@@ -398,7 +587,7 @@ async def save_draft(
     await db.commit()
 
 
-async def discard_draft(db: AsyncSession, version: EstimateVersion) -> None:
+async def discard_draft(db: AsyncSession, version: Any) -> None:
     version.draft_rows = None
     version.draft_updated_at = None
     version.draft_user_id = None
@@ -576,7 +765,7 @@ async def _trim_history(db: AsyncSession, task_id: str, kind: str) -> None:
 async def apply_rows(
     db: AsyncSession,
     doc: ResolvedDocument,
-    version: EstimateVersion,
+    version: Any,
     rows: Optional[list],
     client_rev: int,
     current_user: dict,
@@ -592,11 +781,12 @@ async def apply_rows(
     if client_rev != version.rev:
         raise await _stale_rev_error(db, task_id, kind)
 
+    old_rows = read_rows(doc, version)
+
     new_rows = rows if rows is not None else version.draft_rows
     if new_rows is None:
-        new_rows = version.rows or []
+        new_rows = old_rows
 
-    old_rows = list(version.rows or [])
     changes = diff_rows(old_rows, new_rows, doc.row_format)
 
     if not changes:
@@ -613,23 +803,20 @@ async def apply_rows(
     # с одним rev в параллельных запросах прошли бы оба, и второй тихо затёр бы
     # первого. UPDATE ... WHERE rev = client_rev закрывает окно на уровне БД —
     # совпадение получит ровно один запрос.
-    claim = await db.execute(
-        update(EstimateVersion)
-        .where(EstimateVersion.id == version_id, EstimateVersion.rev == client_rev)
-        .values(rev=client_rev + 1)
-        .execution_options(synchronize_session=False)
-    )
-    if claim.rowcount == 0:
+    if await _claim_rev(db, doc, version_id, client_rev) == 0:
         await db.rollback()
         raise await _stale_rev_error(db, task_id, kind)
 
-    version.rows = new_rows
+    _store_rows(doc, version, new_rows)
     version.rev = client_rev + 1
     await discard_draft(db, version)
 
     await _rebuild_result_xlsx(db, doc, new_rows)
     await _sync_estimate_artifacts(db, doc, new_rows)
-    doc.task.manually_edited_at = datetime.now(timezone.utc)
+    if doc.kind != KIND_SUMMARY_SECTION:
+        # Раздел сводной — снимок: правка в нём не означает, что руками правили
+        # саму смету задачи.
+        doc.task.manually_edited_at = datetime.now(timezone.utc)
 
     label = _KIND_LABEL.get(doc.kind, doc.kind)
     db.add(TaskHistory(
@@ -725,7 +912,7 @@ async def list_history(db: AsyncSession, doc: ResolvedDocument) -> list[dict]:
 async def revert_to_entry(
     db: AsyncSession,
     doc: ResolvedDocument,
-    version: EstimateVersion,
+    version: Any,
     entry_id: str,
     current_user: dict,
 ) -> dict:

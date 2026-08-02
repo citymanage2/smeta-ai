@@ -119,6 +119,26 @@ describe('панель цен доступна только смете', () => {
     expect(screen.queryByText(/Исправить пустые цены/)).not.toBeInTheDocument();
   });
 
+  it('в разделе сводной кнопок нет', async () => {
+    // Раздел — снимок сметы: обе кнопки пишут смету задачи и до раздела не
+    // дошли бы, зато молча изменили бы исходную смету (Фаза 7).
+    vi.mocked(api.getDocumentMeta).mockResolvedValue(meta({
+      kind: 'summary-section', file_slot: 'summary',
+    }));
+    vi.mocked(api.getDocumentRows).mockResolvedValue({
+      version_id: 'sec-1', rev: 0, rows: ESTIMATE_ROWS, draft_rows: null,
+    });
+    render(<DocumentEditor cardId="card-1" kind="summary-section" />);
+
+    await waitFor(() => expect(screen.getByText('Строк: 4')).toBeInTheDocument());
+    expect(screen.queryByText(/Исправить пустые цены/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Цена/ })).not.toBeInTheDocument();
+    // Доп. расходы раздела считает бланк «Сводная» по своим ставкам: показывать
+    // рядом проценты проекта значило бы дать второе число за то же самое.
+    expect(screen.queryByText(/Накладные расходы/)).not.toBeInTheDocument();
+    expect(screen.getByText('ИТОГО по разделу:')).toBeInTheDocument();
+  });
+
   it('в режиме просмотра кнопок нет', async () => {
     mockEstimate({ can_write: false, readonly_reason: 'task_processing' });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);

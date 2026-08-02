@@ -2,7 +2,10 @@ import apiClient from './client';
 
 // Документ = (карточка сметы, тип документа). Один контракт на все типы;
 // чем типы отличаются — описывает row_format и набор разрешённых действий.
-export type DocumentKind = 'list' | 'completeness' | 'estimate' | 'optimization';
+export type DocumentKind =
+  | 'list' | 'completeness' | 'estimate' | 'optimization'
+  // Раздел сводной: строки лежат снимком внутри сводной, версий у него нет.
+  | 'summary-section';
 export type RowFormat = 'generic' | 'estimate';
 export type ReadonlyReason = 'no_permission' | 'task_processing' | 'input_readonly';
 

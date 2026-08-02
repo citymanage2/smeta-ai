@@ -1,19 +1,16 @@
 import React, { useState } from 'react'
 import { Download, Save, Table2 } from 'lucide-react'
-import EstimateGrid from '../estimate/EstimateGrid'
+import DocumentEditor from '../editor/DocumentEditor'
 import SummarySheet from './SummarySheet'
 import CustomExportModal from './CustomExportModal'
 import { useSummaryEditorStore, calcSummary } from '../../stores/summaryEditorStore'
 import { exportSummary } from '../../api/summaryEstimate'
-import { EstimateRow } from '../../types'
 import { LumaSpin } from '../ui/LumaSpin'
 
 interface Props {
   projectId: string
   projectName?: string
 }
-
-type GridTabState = 'all' | 'works' | 'materials'
 
 // -1 means the «Сводная» sheet is active
 const SUMMARY_IDX = -1
@@ -24,28 +21,17 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
     summaryOverrides,
     activeTabIndex,
     isDirty,
-    undoStack,
-    redoStack,
     setActiveTabIndex,
-    updateSectionRows,
+    refreshSections,
     updateSectionTaxPct,
     updateOverride,
     save,
-    undo,
-    redo,
   } = useSummaryEditorStore()
 
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [showCustomExport, setShowCustomExport] = useState(false)
-
-  const [gridTabs, setGridTabs] = useState<GridTabState[]>(() =>
-    sections.map(() => 'all' as GridTabState),
-  )
-  const [selectedRowIds, setSelectedRowIds] = useState<ReadonlySet<string>[]>(() =>
-    sections.map(() => new Set<string>()),
-  )
 
   const isSummaryActive = activeTabIndex === SUMMARY_IDX
 
@@ -200,23 +186,16 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
             const idx = activeTabIndex >= 0 && activeTabIndex < sections.length ? activeTabIndex : 0
             const sec = sections[idx]
             return (
-              <EstimateGrid
+              // Раздел — обычный документ единого редактора: черновик,
+              // «Применить», история с автором, откат, буфер обмена, поиск.
+              // Строки живут в сводной, поэтому после «Применить» перечитываем
+              // разделы — иначе бланк считал бы по старым строкам.
+              <DocumentEditor
                 key={sec.card_id}
-                rows={sec.rows ?? []}
-                selectedRowIds={selectedRowIds[idx] ?? new Set()}
-                activeTab={gridTabs[idx] ?? 'all'}
-                canUndo={undoStack.length > 0}
-                canRedo={redoStack.length > 0}
-                onRowsChange={(rows: EstimateRow[]) => updateSectionRows(idx, rows)}
-                onSelectedRowIdsChange={(ids) => setSelectedRowIds((prev) => {
-                  const next = [...prev]; next[idx] = ids; return next
-                })}
-                onTabChange={(tab) => setGridTabs((prev) => {
-                  const next = [...prev]; next[idx] = tab; return next
-                })}
-                onSave={handleSave}
-                onUndo={undo}
-                onRedo={redo}
+                cardId={sec.card_id}
+                kind="summary-section"
+                title={sec.card_name}
+                onApplied={() => { void refreshSections() }}
               />
             )
           })()

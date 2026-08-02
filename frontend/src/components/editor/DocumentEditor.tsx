@@ -98,6 +98,9 @@ export const DocumentEditor: React.FC<Props> = ({
 
   // Открыт как окно поверх экрана: сворачивать некуда, «свернуть» = «закрыть».
   const isOverlayMode = startFullscreen;
+  // Раздел сводной: тот же формат строк, что смета, но доп. расходы и итог
+  // считает бланк «Сводная» по своим ставкам.
+  const isSummarySection = kind === 'summary-section';
 
   useEffect(() => {
     load(documentRef);
@@ -409,8 +412,11 @@ export const DocumentEditor: React.FC<Props> = ({
             onToggleHistory={() => setHistoryOpen((v) => !v)}
           />
 
-          {/* Цены ищет ИИ — действие есть только там, где у строки есть цена. */}
-          {canWrite && meta.row_format === 'estimate' && meta.task_id && (
+          {/* Цены ищет ИИ — действие есть только в смете и оптимизации. Раздел
+              сводной формально того же формата, но он снимок: оба действия
+              пишут смету задачи и правку раздела бы не увидели, зато молча
+              изменили бы исходную смету. */}
+          {canWrite && (kind === 'estimate' || kind === 'optimization') && meta.task_id && (
             <PriceActions
               taskId={meta.task_id}
               rows={rows}
@@ -424,19 +430,31 @@ export const DocumentEditor: React.FC<Props> = ({
 
           {totals && (
             <div className="de-totals">
-              <div className="de-totals-grid">
-                <span>Сумма по работам:</span>
-                <b>{fmtRub(totals.sumWork)} ₽</b>
-                <span>Накладные расходы {meta.project.overhead_pct}%:</span>
-                <b>{fmtRub(totals.overhead)} ₽</b>
-                <span>Сумма по материалам:</span>
-                <b>{fmtRub(totals.sumMat)} ₽</b>
-                <span>Транспортные расходы {meta.project.transport_pct}%:</span>
-                <b>{fmtRub(totals.transport)} ₽</b>
-              </div>
+              {/* У раздела сводной доп. расходы считает бланк «Сводная» — по
+                  своим ставкам, а не по процентам проекта. Показать их здесь
+                  значило бы поставить рядом два разных числа за одно и то же. */}
+              {isSummarySection ? (
+                <div className="de-totals-grid">
+                  <span>Сумма по работам:</span>
+                  <b>{fmtRub(totals.sumWork)} ₽</b>
+                  <span>Сумма по материалам:</span>
+                  <b>{fmtRub(totals.sumMat)} ₽</b>
+                </div>
+              ) : (
+                <div className="de-totals-grid">
+                  <span>Сумма по работам:</span>
+                  <b>{fmtRub(totals.sumWork)} ₽</b>
+                  <span>Накладные расходы {meta.project.overhead_pct}%:</span>
+                  <b>{fmtRub(totals.overhead)} ₽</b>
+                  <span>Сумма по материалам:</span>
+                  <b>{fmtRub(totals.sumMat)} ₽</b>
+                  <span>Транспортные расходы {meta.project.transport_pct}%:</span>
+                  <b>{fmtRub(totals.transport)} ₽</b>
+                </div>
+              )}
               <div className="de-totals-grand">
-                <span>ИТОГО:</span>
-                <b>{fmtRub(totals.grand)} ₽</b>
+                <span>{isSummarySection ? 'ИТОГО по разделу:' : 'ИТОГО:'}</span>
+                <b>{fmtRub(isSummarySection ? totals.sumWork + totals.sumMat : totals.grand)} ₽</b>
               </div>
             </div>
           )}
