@@ -556,21 +556,22 @@ const EstimateOptimizer: React.FC = () => {
             />
           )}
 
-          {!embed && (
-            <VersionTabs
-              taskId={taskId}
-              versions={visibleVersions}
-              activeVersionId={activeVersionId}
-              activeView={activeView}
-              isOptimizationRunning={isReadonly}
-              onSelectVersion={(id) => {
-                setActiveView('version');
-                setActiveVersion(id);
-              }}
-              onSelectComparison={() => setActiveView('comparison')}
-              onVersionsChange={handleVersionsChange}
-            />
-          )}
+          {/* Вкладки версий видны всегда (решение пользователя 11). Раньше они
+              прятались при встроенном открытии, и человек правил не ту версию,
+              не зная, что версий несколько. */}
+          <VersionTabs
+            taskId={taskId}
+            versions={visibleVersions}
+            activeVersionId={activeVersionId}
+            activeView={activeView}
+            isOptimizationRunning={isReadonly}
+            onSelectVersion={(id) => {
+              setActiveView('version');
+              setActiveVersion(id);
+            }}
+            onSelectComparison={() => setActiveView('comparison')}
+            onVersionsChange={handleVersionsChange}
+          />
 
           {activeView === 'comparison' && (
             <div style={{

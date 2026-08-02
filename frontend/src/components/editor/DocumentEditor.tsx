@@ -15,6 +15,8 @@ import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clip
 import EditorToolbar from './EditorToolbar';
 import EditorHistoryPanel from './EditorHistoryPanel';
 import { ConflictBanner, PresenceBanner, ReadonlyBanner } from './PresenceBanner';
+import EditorVersionPanel, { EditorComparison } from './EditorVersionPanel';
+import OptimizationPanel from './OptimizationPanel';
 import PriceActions from './actions/PriceActions';
 import './DocumentEditor.css';
 
@@ -73,15 +75,18 @@ export const DocumentEditor: React.FC<Props> = ({
   cardId, kind, fileSlot, fileIndex, title, startFullscreen = false, onClose, onApplied,
 }) => {
   const {
-    meta, adapter, columns, rows, loading, error, conflict, applying, draftState,
+    meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
     isDirty, selectedKeys, tab, search, lock, undoStack, redoStack,
-    load, setRows, applyChanges, discardChanges, undo, redo,
+    load, setRows, applyChanges, discardChanges, undo, redo, selectVersion,
     setTab, setSearch, setSelected, heartbeat, reset,
   } = useDocumentEditorStore();
 
   const [fullscreen, setFullscreen] = useState(startFullscreen);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Сравнение версий занимает место таблицы: это другой взгляд на тот же
+  // документ, а не отдельная страница.
+  const [comparing, setComparing] = useState(false);
   // Якорь вставки держим ключом строки, а не её номером: номер «уезжает» при
   // смене вкладки, поиске или удалении строк, и вставка попала бы не туда.
   const anchorRef = useRef<{ rowKey: string; columnKey: string } | null>(null);
@@ -350,6 +355,31 @@ export const DocumentEditor: React.FC<Props> = ({
           {meta.readonly_reason && <ReadonlyBanner reason={meta.readonly_reason} />}
           {lock && <PresenceBanner lock={lock} />}
 
+          {/* Шаги оптимизации и предложения ИИ — рядом с таблицей, а не на
+              отдельной странице. */}
+          {kind === 'optimization' && canWrite && (
+            <OptimizationPanel
+              meta={meta}
+              onVersionCreated={(id) => {
+                setComparing(false);
+                load({ ...documentRef, versionId: id });
+              }}
+            />
+          )}
+
+          {/* Вкладки версий — при любом способе открытия: встроенном и на весь
+              экран. Раньше во встроенном виде они прятались, и человек правил
+              не ту версию, не зная, что версий несколько. */}
+          <EditorVersionPanel
+            meta={meta}
+            versionId={versionId}
+            comparing={comparing}
+            isDirty={isDirty}
+            onSelectVersion={selectVersion}
+            onToggleComparison={setComparing}
+            onVersionsChange={() => load({ ...documentRef, versionId: versionId ?? undefined })}
+          />
+
           <EditorToolbar
             rowCount={displayedRows.length}
             totalCount={rows.length}
@@ -413,7 +443,9 @@ export const DocumentEditor: React.FC<Props> = ({
 
           {notice && <div className="de-notice">{notice}</div>}
 
-          <div className="de-content">
+          {comparing && <EditorComparison meta={meta} />}
+
+          <div className="de-content" hidden={comparing}>
             <div
               className="de-grid-wrap"
               onCopy={handleCopy}

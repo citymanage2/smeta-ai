@@ -16,11 +16,10 @@ import DocumentEditor from '../components/editor/DocumentEditor'
 import { WorkflowCard, KanbanStage } from '../types/workflow'
 import { DocumentKind } from '../api/documents'
 
-// Этапы карточки и типы документов названы одинаково — отдельного отображения
-// не нужно, но список типов, уже переехавших в единый редактор, пока короче:
-// оптимизация подключается в Фазе 6.
+// Этапы карточки и типы документов названы одинаково, и все четыре открываются
+// одним редактором — отдельного отображения не нужно.
 const EMBEDDED_EDITOR_STAGES: ReadonlySet<KanbanStage> = new Set<KanbanStage>([
-  'list', 'completeness', 'estimate',
+  'list', 'completeness', 'estimate', 'optimization',
 ])
 
 const STAGE_TITLE: Record<string, string> = {

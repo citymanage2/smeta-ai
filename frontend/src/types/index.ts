@@ -15,13 +15,14 @@ export const GENERIC_EDITOR_TASK_TYPES: Set<TaskType> = new Set([
 ]);
 
 /**
- * Типы, уже переехавшие в единый редактор. Отличается от списка выше:
- * смета — не плоский документ, но открывается тем же редактором (Фаза 5).
- * Оптимизация присоединится в Фазе 6.
+ * Типы, переехавшие в единый редактор. Отличается от списка выше: смета и
+ * оптимизация — не плоские документы, но открываются тем же редактором
+ * (Фазы 5 и 6). Плоскими остаются только перечень и полнота.
  */
 export const UNIFIED_EDITOR_TASK_TYPES: Set<TaskType> = new Set([
   ...GENERIC_EDITOR_TASK_TYPES,
   'ESTIMATE_FROM_LIST',
+  'ESTIMATE_OPTIMIZATION',
 ]);
 
 export interface GenericRow {

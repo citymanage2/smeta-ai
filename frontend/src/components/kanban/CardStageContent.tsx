@@ -14,7 +14,6 @@ import {
   getCardFilesMeta,
 } from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
-import { EstimateEditorModal } from '../card/EstimateEditorModal'
 import DocumentEditor from '../editor/DocumentEditor'
 import { LumaSpin } from '../ui/LumaSpin'
 import { ProgressCounter } from './ProgressCounter'
@@ -1369,33 +1368,19 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
         }
       })()}
 
-      {editorModal && (
-        // Перечень, полнота и смета — единый редактор. Оптимизация переезжает
-        // на него в Фазе 6; до тех пор открывается прежним путём.
-        editorModal.taskType && UNIFIED_EDITOR_TASK_TYPES.has(editorModal.taskType)
-          ? (
-            <DocumentEditor
-              cardId={card.id}
-              kind={kindFromTaskType(editorModal.taskType)!}
-              fileSlot={editorModal.fileSlot === 'input' ? 'input' : undefined}
-              fileIndex={editorModal.fileSlot === 'input' ? editorModal.fileIndex : undefined}
-              title={editorModal.title}
-              startFullscreen
-              onClose={() => setEditorModal(null)}
-              onApplied={fetchMeta}
-            />
-          )
-          : (
-            <EstimateEditorModal
-              taskId={editorModal.taskId}
-              title={editorModal.title}
-              fileSlot={editorModal.fileSlot}
-              fileIndex={editorModal.fileIndex}
-              readOnly={editorModal.readOnly}
-              onClose={() => setEditorModal(null)}
-              onSaved={fetchMeta}
-            />
-          )
+      {/* Все четыре типа документа открываются одним редактором. Прежний путь
+          через iframe удалён вместе с Фазой 6. */}
+      {editorModal?.taskType && UNIFIED_EDITOR_TASK_TYPES.has(editorModal.taskType) && (
+        <DocumentEditor
+          cardId={card.id}
+          kind={kindFromTaskType(editorModal.taskType)!}
+          fileSlot={editorModal.fileSlot === 'input' ? 'input' : undefined}
+          fileIndex={editorModal.fileSlot === 'input' ? editorModal.fileIndex : undefined}
+          title={editorModal.title}
+          startFullscreen
+          onClose={() => setEditorModal(null)}
+          onApplied={fetchMeta}
+        />
       )}
     </>
   )

@@ -32,6 +32,13 @@ vi.mock('../api/tasks', () => ({
   restartTask: vi.fn(),
 }));
 
+// Страница сначала спрашивает, есть ли у задачи карточка сметы: если есть —
+// уходит на неё. Без мока тест ждал реального отказа сети, и под нагрузкой
+// разметка не успевала появиться.
+vi.mock('../api/documents', () => ({
+  locateDocumentByTask: vi.fn().mockRejectedValue(new Error('нет карточки')),
+}));
+
 vi.mock('../api/projects', () => ({
   listProjects: vi.fn().mockResolvedValue([]),
   linkTaskToProject: vi.fn(),

@@ -32,6 +32,12 @@ export type EditorTab = 'all' | 'works' | 'materials';
 interface DocumentEditorState {
   ref: DocumentRef | null;
   meta: DocumentMeta | null;
+  /**
+   * Версия, открытая прямо сейчас. Отличается от `meta.active_version_id`,
+   * когда человек переключился на другую вкладку версии: черновик, «Применить»
+   * и `rev` относятся к выбранной версии, а не к активной по умолчанию.
+   */
+  versionId: string | null;
   adapter: EditorAdapter;
   columns: EditorColumn[];
   rows: GridRow[];
@@ -52,6 +58,7 @@ interface DocumentEditorState {
   redoStack: GridRow[][];
 
   load: (ref: DocumentRef) => Promise<void>;
+  selectVersion: (versionId: string) => Promise<void>;
   setRows: (rows: GridRow[], options?: { skipHistory?: boolean }) => void;
   applyChanges: () => Promise<boolean>;
   discardChanges: () => Promise<void>;
@@ -79,12 +86,13 @@ function adapterFor(meta: DocumentMeta | null): EditorAdapter {
 
 const EMPTY: Pick<
   DocumentEditorState,
-  'ref' | 'meta' | 'columns' | 'rows' | 'baseline' | 'loading' | 'error' | 'conflict'
+  'ref' | 'meta' | 'versionId' | 'columns' | 'rows' | 'baseline' | 'loading' | 'error' | 'conflict'
   | 'applying' | 'draftState' | 'isDirty' | 'selectedKeys' | 'tab' | 'search'
   | 'lock' | 'undoStack' | 'redoStack'
 > = {
   ref: null,
   meta: null,
+  versionId: null,
   columns: [],
   rows: [],
   baseline: [],
@@ -122,6 +130,7 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
 
       set({
         meta: { ...meta, rev: data.rev },
+        versionId: data.version_id,
         adapter,
         columns: adapter.columns(rows),
         rows,
@@ -152,8 +161,8 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
       redoStack: options?.skipHistory ? get().redoStack : [],
     });
 
-    if (!ref || !meta?.active_version_id || !meta.can_write) return;
-    const versionId = meta.active_version_id;
+    const versionId = get().versionId;
+    if (!ref || !versionId || !meta?.can_write) return;
 
     cancelDraftTimer();
     set({ draftState: 'saving' });
@@ -166,13 +175,13 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
   },
 
   applyChanges: async () => {
-    const { ref, meta, rows, adapter } = get();
-    if (!ref || !meta?.active_version_id) return false;
+    const { ref, meta, rows, adapter, versionId } = get();
+    if (!ref || !meta || !versionId) return false;
     cancelDraftTimer();
     set({ applying: true, conflict: '' });
     try {
       const result = await applyDocument(
-        ref, meta.active_version_id, meta.rev, adapter.fromGrid(rows),
+        ref, versionId, meta.rev, adapter.fromGrid(rows),
       );
       set({
         meta: { ...meta, rev: result.rev, has_draft: false },
@@ -196,12 +205,12 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
   },
 
   discardChanges: async () => {
-    const { ref, meta, baseline } = get();
+    const { ref, meta, baseline, versionId } = get();
     cancelDraftTimer();
     set({ rows: baseline, isDirty: false, draftState: 'idle', undoStack: [], redoStack: [] });
-    if (ref && meta?.active_version_id && meta.can_write) {
+    if (ref && versionId && meta?.can_write) {
       try {
-        await apiDiscardDraft(ref, meta.active_version_id);
+        await apiDiscardDraft(ref, versionId);
       } catch {
         // Черновик на сервере переживёт — на следующем «Применить» его заменит
         // актуальное состояние; молчим, чтобы не пугать пользователя.
@@ -223,6 +232,12 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
     const next = redoStack[redoStack.length - 1];
     set({ redoStack: redoStack.slice(0, -1), undoStack: [...undoStack, rows] });
     get().setRows(next, { skipHistory: true });
+  },
+
+  selectVersion: async (versionId: string) => {
+    const { ref } = get();
+    if (!ref) return;
+    await get().load({ ...ref, versionId });
   },
 
   setTab: (tab) => set({ tab }),

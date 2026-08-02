@@ -23,6 +23,12 @@ export interface VersionBrief {
   version_display_name: string;
   is_rolled_back: boolean;
   created_at: string;
+  // Проценты доп. расходов у каждой версии свои — сравнение версий считает
+  // итоги по ним, а не по общей ставке проекта.
+  overhead_pct: number;
+  transport_pct: number;
+  contingency_pct: number;
+  expenses_overridden: boolean;
 }
 
 export interface LockInfo {

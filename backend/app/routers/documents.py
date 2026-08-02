@@ -82,6 +82,10 @@ async def get_document_meta(
                 version_display_name=v.version_display_name,
                 is_rolled_back=v.is_rolled_back,
                 created_at=v.created_at.isoformat(),
+                overhead_pct=float(v.overhead_pct or 0),
+                transport_pct=float(v.transport_pct or 0),
+                contingency_pct=float(v.contingency_pct or 0),
+                expenses_overridden=bool(v.expenses_overridden),
             )
             for v in doc.versions
         ],

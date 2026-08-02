@@ -117,6 +117,67 @@ async def doc_env(db_session, fake_s3):
     await db_session.commit()
 
 
+@pytest.mark.asyncio
+async def test_optimization_document_opens_with_its_versions(
+    async_client, db_session, doc_env
+):
+    """Оптимизация открывается тем же API, что перечень и смета (Фаза 6).
+
+    У неё несколько версий — по одной на шаг, — и все они должны приходить
+    клиенту: вкладки версий строятся из этого списка.
+    """
+    task = Task(
+        owner_id=doc_env["pm1"], user_role="project_manager",
+        task_type="ESTIMATE_OPTIMIZATION", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+        project_id=doc_env["project_id"],
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    card = await db_session.get(WorkflowCard, doc_env["card_id"])
+    card.optimization_task_id = str(task.id)
+
+    rows = [{"id": "r1", "lineage_id": "r1", "type": "work", "name": "Кладка",
+             "unit": "м3", "qty": 4, "price_work": 1000, "price_material": None}]
+    for number, label in ((0, "original"), (1, "completeness_checked")):
+        db_session.add(EstimateVersion(
+            task_id=str(task.id), version_number=number, version_label=label,
+            version_display_name=f"V{number}", rows=rows,
+            file_slot="result", task_type="ESTIMATE_OPTIMIZATION",
+        ))
+    await db_session.commit()
+
+    meta = await async_client.get(
+        f"/documents/{doc_env['card_id']}/optimization", headers=_pm1(doc_env))
+    assert meta.status_code == 200, meta.text
+    body = meta.json()
+    assert body["row_format"] == "estimate"
+    assert body["can_write"] is True
+    assert len(body["versions"]) == 2
+
+    # Строки конкретной версии — по её идентификатору, а не «активной».
+    second = body["versions"][1]["id"]
+    rows_resp = await async_client.get(
+        f"/documents/{doc_env['card_id']}/optimization/rows",
+        params={"version_id": second}, headers=_pm1(doc_env))
+    assert rows_resp.status_code == 200
+    assert rows_resp.json()["version_id"] == second
+
+
+@pytest.mark.asyncio
+async def test_meta_versions_carry_expense_percentages(async_client, doc_env):
+    """Сравнение версий считает итоги по процентам самой версии, а не общим."""
+    r = await async_client.get(
+        f"/documents/{doc_env['card_id']}/list", headers=_pm1(doc_env))
+
+    assert r.status_code == 200
+    version = r.json()["versions"][0]
+    for field in ("overhead_pct", "transport_pct", "contingency_pct"):
+        assert field in version
+    assert version["expenses_overridden"] is False
+
+
 def _pm1(env):
     return _auth(env["pm1"], "project_manager", "pm1")
 

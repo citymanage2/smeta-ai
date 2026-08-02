@@ -19,6 +19,12 @@ class VersionBrief(BaseModel):
     version_display_name: str
     is_rolled_back: bool
     created_at: str
+    # Проценты доп. расходов у каждой версии свои: сравнение версий без них
+    # посчитало бы разные версии по одной ставке и показало неверную выгоду.
+    overhead_pct: float = 0.0
+    transport_pct: float = 0.0
+    contingency_pct: float = 0.0
+    expenses_overridden: bool = False
 
 
 class LockInfo(BaseModel):
