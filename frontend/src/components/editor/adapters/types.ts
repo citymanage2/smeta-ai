@@ -38,15 +38,24 @@ export interface Percentages {
 }
 
 /**
+ * Настройки документа, которые влияют на показ строк. Пока это только
+ * коэффициент к ценам: в таблице цены показываются уже с ним, а в документ
+ * уходят исходные (решение пользователя, Фаза 8).
+ */
+export interface AdapterContext {
+  coefficient?: unknown;
+}
+
+/**
  * Что отличается между типами документов. Оболочка редактора одна, разный
  * функционал живёт здесь: набор колонок, правила пересчёта, итоги, тип строки.
  */
 export interface EditorAdapter {
   rowFormat: RowFormat;
   /** Хранимые строки → строки таблицы. */
-  toGrid(rows: unknown[]): GridRow[];
+  toGrid(rows: unknown[], ctx?: AdapterContext): GridRow[];
   /** Строки таблицы → хранимые строки (в исходном формате). */
-  fromGrid(gridRows: GridRow[]): unknown[];
+  fromGrid(gridRows: GridRow[], ctx?: AdapterContext): unknown[];
   columns(gridRows: GridRow[]): EditorColumn[];
   rowKind(row: GridRow): RowKind;
   /** Текст, по которому работает поиск. */

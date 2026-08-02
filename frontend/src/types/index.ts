@@ -167,6 +167,9 @@ export interface Project {
   is_archived?: boolean;
   owner_id?: number | null;
   owner_name?: string | null;
+  /** Проценты доп. расходов проекта, по умолчанию 3%. */
+  overhead_pct?: number;
+  transport_pct?: number;
 }
 
 export interface ProjectCard extends Project {

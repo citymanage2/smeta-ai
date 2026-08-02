@@ -86,6 +86,18 @@ class ApplyResponse(BaseModel):
     changes_count: int
 
 
+class CoefficientRequest(BaseModel):
+    """Коэффициент к ценам документа.
+
+    Ноль и минус запрещены на входе: они молча обнулили бы или перевернули
+    смету, а замечено это было бы уже на тендере.
+    """
+    work: float = Field(default=1.0, gt=0, le=100)
+    material: float = Field(default=1.0, gt=0, le=100)
+    # "all" — весь документ; список — только эти строки (галочки в таблице).
+    scope: Any = "all"
+
+
 class ChangeEntry(BaseModel):
     row_number: int
     row_id: Optional[str] = None

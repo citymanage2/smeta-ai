@@ -18,6 +18,7 @@ import { ConflictBanner, PresenceBanner, ReadonlyBanner } from './PresenceBanner
 import EditorVersionPanel, { EditorComparison } from './EditorVersionPanel';
 import OptimizationPanel from './OptimizationPanel';
 import PriceActions from './actions/PriceActions';
+import CoefficientControl from './CoefficientControl';
 import './DocumentEditor.css';
 
 const HEARTBEAT_MS = 20_000;
@@ -78,7 +79,7 @@ export const DocumentEditor: React.FC<Props> = ({
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
     isDirty, selectedKeys, tab, search, lock, undoStack, redoStack,
     load, setRows, applyChanges, discardChanges, undo, redo, selectVersion,
-    setTab, setSearch, setSelected, heartbeat, reset,
+    setTab, setSearch, setSelected, heartbeat, reset, setCoefficient,
   } = useDocumentEditorStore();
 
   const [fullscreen, setFullscreen] = useState(startFullscreen);
@@ -158,9 +159,19 @@ export const DocumentEditor: React.FC<Props> = ({
     return result;
   }, [rows, tab, deferredSearch, adapter]);
 
+  // Ставки доп. расходов: у проекта — общие, у версии могут быть свои. Порядок
+  // тот же, что на сервере, иначе итог на экране не сошёлся бы с файлом.
+  const expenseRates = useMemo(() => {
+    const open = meta?.versions.find((v) => v.id === versionId);
+    if (open?.expenses_overridden) {
+      return { overhead_pct: open.overhead_pct, transport_pct: open.transport_pct };
+    }
+    return meta?.project ?? { overhead_pct: 0, transport_pct: 0 };
+  }, [meta, versionId]);
+
   const totals = useMemo(
-    () => (meta ? adapter.totals(rows, meta.project) : null),
-    [rows, adapter, meta],
+    () => (meta ? adapter.totals(rows, expenseRates) : null),
+    [rows, adapter, meta, expenseRates],
   );
 
   // --- Колонки --------------------------------------------------------------
@@ -412,6 +423,22 @@ export const DocumentEditor: React.FC<Props> = ({
             onToggleHistory={() => setHistoryOpen((v) => !v)}
           />
 
+          {/* Коэффициент к ценам — обратимая настройка документа. В разделе
+              сводной его нет: у сводной свой коэффициент в бланке, и второй,
+              на уровне раздела, дал бы в редакторе одно число, а в бланке
+              другое. */}
+          {canWrite && !isSummarySection && meta.row_format === 'estimate' && (
+            <CoefficientControl
+              coefficient={meta.coefficient}
+              selectedKeys={selectedKeys}
+              onApply={async (payload) => {
+                await setCoefficient(payload);
+                setNotice(payload ? 'Коэффициент применён' : 'Коэффициент снят');
+                onApplied?.();
+              }}
+            />
+          )}
+
           {/* Цены ищет ИИ — действие есть только в смете и оптимизации. Раздел
               сводной формально того же формата, но он снимок: оба действия
               пишут смету задачи и правку раздела бы не увидели, зато молча
@@ -444,11 +471,11 @@ export const DocumentEditor: React.FC<Props> = ({
                 <div className="de-totals-grid">
                   <span>Сумма по работам:</span>
                   <b>{fmtRub(totals.sumWork)} ₽</b>
-                  <span>Накладные расходы {meta.project.overhead_pct}%:</span>
+                  <span>Накладные расходы {expenseRates.overhead_pct}%:</span>
                   <b>{fmtRub(totals.overhead)} ₽</b>
                   <span>Сумма по материалам:</span>
                   <b>{fmtRub(totals.sumMat)} ₽</b>
-                  <span>Транспортные расходы {meta.project.transport_pct}%:</span>
+                  <span>Транспортные расходы {expenseRates.transport_pct}%:</span>
                   <b>{fmtRub(totals.transport)} ₽</b>
                 </div>
               )}

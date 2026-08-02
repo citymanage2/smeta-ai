@@ -516,3 +516,73 @@
   font-size: 16px;
   padding: 0 4px;
 }
+
+/* --- Коэффициент к ценам -------------------------------------------------- */
+
+.de-coefficient {
+  padding: 8px 12px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.de-coefficient-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.de-coefficient-state {
+  font-size: 12px;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+.de-coefficient-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.de-coefficient-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.de-coefficient-form input[type='text'],
+.de-coefficient-form input:not([type]) {
+  width: 90px;
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  text-align: right;
+}
+
+.de-coefficient-scope {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+
+.de-coefficient-error {
+  font-size: 12px;
+  color: #dc2626;
+}
+
+.de-coefficient-hint {
+  font-size: 12px;
+  color: #94a3b8;
+  flex-basis: 100%;
+}

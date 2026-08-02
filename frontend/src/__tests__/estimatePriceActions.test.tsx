@@ -137,6 +137,9 @@ describe('панель цен доступна только смете', () => {
     // рядом проценты проекта значило бы дать второе число за то же самое.
     expect(screen.queryByText(/Накладные расходы/)).not.toBeInTheDocument();
     expect(screen.getByText('ИТОГО по разделу:')).toBeInTheDocument();
+    // Коэффициент у сводной свой — в бланке; второй, на уровне раздела, дал бы
+    // в редакторе одно число, а в бланке другое.
+    expect(screen.queryByRole('button', { name: /Коэффициент/ })).not.toBeInTheDocument();
   });
 
   it('в режиме просмотра кнопок нет', async () => {

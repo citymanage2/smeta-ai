@@ -150,6 +150,24 @@ export async function applyDocument(
   return res.data;
 }
 
+export interface CoefficientPayload {
+  work: number;
+  material: number;
+  /** 'all' — весь документ; список ключей строк — только отмеченные. */
+  scope: 'all' | string[];
+}
+
+/** Поставить коэффициент к ценам или снять его (null). */
+export async function setDocumentCoefficient(
+  ref: DocumentRef,
+  payload: CoefficientPayload | null,
+): Promise<{ coefficient: CoefficientPayload | null }> {
+  const res = await apiClient.put<{ coefficient: CoefficientPayload | null }>(
+    `${base(ref)}/coefficient`, payload, { params: slotParams(ref) },
+  );
+  return res.data;
+}
+
 export async function getDocumentHistory(ref: DocumentRef): Promise<HistoryEntry[]> {
   const res = await apiClient.get<HistoryEntry[]>(`${base(ref)}/history`, {
     params: slotParams(ref),

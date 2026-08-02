@@ -721,7 +721,7 @@ async def _rebuild_result_xlsx(
 
 
 async def _sync_estimate_artifacts(
-    db: AsyncSession, doc: ResolvedDocument, rows: list
+    db: AsyncSession, doc: ResolvedDocument, rows: list, version: Any = None
 ) -> None:
     """Смета: после правки пересобрать файл и итог задачи.
 
@@ -734,7 +734,7 @@ async def _sync_estimate_artifacts(
 
     from app.services import estimate_store
 
-    await estimate_store.sync_artifacts(db, doc.task, rows)
+    await estimate_store.sync_artifacts(db, doc.task, rows, version)
 
 
 async def _trim_history(db: AsyncSession, task_id: str, kind: str) -> None:
@@ -812,7 +812,7 @@ async def apply_rows(
     await discard_draft(db, version)
 
     await _rebuild_result_xlsx(db, doc, new_rows)
-    await _sync_estimate_artifacts(db, doc, new_rows)
+    await _sync_estimate_artifacts(db, doc, new_rows, version)
     if doc.kind != KIND_SUMMARY_SECTION:
         # Раздел сводной — снимок: правка в нём не означает, что руками правили
         # саму смету задачи.
@@ -852,6 +852,67 @@ async def apply_rows(
     )
     return {"version_id": str(version.id), "rev": version.rev,
             "rows_count": len(new_rows), "changes_count": len(changes)}
+
+
+async def set_coefficient(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    version: Any,
+    coefficient: Optional[dict],
+    current_user: dict,
+) -> dict:
+    """Поставить или снять коэффициент к ценам документа.
+
+    Коэффициент — обратимая настройка: исходные цены строк он не трогает
+    никогда, поэтому снятие возвращает ровно прежние числа. Меняются только
+    итоги, скачиваемый файл и выгрузка. `rev` не двигаем: строки не менялись, и
+    у соседа, открывшего документ рядом, «Применить» не должно ломаться.
+    """
+    ensure_writable(doc, current_user)
+    if doc.row_format != "estimate":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="У этого документа нет цен, коэффициент к нему неприменим",
+        )
+
+    version.coefficient = coefficient
+
+    if doc.kind == KIND_ESTIMATE:
+        # Файл и итог задачи считаются с коэффициентом — иначе на экране одно
+        # число, а в скачанном файле другое.
+        await _sync_estimate_artifacts(db, doc, read_rows(doc, version), version)
+
+    user_name = await user_display_name(db, current_user)
+    if coefficient is None:
+        description = f"{user_name}: коэффициент к ценам снят"
+    else:
+        description = (
+            f"{user_name}: коэффициент к ценам — работы ×{coefficient.get('work', 1)}, "
+            f"материалы ×{coefficient.get('material', 1)}"
+        )
+        scope = coefficient.get("scope", "all")
+        if isinstance(scope, list):
+            description += f" (строк: {len(scope)})"
+
+    db.add(TaskHistory(
+        id=str(_uuid.uuid4()),
+        task_id=str(doc.task.id),
+        operation_type="document_coefficient",
+        slot=doc.file_slot,
+        description=description,
+        previous_value={},
+        new_value={"coefficient": coefficient, "changes_count": 0, "changes": []},
+        user_id=current_user_id(current_user),
+        user_name=user_name,
+        document_kind=doc.kind,
+    ))
+    await db.commit()
+
+    logger.info(
+        "document_coefficient_set",
+        card_id=str(doc.card.id), kind=doc.kind, coefficient=coefficient,
+    )
+    return {"coefficient": coefficient}
 
 
 async def _stale_rev_error(db: AsyncSession, task_id: str, kind: str) -> HTTPException:

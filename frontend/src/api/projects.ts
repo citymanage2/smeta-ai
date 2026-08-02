@@ -9,6 +9,9 @@ export interface ProjectCreatePayload {
 export interface ProjectUpdatePayload {
   name?: string;
   description?: string;
+  /** Проценты доп. расходов проекта: подставляются во все его документы. */
+  overhead_pct?: number;
+  transport_pct?: number;
 }
 
 export async function listProjects(archived?: boolean): Promise<ProjectCard[]> {

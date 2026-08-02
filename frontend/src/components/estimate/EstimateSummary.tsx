@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { EstimateRow } from '../../types';
-import { billableQty } from '../../utils/negativeQty';
+import { GridRow } from '../editor/adapters/types';
+import { calcEstimateTotals } from '../../utils/estimateCalc';
 
 const VAT_RATE = 0.22;
 
@@ -28,19 +29,18 @@ const EstimateSummary: React.FC<EstimateSummaryProps> = ({
     vat,
     totalWithVat,
   } = useMemo(() => {
-    // billableQty: строка с отрицательным объёмом — вычет, стоимости у неё нет
-    // (иначе итог занижается на qty × цену).
-    const worksTotal = rows
-      .filter((r) => r.type === 'work')
-      .reduce((acc, r) => acc + billableQty(r.qty) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
-
-    const materialsTotal = rows
-      .filter((r) => r.type === 'material')
-      .reduce((acc, r) => acc + billableQty(r.qty) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
+    // Единый расчёт: та же формула, по которой сервер собирает файл сметы и
+    // считает итог задачи. Раньше здесь была своя — накладные и транспортные
+    // брались от общего базиса, и число на экране не сходилось с файлом.
+    const canonical = calcEstimateTotals(
+      rows as unknown as GridRow[], { overhead_pct, transport_pct },
+    );
+    const worksTotal = canonical.sumWork;
+    const materialsTotal = canonical.sumMat;
 
     const basis = worksTotal + materialsTotal;
-    const overheadRub = (basis * overhead_pct) / 100;
-    const transportRub = (basis * transport_pct) / 100;
+    const overheadRub = canonical.overhead;
+    const transportRub = canonical.transport;
     const contingencyRub = (basis * contingency_pct) / 100;
     const total = basis + overheadRub + transportRub + contingencyRub;
     const vat = total * VAT_RATE;

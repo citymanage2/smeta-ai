@@ -1,5 +1,7 @@
 import { billableQty } from '../../../utils/negativeQty';
+import { calcEstimateTotals, rowCoefficient } from '../../../utils/estimateCalc';
 import {
+  AdapterContext,
   DocumentTotals,
   EditorAdapter,
   EditorColumn,
@@ -54,35 +56,80 @@ const LABEL_TO_TYPE: Record<string, string> = {
   Работа: 'work', Материал: 'material', Раздел: 'section',
 };
 
+// Исходные цены (без коэффициента) едут рядом со строкой таблицы. Без них
+// нельзя отличить «человек правил цену» от «цену показали умноженной», и
+// каждое сохранение множило бы её заново.
+const BASE_WORK = '__base_price_work';
+const BASE_MATERIAL = '__base_price_material';
+
 function costOf(row: GridRow, priceKey: string): number {
   const qty = billableQty(toNumber(row.qty));
   const price = toNumber(row[priceKey]) ?? 0;
   return Math.round(qty * price * 100) / 100;
 }
 
+function scale(price: number | null, factor: number): number | null {
+  if (price === null) return null;
+  if (factor === 1) return price;
+  return Math.round(price * factor * 100) / 100;
+}
+
+/**
+ * Показанная цена → исходная.
+ *
+ * Если ячейку не трогали, возвращаем ровно ту исходную цену, что была: иначе
+ * деление вносило бы копеечный сдвиг при каждом сохранении. Если правили —
+ * введённое считается ценой с коэффициентом, поэтому делим.
+ */
+function unscale(
+  shown: number | null, base: number | null, factor: number,
+): number | null {
+  if (shown === null) return null;
+  if (factor === 1) return shown;
+  if (base !== null && scale(base, factor) === shown) return base;
+  return Math.round((shown / factor) * 100) / 100;
+}
+
 export const estimateAdapter: EditorAdapter = {
   rowFormat: 'estimate',
 
-  toGrid(rows: unknown[]): GridRow[] {
+  toGrid(rows: unknown[], ctx?: AdapterContext): GridRow[] {
     return rows.map((raw, index) => {
       const row = (raw ?? {}) as Record<string, unknown>;
-      const grid: GridRow = { __key: String(row.id ?? `row-${index}`) };
+      const key = String(row.id ?? `row-${index}`);
+      const grid: GridRow = { __key: key };
       for (const field of STORED_FIELDS) grid[field] = row[field] ?? null;
       grid.type = TYPE_TO_LABEL[String(row.type ?? '')] ?? row.type ?? '';
+
+      // Цены показываются уже с коэффициентом (решение пользователя, Фаза 8).
+      // Исходные держим рядом: по ним видно, правил ли человек ячейку, и
+      // благодаря им повторное сохранение не множит цену второй раз.
+      const factor = rowCoefficient(ctx?.coefficient, key);
+      grid[BASE_WORK] = toNumber(grid.price_work);
+      grid[BASE_MATERIAL] = toNumber(grid.price_material);
+      grid.price_work = scale(grid[BASE_WORK] as number | null, factor.work);
+      grid.price_material = scale(grid[BASE_MATERIAL] as number | null, factor.material);
+
       grid.cost_work = costOf(grid, 'price_work');
       grid.cost_material = costOf(grid, 'price_material');
       return grid;
     });
   },
 
-  fromGrid(gridRows: GridRow[]): unknown[] {
+  fromGrid(gridRows: GridRow[], ctx?: AdapterContext): unknown[] {
     return gridRows.map((grid) => {
       const row: Record<string, unknown> = { id: grid.__key };
       for (const field of STORED_FIELDS) row[field] = grid[field] ?? null;
       row.type = LABEL_TO_TYPE[String(grid.type ?? '')] ?? grid.type ?? 'work';
       row.qty = toNumber(grid.qty);
-      row.price_work = toNumber(grid.price_work);
-      row.price_material = toNumber(grid.price_material);
+
+      const factor = rowCoefficient(ctx?.coefficient, grid.__key);
+      row.price_work = unscale(
+        toNumber(grid.price_work), toNumber(grid[BASE_WORK]), factor.work,
+      );
+      row.price_material = unscale(
+        toNumber(grid.price_material), toNumber(grid[BASE_MATERIAL]), factor.material,
+      );
       // cost_work / cost_material — вычисляемые, наружу не сохраняются:
       // источник правды по стоимости всегда «объём × цена».
       return row;
@@ -121,19 +168,9 @@ export const estimateAdapter: EditorAdapter = {
   },
 
   totals(rows: GridRow[], pct: Percentages): DocumentTotals | null {
-    let sumWork = 0;
-    let sumMat = 0;
-    for (const row of rows) {
-      if (row.is_excluded) continue;
-      const kind = estimateAdapter.rowKind(row);
-      if (kind === 'section') continue;
-      // billableQty внутри costOf: у вычета (объём < 0) стоимости нет.
-      sumWork += costOf(row, 'price_work');
-      sumMat += costOf(row, 'price_material');
-    }
-    const overhead = (sumWork * pct.overhead_pct) / 100;
-    const transport = (sumMat * pct.transport_pct) / 100;
-    return { sumWork, overhead, sumMat, transport, grand: sumWork + overhead + sumMat + transport };
+    // Формула одна на весь проект — та же, по которой сервер собирает файл
+    // сметы и считает итог задачи.
+    return calcEstimateTotals(rows, pct);
   },
 
   emptyRow(_columns: EditorColumn[], keySeed: string): GridRow {

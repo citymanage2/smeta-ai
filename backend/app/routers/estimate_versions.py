@@ -1407,18 +1407,28 @@ async def export_version(
     from urllib.parse import quote as _quote
     from app.services.excel_service import generate_estimate_export
 
+    from app.services import estimate_store
+
     version = await _get_version_or_404(task_id, version_id, db)
-    await _get_task_or_404(version.task_id, db, current_user)
+    task = await _get_task_or_404(version.task_id, db, current_user)
+
+    # Ставки и коэффициент — те же, что показывает редактор: проценты проекта,
+    # если версия их не переопределяет. Иначе выгруженная версия расходилась бы
+    # с экраном (а раньше при неоверрайженной версии считала вовсе по 0%).
+    overhead_pct, transport_pct, coefficient = await estimate_store.expense_settings(
+        db, task, version,
+    )
 
     try:
         # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
         xlsx_bytes = await asyncio.to_thread(
             generate_estimate_export,
             rows=version.rows or [],
-            overhead_pct=float(version.overhead_pct or 0),
-            transport_pct=float(version.transport_pct or 0),
+            overhead_pct=overhead_pct,
+            transport_pct=transport_pct,
             contingency_pct=float(version.contingency_pct or 0),
             version_display_name=version.version_display_name,
+            coefficient=coefficient,
         )
     except Exception as exc:
         logger.error("export_version failed", error=str(exc), task_id=task_id, version_id=version_id, exc_info=True)

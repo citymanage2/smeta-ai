@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import math
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -733,6 +734,24 @@ class TaskProcessor:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = result.scalar_one_or_none()
         return bool(task) and is_batch_pending(task.progress_data)
+
+    async def _project_expense_rates(self, task) -> tuple:
+        """Ставки накладных и транспортных проекта; без проекта — прежние 3%."""
+        from app.models.project import Project
+        from app.services.estimate_store import DEFAULT_PCT
+
+        project_id = getattr(task, "project_id", None)
+        # Только настоящий идентификатор: сюда приходит и задача без проекта,
+        # и объект-заглушка из тестов шага 3.
+        if not isinstance(project_id, (str, uuid.UUID)):
+            return DEFAULT_PCT, DEFAULT_PCT
+        project = await self.db.get(Project, str(project_id))
+        if project is None:
+            return DEFAULT_PCT, DEFAULT_PCT
+        return (
+            float(project.overhead_pct if project.overhead_pct is not None else DEFAULT_PCT),
+            float(project.transport_pct if project.transport_pct is not None else DEFAULT_PCT),
+        )
 
     async def _save_progress_data(self, data: dict) -> None:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
@@ -2912,7 +2931,13 @@ class TaskProcessor:
 
         await self.update_progress(f"Собрано {len(final_items)} позиций. Формирование Excel сметы...")
 
-        excel_data, grand_total = generate_estimate_xlsx(final_items)
+        # Ставки доп. расходов берём у проекта: иначе свежая смета считалась бы
+        # по прежним 3%, а после первой же правки пересчиталась бы по настройке
+        # проекта — и число «само собой» поменялось бы.
+        overhead_pct, transport_pct = await self._project_expense_rates(task)
+        excel_data, grand_total = generate_estimate_xlsx(
+            final_items, overhead_pct=overhead_pct, transport_pct=transport_pct,
+        )
 
         # Save result file
         await self.save_result(self._result_filename(task, "Смета_из_перечня.xlsx"), _XLSX_MIME, excel_data)

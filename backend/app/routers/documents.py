@@ -7,13 +7,14 @@ HTTP-обвязка.
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.document import (
     ApplyRequest,
     ApplyResponse,
+    CoefficientRequest,
     DocumentMeta,
     DocumentRows,
     HeartbeatResponse,
@@ -176,6 +177,29 @@ async def apply_document(
         db, doc, version, body.rows, body.rev, current_user
     )
     return ApplyResponse(**result)
+
+
+@router.put("/{card_id}/{kind}/coefficient")
+async def set_document_coefficient(
+    card_id: str,
+    kind: str,
+    body: Optional[CoefficientRequest] = Body(default=None),
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Поставить коэффициент к ценам или снять его (пустое тело = снять).
+
+    Исходные цены строк не меняются: коэффициент — настройка документа, его
+    можно снять и получить прежние числа.
+    """
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    version = svc.pick_version(doc, None)
+    payload = None
+    if body is not None:
+        scope = body.scope if body.scope == "all" else [str(x) for x in (body.scope or [])]
+        payload = {"work": body.work, "material": body.material, "scope": scope}
+    return await svc.set_coefficient(db, doc, version, payload, current_user)
 
 
 @router.get("/{card_id}/{kind}/history", response_model=list[HistoryEntryOut])

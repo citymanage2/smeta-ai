@@ -24,14 +24,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.estimate_version import EstimateVersion
+from app.models.project import Project
 from app.models.result import TaskResult
 from app.models.task import Task
 from app.services import storage_service
 from app.utils.estimate_rows import items_to_rows, rows_to_items
-from app.utils.xlsx_exporter import generate_estimate_xlsx
+from app.utils.xlsx_exporter import DEFAULT_OVERHEAD_PCT, generate_estimate_xlsx
 
 logger = structlog.get_logger()
 
+# Прежние 3%: значение по умолчанию у проекта, поведение не меняется.
+DEFAULT_PCT = DEFAULT_OVERHEAD_PCT
 ESTIMATE_SLOT = "estimate"
 ESTIMATE_FILENAME = "Смета_из_перечня.xlsx"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -117,13 +120,55 @@ async def _store_estimate_file(db: AsyncSession, task: Task, data: bytes) -> Non
         ))
 
 
-async def sync_artifacts(db: AsyncSession, task: Task, rows: list) -> float:
+async def expense_settings(
+    db: AsyncSession, task: Task, version: Optional[EstimateVersion] = None
+) -> tuple:
+    """Ставки доп. расходов и коэффициент для сметы задачи.
+
+    Порядок: проценты берём у проекта — это единая настройка, из-за отсутствия
+    которой 3% были зашиты в генераторе файла. Версия может их переопределить
+    (`expenses_overridden`) — так работает сравнение версий. Коэффициент всегда
+    принадлежит версии: он настройка конкретного документа.
+    """
+    if version is None:
+        version = await get_working_version(db, str(task.id))
+
+    overhead = DEFAULT_PCT
+    transport = DEFAULT_PCT
+    if task.project_id:
+        project = await db.get(Project, str(task.project_id))
+        if project is not None:
+            overhead = float(project.overhead_pct if project.overhead_pct is not None else DEFAULT_PCT)
+            transport = float(project.transport_pct if project.transport_pct is not None else DEFAULT_PCT)
+
+    coefficient = None
+    if version is not None:
+        coefficient = version.coefficient
+        if version.expenses_overridden:
+            overhead = float(version.overhead_pct or 0)
+            transport = float(version.transport_pct or 0)
+
+    return overhead, transport, coefficient
+
+
+async def sync_artifacts(
+    db: AsyncSession,
+    task: Task,
+    rows: list,
+    version: Optional[EstimateVersion] = None,
+) -> float:
     """Пересобрать файл сметы и итог задачи по строкам. Версию не трогает.
 
     Вызывается там, где строки версии уже записаны — в документном сервисе,
     который сам ведёт `rev`, черновик и историю правок.
     """
-    excel_data, grand_total = generate_estimate_xlsx(rows_to_items(rows))
+    overhead_pct, transport_pct, coefficient = await expense_settings(db, task, version)
+    excel_data, grand_total = generate_estimate_xlsx(
+        rows_to_items(rows),
+        overhead_pct=overhead_pct,
+        transport_pct=transport_pct,
+        coefficient=coefficient,
+    )
     await _store_estimate_file(db, task, excel_data)
 
     task.cost = Decimal(str(round(grand_total, 2)))
@@ -204,7 +249,7 @@ async def write_rows(
         version.draft_updated_at = None
         version.draft_user_id = None
 
-    grand_total = await sync_artifacts(db, task, rows)
+    grand_total = await sync_artifacts(db, task, rows, version)
 
     if commit:
         await db.commit()

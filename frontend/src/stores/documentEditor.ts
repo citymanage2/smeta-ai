@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  CoefficientPayload,
   DocumentMeta,
   DocumentRef,
   LockInfo,
@@ -9,6 +10,7 @@ import {
   getDocumentRows,
   saveDraft,
   sendHeartbeat,
+  setDocumentCoefficient,
 } from '../api/documents';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 import { genericAdapter } from '../components/editor/adapters/genericAdapter';
@@ -59,6 +61,8 @@ interface DocumentEditorState {
 
   load: (ref: DocumentRef) => Promise<void>;
   selectVersion: (versionId: string) => Promise<void>;
+  /** Поставить коэффициент к ценам или снять его (null). */
+  setCoefficient: (payload: CoefficientPayload | null) => Promise<void>;
   setRows: (rows: GridRow[], options?: { skipHistory?: boolean }) => void;
   applyChanges: () => Promise<boolean>;
   discardChanges: () => Promise<void>;
@@ -122,10 +126,13 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
       const data = await getDocumentRows({ ...ref, versionId: ref.versionId ?? undefined });
       const adapter = adapterFor(meta);
 
-      const applied = adapter.toGrid(data.rows);
+      // Коэффициент — настройка документа: цены в таблице показываются уже с
+      // ним, а в документ уходят исходные (решение пользователя, Фаза 8).
+      const ctx = { coefficient: meta.coefficient };
+      const applied = adapter.toGrid(data.rows, ctx);
       // Непринятые правки не теряются между сессиями: черновик показываем
       // сразу, но «как было» помним — иначе не отличить правку от исходника.
-      const draft = data.draft_rows ? adapter.toGrid(data.draft_rows) : null;
+      const draft = data.draft_rows ? adapter.toGrid(data.draft_rows, ctx) : null;
       const rows = draft ?? applied;
 
       set({
@@ -168,7 +175,7 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
     set({ draftState: 'saving' });
     draftTimer = setTimeout(() => {
       draftTimer = null;
-      saveDraft(ref, versionId, adapter.fromGrid(get().rows))
+      saveDraft(ref, versionId, adapter.fromGrid(get().rows, { coefficient: meta?.coefficient }))
         .then(() => set({ draftState: 'saved' }))
         .catch(() => set({ draftState: 'error' }));
     }, DRAFT_DEBOUNCE_MS);
@@ -181,7 +188,8 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
     set({ applying: true, conflict: '' });
     try {
       const result = await applyDocument(
-        ref, versionId, meta.rev, adapter.fromGrid(rows),
+        ref, versionId, meta.rev,
+        adapter.fromGrid(rows, { coefficient: meta.coefficient }),
       );
       set({
         meta: { ...meta, rev: result.rev, has_draft: false },
@@ -238,6 +246,16 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
     const { ref } = get();
     if (!ref) return;
     await get().load({ ...ref, versionId });
+  },
+
+  setCoefficient: async (payload: CoefficientPayload | null) => {
+    const { ref, versionId } = get();
+    if (!ref) return;
+    await setDocumentCoefficient(ref, payload);
+    // Перечитываем документ целиком: цены в таблице показываются с
+    // коэффициентом, значит их нужно пересчитать от исходных, а не подкрутить
+    // на месте.
+    await get().load({ ...ref, versionId: versionId ?? undefined });
   },
 
   setTab: (tab) => set({ tab }),
