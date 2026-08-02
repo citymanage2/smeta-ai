@@ -135,6 +135,7 @@ async def resolve_document(
     kind: str,
     current_user: dict,
     file_slot: Optional[str] = None,
+    file_index: Optional[int] = None,
 ) -> ResolvedDocument:
     if kind not in DOCUMENT_KINDS:
         raise _not_found()
@@ -168,6 +169,12 @@ async def resolve_document(
         .order_by(EstimateVersion.version_number)
     )
     versions = list(res.scalars().all())
+    if slot == "input" and file_index is not None:
+        # У задачи может быть несколько входных файлов — версия каждого помечена
+        # меткой input_N.
+        label = f"input_{file_index}"
+        versions = [v for v in versions if v.version_label == label]
+
     active = next((v for v in versions if not v.is_rolled_back), versions[0] if versions else None)
 
     return ResolvedDocument(
@@ -179,6 +186,142 @@ async def resolve_document(
         row_format=_KIND_TO_ROW_FORMAT[kind],
         versions=versions,
         active=active,
+    )
+
+
+async def locate_by_task(
+    db: AsyncSession, task_id: str, current_user: dict
+) -> tuple[str, str]:
+    """Задача → (карточка, тип документа).
+
+    Нужна там, где на руках только идентификатор задачи: старые ссылки вида
+    /tasks/{id}/... и точки входа, оставшиеся от прежней навигации.
+    """
+    task = await db.get(Task, task_id)
+    if task is None or not can_edit(task.owner_id, current_user, task.is_shared):
+        raise _not_found()
+
+    for kind, field in _KIND_TO_CARD_FIELD.items():
+        res = await db.execute(
+            select(WorkflowCard).where(
+                getattr(WorkflowCard, field) == task_id,
+                WorkflowCard.deleted_at.is_(None),
+            ).limit(1)
+        )
+        card = res.scalar_one_or_none()
+        if card is not None:
+            return str(card.id), kind
+
+    raise _not_found()
+
+
+async def ensure_versions(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    current_user: dict,
+    file_index: Optional[int] = None,
+) -> ResolvedDocument:
+    """Создать V0 из файла, если версий ещё нет.
+
+    Раньше это делал сам редактор при открытии; теперь — сервис, чтобы документ
+    открывался одинаково из любой точки входа. Идемпотентно: при существующих
+    версиях ничего не делает.
+    """
+    if doc.versions or doc.task.status != "completed":
+        return doc
+
+    from app.models.result import TaskResult
+    from app.models.task_input_file import TaskInputFile
+    from app.services import storage_service
+
+    rows: Optional[list] = None
+    label = "original"
+    display = "V0 — Оригинал"
+
+    if doc.file_slot == "input":
+        from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
+
+        index = file_index or 0
+        res = await db.execute(
+            select(TaskInputFile).where(
+                TaskInputFile.task_id == str(doc.task.id),
+                TaskInputFile.file_index == index,
+            )
+        )
+        source = res.scalar_one_or_none()
+        if source is None:
+            return doc
+        rows = parse_xlsx_to_generic_rows(await storage_service.load_bytes(source.storage_key))
+        label = f"input_{index}"
+        display = f"V0 — Оригинал (файл {index})"
+
+    elif doc.row_format == "generic":
+        from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
+
+        res = await db.execute(
+            select(TaskResult)
+            .where(TaskResult.task_id == str(doc.task.id), TaskResult.slot == "result")
+            .order_by(TaskResult.id.desc())
+            .limit(1)
+        )
+        source = res.scalar_one_or_none()
+        if source is None:
+            return doc
+        rows = parse_xlsx_to_generic_rows(await storage_service.load_bytes(source.storage_key))
+
+    elif doc.kind == KIND_ESTIMATE:
+        from app.services.estimate_parser import parse_estimate_excel
+
+        res = await db.execute(
+            select(TaskResult)
+            .where(
+                TaskResult.task_id == str(doc.task.id),
+                TaskResult.slot.in_(["estimate", "result"]),
+            )
+            .order_by(TaskResult.id.desc())
+            .limit(1)
+        )
+        source = res.scalar_one_or_none()
+        if source is None:
+            return doc
+        try:
+            rows = parse_estimate_excel(await storage_service.load_bytes(source.storage_key))
+        except Exception as exc:  # noqa: BLE001 — показываем причину пользователю
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Не удалось разобрать файл сметы: {exc}",
+            )
+        display = "Исходная смета"
+
+    if rows is None:
+        # Версии оптимизации создаёт сам процесс оптимизации — сюда не попадаем.
+        return doc
+
+    count_res = await db.execute(
+        select(EstimateVersion).where(EstimateVersion.task_id == str(doc.task.id))
+    )
+    next_number = max(
+        (v.version_number for v in count_res.scalars().all()), default=-1
+    ) + 1
+
+    db.add(EstimateVersion(
+        id=str(_uuid.uuid4()),
+        task_id=str(doc.task.id),
+        version_number=next_number,
+        version_label=label,
+        version_display_name=display,
+        rows=rows,
+        file_slot=doc.file_slot,
+        task_type=doc.task.task_type,
+    ))
+    await db.commit()
+    logger.info(
+        "document_version_initialised",
+        card_id=str(doc.card.id), kind=doc.kind, slot=doc.file_slot, rows=len(rows),
+    )
+
+    return await resolve_document(
+        db, str(doc.card.id), doc.kind, current_user, doc.file_slot, file_index,
     )
 
 

@@ -31,6 +31,18 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 # Слот файла: 'input' открывает документ исходного файла заказчика (только чтение).
 FileSlotQuery = Query(default=None, description="Слот файла: 'input' — исходный файл")
+FileIndexQuery = Query(default=None, description="Номер входного файла (для file_slot='input')")
+
+
+@router.get("/by-task/{task_id}")
+async def locate_document_by_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Какой документ соответствует задаче — для старых ссылок вида /tasks/{id}."""
+    card_id, kind = await svc.locate_by_task(db, task_id, current_user)
+    return {"card_id": card_id, "kind": kind}
 
 
 @router.get("/{card_id}/{kind}", response_model=DocumentMeta)
@@ -38,11 +50,14 @@ async def get_document_meta(
     card_id: str,
     kind: str,
     file_slot: Optional[str] = FileSlotQuery,
+    file_index: Optional[int] = FileIndexQuery,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Метаданные документа: версии, права, черновик, коэффициент, присутствие."""
-    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot, file_index)
+    # Первое открытие документа создаёт V0 из файла — раньше это делал клиент.
+    doc = await svc.ensure_versions(db, doc, current_user, file_index)
     can_write, reason = svc.write_state(doc, current_user)
     active = doc.active
     lock = await svc.get_foreign_lock(db, card_id, kind, current_user)
@@ -90,10 +105,12 @@ async def get_document_rows(
     kind: str,
     version_id: Optional[str] = Query(default=None),
     file_slot: Optional[str] = FileSlotQuery,
+    file_index: Optional[int] = FileIndexQuery,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot, file_index)
+    doc = await svc.ensure_versions(db, doc, current_user, file_index)
     version = svc.pick_version(doc, version_id)
     return DocumentRows(
         version_id=str(version.id),

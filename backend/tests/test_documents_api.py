@@ -497,6 +497,125 @@ async def test_legacy_endpoint_never_overwrites_input_file(
 
 
 # ---------------------------------------------------------------------------
+# Первое открытие: версия создаётся из файла
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def fresh_card(db_session, doc_env, fake_s3):
+    """Карточка с готовой задачей, но без единой версии — как сразу после расчёта."""
+    from app.models.result import TaskResult
+    from app.utils.xlsx_generic import rows_to_xlsx
+
+    task = Task(
+        owner_id=doc_env["pm1"], user_role="project_manager",
+        task_type="LIST_FROM_GRAND", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+        project_id=doc_env["project_id"],
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    xlsx = rows_to_xlsx([
+        {"row_id": "a", "cells": {"Наименование": "Кладка", "Кол-во": 12}},
+        {"row_id": "b", "cells": {"Наименование": "Штукатурка", "Кол-во": 30}},
+    ])
+    key = storage_service.build_result_key(str(task.id), "result", "perechen.xlsx")
+    await storage_service.put_object(key, xlsx, "application/vnd.ms-excel")
+    db_session.add(TaskResult(
+        task_id=str(task.id), file_name="perechen.xlsx",
+        mime_type="application/vnd.ms-excel", storage_key=key,
+        size_bytes=len(xlsx), slot="result",
+    ))
+
+    card = WorkflowCard(
+        project_id=doc_env["project_id"], name="Фасад", stage="list",
+        list_task_id=str(task.id),
+    )
+    db_session.add(card)
+    await db_session.commit()
+    return {"card_id": str(card.id), "task_id": str(task.id)}
+
+
+@pytest.mark.asyncio
+async def test_first_open_creates_version_from_result(async_client, doc_env, fresh_card):
+    """Раньше версию заводил клиент при открытии; теперь — сервер, для всех точек входа."""
+    meta = await async_client.get(
+        f"/documents/{fresh_card['card_id']}/list", headers=_pm1(doc_env))
+    assert meta.status_code == 200
+    assert meta.json()["active_version_id"] is not None
+    assert meta.json()["rev"] == 0
+
+    rows = await async_client.get(
+        f"/documents/{fresh_card['card_id']}/list/rows", headers=_pm1(doc_env))
+    names = [r["cells"]["Наименование"] for r in rows.json()["rows"]]
+    assert names == ["Кладка", "Штукатурка"]
+
+
+@pytest.mark.asyncio
+async def test_first_open_is_idempotent(async_client, doc_env, fresh_card, db_session):
+    for _ in range(3):
+        await async_client.get(
+            f"/documents/{fresh_card['card_id']}/list", headers=_pm1(doc_env))
+
+    versions = (await db_session.execute(
+        select(EstimateVersion).where(EstimateVersion.task_id == fresh_card["task_id"])
+    )).scalars().all()
+    assert len(versions) == 1
+
+
+@pytest.mark.asyncio
+async def test_unfinished_task_does_not_create_version(
+    async_client, doc_env, fresh_card, db_session
+):
+    task = await db_session.get(Task, fresh_card["task_id"])
+    task.status = "processing"
+    await db_session.commit()
+
+    meta = await async_client.get(
+        f"/documents/{fresh_card['card_id']}/list", headers=_pm1(doc_env))
+    assert meta.json()["active_version_id"] is None
+    assert meta.json()["can_write"] is False
+
+
+@pytest.mark.asyncio
+async def test_input_file_index_picks_the_right_document(async_client, doc_env, db_session):
+    """У задачи может быть несколько исходных файлов — открывается запрошенный."""
+    second = EstimateVersion(
+        task_id=doc_env["task_id"], version_number=2, version_label="input_1",
+        version_display_name="V0 — Оригинал (файл 1)",
+        rows=[{"row_id": "x", "cells": {"Наименование": "Второй файл"}}],
+        file_slot="input", task_type="LIST_FROM_GRAND",
+    )
+    db_session.add(second)
+    await db_session.commit()
+
+    rows = await async_client.get(
+        f"/documents/{doc_env['card_id']}/list/rows?file_slot=input&file_index=1",
+        headers=_pm1(doc_env))
+    assert rows.json()["rows"][0]["cells"]["Наименование"] == "Второй файл"
+
+
+# ---------------------------------------------------------------------------
+# Поиск документа по задаче (для старых ссылок)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_locate_by_task_returns_card_and_kind(async_client, doc_env):
+    r = await async_client.get(
+        f"/documents/by-task/{doc_env['task_id']}", headers=_pm1(doc_env))
+    assert r.status_code == 200
+    assert r.json() == {"card_id": doc_env["card_id"], "kind": "list"}
+
+
+@pytest.mark.asyncio
+async def test_locate_by_task_denies_foreign_task(async_client, doc_env):
+    r = await async_client.get(
+        f"/documents/by-task/{doc_env['task_id']}",
+        headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Присутствие («Иван сейчас редактирует»)
 # ---------------------------------------------------------------------------
 

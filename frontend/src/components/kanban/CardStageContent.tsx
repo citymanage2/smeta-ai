@@ -15,10 +15,11 @@ import {
 } from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { EstimateEditorModal } from '../card/EstimateEditorModal'
-import { GenericEditorModal } from '../card/GenericEditorModal'
+import DocumentEditor from '../editor/DocumentEditor'
 import { LumaSpin } from '../ui/LumaSpin'
 import { ProgressCounter } from './ProgressCounter'
 import { GENERIC_EDITOR_TASK_TYPES } from '../../types'
+import { kindFromTaskType } from '../../api/documents'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1361,16 +1362,20 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
       })()}
 
       {editorModal && (
+        // Плоские документы (перечень, полнота) — единый редактор. Смета и
+        // оптимизация переезжают на него в фазах 5 и 6; до тех пор открываются
+        // прежним путём.
         editorModal.taskType && GENERIC_EDITOR_TASK_TYPES.has(editorModal.taskType)
           ? (
-            <GenericEditorModal
-              taskId={editorModal.taskId}
+            <DocumentEditor
+              cardId={card.id}
+              kind={kindFromTaskType(editorModal.taskType)!}
+              fileSlot={editorModal.fileSlot === 'input' ? 'input' : undefined}
+              fileIndex={editorModal.fileSlot === 'input' ? editorModal.fileIndex : undefined}
               title={editorModal.title}
-              fileSlot={editorModal.fileSlot}
-              fileIndex={editorModal.fileIndex}
-              readOnly={editorModal.readOnly}
+              startFullscreen
               onClose={() => setEditorModal(null)}
-              onSaved={fetchMeta}
+              onApplied={fetchMeta}
             />
           )
           : (
