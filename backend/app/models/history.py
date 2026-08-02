@@ -1,5 +1,6 @@
 import uuid as _uuid
-from sqlalchemy import String, DateTime, JSON, ForeignKey
+from typing import Optional
+from sqlalchemy import String, DateTime, JSON, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from datetime import datetime, timezone
@@ -25,6 +26,13 @@ class TaskHistory(Base):
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     previous_value: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     new_value: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # --- Единый редактор (план 2026-08-02) ---
+    # Автор правки: показываем «Иванов, 02.08.2026 14:31, изменил…».
+    # nullable — у записей, созданных автоматикой (оптимизация, поиск цен).
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    user_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # Тип документа, к которому относится правка (list | completeness | estimate | ...)
+    document_kind: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

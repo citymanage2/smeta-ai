@@ -47,6 +47,15 @@ class Project(Base):
     summary_total: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2), nullable=True, default=None
     )
+    # Проценты доп. расходов проекта. Раньше 3% были захардкожены в трёх местах
+    # фронтенда; теперь настраиваются здесь и подставляются во все документы
+    # проекта. Значение по умолчанию — прежние 3%, поведение не меняется.
+    overhead_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, default=Decimal("3"), server_default="3"
+    )
+    transport_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, default=Decimal("3"), server_default="3"
+    )
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )

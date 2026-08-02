@@ -51,6 +51,20 @@ class EstimateVersion(Base):
     file_slot: Mapped[str] = mapped_column(String(20), nullable=False, default="result")
     # Тип задачи — для generic-режима редактора без JOIN
     task_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # --- Единый редактор (план 2026-08-02) ---
+    # Черновик: правки автосохраняются сюда и не влияют ни на rows, ни на файл,
+    # пока пользователь не нажал «Применить».
+    draft_rows: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    draft_updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    draft_user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Счётчик применённых изменений. Клиент присылает свой rev при «Применить»;
+    # расхождение = кто-то сохранил раньше → 409 вместо тихого затирания.
+    rev: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Обратимый коэффициент к ценам: {"work": 1.01, "material": 1.0,
+    #  "scope": "all" | ["row_id", ...]}. Исходные цены в rows не меняются.
+    coefficient: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

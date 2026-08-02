@@ -1,0 +1,663 @@
+"""Документный сервис — единая точка работы с таблицами всех типов.
+
+Документ = (карточка сметы, тип документа). Сервис прячет за собой то, что
+физически данные лежат по-разному: перечень и полнота — плоскими строками
+`{row_id, cells}`, смета и оптимизация — типизированными `EstimateRow`.
+Роутер и клиент видят один контракт.
+
+Ключевые правила, ради которых сервис и появился:
+  * правки живут в черновике и попадают в рабочие строки только по «Применить»;
+  * `rev` защищает от тихого затирания чужих правок;
+  * право на запись определяет сервер (а не параметр в адресе страницы);
+  * пока задача считается — только чтение;
+  * входной файл заказчика неприкосновенен.
+"""
+from __future__ import annotations
+
+import uuid as _uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+import structlog
+from fastapi import HTTPException, status
+from sqlalchemy import delete, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.document_lock import LOCK_TTL_SECONDS, DocumentLock
+from app.models.estimate_version import EstimateVersion
+from app.models.history import TaskHistory
+from app.models.project import Project
+from app.models.task import Task
+from app.models.user import User
+from app.models.workflow_card import WorkflowCard
+from app.utils.auth import current_user_id
+from app.utils.permissions import can_edit
+
+logger = structlog.get_logger()
+
+# --- Типы документов -------------------------------------------------------
+
+KIND_LIST = "list"
+KIND_COMPLETENESS = "completeness"
+KIND_ESTIMATE = "estimate"
+KIND_OPTIMIZATION = "optimization"
+
+# Фаза 7 добавит сюда 'summary-section' со своим хранилищем.
+DOCUMENT_KINDS: tuple[str, ...] = (
+    KIND_LIST, KIND_COMPLETENESS, KIND_ESTIMATE, KIND_OPTIMIZATION,
+)
+
+_KIND_TO_CARD_FIELD = {
+    KIND_LIST: "list_task_id",
+    KIND_COMPLETENESS: "completeness_task_id",
+    KIND_ESTIMATE: "estimate_task_id",
+    KIND_OPTIMIZATION: "optimization_task_id",
+}
+
+# Слот, в котором лежат версии документа этого типа.
+_KIND_TO_FILE_SLOT = {
+    KIND_LIST: "result",
+    KIND_COMPLETENESS: "result",
+    KIND_ESTIMATE: "estimate",
+    KIND_OPTIMIZATION: "result",
+}
+
+_KIND_TO_ROW_FORMAT = {
+    KIND_LIST: "generic",
+    KIND_COMPLETENESS: "generic",
+    KIND_ESTIMATE: "estimate",
+    KIND_OPTIMIZATION: "estimate",
+}
+
+_KIND_LABEL = {
+    KIND_LIST: "Перечень",
+    KIND_COMPLETENESS: "Полнота",
+    KIND_ESTIMATE: "Смета",
+    KIND_OPTIMIZATION: "Оптимизация",
+}
+
+# Типы задач, у которых сохранение строк пересобирает xlsx результата.
+_XLSX_REBUILD_TYPES = frozenset({
+    "LIST_FROM_GRAND", "LIST_FROM_PROJECT",
+    "CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS",
+})
+
+# Читаемые названия полей типизированной строки сметы — для истории правок.
+_ESTIMATE_FIELD_LABELS = {
+    "name": "Наименование",
+    "unit": "Ед. изм.",
+    "qty": "Кол-во",
+    "price_work": "Цена работ",
+    "price_material": "Цена материалов",
+    "cost": "Стоимость",
+    "type": "Тип",
+    "is_excluded": "Исключена",
+    "num": "№",
+}
+
+# Глубина истории на документ: старые записи чистим, иначе снимки строк
+# разрастаются без предела (одна запись сметы на 2000 строк — сотни КБ).
+HISTORY_DEPTH = 20
+# Снимок «как было» держим только у последних записей: он нужен для отката, но
+# именно он и весит. Более старые записи остаются в списке как справка — с
+# перечнем изменений, но без возможности отката. 2000 строк × 20 записей — это
+# ~8 МБ на документ; со снимками только у 10 последних — вдвое меньше.
+SNAPSHOT_DEPTH = 10
+# Сколько изменений показываем детально; остальное — только счётчиком.
+MAX_DETAILED_CHANGES = 200
+
+
+@dataclass
+class ResolvedDocument:
+    card: WorkflowCard
+    kind: str
+    task: Task
+    project: Project
+    file_slot: str
+    row_format: str
+    versions: list[EstimateVersion]
+    active: Optional[EstimateVersion]
+
+
+# ---------------------------------------------------------------------------
+# Разрешение документа и прав
+# ---------------------------------------------------------------------------
+
+def _not_found() -> HTTPException:
+    # Чужой документ неотличим от несуществующего — как и везде в проекте.
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
+
+
+async def resolve_document(
+    db: AsyncSession,
+    card_id: str,
+    kind: str,
+    current_user: dict,
+    file_slot: Optional[str] = None,
+) -> ResolvedDocument:
+    if kind not in DOCUMENT_KINDS:
+        raise _not_found()
+
+    card = await db.get(WorkflowCard, card_id)
+    if card is None or card.deleted_at is not None:
+        raise _not_found()
+
+    task_id = getattr(card, _KIND_TO_CARD_FIELD[kind], None)
+    if not task_id:
+        raise _not_found()
+
+    task = await db.get(Task, str(task_id))
+    if task is None:
+        raise _not_found()
+    if not can_edit(task.owner_id, current_user, task.is_shared):
+        raise _not_found()
+
+    project = await db.get(Project, str(card.project_id))
+    if project is None:
+        raise _not_found()
+
+    slot = file_slot if file_slot == "input" else _KIND_TO_FILE_SLOT[kind]
+
+    res = await db.execute(
+        select(EstimateVersion)
+        .where(
+            EstimateVersion.task_id == str(task_id),
+            EstimateVersion.file_slot == slot,
+        )
+        .order_by(EstimateVersion.version_number)
+    )
+    versions = list(res.scalars().all())
+    active = next((v for v in versions if not v.is_rolled_back), versions[0] if versions else None)
+
+    return ResolvedDocument(
+        card=card,
+        kind=kind,
+        task=task,
+        project=project,
+        file_slot=slot,
+        row_format=_KIND_TO_ROW_FORMAT[kind],
+        versions=versions,
+        active=active,
+    )
+
+
+def write_state(doc: ResolvedDocument, current_user: dict) -> tuple[bool, Optional[str]]:
+    """Можно ли писать в документ и почему нет. Решает сервер, не клиент."""
+    if doc.file_slot == "input":
+        return False, "input_readonly"
+    if not can_edit(doc.task.owner_id, current_user, doc.task.is_shared):
+        return False, "no_permission"
+    if doc.task.status in ("processing", "pending"):
+        return False, "task_processing"
+    return True, None
+
+
+_READONLY_MESSAGE = {
+    "input_readonly": "Исходный файл заказчика доступен только для чтения",
+    "no_permission": "Недостаточно прав для изменения документа",
+    "task_processing": "Идёт расчёт — документ доступен только для просмотра",
+}
+
+
+def ensure_writable(doc: ResolvedDocument, current_user: dict) -> None:
+    can, reason = write_state(doc, current_user)
+    if can:
+        return
+    if reason == "no_permission":
+        raise _not_found()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=_READONLY_MESSAGE.get(reason, "Документ недоступен для изменения"),
+    )
+
+
+def pick_version(doc: ResolvedDocument, version_id: Optional[str]) -> EstimateVersion:
+    if version_id:
+        for v in doc.versions:
+            if str(v.id) == str(version_id):
+                return v
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Версия не найдена")
+    if doc.active is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Для документа ещё нет данных. Дождитесь завершения задачи.",
+        )
+    return doc.active
+
+
+async def user_display_name(db: AsyncSession, current_user: dict) -> str:
+    uid = current_user_id(current_user)
+    if uid is not None:
+        user = await db.get(User, uid)
+        if user is not None:
+            return user.full_name or user.username or f"Пользователь {uid}"
+    return current_user.get("username") or "Неизвестный пользователь"
+
+
+# ---------------------------------------------------------------------------
+# Черновик
+# ---------------------------------------------------------------------------
+
+async def save_draft(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    version: EstimateVersion,
+    rows: list,
+    current_user: dict,
+) -> None:
+    ensure_writable(doc, current_user)
+    version.draft_rows = rows
+    version.draft_updated_at = datetime.now(timezone.utc)
+    version.draft_user_id = current_user_id(current_user)
+    await db.commit()
+
+
+async def discard_draft(db: AsyncSession, version: EstimateVersion) -> None:
+    version.draft_rows = None
+    version.draft_updated_at = None
+    version.draft_user_id = None
+
+
+# ---------------------------------------------------------------------------
+# Диф правок для истории
+# ---------------------------------------------------------------------------
+
+def _row_key(row: Any) -> Optional[str]:
+    if not isinstance(row, dict):
+        return None
+    key = row.get("row_id") or row.get("id")
+    return str(key) if key is not None else None
+
+
+def _row_name(row: Any, row_format: str) -> str:
+    if not isinstance(row, dict):
+        return ""
+    if row_format == "generic":
+        cells = row.get("cells") or {}
+        for candidate in ("Наименование", "наименование", "Name"):
+            if candidate in cells:
+                return str(cells.get(candidate) or "")
+        return ""
+    return str(row.get("name") or "")
+
+
+def _row_fields(row: Any, row_format: str) -> dict:
+    if not isinstance(row, dict):
+        return {}
+    if row_format == "generic":
+        cells = row.get("cells")
+        return dict(cells) if isinstance(cells, dict) else {}
+    return {k: v for k, v in row.items() if k not in ("id", "lineage_id")}
+
+
+def _field_label(field: str, row_format: str) -> str:
+    if row_format == "generic":
+        return field
+    return _ESTIMATE_FIELD_LABELS.get(field, field)
+
+
+def diff_rows(old_rows: list, new_rows: list, row_format: str) -> list[dict]:
+    """Изменения по ячейкам: «строка 12, Цена работ: 3000 → 2500».
+
+    Сопоставление строк — по идентификатору; строки без идентификатора
+    сравниваются по позиции. Добавление и удаление строк фиксируются одной
+    записью на строку, а не по каждому полю.
+    """
+    changes: list[dict] = []
+    old_by_key = {}
+    for idx, row in enumerate(old_rows):
+        key = _row_key(row)
+        old_by_key[key if key is not None else f"__pos_{idx}"] = row
+
+    seen: set[str] = set()
+    for idx, new_row in enumerate(new_rows):
+        key = _row_key(new_row)
+        lookup = key if key is not None else f"__pos_{idx}"
+        seen.add(lookup)
+        old_row = old_by_key.get(lookup)
+        row_name = _row_name(new_row, row_format)
+
+        if old_row is None:
+            changes.append({
+                "row_number": idx + 1, "row_id": key, "row_name": row_name,
+                "field": "Строка", "previous": None, "new": "добавлена",
+            })
+            continue
+
+        old_fields = _row_fields(old_row, row_format)
+        new_fields = _row_fields(new_row, row_format)
+        for field in dict.fromkeys([*old_fields, *new_fields]):
+            before, after = old_fields.get(field), new_fields.get(field)
+            if before == after:
+                continue
+            changes.append({
+                "row_number": idx + 1, "row_id": key, "row_name": row_name,
+                "field": _field_label(field, row_format),
+                "previous": before, "new": after,
+            })
+
+    for idx, old_row in enumerate(old_rows):
+        key = _row_key(old_row)
+        lookup = key if key is not None else f"__pos_{idx}"
+        if lookup in seen:
+            continue
+        changes.append({
+            "row_number": idx + 1, "row_id": key,
+            "row_name": _row_name(old_row, row_format),
+            "field": "Строка", "previous": "была", "new": "удалена",
+        })
+
+    return changes
+
+
+# ---------------------------------------------------------------------------
+# Применение правок
+# ---------------------------------------------------------------------------
+
+async def _rebuild_result_xlsx(
+    db: AsyncSession, doc: ResolvedDocument, rows: list
+) -> None:
+    """Пересобрать xlsx результата. Входные файлы не трогаем никогда."""
+    if doc.file_slot != "result":
+        return
+    if doc.task.task_type not in _XLSX_REBUILD_TYPES:
+        return
+
+    from app.models.result import TaskResult
+    from app.services import storage_service
+    from app.utils.xlsx_generic import rows_to_xlsx
+
+    res = await db.execute(
+        select(TaskResult)
+        .where(TaskResult.task_id == str(doc.task.id), TaskResult.slot == "result")
+        .order_by(TaskResult.id.desc())
+        .limit(1)
+    )
+    tr = res.scalar_one_or_none()
+    if tr is None:
+        return
+
+    xlsx_bytes = rows_to_xlsx(rows)
+    tr.storage_key = await storage_service.store_result_file(
+        str(doc.task.id), "result", tr.file_name or "result.xlsx",
+        tr.mime_type, xlsx_bytes,
+    )
+    tr.size_bytes = len(xlsx_bytes)
+
+
+async def _trim_history(db: AsyncSession, task_id: str, kind: str) -> None:
+    """Удержать историю в разумном объёме.
+
+    Записи глубже HISTORY_DEPTH удаляем целиком; у записей между SNAPSHOT_DEPTH и
+    HISTORY_DEPTH выбрасываем снимок строк — они остаются как справка «кто и что
+    менял», но откатиться на них уже нельзя.
+    """
+    res = await db.execute(
+        select(TaskHistory)
+        .where(TaskHistory.task_id == task_id, TaskHistory.document_kind == kind)
+        .order_by(TaskHistory.created_at.desc())
+        .offset(SNAPSHOT_DEPTH)
+    )
+    older = list(res.scalars().all())
+
+    stale_ids = [e.id for e in older[HISTORY_DEPTH - SNAPSHOT_DEPTH:]]
+    if stale_ids:
+        await db.execute(delete(TaskHistory).where(TaskHistory.id.in_(stale_ids)))
+
+    for entry in older[: HISTORY_DEPTH - SNAPSHOT_DEPTH]:
+        previous = entry.previous_value if isinstance(entry.previous_value, dict) else {}
+        if previous.get("rows") is not None:
+            entry.previous_value = {"rows_dropped": True}
+
+
+async def apply_rows(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    version: EstimateVersion,
+    rows: Optional[list],
+    client_rev: int,
+    current_user: dict,
+    operation_type: str = "document_edit",
+    description_override: Optional[str] = None,
+) -> dict:
+    """Черновик (или переданные строки) → рабочие строки. Единственная точка записи."""
+    ensure_writable(doc, current_user)
+
+    # Значения снимаем заранее: после отката транзакции ORM-объекты сброшены.
+    task_id, kind, version_id = str(doc.task.id), doc.kind, version.id
+
+    if client_rev != version.rev:
+        raise await _stale_rev_error(db, task_id, kind)
+
+    new_rows = rows if rows is not None else version.draft_rows
+    if new_rows is None:
+        new_rows = version.rows or []
+
+    old_rows = list(version.rows or [])
+    changes = diff_rows(old_rows, new_rows, doc.row_format)
+
+    if not changes:
+        # Нечего применять — черновик просто убираем, rev не трогаем.
+        await discard_draft(db, version)
+        await db.commit()
+        return {"version_id": str(version.id), "rev": version.rev,
+                "rows_count": len(new_rows), "changes_count": 0}
+
+    user_name = await user_display_name(db, current_user)
+
+    # Атомарная заявка на запись. Проверка `client_rev != version.rev` выше даёт
+    # быстрый и понятный отказ, но между ней и коммитом есть окно: два «Применить»
+    # с одним rev в параллельных запросах прошли бы оба, и второй тихо затёр бы
+    # первого. UPDATE ... WHERE rev = client_rev закрывает окно на уровне БД —
+    # совпадение получит ровно один запрос.
+    claim = await db.execute(
+        update(EstimateVersion)
+        .where(EstimateVersion.id == version_id, EstimateVersion.rev == client_rev)
+        .values(rev=client_rev + 1)
+        .execution_options(synchronize_session=False)
+    )
+    if claim.rowcount == 0:
+        await db.rollback()
+        raise await _stale_rev_error(db, task_id, kind)
+
+    version.rows = new_rows
+    version.rev = client_rev + 1
+    await discard_draft(db, version)
+
+    await _rebuild_result_xlsx(db, doc, new_rows)
+    doc.task.manually_edited_at = datetime.now(timezone.utc)
+
+    label = _KIND_LABEL.get(doc.kind, doc.kind)
+    db.add(TaskHistory(
+        id=str(_uuid.uuid4()),
+        task_id=str(doc.task.id),
+        operation_type=operation_type,
+        slot=doc.file_slot,
+        description=description_override or (
+            f"{user_name}: изменено значений — {len(changes)} (документ «{label}»)"
+        ),
+        # previous_value хранит снимок «как было» — по нему работает откат.
+        previous_value={"rows": old_rows},
+        # new_value хранит только перечень изменений: второй снимок строк удвоил
+        # бы объём истории, а текущее состояние и так лежит в версии.
+        new_value={
+            "changes": changes[:MAX_DETAILED_CHANGES],
+            "changes_count": len(changes),
+        },
+        user_id=current_user_id(current_user),
+        user_name=user_name,
+        document_kind=doc.kind,
+    ))
+    # Явный flush: чистка истории считает записи запросом, и без него новая
+    # запись не попала бы в подсчёт — глубина «плавала» бы на единицу в
+    # зависимости от настройки autoflush сессии.
+    await db.flush()
+    await _trim_history(db, task_id, kind)
+    await db.commit()
+
+    logger.info(
+        "document_applied", card_id=str(doc.card.id), kind=doc.kind,
+        rev=version.rev, changes=len(changes), user=user_name,
+    )
+    return {"version_id": str(version.id), "rev": version.rev,
+            "rows_count": len(new_rows), "changes_count": len(changes)}
+
+
+async def _stale_rev_error(db: AsyncSession, task_id: str, kind: str) -> HTTPException:
+    """Принимает идентификаторы, а не ORM-объекты: вызывается в том числе после
+    rollback, когда объекты сессии сброшены и любое обращение к их полям
+    попыталось бы сходить в БД из синхронного контекста."""
+    last = await _last_editor(db, task_id, kind)
+    who = f" Последним сохранял: {last}." if last else ""
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Документ изменился, пока вы работали."
+            f"{who} Обновите страницу, чтобы не потерять чужие правки."
+        ),
+    )
+
+
+async def _last_editor(db: AsyncSession, task_id: str, kind: str) -> Optional[str]:
+    res = await db.execute(
+        select(TaskHistory.user_name)
+        .where(TaskHistory.task_id == task_id, TaskHistory.document_kind == kind)
+        .order_by(TaskHistory.created_at.desc())
+        .limit(1)
+    )
+    return res.scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# История и откат
+# ---------------------------------------------------------------------------
+
+async def list_history(db: AsyncSession, doc: ResolvedDocument) -> list[dict]:
+    res = await db.execute(
+        select(TaskHistory)
+        .where(
+            TaskHistory.task_id == str(doc.task.id),
+            TaskHistory.document_kind == doc.kind,
+        )
+        .order_by(TaskHistory.created_at.desc())
+    )
+    entries = []
+    for e in res.scalars().all():
+        payload = e.new_value if isinstance(e.new_value, dict) else {}
+        entries.append({
+            "id": str(e.id),
+            "kind": e.document_kind,
+            "operation_type": e.operation_type,
+            "description": e.description,
+            "user_id": e.user_id,
+            "user_name": e.user_name or "",
+            "created_at": e.created_at.isoformat(),
+            "changes_count": payload.get("changes_count", 0),
+            "changes": payload.get("changes", []),
+        })
+    return entries
+
+
+async def revert_to_entry(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    version: EstimateVersion,
+    entry_id: str,
+    current_user: dict,
+) -> dict:
+    entry = await db.get(TaskHistory, entry_id)
+    if (
+        entry is None
+        or str(entry.task_id) != str(doc.task.id)
+        or entry.document_kind != doc.kind
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись истории не найдена")
+
+    previous = entry.previous_value if isinstance(entry.previous_value, dict) else {}
+    rows = previous.get("rows")
+    if rows is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="У этой записи нет сохранённого состояния для отката",
+        )
+
+    user_name = await user_display_name(db, current_user)
+    return await apply_rows(
+        db, doc, version, rows, version.rev, current_user,
+        operation_type="document_revert",
+        description_override=(
+            f"{user_name}: откат к состоянию от "
+            f"{entry.created_at.strftime('%d.%m.%Y %H:%M')}"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Присутствие
+# ---------------------------------------------------------------------------
+
+def _is_fresh(lock: DocumentLock) -> bool:
+    hb = lock.heartbeat_at
+    if hb is None:
+        return False
+    if hb.tzinfo is None:
+        hb = hb.replace(tzinfo=timezone.utc)
+    return hb > datetime.now(timezone.utc) - timedelta(seconds=LOCK_TTL_SECONDS)
+
+
+def _lock_info(lock: DocumentLock) -> dict:
+    hb = lock.heartbeat_at
+    return {
+        "user_id": lock.user_id,
+        "user_name": lock.user_name or "",
+        "heartbeat_at": hb.isoformat() if hb else "",
+    }
+
+
+async def _current_lock(
+    db: AsyncSession, card_id: str, kind: str
+) -> Optional[DocumentLock]:
+    res = await db.execute(
+        select(DocumentLock).where(
+            DocumentLock.card_id == card_id, DocumentLock.kind == kind
+        )
+    )
+    return res.scalar_one_or_none()
+
+
+async def get_foreign_lock(
+    db: AsyncSession, card_id: str, kind: str, current_user: dict
+) -> Optional[dict]:
+    """Кто ещё редактирует документ. Свой heartbeat и протухшие — не считаем."""
+    lock = await _current_lock(db, card_id, kind)
+    if lock is None or not _is_fresh(lock):
+        return None
+    if lock.user_id is not None and lock.user_id == current_user_id(current_user):
+        return None
+    return _lock_info(lock)
+
+
+async def heartbeat(
+    db: AsyncSession, card_id: str, kind: str, current_user: dict
+) -> Optional[dict]:
+    """Отметиться в документе. Держатель — первый пришедший, пока не ушёл."""
+    uid = current_user_id(current_user)
+    lock = await _current_lock(db, card_id, kind)
+
+    if lock is not None and _is_fresh(lock) and lock.user_id != uid:
+        return _lock_info(lock)  # документ уже за другим — не перехватываем
+
+    user_name = await user_display_name(db, current_user)
+    now = datetime.now(timezone.utc)
+    if lock is None:
+        db.add(DocumentLock(
+            id=str(_uuid.uuid4()), card_id=card_id, kind=kind,
+            user_id=uid, user_name=user_name, heartbeat_at=now,
+        ))
+    else:
+        lock.user_id = uid
+        lock.user_name = user_name
+        lock.heartbeat_at = now
+    await db.commit()
+    return None

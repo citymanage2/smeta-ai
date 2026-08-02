@@ -1,0 +1,105 @@
+"""Контракт единого редактора документов.
+
+Один и тот же контракт для всех типов документов; чем они отличаются, описывает
+`row_format` (формат строки) и набор разрешённых действий на клиенте.
+"""
+from decimal import Decimal
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+RowFormat = Literal["generic", "estimate"]
+ReadonlyReason = Literal["no_permission", "task_processing", "input_readonly"]
+
+
+class VersionBrief(BaseModel):
+    id: str
+    version_number: int
+    version_label: str
+    version_display_name: str
+    is_rolled_back: bool
+    created_at: str
+
+
+class LockInfo(BaseModel):
+    user_id: Optional[int]
+    user_name: str
+    heartbeat_at: str
+
+
+class ProjectSettings(BaseModel):
+    """Проценты доп. расходов проекта — единый источник вместо трёх хардкодов."""
+    overhead_pct: Decimal
+    transport_pct: Decimal
+
+
+class DocumentMeta(BaseModel):
+    card_id: str
+    kind: str
+    row_format: RowFormat
+    file_slot: str
+    task_id: str
+    task_type: str
+    task_status: str
+    can_write: bool
+    readonly_reason: Optional[ReadonlyReason] = None
+    rev: int
+    active_version_id: Optional[str] = None
+    versions: list[VersionBrief] = Field(default_factory=list)
+    coefficient: Optional[dict] = None
+    has_draft: bool = False
+    draft_updated_at: Optional[str] = None
+    lock: Optional[LockInfo] = None
+    project: ProjectSettings
+
+
+class DocumentRows(BaseModel):
+    version_id: str
+    rev: int
+    rows: list[Any]
+    draft_rows: Optional[list[Any]] = None
+
+
+class SaveDraftRequest(BaseModel):
+    version_id: Optional[str] = None
+    rows: list[Any]
+
+
+class ApplyRequest(BaseModel):
+    version_id: Optional[str] = None
+    # rev, на котором работал клиент. Расхождение → 409.
+    rev: int
+    # Если не передан — применяется черновик.
+    rows: Optional[list[Any]] = None
+
+
+class ApplyResponse(BaseModel):
+    version_id: str
+    rev: int
+    rows_count: int
+    changes_count: int
+
+
+class ChangeEntry(BaseModel):
+    row_number: int
+    row_id: Optional[str] = None
+    row_name: str = ""
+    field: str
+    previous: Any = None
+    new: Any = None
+
+
+class HistoryEntryOut(BaseModel):
+    id: str
+    kind: Optional[str] = None
+    operation_type: str
+    description: str
+    user_id: Optional[int] = None
+    user_name: str = ""
+    created_at: str
+    changes_count: int = 0
+    changes: list[ChangeEntry] = Field(default_factory=list)
+
+
+class HeartbeatResponse(BaseModel):
+    lock: Optional[LockInfo] = None

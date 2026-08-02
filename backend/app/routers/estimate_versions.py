@@ -180,14 +180,23 @@ async def save_rows(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Persist edited rows for a version. Marks task as manually edited."""
+    """Persist edited rows for a version. Marks task as manually edited.
+
+    Файл заказчика (file_slot='input') не пересобирается никогда: оригинал —
+    единственное, что нельзя восстановить, если правка окажется ошибочной
+    (решение 7.4, план 2026-08-02). Строки версии при этом сохраняются — они
+    нужны для просмотра, — но исходный xlsx остаётся нетронутым.
+    """
     from datetime import datetime, timezone
     from app.models.result import TaskResult
-    from app.models.task_input_file import TaskInputFile
     from app.utils.xlsx_generic import rows_to_xlsx
 
     version = await _get_version_or_404(task_id, version_id, db)
     version.rows = body.rows
+    # На переходный период старый редактор живёт рядом с новым и пишет в те же
+    # строки. Без сдвига rev его сохранение было бы невидимо для защиты от
+    # перезаписи — открытый рядом новый редактор молча затёр бы эти правки.
+    version.rev = (version.rev or 0) + 1
     task = await _get_task_or_404(task_id, db, current_user)
     task.manually_edited_at = datetime.now(timezone.utc)
 
@@ -208,25 +217,6 @@ async def save_rows(
                     task_id, "result", tr.file_name or "result.xlsx", tr.mime_type, xlsx_bytes
                 )
                 tr.size_bytes = len(xlsx_bytes)
-
-        elif version.file_slot == "input":
-            # file_index encoded in version_label as "input_N"
-            try:
-                file_index = int(version.version_label.split("_")[-1])
-            except (ValueError, AttributeError):
-                file_index = 0
-            res = await db.execute(
-                select(TaskInputFile).where(
-                    TaskInputFile.task_id == task_id,
-                    TaskInputFile.file_index == file_index,
-                )
-            )
-            tif = res.scalar_one_or_none()
-            if tif is not None:
-                tif.storage_key = await storage_service.store_input_file(
-                    task_id, tif.file_index, tif.file_name, tif.mime_type, xlsx_bytes
-                )
-                tif.size_bytes = len(xlsx_bytes)
 
     await db.commit()
     return {"version_id": version_id, "rows_count": len(body.rows)}

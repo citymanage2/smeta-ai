@@ -224,6 +224,7 @@ def create_app() -> FastAPI:
     from app.routers.summary import router as summary_router
     from app.routers.retraining import router as retraining_router
     from app.routers.notifications import router as notifications_router
+    from app.routers.documents import router as documents_router
 
     app.include_router(auth.router)
     app.include_router(tasks.router)
@@ -239,6 +240,7 @@ def create_app() -> FastAPI:
     app.include_router(summary_router, prefix="/api")
     app.include_router(retraining_router)
     app.include_router(notifications_router)
+    app.include_router(documents_router)
 
     # Global error handler
     @app.exception_handler(Exception)
