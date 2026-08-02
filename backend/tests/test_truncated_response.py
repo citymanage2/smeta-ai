@@ -100,7 +100,26 @@ async def test_normal_response_still_returns_text(monkeypatch):
 # (сбор батчей → вызов → применение) выполняется целиком.
 # --------------------------------------------------------------------------
 
-async def test_truncated_batch_is_split_in_half_and_priced():
+def _capture_estimate_writes(monkeypatch) -> dict:
+    """Перехватить запись сметы в единый источник правды (Фаза 5).
+
+    Цены из исправления пустых цен уходят не в `progress_data`, а в рабочую
+    версию сметы через `estimate_store.write_items`. Здесь БД замокана целиком,
+    поэтому смотрим на то, что сервису передали.
+    """
+    from app.services import estimate_store
+
+    written: dict = {}
+
+    async def fake_write_items(_db, _task, items, **_kw):
+        written["items"] = [dict(it) for it in items]
+        return None, 0.0
+
+    monkeypatch.setattr(estimate_store, "write_items", fake_write_items)
+    return written
+
+
+async def test_truncated_batch_is_split_in_half_and_priced(monkeypatch):
     """Батч из 5 позиций не влез в ответ → две половины, все цены проставлены."""
     import re
 
@@ -121,6 +140,8 @@ async def test_truncated_batch_is_split_in_half_and_priced():
     p.update_progress = AsyncMock()
     p._check_cancelled = AsyncMock()
 
+    written = _capture_estimate_writes(monkeypatch)
+
     calls = {"n": 0, "sizes": []}
 
     async def fake_claude(messages, **kwargs):
@@ -137,4 +158,4 @@ async def test_truncated_batch_is_split_in_half_and_priced():
 
     # Один обрезанный вызов на 5 позиций → две половины вместо трёх повторов.
     assert calls["sizes"] == [5, 2, 3], calls["sizes"]
-    assert [it.get("work_price") for it in items] == [100, 101, 102, 103, 104]
+    assert [it.get("work_price") for it in written["items"]] == [100, 101, 102, 103, 104]

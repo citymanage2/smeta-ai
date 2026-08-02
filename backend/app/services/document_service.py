@@ -531,6 +531,23 @@ async def _rebuild_result_xlsx(
     tr.size_bytes = len(xlsx_bytes)
 
 
+async def _sync_estimate_artifacts(
+    db: AsyncSession, doc: ResolvedDocument, rows: list
+) -> None:
+    """Смета: после правки пересобрать файл и итог задачи.
+
+    Без этого редактор, `task.cost` и скачанный файл показывали бы три разных
+    числа — ровно та проблема, ради которой затевалась Фаза 5. Версию и `rev`
+    ведёт `apply_rows`, поэтому здесь только артефакты.
+    """
+    if doc.kind != KIND_ESTIMATE:
+        return
+
+    from app.services import estimate_store
+
+    await estimate_store.sync_artifacts(db, doc.task, rows)
+
+
 async def _trim_history(db: AsyncSession, task_id: str, kind: str) -> None:
     """Удержать историю в разумном объёме.
 
@@ -611,6 +628,7 @@ async def apply_rows(
     await discard_draft(db, version)
 
     await _rebuild_result_xlsx(db, doc, new_rows)
+    await _sync_estimate_artifacts(db, doc, new_rows)
     doc.task.manually_edited_at = datetime.now(timezone.utc)
 
     label = _KIND_LABEL.get(doc.kind, doc.kind)
