@@ -385,6 +385,50 @@ class TestDiffExplained:
         assert d["only_order"] is True
         assert d["samples"] == []
 
+    def test_row_without_numbers_is_described(self):
+        """Заголовок раздела: ни количества, ни цен.
+
+        На боевых данных такая строка уронила весь отчёт — количество
+        печаталось как число, а числа у неё нет. Отчёт по 146 сметам падал
+        целиком из-за одной строки.
+        """
+        header = [{"type": "Раздел", "name": "Раздел 1. Демонтаж", "unit": "",
+                   "quantity": None, "work_price": None, "material_price": None}]
+        row = [{"type": "Работа", "name": "Кладка", "unit": "м2",
+                "quantity": 10, "work_price": 100.0, "material_price": None}]
+
+        d = _analyze(header, row)
+
+        assert d["samples"], "пример различия обязателен"
+        assert d["samples"][0]["items"], "у строки без чисел тоже есть описание"
+
+    @pytest.mark.asyncio
+    async def test_report_survives_rows_without_numbers(
+        self, async_client, db_session, mig_env,
+    ):
+        """Смета с заголовками разделов не должна ронять весь отчёт."""
+        base = await db_session.get(Task, mig_env["in_sync"])
+        header = {"type": "Раздел", "name": "Раздел 1. Демонтаж", "unit": "",
+                  "quantity": None, "work_price": None, "material_price": None}
+        task = Task(
+            owner_id=base.owner_id, user_role="admin", task_type="ESTIMATE_FROM_LIST",
+            status="completed", input_files=[], input_file_data=[], chat_history=[],
+            project_id=base.project_id, name="Смета с разделами",
+            progress_data={"items": [header] + _items()},
+        )
+        db_session.add(task)
+        await db_session.flush()
+        await estimate_store.ensure_working_version(
+            db_session, task,
+            estimate_store.items_to_rows(_items(work_price=777.0)), commit=False,
+        )
+        await db_session.commit()
+
+        r = await _report(async_client, mig_env)
+
+        assert r.status_code == 200, r.text
+        assert _by_id(r.json(), str(task.id))["status"] == "conflict"
+
     @pytest.mark.asyncio
     async def test_report_explains_conflict(self, async_client, mig_env):
         """Отчёт по API отдаёт разбор, а не только число расхождений."""

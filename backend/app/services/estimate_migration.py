@@ -101,19 +101,30 @@ SAMPLE_LIMIT = 3
 
 
 def _money(value) -> str:
-    """Число так, как человек читает его в смете."""
+    """Число так, как человек читает его в смете. Числа нет — прочерк."""
+    if value is None:
+        return "—"
     return f"{value:,.2f}".replace(",", " ")
 
 
 def _row_text(sig: tuple) -> str:
-    """Строка сметы одной фразой: количество, единица и обе цены."""
+    """Строка сметы одной фразой: количество, единица и обе цены.
+
+    Количества и цен может не быть вовсе — так выглядит заголовок раздела.
+    Раньше количество печаталось безусловно, и одна такая строка роняла отчёт
+    по всем сметам.
+    """
     _type, _name, unit, qty, work, material = sig
-    parts = [f"{_money(qty)} {unit}".strip()]
+    parts = []
+    if qty is not None:
+        parts.append(f"{_money(qty)} {unit}".strip())
+    elif unit:
+        parts.append(unit)
     if work:
         parts.append(f"работа {_money(work)}")
     if material:
         parts.append(f"материал {_money(material)}")
-    return ", ".join(parts)
+    return ", ".join(parts) if parts else "без количества и цен"
 
 
 def describe_diff(items: list, version_items: list) -> dict:

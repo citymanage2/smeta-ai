@@ -216,6 +216,21 @@ describe('перевод смет из админки', () => {
     expect(await screen.findByText(/не удалось/i)).toBeInTheDocument();
   });
 
+  it('причина ошибки видна на экране — иначе её негде взять', async () => {
+    // У пользователя нет доступа к логам сервера: если причина не показана,
+    // «попробуйте ещё раз» — единственное, что он может сделать.
+    vi.mocked(adminApi.getEstimateMigrationReport).mockRejectedValue({
+      response: { status: 500, data: { detail: 'unsupported format string' } },
+    });
+    render(<EstimateMigrationPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: /проверить/i }));
+
+    const box = await screen.findByText(/не удалось получить отчёт/i);
+    expect(box).toHaveTextContent(/500/);
+    expect(box).toHaveTextContent(/unsupported format string/);
+  });
+
   it('до проверки применять нечего', () => {
     render(<EstimateMigrationPanel />);
 

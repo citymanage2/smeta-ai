@@ -25,6 +25,23 @@ import { LumaSpin } from '../ui/LumaSpin';
 
 const money = (n: number) => `${Math.round(n).toLocaleString('ru-RU')} ₽`;
 
+/**
+ * Причина отказа сервера человеческой фразой — хвост к сообщению об ошибке.
+ *
+ * Администратор не смотрит в логи контейнера, а без причины на экране ошибка
+ * неотличима от любой другой: и «нет сети», и сбой в самом отчёте выглядят
+ * одинаково. Код ответа и текст сервера позволяют хотя бы передать их дальше.
+ */
+const describeError = (e: unknown): string => {
+  const err = e as { response?: { status?: number; data?: { detail?: unknown } };
+    message?: string };
+  const status = err?.response?.status;
+  const raw = err?.response?.data?.detail ?? err?.message;
+  const detail = typeof raw === 'string' ? raw : raw ? JSON.stringify(raw) : '';
+  const code = status ? ` (ошибка ${status})` : '';
+  return detail ? `${code}: ${detail}` : `${code}. Попробуйте ещё раз.`;
+};
+
 const cardStyle: React.CSSProperties = {
   border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, marginBottom: 12,
   background: '#fff',
@@ -43,8 +60,10 @@ const EstimateMigrationPanel: React.FC = () => {
     setError(null);
     try {
       setReport(await getEstimateMigrationReport());
-    } catch {
-      setError('Не удалось получить отчёт. Попробуйте ещё раз.');
+    } catch (e) {
+      // Доступа к логам сервера у администратора нет: без причины на экране
+      // единственное доступное действие — нажать кнопку ещё раз.
+      setError(`Не удалось получить отчёт${describeError(e)}`);
     } finally {
       setLoading(false);
     }
@@ -81,8 +100,10 @@ const EstimateMigrationPanel: React.FC = () => {
       const created = result.counts.needs_version ?? 0;
       setNotice(`Создано рабочих версий: ${created}`);
       await load();
-    } catch {
-      setError('Не удалось выполнить перевод. Данные остались как были.');
+    } catch (e) {
+      setError(
+        `Не удалось выполнить перевод, данные остались как были${describeError(e)}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -100,8 +121,10 @@ const EstimateMigrationPanel: React.FC = () => {
             : `«${entry.task_name}»: оставлено как в редакторе`,
         );
         await load();
-      } catch {
-        setError('Не удалось разобрать расхождение. Смета осталась как была.');
+      } catch (e) {
+        setError(
+          `Не удалось разобрать расхождение, смета осталась как была${describeError(e)}`,
+        );
       } finally {
         setBusy(false);
       }
