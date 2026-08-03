@@ -174,3 +174,60 @@ export async function uploadPrices(file: File): Promise<{ message: string }> {
   const response = await apiClient.post<{ message: string }>('/admin/prices/upload', formData);
   return response.data;
 }
+
+// ---------------------------------------------------------------------------
+// Перевод смет на единый источник правды (разовая операция, план 2026-08-03)
+// ---------------------------------------------------------------------------
+
+export interface MigrationEntry {
+  task_id: string;
+  task_name: string;
+  /** needs_version | in_sync | conflict | excluded | empty | resolved */
+  status: string;
+  items_count: number;
+  version_count: number;
+  /** Сколько позиций расходится между расчётом и редактором. */
+  diff_count: number;
+  items_total: number;
+  version_total: number;
+}
+
+export interface MigrationReport {
+  applied: boolean;
+  counts: Record<string, number>;
+  labels: Record<string, string>;
+  entries: MigrationEntry[];
+}
+
+export interface MigrationResolveResult {
+  task_id: string;
+  task_name: string;
+  status: string;
+  items_total: number;
+  version_total: number;
+}
+
+/** Отчёт «что будет сделано». Ничего не меняет. */
+export async function getEstimateMigrationReport(): Promise<MigrationReport> {
+  const response = await apiClient.get<MigrationReport>('/admin/estimates/migration');
+  return response.data;
+}
+
+/** Создать недостающие рабочие версии. Сметы с расхождением не трогаются. */
+export async function applyEstimateMigration(exclude: string[]): Promise<MigrationReport> {
+  const response = await apiClient.post<MigrationReport>(
+    '/admin/estimates/migration/apply', { exclude },
+  );
+  return response.data;
+}
+
+/** Разобрать расхождение по одной смете. */
+export async function resolveEstimateConflict(
+  taskId: string,
+  prefer: 'items' | 'version',
+): Promise<MigrationResolveResult> {
+  const response = await apiClient.post<MigrationResolveResult>(
+    '/admin/estimates/migration/resolve', { task_id: taskId, prefer },
+  );
+  return response.data;
+}

@@ -1428,3 +1428,80 @@ async def api_health(
             "base_url", "via_proxy", "api_key_set", "proxy_secret_set", "model",
         )},
     )
+
+
+# ---------------------------------------------------------------------------
+# Перевод смет на единый источник правды
+# ---------------------------------------------------------------------------
+#
+# Разовая операция после Фазы 5 плана единого редактора: у смет, посчитанных до
+# него, может не быть рабочей версии, а у части два хранилища разошлись. Раньше
+# это чинилось только командой в консоли сервера — теперь доступно из админки.
+#
+# План: plans/2026-08-03-migraciya-smet-iz-adminki.md
+
+
+class MigrationApplyRequest(BaseModel):
+    # Сметы, которые не трогаем: активные тендеры.
+    exclude: list[str] = []
+
+
+class MigrationResolveRequest(BaseModel):
+    task_id: str
+    # Чья сторона верна: 'items' — позиции расчёта, 'version' — строки редактора.
+    prefer: str
+
+
+@router.get("/estimates/migration")
+async def estimates_migration_report(
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(get_admin_user),
+):
+    """Что будет сделано. Ничего не меняет."""
+    from app.services.estimate_migration import migrate_estimates, report_to_dict
+
+    report = await migrate_estimates(db, apply=False)
+    return report_to_dict(report)
+
+
+@router.post("/estimates/migration/apply")
+async def estimates_migration_apply(
+    body: MigrationApplyRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(get_admin_user),
+):
+    """Создать недостающие рабочие версии.
+
+    Сметы с расхождением не трогаются: их разбирают по одной, осознанно.
+    """
+    from app.services.estimate_migration import migrate_estimates, report_to_dict
+
+    report = await migrate_estimates(db, apply=True, exclude=set(body.exclude))
+    logger.info(
+        "estimates_migration_applied",
+        counts=report.counts, excluded=len(body.exclude),
+    )
+    return report_to_dict(report)
+
+
+@router.post("/estimates/migration/resolve")
+async def estimates_migration_resolve(
+    body: MigrationResolveRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(get_admin_user),
+):
+    """Разобрать расхождение по одной смете."""
+    from app.services.estimate_migration import resolve_conflict
+
+    entry = await resolve_conflict(db, body.task_id, body.prefer)
+    logger.info(
+        "estimates_migration_resolved",
+        task_id=body.task_id, prefer=body.prefer,
+    )
+    return {
+        "task_id": entry.task_id,
+        "task_name": entry.task_name,
+        "status": entry.status,
+        "items_total": round(entry.items_total, 2),
+        "version_total": round(entry.version_total, 2),
+    }
