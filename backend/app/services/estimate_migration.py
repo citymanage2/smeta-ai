@@ -69,6 +69,11 @@ class Entry:
     diff_count: int = 0
     items_total: float = 0.0
     version_total: float = 0.0
+    # Разбор расхождения: по одному числу «расходится позиций» решение принять
+    # нельзя — непонятно, изменились цифры или строки просто переставлены.
+    only_order: bool = False
+    same_totals: bool = False
+    samples: list = field(default_factory=list)
 
 
 @dataclass
@@ -90,6 +95,71 @@ def _diff_count(left: list, right: list) -> int:
             1 for x, y in zip(a, b) if x != y
         )
     return sum(1 for x, y in zip(a, b) if x != y)
+
+
+SAMPLE_LIMIT = 3
+
+
+def _money(value) -> str:
+    """Число так, как человек читает его в смете."""
+    return f"{value:,.2f}".replace(",", " ")
+
+
+def _row_text(sig: tuple) -> str:
+    """Строка сметы одной фразой: количество, единица и обе цены."""
+    _type, _name, unit, qty, work, material = sig
+    parts = [f"{_money(qty)} {unit}".strip()]
+    if work:
+        parts.append(f"работа {_money(work)}")
+    if material:
+        parts.append(f"материал {_money(material)}")
+    return ", ".join(parts)
+
+
+def describe_diff(items: list, version_items: list) -> dict:
+    """Объяснить расхождение словами, а не числом.
+
+    Отвечает на три вопроса, без которых человек не может решить, чью сторону
+    брать: одинаковые ли деньги, одинаковый ли набор строк и что именно
+    разошлось. Примеров даётся не больше трёх — отчёт должен читаться, а не
+    превращаться в простыню.
+    """
+    left, right = items_signature(items), items_signature(version_items)
+    same_totals = round(items_total(items), 2) == round(items_total(version_items), 2)
+    # Набор строк тот же, отличается только порядок: перезаписывать нечего.
+    only_order = sorted(left, key=repr) == sorted(right, key=repr)
+
+    samples: list = []
+    for sig_a, sig_b in zip(left, right):
+        if len(samples) >= SAMPLE_LIMIT:
+            break
+        if sig_a == sig_b:
+            continue
+        samples.append({
+            "name": sig_a[1] or sig_b[1] or "(без названия)",
+            "items": _row_text(sig_a),
+            "version": _row_text(sig_b),
+        })
+
+    # Строки, которых нет на одной из сторон, — тоже расхождение.
+    if len(samples) < SAMPLE_LIMIT and len(left) != len(right):
+        longer, side = (left, "items") if len(left) > len(right) else (right, "version")
+        for sig in longer[min(len(left), len(right)):]:
+            if len(samples) >= SAMPLE_LIMIT:
+                break
+            samples.append({
+                "name": sig[1] or "(без названия)",
+                "items": _row_text(sig) if side == "items" else "строки нет",
+                "version": _row_text(sig) if side == "version" else "строки нет",
+            })
+
+    return {
+        "only_order": only_order,
+        "same_totals": same_totals,
+        "items_rows": len(left),
+        "version_rows": len(right),
+        "samples": samples,
+    }
 
 
 async def _backup(db: AsyncSession, task: Task, rows: list, items: list) -> None:
@@ -165,11 +235,14 @@ async def migrate_estimates(
             ))
             continue
 
+        explained = describe_diff(items, version_items)
         entry = Entry(
             task_id, name, STATUS_CONFLICT,
             items_count=len(items), version_count=len(version_items),
             diff_count=_diff_count(items, version_items),
             items_total=items_total(items), version_total=items_total(version_items),
+            only_order=explained["only_order"], same_totals=explained["same_totals"],
+            samples=explained["samples"],
         )
 
         if apply and prefer == "items":
@@ -252,6 +325,11 @@ def report_to_dict(report: Report) -> dict:
                 "diff_count": e.diff_count,
                 "items_total": round(e.items_total, 2),
                 "version_total": round(e.version_total, 2),
+                "only_order": e.only_order,
+                "same_totals": e.same_totals,
+                "items_rows": e.items_count,
+                "version_rows": e.version_count,
+                "samples": e.samples,
             }
             for e in report.entries
         ],

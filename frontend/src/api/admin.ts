@@ -190,6 +190,14 @@ export interface MigrationEntry {
   diff_count: number;
   items_total: number;
   version_total: number;
+  /** Набор строк тот же, отличается только порядок — переписывать нечего. */
+  only_order?: boolean;
+  /** Деньги с обеих сторон одинаковые. */
+  same_totals?: boolean;
+  items_rows?: number;
+  version_rows?: number;
+  /** До трёх примеров: что именно разошлось. */
+  samples?: { name: string; items: string; version: string }[];
 }
 
 export interface MigrationReport {

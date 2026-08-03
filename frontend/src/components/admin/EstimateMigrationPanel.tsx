@@ -235,11 +235,57 @@ const EstimateMigrationPanel: React.FC = () => {
                   style={{ padding: '10px 0', borderTop: '1px solid #f1f5f9' }}
                 >
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{entry.task_name}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', margin: '4px 0 8px' }}>
-                    расходится позиций: {entry.diff_count} · итог расчёта{' '}
-                    {money(entry.items_total)} · итог редактора{' '}
-                    {money(entry.version_total)}
+                  <div style={{ fontSize: 12, color: '#64748b', margin: '4px 0 6px' }}>
+                    строк: {entry.items_rows ?? entry.items_count} (расчёт) против{' '}
+                    {entry.version_rows ?? entry.version_count} (редактор) ·
+                    расходится позиций: {entry.diff_count}
                   </div>
+                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
+                    итог расчёта {money(entry.items_total)} · итог редактора{' '}
+                    {money(entry.version_total)}
+                    {entry.same_totals && (
+                      <b style={{ color: '#15803d' }}> — итоги совпадают</b>
+                    )}
+                  </div>
+
+                  {/* Самый важный случай: набор строк тот же, отличается только
+                      порядок. Тогда «взять из расчёта» ничего не улучшит, но
+                      может стереть правки человека. */}
+                  {entry.only_order && (
+                    <div style={{
+                      fontSize: 12, color: '#15803d', background: '#f0fdf4',
+                      padding: '6px 10px', borderRadius: 6, marginBottom: 8,
+                    }}>
+                      Состав строк совпадает — отличается только порядок.
+                      Цифры одинаковые, переписывать нечего: безопаснее оставить
+                      как в редакторе.
+                    </div>
+                  )}
+
+                  {(entry.samples?.length ?? 0) > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>
+                        Что разошлось:
+                      </div>
+                      {entry.samples!.map((s, i) => (
+                        <div
+                          key={`${entry.task_id}-${i}`}
+                          style={{
+                            fontSize: 12, padding: '4px 10px', background: '#f8fafc',
+                            borderRadius: 6, marginBottom: 4,
+                          }}
+                        >
+                          <b>{s.name}</b>
+                          <div style={{ color: '#64748b' }}>
+                            расчёт: {s.items}
+                          </div>
+                          <div style={{ color: '#64748b' }}>
+                            редактор: {s.version}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button
                       onClick={() => handleResolve(entry, 'items')}
