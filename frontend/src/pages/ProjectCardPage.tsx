@@ -15,6 +15,7 @@ import StageProcessingPanel from '../components/card/StageProcessingPanel'
 import DocumentEditor from '../components/editor/DocumentEditor'
 import { WorkflowCard, KanbanStage } from '../types/workflow'
 import { DocumentKind } from '../api/documents'
+import { EditorTab } from '../stores/documentEditor'
 
 // Этапы карточки и типы документов названы одинаково, и все четыре открываются
 // одним редактором — отдельного отображения не нужно.
@@ -139,6 +140,23 @@ const ProjectCardPage: React.FC = () => {
   const showSoft =
     guard.blockType === 'soft' && !stageTask(card, stageForContent) && !softDismissed
 
+  // Версия и вкладка живут в адресе рядом с этапом: скопированная ссылка
+  // должна открыть у коллеги ровно то, что видит отправитель. `replace`, чтобы
+  // переключение вкладок не забивало историю браузера.
+  const handleEditorState = useCallback(
+    (state: { versionId: string | null; tab: string }) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (state.versionId) next.set('version', state.versionId)
+        else next.delete('version')
+        if (state.tab && state.tab !== 'all') next.set('tab', state.tab)
+        else next.delete('tab')
+        return next
+      }, { replace: true })
+    },
+    [setSearchParams],
+  )
+
   const handleSelect = (stage: KanbanStage) => {
     setSelectedStage(stage)
     setSoftDismissed(false)
@@ -234,6 +252,9 @@ const ProjectCardPage: React.FC = () => {
               cardId={card.id}
               kind={stageForContent as DocumentKind}
               title={STAGE_TITLE[stageForContent] ?? card.name}
+              initialVersionId={searchParams.get('version') ?? undefined}
+              initialTab={(searchParams.get('tab') as EditorTab | null) ?? undefined}
+              onStateChange={handleEditorState}
               onApplied={refetch}
             />
           </div>

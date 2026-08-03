@@ -20,6 +20,22 @@ interface Props {
 
 const fmt = (n: number) => Math.round(n).toLocaleString('ru-RU');
 
+/**
+ * Ссылка на источник приходит от ИИ, то есть из недоверенного текста. Открывать
+ * можно только обычные веб-адреса: `javascript:` в href выполнил бы код прямо
+ * в интерфейсе.
+ */
+export function safeSourceUrl(source: string): string | null {
+  const value = (source || '').trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 const cardStyle: React.CSSProperties = {
   border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, marginBottom: 10,
   background: '#fff',
@@ -87,7 +103,9 @@ const AnalogsPanel: React.FC<Props> = ({ state, onReplace, onCancel, onClose }) 
             <div style={{ fontSize: 13, color: '#64748b' }}>
               Аналогов не нашлось — позиция остаётся как есть.
             </div>
-          ) : result.variants.map((variant, index) => (
+          ) : result.variants.map((variant, index) => {
+            const href = safeSourceUrl(variant.source);
+            return (
             <div
               key={`${variant.name}#${index}`}
               style={{
@@ -101,9 +119,9 @@ const AnalogsPanel: React.FC<Props> = ({ state, onReplace, onCancel, onClose }) 
                   {fmt(variant.price)} ₽ за {variant.unit || 'ед.'}
                   {variant.reason ? ` · ${variant.reason}` : ''}
                 </div>
-                {variant.source && (
+                {href && (
                   <a
-                    href={variant.source}
+                    href={href}
                     target="_blank"
                     rel="noreferrer"
                     style={{
@@ -127,7 +145,8 @@ const AnalogsPanel: React.FC<Props> = ({ state, onReplace, onCancel, onClose }) 
                 Заменить
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
       ))}
     </div>

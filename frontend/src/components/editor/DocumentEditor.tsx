@@ -27,6 +27,7 @@ import { PricePosition, buildPriceRows, insertRowsAfter } from './actions/priceI
 import FindAnalogs from './actions/FindAnalogs';
 import AnalogsPanel from './AnalogsPanel';
 import { applyAnalogToRow } from './actions/analogsApply';
+import { moveRow, removeRowsCascade } from './rowOps';
 import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
 import { columnsFromEditor, rowsFromEditor } from './exportBuilder';
@@ -48,6 +49,11 @@ interface Props {
    * В режиме окна «свернуть» означает «закрыть» — сворачивать некуда.
    */
   startFullscreen?: boolean;
+  /** Версия и вкладка из ссылки: по ней коллега должен увидеть то же самое. */
+  initialVersionId?: string;
+  initialTab?: 'all' | 'works' | 'materials';
+  /** Открытая версия и вкладка — чтобы страница положила их в адрес. */
+  onStateChange?: (state: { versionId: string | null; tab: string }) => void;
   onClose?: () => void;
   onApplied?: () => void;
 }
@@ -95,7 +101,8 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 // --- Компонент -------------------------------------------------------------
 
 export const DocumentEditor: React.FC<Props> = ({
-  cardId, kind, fileSlot, fileIndex, title, startFullscreen = false, onClose, onApplied,
+  cardId, kind, fileSlot, fileIndex, title, startFullscreen = false,
+  initialVersionId, initialTab, onStateChange, onClose, onApplied,
 }) => {
   const {
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
@@ -122,6 +129,14 @@ export const DocumentEditor: React.FC<Props> = ({
     () => ({ cardId, kind, fileSlot, fileIndex }), [cardId, kind, fileSlot, fileIndex],
   );
 
+  // Версия из ссылки применяется только при первом открытии: дальше версию
+  // выбирает человек вкладками, и адрес идёт за ним, а не наоборот.
+  const initialRef = useMemo<DocumentRef>(
+    () => (initialVersionId ? { ...documentRef, versionId: initialVersionId } : documentRef),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [documentRef],
+  );
+
   // Открыт как окно поверх экрана: сворачивать некуда, «свернуть» = «закрыть».
   const isOverlayMode = startFullscreen;
   // Раздел сводной: тот же формат строк, что смета, но доп. расходы и итог
@@ -129,9 +144,17 @@ export const DocumentEditor: React.FC<Props> = ({
   const isSummarySection = kind === 'summary-section';
 
   useEffect(() => {
-    load(documentRef);
+    load(initialRef);
+    if (initialTab) setTab(initialTab);
     return () => reset();
-  }, [documentRef, load, reset]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRef, load, reset]);
+
+  // Открытая версия и вкладка — наружу, чтобы страница положила их в адрес и
+  // ссылка открывала ровно то состояние, из которого её скопировали.
+  useEffect(() => {
+    onStateChange?.({ versionId, tab });
+  }, [versionId, tab, onStateChange]);
 
   // Присутствие: раз в 20 секунд отмечаемся и узнаём, не открыл ли документ кто-то ещё.
   useEffect(() => {
@@ -199,10 +222,50 @@ export const DocumentEditor: React.FC<Props> = ({
     [rows, adapter, meta, expenseRates],
   );
 
+  // --- Перетаскивание строк -------------------------------------------------
+  //
+  // Порядок строк — это порядок в документе и в скачиваемом файле, поэтому
+  // строку можно перенести мышкой за ручку в начале строки.
+
+  const dragKeyRef = useRef<string | null>(null);
+
+  const handleRowDrop = useCallback((targetKey: string, above: boolean) => {
+    const key = dragKeyRef.current;
+    dragKeyRef.current = null;
+    if (!key || key === targetKey) return;
+    setRows(moveRow(rows, key, targetKey, above));
+  }, [rows, setRows]);
+
   // --- Колонки --------------------------------------------------------------
 
   const gridColumns = useMemo<Column<GridRow>[]>(() => {
     const editable = canWrite;
+    // Колонка-ручка: за неё строку тянут мышкой. Показываем только при праве на
+    // запись — в режиме просмотра порядок менять нельзя.
+    const dragColumn: Column<GridRow> = {
+      key: '__drag',
+      name: '',
+      width: 28,
+      minWidth: 28,
+      frozen: true,
+      resizable: false,
+      renderCell: ({ row }) => (
+        <div
+          className="de-drag-handle"
+          draggable
+          onDragStart={() => { dragKeyRef.current = row.__key; }}
+          onDragEnd={() => { dragKeyRef.current = null; }}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            handleRowDrop(row.__key, e.clientY < box.top + box.height / 2);
+          }}
+          title="Перетащите, чтобы изменить порядок"
+        >
+          ⋮⋮
+        </div>
+      ),
+    };
     const data: Column<GridRow>[] = columns.map((column: EditorColumn) => ({
       key: column.key,
       name: column.name,
@@ -212,8 +275,10 @@ export const DocumentEditor: React.FC<Props> = ({
       cellClass: column.numeric ? 'de-cell-numeric' : undefined,
       renderEditCell: TextEditor,
     }));
-    return [{ ...SelectColumn, frozen: true }, ...data];
-  }, [columns, canWrite]);
+    return editable
+      ? [{ ...SelectColumn, frozen: true }, dragColumn, ...data]
+      : [{ ...SelectColumn, frozen: true }, ...data];
+  }, [columns, canWrite, handleRowDrop]);
 
   // --- Правка ячейки --------------------------------------------------------
 
@@ -407,9 +472,17 @@ export const DocumentEditor: React.FC<Props> = ({
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedKeys.size === 0) return;
-    setRows(rows.filter((row) => !selectedKeys.has(row.__key)));
+    // В смете удаление работы уносит её материалы: материал без своей работы —
+    // мусор, который потом ищут руками.
+    const next = removeRowsCascade(rows, selectedKeys, adapter);
+    const removedExtra = rows.length - next.length - selectedKeys.size;
+    setRows(next);
     setSelected(new Set());
-  }, [rows, selectedKeys, setRows, setSelected]);
+    if (removedExtra > 0) {
+      setNotice(`Удалено строк: ${rows.length - next.length} (вместе с материалами)`);
+    }
+  }, [rows, selectedKeys, adapter, setRows, setSelected]);
+
 
   // --- Клавиатура -----------------------------------------------------------
 
@@ -679,6 +752,7 @@ export const DocumentEditor: React.FC<Props> = ({
                   columns={gridColumns}
                   rows={displayedRows}
                   rowKeyGetter={(row) => row.__key}
+                  rowClass={(row) => adapter.rowClass?.(row)}
                   onRowsChange={handleGridRowsChange}
                   selectedRows={selectedKeys}
                   onSelectedRowsChange={(keys) => setSelected(new Set(keys as Set<string>))}

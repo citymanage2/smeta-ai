@@ -586,3 +586,60 @@
   color: #94a3b8;
   flex-basis: 100%;
 }
+
+/* --- Подсветка строк и перетаскивание (Фаза 12) ---------------------------
+ *
+ * Правила видны глазом, а не выясняются из итога: вычет не считается,
+ * исключённая позиция вычеркнута, цена из прайса помечена, группы А/В/С
+ * различаются по важности позиции в смете.
+ */
+
+.de-drag-handle {
+  cursor: grab;
+  color: #cbd5e1;
+  text-align: center;
+  line-height: 1;
+  letter-spacing: -2px;
+  user-select: none;
+}
+
+.de-drag-handle:hover {
+  color: #64748b;
+}
+
+.de-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Вычет: объём меньше нуля корректирует соседнюю позицию, стоимость по нему
+   не считается. */
+.rdg-row.de-row-deduction .rdg-cell {
+  background: #f8fafc;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* Позиция, убранная оптимизацией. */
+.rdg-row.de-row-excluded .rdg-cell {
+  background: #fef2f2;
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+/* Цена подставлена из прайса, а не найдена ИИ. */
+.rdg-row.de-row-from-price .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #22c55e;
+}
+
+/* Группы А/В/С: где сосредоточены деньги сметы. */
+.rdg-row.de-row-abc-a .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #ef4444;
+}
+
+.rdg-row.de-row-abc-b .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+.rdg-row.de-row-abc-c .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #94a3b8;
+}

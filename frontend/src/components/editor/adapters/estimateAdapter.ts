@@ -1,4 +1,4 @@
-import { billableQty } from '../../../utils/negativeQty';
+import { billableQty, isNegativeQty } from '../../../utils/negativeQty';
 import { calcEstimateTotals, rowCoefficient } from '../../../utils/estimateCalc';
 import {
   AdapterContext,
@@ -171,6 +171,23 @@ export const estimateAdapter: EditorAdapter = {
     // Формула одна на весь проект — та же, по которой сервер собирает файл
     // сметы и считает итог задачи.
     return calcEstimateTotals(rows, pct);
+  },
+
+  rowClass(row: GridRow): string | undefined {
+    const classes: string[] = [];
+
+    // Вычет: объём меньше нуля корректирует соседнюю позицию, стоимость по нему
+    // не считается — это должно быть видно, а не выясняться из итога.
+    if (isNegativeQty(toNumber(row.qty))) classes.push('de-row-deduction');
+    if (row.is_excluded) classes.push('de-row-excluded');
+    if (row.price_list_name) classes.push('de-row-from-price');
+
+    const abc = String(row.abc_group ?? '').trim().toUpperCase();
+    if (abc === 'A' || abc === 'А') classes.push('de-row-abc-a');
+    if (abc === 'B' || abc === 'В') classes.push('de-row-abc-b');
+    if (abc === 'C' || abc === 'С') classes.push('de-row-abc-c');
+
+    return classes.length > 0 ? classes.join(' ') : undefined;
   },
 
   emptyRow(_columns: EditorColumn[], keySeed: string): GridRow {

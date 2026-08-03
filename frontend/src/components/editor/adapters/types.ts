@@ -66,6 +66,11 @@ export interface EditorAdapter {
   totals(rows: GridRow[], pct: Percentages): DocumentTotals | null;
   /** Пустая строка для «Добавить строку». */
   emptyRow(columns: EditorColumn[], keySeed: string): GridRow;
+  /**
+   * Css-классы строки: подсветка вычетов, исключённых позиций, цен из прайса и
+   * групп А/В/С. У плоских документов подсвечивать нечего — метод необязателен.
+   */
+  rowClass?(row: GridRow): string | undefined;
 }
 
 // --- Общие помощники форматов ---------------------------------------------

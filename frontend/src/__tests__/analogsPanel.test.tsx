@@ -22,7 +22,7 @@ vi.mock('../api/documents', async () => {
 });
 
 import * as documentsApi from '../api/documents';
-import AnalogsPanel from '../components/editor/AnalogsPanel';
+import AnalogsPanel, { safeSourceUrl } from '../components/editor/AnalogsPanel';
 import FindAnalogs, { estimateAnalogsEffort } from '../components/editor/actions/FindAnalogs';
 import { applyAnalogToRow } from '../components/editor/actions/analogsApply';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
@@ -198,8 +198,10 @@ describe('панель результатов', () => {
     expect(screen.getByText(/700/)).toBeInTheDocument();
     expect(screen.getByText(/3\s?000/)).toBeInTheDocument();
     expect(screen.getByText(/та же несущая способность/)).toBeInTheDocument();
+    // Адрес нормализован разбором URL — проверка протокола приводит его к
+    // каноническому виду.
     expect(screen.getByRole('link', { name: /источник/i }))
-      .toHaveAttribute('href', 'https://example.ru');
+      .toHaveAttribute('href', 'https://example.ru/');
   });
 
   it('«Заменить» отдаёт строку и выбранный вариант', () => {
@@ -214,6 +216,28 @@ describe('панель результатов', () => {
     renderPanel(DONE_STATE);
 
     expect(screen.getByText(/аналогов не нашлось/i)).toBeInTheDocument();
+  });
+
+  it('опасная ссылка от ИИ не становится ссылкой', () => {
+    // Источник приходит из ответа модели — это недоверенный текст.
+    expect(safeSourceUrl('javascript:alert(1)')).toBeNull();
+    expect(safeSourceUrl('data:text/html,<script>')).toBeNull();
+    expect(safeSourceUrl('  ')).toBeNull();
+    expect(safeSourceUrl('не ссылка вовсе')).toBeNull();
+    expect(safeSourceUrl('https://example.ru/price')).toBe('https://example.ru/price');
+  });
+
+  it('вариант с опасной ссылкой показывается, но без перехода', () => {
+    renderPanel({
+      ...DONE_STATE,
+      results: [{
+        ...DONE_STATE.results[0],
+        variants: [{ ...DONE_STATE.results[0].variants[0], source: 'javascript:alert(1)' }],
+      }],
+    });
+
+    expect(screen.getByText('Кладка из газобетонных блоков')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /источник/i })).not.toBeInTheDocument();
   });
 
   it('поломка показывается человеку', () => {
