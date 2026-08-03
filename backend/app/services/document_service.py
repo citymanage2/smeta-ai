@@ -465,10 +465,14 @@ async def ensure_versions(
 def write_state(doc: ResolvedDocument, current_user: dict) -> tuple[bool, Optional[str]]:
     """Можно ли писать в документ и почему нет. Решает сервер, не клиент."""
     if doc.kind == KIND_SUMMARY_SECTION:
-        # Раздел принадлежит проекту, а не задаче: право даёт проект, и идущий
-        # пересчёт сметы раздел не запирает — он снимок и от расчёта не зависит.
+        # Право даёт проект: сводная — артефакт проекта, а не задачи.
         if not can_edit(doc.project.owner_id, current_user, doc.project.is_shared):
             return False, "no_permission"
+        # Но идущий расчёт раздел запирает: правка раздела пишется в саму смету,
+        # а расчёт, закончившись, перезапишет строки целиком — работа человека
+        # исчезла бы без следа.
+        if doc.task.status in ("processing", "pending"):
+            return False, "task_processing"
         return True, None
     if doc.file_slot == "input":
         return False, "input_readonly"
@@ -729,13 +733,20 @@ async def _sync_estimate_artifacts(
     Без этого редактор, `task.cost` и скачанный файл показывали бы три разных
     числа — ровно та проблема, ради которой затевалась Фаза 5. Версию и `rev`
     ведёт `apply_rows`, поэтому здесь только артефакты.
-    """
-    if doc.kind != KIND_ESTIMATE:
-        return
 
+    Раздел сводной идёт по тому же пути, но на шаг дальше: его строки —
+    строки сметы, поэтому они пишутся в рабочую версию (план 2026-08-04).
+    """
     from app.services import estimate_store
 
-    await estimate_store.sync_artifacts(db, doc.task, rows, version)
+    if doc.kind == KIND_ESTIMATE:
+        await estimate_store.sync_artifacts(db, doc.task, rows, version)
+        return
+
+    if doc.kind == KIND_SUMMARY_SECTION:
+        # `write_rows` пишет строки, файл и `task.cost` и сам обновляет снимки
+        # разделов — включая тот, который сейчас правят.
+        await estimate_store.write_rows(db, doc.task, rows, commit=False)
 
 
 async def _trim_history(db: AsyncSession, task_id: str, kind: str) -> None:

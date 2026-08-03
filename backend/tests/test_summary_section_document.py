@@ -236,8 +236,13 @@ async def test_apply_writes_rows_into_summary(async_client, db_session, summary_
 
 
 @pytest.mark.asyncio
-async def test_apply_does_not_touch_source_estimate(async_client, db_session, summary_env):
-    """Правка раздела не меняет исходную смету — снимок на то и снимок."""
+async def test_apply_writes_into_source_estimate(async_client, db_session, summary_env):
+    """Правка раздела меняет саму смету.
+
+    Раньше раздел был отдельной копией: человек правил сводную неделю, а смета
+    оставалась прежней, и при пересборке разделов работа исчезала. Теперь
+    сводная и смета — одно и то же (план 2026-08-04).
+    """
     edited = _estimate_rows(1500)
     edited[0]["price_work"] = 2500
 
@@ -247,7 +252,68 @@ async def test_apply_does_not_touch_source_estimate(async_client, db_session, su
 
     db_session.expire_all()
     version = await db_session.get(EstimateVersion, summary_env["version_id"])
-    assert version.rows[0]["price_work"] == 1000
+    assert version.rows[0]["price_work"] == 2500
+
+
+@pytest.mark.asyncio
+async def test_estimate_edit_reaches_the_section(async_client, db_session, summary_env):
+    """Правка сметы видна в разделе сводной без пересборки."""
+    edited = _estimate_rows(1000)
+    edited[0]["price_work"] = 777
+
+    resp = await async_client.post(
+        f"/documents/{summary_env['card_id']}/estimate/apply",
+        json={"rev": 0, "rows": edited},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+    assert resp.status_code == 200, resp.text
+
+    summary = await _reload_summary(db_session, summary_env)
+    assert summary.sections[0]["rows"][0]["price_work"] == 777
+
+    rows_resp = await async_client.get(
+        _url(summary_env, "/rows"), headers=_auth(summary_env["pm1"], "project_manager"))
+    assert rows_resp.json()["rows"][0]["price_work"] == 777
+
+
+@pytest.mark.asyncio
+async def test_section_from_older_version_moves_to_the_working_one(
+    async_client, db_session, summary_env
+):
+    """Раздел, собранный из прежней версии, при правке переезжает на рабочую.
+
+    Решение пользователя: правка сводной уходит в смету всегда. Значит и ссылка
+    раздела должна указывать туда, где строки теперь лежат, — иначе следующая
+    смена состава собрала бы раздел из устаревшей версии.
+    """
+    # Рабочая версия сметы — первая непокатанная по номеру, то есть та, что уже
+    # есть в фикстуре. Раздел же соберём из более поздней, отдельной версии.
+    older = EstimateVersion(
+        task_id=summary_env["task_id"], version_number=1, version_label="custom",
+        version_display_name="Прежний вариант", rows=_estimate_rows(1100),
+        file_slot="estimate", task_type="ESTIMATE_FROM_LIST",
+    )
+    db_session.add(older)
+    await db_session.flush()
+    older_id = str(older.id)
+
+    summary = await _reload_summary(db_session, summary_env)
+    summary.sections = [{**summary.sections[0], "version_id": older_id}]
+    await db_session.commit()
+    working_id = summary_env["version_id"]
+
+    edited = _estimate_rows(1500)
+    edited[0]["price_work"] = 2500
+    resp = await async_client.post(
+        _url(summary_env, "/apply"), json={"rev": 0, "rows": edited},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    fresh = await db_session.get(EstimateVersion, working_id)
+    assert fresh.rows[0]["price_work"] == 2500, "правка не дошла до рабочей версии"
+
+    summary = await _reload_summary(db_session, summary_env)
+    assert summary.sections[0]["version_id"] == working_id
 
 
 @pytest.mark.asyncio
@@ -337,10 +403,15 @@ async def test_head_of_sales_can_edit_foreign_section(async_client, db_session, 
 
 
 @pytest.mark.asyncio
-async def test_section_editable_while_estimate_task_processing(
+async def test_section_readonly_while_estimate_task_processing(
     async_client, db_session, summary_env
 ):
-    """Идущий пересчёт сметы не запирает раздел: раздел — снимок, а не задача."""
+    """Пока смета считается, раздел открыт только на чтение.
+
+    Раньше раздел был снимком и от расчёта не зависел. Теперь правка раздела
+    пишется в саму смету — а расчёт, закончившись, перезапишет строки целиком:
+    работа человека исчезла бы без следа.
+    """
     task = await db_session.get(Task, summary_env["task_id"])
     task.status = "processing"
     await db_session.commit()
@@ -348,7 +419,15 @@ async def test_section_editable_while_estimate_task_processing(
     resp = await async_client.get(
         _url(summary_env), headers=_auth(summary_env["pm1"], "project_manager"))
     assert resp.status_code == 200
-    assert resp.json()["can_write"] is True
+    assert resp.json()["can_write"] is False
+    assert resp.json()["readonly_reason"] == "task_processing"
+
+    edited = _estimate_rows(1500)
+    edited[0]["price_work"] = 2500
+    apply_resp = await async_client.post(
+        _url(summary_env, "/apply"), json={"rev": 0, "rows": edited},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+    assert apply_resp.status_code == 409
 
 
 # ---------------------------------------------------------------------------

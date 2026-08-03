@@ -174,7 +174,58 @@ async def sync_artifacts(
     task.cost = Decimal(str(round(grand_total, 2)))
     task.estimation_status = "estimated"
     task.updated_at = datetime.now(timezone.utc)
+    await sync_summary_sections(db, task, rows, version)
     return grand_total
+
+
+async def sync_summary_sections(
+    db: AsyncSession,
+    task: Task,
+    rows: list,
+    version: Optional[EstimateVersion] = None,
+) -> None:
+    """Разделы сводной, собранные из этой сметы, показывают её текущие строки.
+
+    Раздел сводной хранит снимок строк. Пока снимок жил своей жизнью, сводная и
+    смета молча расходились: человек правил сводную неделю, а при смене состава
+    разделов работа исчезала. Теперь снимок производный — его обновляет тот же
+    модуль, что пишет смету, поэтому расходиться нечему.
+
+    Ссылка на версию переставляется на ту, в которую строки записаны: иначе
+    следующая смена состава собрала бы раздел из устаревшей версии.
+    """
+    from app.models.summary_estimate import SummaryEstimate
+    from app.models.workflow_card import WorkflowCard
+
+    res = await db.execute(
+        select(WorkflowCard).where(WorkflowCard.estimate_task_id == str(task.id))
+    )
+    cards = {str(card.id): card for card in res.scalars().all()}
+    if not cards:
+        return
+
+    project_ids = {str(card.project_id) for card in cards.values()}
+    res = await db.execute(
+        select(SummaryEstimate).where(SummaryEstimate.project_id.in_(project_ids))
+    )
+
+    for summary in res.scalars().all():
+        sections = list(summary.sections or [])
+        touched = False
+        for index, section in enumerate(sections):
+            if not isinstance(section, dict) or str(section.get("card_id")) not in cards:
+                continue
+            updated = {**section, "rows": rows}
+            if version is not None:
+                updated["version_id"] = str(version.id)
+                updated["version_display_name"] = version.version_display_name
+            sections[index] = updated
+            touched = True
+        if touched:
+            # Список пересобираем целиком: правку JSON «на месте» SQLAlchemy не
+            # замечает и запись молча не доехала бы до базы.
+            summary.sections = sections
+            summary.updated_at = datetime.now(timezone.utc)
 
 
 async def _new_version(db: AsyncSession, task: Task, rows: list) -> EstimateVersion:
