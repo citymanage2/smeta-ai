@@ -145,12 +145,6 @@
   flex-wrap: wrap;
 }
 
-.de-row-count {
-  font-size: 12px;
-  color: #64748b;
-  white-space: nowrap;
-}
-
 .de-search {
   position: relative;
   display: flex;
@@ -213,17 +207,36 @@
   margin: 0 2px;
 }
 
+/* Кнопки редактора — одна высота и одно скругление на всё окно: тулбар,
+   действия с ценами, коэффициент, панель аналогов. Отличаются только весом:
+   .de-btn — обычное действие, .de-btn-primary — главное, .de-btn-ghost —
+   отступное. */
+.de-btn,
+.de-btn-primary,
+.de-btn-ghost,
 .de-icon-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px;
-  border: 1px solid #e2e8f0;
-  border-radius: 7px;
-  background: #fff;
-  color: #475569;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 30px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.12s;
+}
+
+.de-icon-btn {
+  width: 30px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
 }
 
 .de-icon-btn:hover:not(:disabled) { border-color: #93c5fd; color: #2563eb; }
@@ -231,33 +244,41 @@
 .de-icon-btn-active { border-color: #93c5fd; color: #2563eb; background: #eff6ff; }
 .de-icon-btn-danger:hover:not(:disabled) { border-color: #fca5a5; color: #dc2626; }
 
+.de-btn {
+  padding: 0 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+}
+
+.de-btn:hover:not(:disabled) { border-color: #93c5fd; color: #2563eb; }
+.de-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .de-btn-primary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  border: none;
-  border-radius: 8px;
+  padding: 0 14px;
+  border: 1px solid #2563eb;
   background: #2563eb;
   color: #fff;
-  cursor: pointer;
-  white-space: nowrap;
 }
 
-.de-btn-primary:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
+.de-btn-primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
+
+.de-btn-primary:disabled {
+  background: #e2e8f0;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
 
 .de-btn-ghost {
-  padding: 7px 12px;
-  font-size: 13px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  background: none;
   color: #64748b;
-  cursor: pointer;
-  white-space: nowrap;
 }
+
+.de-btn-ghost:hover:not(:disabled) { background: #f1f5f9; color: #334155; }
+.de-btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .de-draft-state { font-size: 11px; white-space: nowrap; }
 .de-draft-saving { color: #94a3b8; }
@@ -298,24 +319,6 @@
   flex-shrink: 0;
   flex-wrap: wrap;
 }
-
-.de-price-actions .de-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
-  color: #475569;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.de-price-actions .de-btn:hover:not(:disabled) { border-color: #93c5fd; color: #2563eb; }
-.de-price-actions .de-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ── Итоги ─────────────────────────────────────────────────────────── */
 .de-totals {

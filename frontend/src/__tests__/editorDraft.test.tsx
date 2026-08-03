@@ -192,13 +192,15 @@ describe('вставка из буфера', () => {
     // «Материалы» после «Все» сдвигали его — правка попадала не туда.
     mockTyped();
     render(<DocumentEditor cardId="card-1" kind="list" />);
-    await waitFor(() => expect(screen.getByText('Строк: 2')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
 
     const store = useDocumentEditorStore.getState();
     const before = store.rows.map((r) => r['Кол-во']);
 
     fireEvent.click(screen.getByRole('tab', { name: /Материалы/ }));
-    await waitFor(() => expect(screen.getByText('Строк: 1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '1'));
 
     fireEvent.paste(screen.getByTestId('document-editor-grid'), {
       clipboardData: { getData: () => '777' },
@@ -215,7 +217,8 @@ describe('вставка из буфера', () => {
       version_id: 'v1', rev: 0, rows: TYPED, draft_rows: null,
     });
     render(<DocumentEditor cardId="card-1" kind="list" fileSlot="input" />);
-    await waitFor(() => expect(screen.getByText('Строк: 2')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
 
     fireEvent.paste(screen.getByTestId('document-editor-grid'), {
       clipboardData: { getData: () => '777' },

@@ -66,7 +66,8 @@ describe('документ на 2000 позиций', () => {
     const { container } = render(<DocumentEditor cardId="card-1" kind="list" />);
 
     await waitFor(() => {
-      expect(screen.getByText(`Строк: ${ROW_COUNT}`)).toBeInTheDocument();
+      expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', String(ROW_COUNT));
     });
 
     const rendered = container.querySelectorAll('[role="row"]');

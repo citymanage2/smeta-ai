@@ -6,7 +6,6 @@ import {
 import { DraftState, EditorTab } from '../../stores/documentEditor';
 
 interface Props {
-  rowCount: number;
   totalCount: number;
   workCount: number;
   materialCount: number;
@@ -43,7 +42,7 @@ const DRAFT_LABEL: Record<DraftState, string> = {
 };
 
 export const EditorToolbar: React.FC<Props> = ({
-  rowCount, totalCount, workCount, materialCount, showTabs, tab, search,
+  totalCount, workCount, materialCount, showTabs, tab, search,
   selectedCount, canWrite, isDirty, applying, draftState, canUndo, canRedo,
   fullscreen, historyOpen, onTabChange, onSearchChange, onUndo, onRedo,
   onApply, onDiscard, onAddRow, onDeleteSelected, onToggleFullscreen, onToggleHistory,
@@ -72,8 +71,6 @@ export const EditorToolbar: React.FC<Props> = ({
     )}
 
     <div className="de-toolbar-row">
-      <span className="de-row-count">Строк: {rowCount}</span>
-
       <div className="de-search">
         <Search size={14} className="de-search-icon" />
         <input

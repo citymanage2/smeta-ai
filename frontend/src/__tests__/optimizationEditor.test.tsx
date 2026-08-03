@@ -124,7 +124,8 @@ describe('вкладки версий видны всегда', () => {
     mockDoc({ versions: [VERSIONS[0]] });
     render(<DocumentEditor cardId="card-1" kind="optimization" />);
 
-    await waitFor(() => expect(screen.getByText('Строк: 1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '1'));
     expect(screen.queryByTestId('editor-version-tabs')).not.toBeInTheDocument();
   });
 });

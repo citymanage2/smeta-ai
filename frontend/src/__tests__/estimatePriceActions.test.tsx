@@ -121,7 +121,8 @@ describe('панель цен доступна только смете', () => {
     });
     render(<DocumentEditor cardId="card-1" kind="list" />);
 
-    await waitFor(() => expect(screen.getByText('Строк: 1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '1'));
     expect(screen.queryByText(/Исправить пустые цены/)).not.toBeInTheDocument();
   });
 
@@ -136,7 +137,8 @@ describe('панель цен доступна только смете', () => {
     });
     render(<DocumentEditor cardId="card-1" kind="summary-section" />);
 
-    await waitFor(() => expect(screen.getByText('Строк: 4')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '4'));
     expect(screen.queryByText(/Исправить пустые цены/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Цена/ })).not.toBeInTheDocument();
     // Доп. расходы раздела считает бланк «Сводная» по своим ставкам: показывать
@@ -196,7 +198,8 @@ describe('исправление пустых цен', () => {
     });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
 
-    await waitFor(() => expect(screen.getByText('Строк: 1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '1'));
     expect(screen.queryByText(/Исправить пустые цены/)).not.toBeInTheDocument();
   });
 });
@@ -215,7 +218,8 @@ describe('пересчёт цены строки', () => {
       item_index: 1, work_price: 777, material_price: null, sources: 'сайт', notes: '',
     });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
-    await waitFor(() => expect(screen.getByText('Строк: 4')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '4'));
 
     useDocumentEditorStore.getState().setSelected(new Set(['r2']));
     await waitFor(() => expect(screen.getByRole('button', { name: /Цена/ })).toBeEnabled());
@@ -229,7 +233,8 @@ describe('пересчёт цены строки', () => {
   it('вычет пересчитать нельзя — цена ему не нужна', async () => {
     mockEstimate();
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
-    await waitFor(() => expect(screen.getByText('Строк: 4')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '4'));
 
     useDocumentEditorStore.getState().setSelected(new Set(['r4']));
 

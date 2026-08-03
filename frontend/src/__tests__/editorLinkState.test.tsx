@@ -122,6 +122,7 @@ describe('состояние документа в ссылке', () => {
     // Вкладка «Материалы» выбрана, и в таблице осталась одна строка из двух.
     expect(screen.getByRole('tab', { name: /материалы/i }))
       .toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText(/Строк: 1/)).toBeInTheDocument();
+    expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '1');
   });
 });

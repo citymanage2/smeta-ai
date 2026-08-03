@@ -153,7 +153,8 @@ describe('коэффициент в редакторе', () => {
     mockDocument();
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
 
-    await waitFor(() => expect(screen.getByText('Строк: 2')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
     expect(screen.getByRole('button', { name: /Коэффициент/ })).toBeInTheDocument();
   });
 
@@ -169,7 +170,8 @@ describe('коэффициент в редакторе', () => {
   it('коэффициент к отмеченным строкам уходит списком строк', async () => {
     mockDocument();
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
-    await waitFor(() => expect(screen.getByText('Строк: 2')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
 
     useDocumentEditorStore.getState().setSelected(new Set(['r2']));
     await waitFor(() => expect(screen.getByText(/Выбрано: 1/)).toBeInTheDocument());
@@ -228,14 +230,16 @@ describe('коэффициент в редакторе', () => {
     });
     render(<DocumentEditor cardId="card-1" kind="list" />);
 
-    await waitFor(() => expect(screen.getByText('Строк: 1')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '1'));
     expect(screen.queryByRole('button', { name: /Коэффициент/ })).not.toBeInTheDocument();
   });
 
   it('правка ячейки при коэффициенте сохраняет исходную цену', async () => {
     mockDocument({ coefficient: { work: 2, material: 1, scope: 'all' } });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
-    await waitFor(() => expect(screen.getByText('Строк: 2')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
 
     const store = useDocumentEditorStore.getState();
     store.setRows(store.rows.map((row: GridRow, index: number) => (

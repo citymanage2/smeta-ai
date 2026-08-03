@@ -599,7 +599,6 @@ export const DocumentEditor: React.FC<Props> = ({
           />
 
           <EditorToolbar
-            rowCount={displayedRows.length}
             totalCount={rows.length}
             workCount={counts.work}
             materialCount={counts.material}
@@ -765,11 +764,16 @@ export const DocumentEditor: React.FC<Props> = ({
           {comparing && <EditorComparison meta={meta} />}
 
           <div className="de-content" hidden={comparing}>
+            {/* data-row-count — сколько строк видно после вкладки и поиска.
+                На экране это число не нужно (счётчики стоят во вкладках), но по
+                нему проверяют фильтрацию тесты: строки таблицы виртуализованы и
+                посчитать их в DOM нельзя. */}
             <div
               className="de-grid-wrap"
               onCopy={handleCopy}
               onPaste={handlePaste}
               data-testid="document-editor-grid"
+              data-row-count={displayedRows.length}
             >
               {rows.length === 0 ? (
                 <div className="de-state">Нет данных для отображения</div>
