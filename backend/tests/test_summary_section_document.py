@@ -632,3 +632,90 @@ async def test_changing_sections_to_the_same_set_changes_nothing(
     after = await _reload_summary(db_session, summary_env)
     assert after.id == summary_id, "сводная пересоздана — история и черновики потеряны"
     assert after.sections == sections
+
+
+# ---------------------------------------------------------------------------
+# Унаследованные расхождения (план 2026-08-04, Фаза 3)
+# ---------------------------------------------------------------------------
+#
+# До этой работы раздел был отдельной копией сметы и мог годами жить со своими
+# числами. Такие снимки нельзя ни молча затереть сметой, ни молча записать в
+# смету: в первом случае пропадает работа человека, во втором — результат
+# расчёта. Поэтому расхождение показывается, а сторону выбирает человек.
+
+
+@pytest.mark.asyncio
+async def test_divergence_is_reported(async_client, summary_env):
+    """Снимок раздела (1500) и смета (1000) разошлись — это видно при открытии."""
+    resp = await async_client.get(
+        _url(summary_env), headers=_auth(summary_env["pm1"], "project_manager"))
+
+    assert resp.status_code == 200, resp.text
+    diff = resp.json()["divergence"]
+    assert diff is not None, "расхождение снимка и сметы должно быть видно"
+    assert diff["section_rows"] == 2
+    assert diff["estimate_rows"] == 2
+    assert diff["section_total"] != diff["estimate_total"]
+
+
+@pytest.mark.asyncio
+async def test_no_divergence_when_sides_match(async_client, db_session, summary_env):
+    """Когда стороны совпадают, тревожить человека нечем."""
+    await async_client.post(
+        f"/documents/{summary_env['card_id']}/estimate/apply",
+        json={"rev": 0, "rows": _estimate_rows(1500)},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+
+    resp = await async_client.get(
+        _url(summary_env), headers=_auth(summary_env["pm1"], "project_manager"))
+
+    assert resp.json()["divergence"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_keeps_section_and_writes_it_into_estimate(
+    async_client, db_session, summary_env
+):
+    """«Правки раздела верны» — они уезжают в смету."""
+    resp = await async_client.post(
+        _url(summary_env, "/divergence/resolve"), json={"prefer": "section"},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    version = await db_session.get(EstimateVersion, summary_env["version_id"])
+    assert version.rows[0]["price_work"] == 1500
+
+    meta = await async_client.get(
+        _url(summary_env), headers=_auth(summary_env["pm1"], "project_manager"))
+    assert meta.json()["divergence"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_takes_estimate_and_keeps_old_snapshot_in_history(
+    async_client, db_session, summary_env
+):
+    """«Смета верна» — раздел берёт её строки, а прежние уходят в историю."""
+    resp = await async_client.post(
+        _url(summary_env, "/divergence/resolve"), json={"prefer": "estimate"},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+    assert resp.status_code == 200, resp.text
+
+    summary = await _reload_summary(db_session, summary_env)
+    assert summary.sections[0]["rows"][0]["price_work"] == 1000
+
+    res = await db_session.execute(
+        select(TaskHistory).where(TaskHistory.document_kind == "summary-section"))
+    entries = list(res.scalars().all())
+    assert entries, "прежние строки раздела должны остаться в истории"
+    assert entries[0].previous_value["rows"][0]["price_work"] == 1500
+
+
+@pytest.mark.asyncio
+async def test_resolve_requires_write_permission(async_client, summary_env):
+    """Чужой проект расхождением не разрулить."""
+    resp = await async_client.post(
+        _url(summary_env, "/divergence/resolve"), json={"prefer": "estimate"},
+        headers=_auth(summary_env["pm2"], "project_manager"))
+
+    assert resp.status_code == 404

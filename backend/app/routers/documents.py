@@ -30,7 +30,9 @@ from app.schemas.document import (
     PriceListRequest,
     PriceListResponse,
     ProjectSettings,
+    ResolveDivergenceRequest,
     SaveDraftRequest,
+    SectionDivergence,
     VersionBrief,
 )
 from app.services import analogs_service
@@ -74,6 +76,7 @@ async def get_document_meta(
     can_write, reason = svc.write_state(doc, current_user)
     active = doc.active
     lock = await svc.get_foreign_lock(db, card_id, kind, current_user)
+    divergence = await svc.summary_divergence(db, doc)
 
     return DocumentMeta(
         card_id=str(doc.card.id),
@@ -114,7 +117,20 @@ async def get_document_meta(
             transport_pct=doc.project.transport_pct,
             name=doc.project.name or "",
         ),
+        divergence=SectionDivergence(**divergence) if divergence else None,
     )
+
+
+@router.post("/{card_id}/summary-section/divergence/resolve")
+async def resolve_section_divergence(
+    card_id: str,
+    body: ResolveDivergenceRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Свести разошедшиеся раздел и смету к одной стороне — по решению человека."""
+    doc = await svc.resolve_document(db, card_id, "summary-section", current_user)
+    return await svc.resolve_summary_divergence(db, doc, body.prefer, current_user)
 
 
 @router.get("/{card_id}/{kind}/rows", response_model=DocumentRows)

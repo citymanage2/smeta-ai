@@ -537,6 +537,96 @@ def read_rows(doc: ResolvedDocument, version: Any) -> list:
     return list(version.rows or [])
 
 
+async def summary_divergence(db: AsyncSession, doc: ResolvedDocument) -> Optional[dict]:
+    """Снимок раздела разошёлся со сметой — сколько строк и денег с каждой стороны.
+
+    Раздел сводной годами был отдельной копией сметы и мог накопить свои числа.
+    Такой снимок нельзя ни молча затереть сметой, ни молча записать в смету: в
+    первом случае пропадает работа человека, во втором — результат расчёта.
+    Поэтому расхождение показывается, а сторону выбирает человек.
+
+    `None` означает «стороны сходятся» — тревожить незачем.
+    """
+    if doc.kind != KIND_SUMMARY_SECTION:
+        return None
+
+    from app.services import estimate_store
+    from app.utils.estimate_rows import items_signature, items_total, rows_to_items
+
+    version = await estimate_store.get_working_version(db, str(doc.task.id))
+    if version is None:
+        return None
+
+    section_rows = read_rows(doc, doc.active)
+    estimate_rows = list(version.rows or [])
+    left, right = rows_to_items(section_rows), rows_to_items(estimate_rows)
+    if items_signature(left) == items_signature(right):
+        return None
+
+    return {
+        "section_rows": len(section_rows),
+        "estimate_rows": len(estimate_rows),
+        "section_total": round(items_total(left), 2),
+        "estimate_total": round(items_total(right), 2),
+    }
+
+
+async def resolve_summary_divergence(
+    db: AsyncSession, doc: ResolvedDocument, prefer: str, current_user: dict
+) -> dict:
+    """Свести раздел и смету к одной стороне — по решению человека."""
+    ensure_writable(doc, current_user)
+
+    from app.services import estimate_store
+
+    version = await estimate_store.get_working_version(db, str(doc.task.id))
+    if version is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="У этой сметы нет рабочей версии — сводить нечего",
+        )
+
+    if prefer not in ("section", "estimate"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Выберите, чья сторона верна: раздела или сметы",
+        )
+
+    section_rows = read_rows(doc, doc.active)
+    user_name = await user_display_name(db, current_user)
+
+    if prefer == "section":
+        # Строки раздела уезжают в смету; снимки разделов обновит `write_rows`.
+        await estimate_store.write_rows(db, doc.task, section_rows, commit=False)
+        description = f"{user_name}: правки раздела сводной перенесены в смету"
+        new_rows = section_rows
+    else:
+        new_rows = list(version.rows or [])
+        _store_rows(doc, doc.active, new_rows)
+        description = f"{user_name}: раздел сводной приведён к смете"
+
+    # Прежний снимок сохраняем целиком — единственный способ вернуться назад.
+    db.add(TaskHistory(
+        id=str(_uuid.uuid4()),
+        task_id=str(doc.task.id),
+        operation_type="summary_divergence_resolved",
+        slot=doc.file_slot,
+        description=description,
+        previous_value={"rows": section_rows},
+        new_value={"rows_count": len(new_rows), "prefer": prefer},
+        user_id=current_user_id(current_user),
+        user_name=user_name,
+        document_kind=doc.kind,
+    ))
+    await db.commit()
+
+    logger.info(
+        "summary_divergence_resolved",
+        card_id=str(doc.card.id), prefer=prefer, rows=len(new_rows),
+    )
+    return {"prefer": prefer, "rows_count": len(new_rows)}
+
+
 def _store_rows(doc: ResolvedDocument, version: Any, rows: list) -> None:
     if doc.kind != KIND_SUMMARY_SECTION:
         version.rows = rows

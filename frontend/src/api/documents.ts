@@ -58,6 +58,16 @@ export interface DocumentMeta {
   draft_updated_at: string | null;
   lock: LockInfo | null;
   project: { overhead_pct: number; transport_pct: number; name?: string };
+  /** Только у раздела сводной: его строки разошлись со сметой. */
+  divergence?: SectionDivergence | null;
+}
+
+/** Раздел сводной и смета показывают разное — обе стороны в цифрах. */
+export interface SectionDivergence {
+  section_rows: number;
+  estimate_rows: number;
+  section_total: number;
+  estimate_total: number;
 }
 
 export interface DocumentRows {
@@ -108,6 +118,23 @@ function slotParams(ref: DocumentRef): Record<string, string | number> {
 
 export async function getDocumentMeta(ref: DocumentRef): Promise<DocumentMeta> {
   const res = await apiClient.get<DocumentMeta>(base(ref), { params: slotParams(ref) });
+  return res.data;
+}
+
+/**
+ * Свести разошедшиеся раздел сводной и смету к одной стороне.
+ *
+ * `section` — верны правки раздела, они уезжают в смету; `estimate` — верна
+ * смета, раздел берёт её строки. Прежние строки раздела в обоих случаях уходят
+ * в историю.
+ */
+export async function resolveSectionDivergence(
+  cardId: string,
+  prefer: 'section' | 'estimate',
+): Promise<{ prefer: string; rows_count: number }> {
+  const res = await apiClient.post(
+    `/documents/${cardId}/summary-section/divergence/resolve`, { prefer },
+  );
   return res.data;
 }
 

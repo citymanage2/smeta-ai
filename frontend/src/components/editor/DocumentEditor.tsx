@@ -9,7 +9,7 @@ import 'react-data-grid/lib/styles.css';
 import { X } from 'lucide-react';
 import {
   AnalogVariant, AnalogsState, DocumentKind, DocumentRef,
-  cancelAnalogs, exportDocument, getAnalogsState,
+  cancelAnalogs, exportDocument, getAnalogsState, resolveSectionDivergence,
 } from '../../api/documents';
 import { useDocumentEditorStore } from '../../stores/documentEditor';
 import { LumaSpin } from '../ui/LumaSpin';
@@ -17,7 +17,9 @@ import { EditorColumn, GridRow } from './adapters/types';
 import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clipboard';
 import EditorToolbar from './EditorToolbar';
 import EditorHistoryPanel from './EditorHistoryPanel';
-import { ConflictBanner, PresenceBanner, ReadonlyBanner } from './PresenceBanner';
+import {
+  ConflictBanner, PresenceBanner, ReadonlyBanner, SummaryDivergenceBanner,
+} from './PresenceBanner';
 import EditorVersionPanel, { EditorComparison } from './EditorVersionPanel';
 import OptimizationPanel from './OptimizationPanel';
 import PriceActions from './actions/PriceActions';
@@ -430,6 +432,20 @@ export const DocumentEditor: React.FC<Props> = ({
     return () => clearInterval(timer);
   }, [analogsRunning, refreshAnalogs]);
 
+  // Раздел сводной разошёлся со сметой: человек выбирает сторону, после чего
+  // документ перечитывается — расхождения больше нет ни в одном из хранилищ.
+  const handleResolveDivergence = useCallback(async (prefer: 'section' | 'estimate') => {
+    try {
+      await resolveSectionDivergence(documentRef.cardId, prefer);
+      setNotice(prefer === 'section'
+        ? 'Правки раздела перенесены в смету'
+        : 'Раздел приведён к смете');
+      await load(documentRef);
+    } catch {
+      setNotice('Не удалось свести раздел и смету');
+    }
+  }, [documentRef, load]);
+
   const handleCancelAnalogs = useCallback(async () => {
     try {
       setAnalogs(await cancelAnalogs(documentRef));
@@ -546,6 +562,16 @@ export const DocumentEditor: React.FC<Props> = ({
           )}
           {meta.readonly_reason && <ReadonlyBanner reason={meta.readonly_reason} />}
           {lock && <PresenceBanner lock={lock} />}
+
+          {/* Раздел сводной, собранный до перехода на общие строки, может
+              годами жить со своими числами. Ни одну сторону нельзя затирать
+              молча: в разделе — работа человека, в смете — результат расчёта. */}
+          {meta.divergence && canWrite && (
+            <SummaryDivergenceBanner
+              divergence={meta.divergence}
+              onResolve={handleResolveDivergence}
+            />
+          )}
 
           {/* Шаги оптимизации и предложения ИИ — рядом с таблицей, а не на
               отдельной странице. */}

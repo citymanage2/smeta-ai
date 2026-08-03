@@ -41,6 +41,19 @@ class ProjectSettings(BaseModel):
     name: str = ""
 
 
+class SectionDivergence(BaseModel):
+    """Раздел сводной и смета показывают разное — обе стороны в цифрах."""
+    section_rows: int
+    estimate_rows: int
+    section_total: float
+    estimate_total: float
+
+
+class ResolveDivergenceRequest(BaseModel):
+    # Чья сторона верна: 'section' — правки раздела, 'estimate' — строки сметы.
+    prefer: str
+
+
 class DocumentMeta(BaseModel):
     card_id: str
     kind: str
@@ -59,6 +72,8 @@ class DocumentMeta(BaseModel):
     draft_updated_at: Optional[str] = None
     lock: Optional[LockInfo] = None
     project: ProjectSettings
+    # Только у раздела сводной и только пока стороны не сведены.
+    divergence: Optional[SectionDivergence] = None
 
 
 class DocumentRows(BaseModel):
