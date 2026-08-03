@@ -180,14 +180,24 @@ async def save_rows(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Persist edited rows for a version. Marks task as manually edited."""
+    """Persist edited rows for a version. Marks task as manually edited.
+
+    Файл заказчика (file_slot='input') не пересобирается никогда: оригинал —
+    единственное, что нельзя восстановить, если правка окажется ошибочной
+    (решение 7.4, план 2026-08-02). Строки версии при этом сохраняются — они
+    нужны для просмотра, — но исходный xlsx остаётся нетронутым.
+    """
     from datetime import datetime, timezone
     from app.models.result import TaskResult
-    from app.models.task_input_file import TaskInputFile
+    from app.services import estimate_store
     from app.utils.xlsx_generic import rows_to_xlsx
 
     version = await _get_version_or_404(task_id, version_id, db)
     version.rows = body.rows
+    # На переходный период старый редактор живёт рядом с новым и пишет в те же
+    # строки. Без сдвига rev его сохранение было бы невидимо для защиты от
+    # перезаписи — открытый рядом новый редактор молча затёр бы эти правки.
+    version.rev = (version.rev or 0) + 1
     task = await _get_task_or_404(task_id, db, current_user)
     task.manually_edited_at = datetime.now(timezone.utc)
 
@@ -209,24 +219,13 @@ async def save_rows(
                 )
                 tr.size_bytes = len(xlsx_bytes)
 
-        elif version.file_slot == "input":
-            # file_index encoded in version_label as "input_N"
-            try:
-                file_index = int(version.version_label.split("_")[-1])
-            except (ValueError, AttributeError):
-                file_index = 0
-            res = await db.execute(
-                select(TaskInputFile).where(
-                    TaskInputFile.task_id == task_id,
-                    TaskInputFile.file_index == file_index,
-                )
-            )
-            tif = res.scalar_one_or_none()
-            if tif is not None:
-                tif.storage_key = await storage_service.store_input_file(
-                    task_id, tif.file_index, tif.file_name, tif.mime_type, xlsx_bytes
-                )
-                tif.size_bytes = len(xlsx_bytes)
+    # Смета: файл и итог задачи пересобираются вместе со строками. Без этого
+    # старый редактор остался бы щелью, через которую смета снова расходится —
+    # строки новые, а `task.cost` и скачиваемый файл старые (Фаза 5).
+    if version.file_slot == estimate_store.ESTIMATE_SLOT:
+        working = await estimate_store.get_working_version(db, task_id)
+        if working is not None and str(working.id) == str(version.id):
+            await estimate_store.sync_artifacts(db, task, body.rows)
 
     await db.commit()
     return {"version_id": version_id, "rows_count": len(body.rows)}
@@ -1408,18 +1407,28 @@ async def export_version(
     from urllib.parse import quote as _quote
     from app.services.excel_service import generate_estimate_export
 
+    from app.services import estimate_store
+
     version = await _get_version_or_404(task_id, version_id, db)
-    await _get_task_or_404(version.task_id, db, current_user)
+    task = await _get_task_or_404(version.task_id, db, current_user)
+
+    # Ставки и коэффициент — те же, что показывает редактор: проценты проекта,
+    # если версия их не переопределяет. Иначе выгруженная версия расходилась бы
+    # с экраном (а раньше при неоверрайженной версии считала вовсе по 0%).
+    overhead_pct, transport_pct, coefficient = await estimate_store.expense_settings(
+        db, task, version,
+    )
 
     try:
         # CPU-тяжёлая генерация xlsx — в отдельный поток, чтобы не блокировать loop.
         xlsx_bytes = await asyncio.to_thread(
             generate_estimate_export,
             rows=version.rows or [],
-            overhead_pct=float(version.overhead_pct or 0),
-            transport_pct=float(version.transport_pct or 0),
+            overhead_pct=overhead_pct,
+            transport_pct=transport_pct,
             contingency_pct=float(version.contingency_pct or 0),
             version_display_name=version.version_display_name,
+            coefficient=coefficient,
         )
     except Exception as exc:
         logger.error("export_version failed", error=str(exc), task_id=task_id, version_id=version_id, exc_info=True)

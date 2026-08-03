@@ -1803,7 +1803,11 @@ async def fix_empty_prices(
     if task.status == "processing":
         raise HTTPException(status_code=409, detail="Задача уже выполняется")
 
-    items: list[dict] = (task.progress_data or {}).get("items", [])
+    from app.services import estimate_store
+
+    # Считаем по рабочей версии — иначе кнопка обещала бы исправить позиции,
+    # цены которых человек уже проставил руками в редакторе.
+    items: list[dict] = await estimate_store.read_items(db, task)
 
     def _has_empty(it: dict) -> bool:
         # Должно совпадать с _has_empty_price в task_processor: иначе кнопка
@@ -1844,9 +1848,14 @@ async def update_estimate_items(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Пересохранить позиции сметы: пересоздать Excel и обновить cost."""
-    from app.utils.xlsx_exporter import generate_estimate_xlsx
-    from decimal import Decimal as _Decimal
+    """Пересохранить позиции сметы.
+
+    Обратная совместимость: эндпоинт остаётся для внешних вызовов и старых
+    вкладок, но источником правды больше не является — пишет туда же, куда и
+    редактор, через `estimate_store`. Раньше он писал в `progress_data['items']`
+    и расходился с версией сметы.
+    """
+    from app.services import estimate_store
 
     task_row = await db.execute(select(Task).where(Task.id == task_id))
     task = task_row.scalar_one_or_none()
@@ -1857,35 +1866,7 @@ async def update_estimate_items(
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
 
-    excel_data, grand_total = generate_estimate_xlsx(body.items)
-
-    # Update or create the "estimate" slot result
-    existing_r = await db.execute(
-        select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
-    )
-    old_result = existing_r.scalar_one_or_none()
-    est_key = await storage_service.store_result_file(
-        task_id, "estimate", "Смета_из_перечня.xlsx", XLSX_MIME, excel_data
-    )
-    if old_result:
-        old_result.storage_key = est_key
-        old_result.size_bytes = len(excel_data)
-        old_result.file_name = "Смета_из_перечня.xlsx"
-    else:
-        db.add(TaskResult(
-            task_id=task_id,
-            file_name="Смета_из_перечня.xlsx",
-            mime_type=XLSX_MIME,
-            storage_key=est_key,
-            size_bytes=len(excel_data),
-            slot="estimate",
-        ))
-
-    task.cost = _Decimal(str(round(grand_total, 2)))
-    task.estimation_status = "estimated"
-    task.progress_data = {**(task.progress_data or {}), "items": body.items}
-    task.updated_at = datetime.now(timezone.utc)
-    await db.commit()
+    _, grand_total = await estimate_store.write_items(db, task, body.items)
 
     return {"task_id": task_id, "grand_total": round(grand_total, 2), "items_count": len(body.items)}
 
@@ -1911,7 +1892,11 @@ async def reprice_estimate_item(
     if task.task_type != "ESTIMATE_FROM_LIST":
         raise HTTPException(status_code=409, detail="Доступно только для задач типа ESTIMATE_FROM_LIST")
 
-    items = (task.progress_data or {}).get("items", [])
+    from app.services import estimate_store
+
+    # Читаем смету из рабочей версии: цена ищется для той строки, которую
+    # человек видит в редакторе, а не для той, что когда-то выдал ИИ.
+    items = await estimate_store.read_items(db, task)
     if item_index < 0 or item_index >= len(items):
         raise HTTPException(status_code=404, detail="Позиция не найдена")
 
@@ -1957,10 +1942,7 @@ async def reprice_estimate_item(
 
     new_price = data.get("work_price") if item.get("type") == "Работа" else data.get("material_price")
     if new_price is not None:
-        from sqlalchemy.orm.attributes import flag_modified
-        from app.utils.xlsx_exporter import generate_estimate_xlsx
-        from decimal import Decimal as _Decimal
-        updated_item = {
+        items[item_index] = {
             **item,
             "work_price": data.get("work_price"),
             "material_price": data.get("material_price"),
@@ -1968,34 +1950,7 @@ async def reprice_estimate_item(
             "notes": data.get("notes", ""),
             "price_list_name": None,
         }
-        items[item_index] = updated_item
-        task.progress_data = {**(task.progress_data or {}), "items": items}
-        flag_modified(task, "progress_data")
-        excel_data, grand_total = generate_estimate_xlsx(items)
-        existing_r = await db.execute(
-            select(TaskResult).where(TaskResult.task_id == task_id, TaskResult.slot == "estimate")
-        )
-        old_result = existing_r.scalar_one_or_none()
-        est_key = await storage_service.store_result_file(
-            task_id, "estimate", "Смета_из_перечня.xlsx", XLSX_MIME, excel_data
-        )
-        if old_result:
-            old_result.storage_key = est_key
-            old_result.size_bytes = len(excel_data)
-            old_result.file_name = "Смета_из_перечня.xlsx"
-        else:
-            db.add(TaskResult(
-                task_id=task_id,
-                file_name="Смета_из_перечня.xlsx",
-                mime_type=XLSX_MIME,
-                storage_key=est_key,
-                size_bytes=len(excel_data),
-                slot="estimate",
-            ))
-        task.cost = _Decimal(str(round(grand_total, 2)))
-        task.estimation_status = "estimated"
-        task.updated_at = datetime.now(timezone.utc)
-        await db.commit()
+        await estimate_store.write_items(db, task, items)
 
     return {
         "item_index": item_index,

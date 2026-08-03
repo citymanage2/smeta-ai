@@ -10,5 +10,6 @@ from app.models.api_call_log import ApiCallLog
 from app.models.summary_estimate import SummaryEstimate
 from app.models.job import Job
 from app.models.system_event import SystemEvent
+from app.models.document_lock import DocumentLock
 
-__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent"]
+__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent", "DocumentLock"]

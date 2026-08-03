@@ -3,7 +3,7 @@ import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case, delete
 from datetime import datetime, timezone
@@ -35,6 +35,12 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    # Проценты доп. расходов проекта. Раньше 3% были зашиты в генераторе файла
+    # сметы; теперь это настройка, и её значение подставляется во все документы
+    # проекта. Отрицательная ставка и ставка больше 100% — заведомая ошибка
+    # ввода, поэтому отклоняются, а не сохраняются молча.
+    overhead_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    transport_pct: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class ArchiveRequest(BaseModel):
@@ -54,6 +60,8 @@ class ProjectResponse(BaseModel):
     is_archived: bool = False
     owner_id: Optional[int] = None
     owner_name: Optional[str] = None
+    overhead_pct: float = 3.0
+    transport_pct: float = 3.0
 
 
 class ProjectCardResponse(BaseModel):
@@ -136,6 +144,8 @@ def _project_to_response(p: Project, owner_name: Optional[str] = None) -> Projec
         is_archived=p.is_archived,
         owner_id=p.owner_id,
         owner_name=owner_name,
+        overhead_pct=float(p.overhead_pct if p.overhead_pct is not None else 3),
+        transport_pct=float(p.transport_pct if p.transport_pct is not None else 3),
     )
 
 
@@ -493,9 +503,57 @@ async def update_project(
         project.name = body.name
     if body.description is not None:
         project.description = body.description
+
+    percentages_changed = (
+        (body.overhead_pct is not None
+         and float(body.overhead_pct) != float(project.overhead_pct or 0))
+        or (body.transport_pct is not None
+            and float(body.transport_pct) != float(project.transport_pct or 0))
+    )
+    if body.overhead_pct is not None:
+        project.overhead_pct = body.overhead_pct
+    if body.transport_pct is not None:
+        project.transport_pct = body.transport_pct
+
     project.updated_at = datetime.now(timezone.utc)
     await db.commit()
+
+    if percentages_changed:
+        await _recalculate_project_estimates(project_id, db)
+
     return _project_to_response(project)
+
+
+async def _recalculate_project_estimates(project_id: str, db: AsyncSession) -> None:
+    """Пересобрать сметы проекта после смены ставок доп. расходов.
+
+    Итоги на экране считаются на лету и меняются сразу, а вот `task.cost` и
+    скачиваемый файл — нет. Без пересчёта карточка проекта, дашборд и воронка
+    показывали бы сумму по старым ставкам, и человек увидел бы два разных числа
+    за одно и то же. Смет в проекте единицы, поэтому пересчёт прямой.
+    """
+    from app.services import estimate_store
+
+    res = await db.execute(
+        select(Task).where(
+            Task.project_id == project_id,
+            Task.task_type == "ESTIMATE_FROM_LIST",
+            Task.deleted_at.is_(None),
+        )
+    )
+    recalculated = 0
+    for task in res.scalars().all():
+        version = await estimate_store.get_working_version(db, str(task.id))
+        if version is None or not version.rows:
+            continue
+        await estimate_store.sync_artifacts(db, task, version.rows, version)
+        recalculated += 1
+
+    if recalculated:
+        await db.commit()
+    logger.info(
+        "project_percentages_applied", project_id=project_id, estimates=recalculated,
+    )
 
 
 @router.delete("/{project_id}")

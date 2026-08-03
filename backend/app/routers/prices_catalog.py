@@ -29,6 +29,7 @@ from app.services.embedding_service import (
 )
 from app.utils.auth import get_current_user
 from app.utils.permissions import get_manager_user
+from app.utils.price_min import compute_min_price
 
 logger = structlog.get_logger()
 
@@ -315,8 +316,7 @@ async def create_work(
     _user=Depends(get_manager_user),
 ):
     prices = body.prices or {}
-    positive = [v for v in prices.values() if v and v > 0]
-    min_price = min(positive) if positive else None
+    min_price = compute_min_price(prices)
 
     embedding = await _generate_embedding_safe(body.name)
 
@@ -387,8 +387,7 @@ async def update_work(
         work.unit = body.unit
     if body.prices is not None:
         work.prices = body.prices
-        positive = [v for v in body.prices.values() if v and v > 0]
-        work.min_price = min(positive) if positive else None
+        work.min_price = compute_min_price(body.prices)
 
     if name_changed:
         work.embedding = await _generate_embedding_safe(work.name)

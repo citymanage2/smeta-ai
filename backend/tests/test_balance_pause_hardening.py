@@ -206,12 +206,24 @@ def _proc_with_task(items: list[dict]) -> tuple[TaskProcessor, MagicMock]:
     return p, task
 
 
-async def test_fix_empty_prices_saves_paid_batches_before_balance_pause():
+async def test_fix_empty_prices_saves_paid_batches_before_balance_pause(monkeypatch):
     """Первый батч оплачен и вернул цены, второй упал по балансу.
 
-    Найденные цены должны попасть в progress_data ДО падения — иначе перезапуск
-    задачи снова увидит их пустыми и оплатит те же позиции второй раз.
+    Найденные цены должны быть сохранены ДО падения — иначе перезапуск задачи
+    снова увидит их пустыми и оплатит те же позиции второй раз. С Фазы 5 они
+    уходят в рабочую версию сметы (единый источник правды), а не в
+    `progress_data`.
     """
+    from app.services import estimate_store
+
+    written: dict = {}
+
+    async def fake_write_items(_db, _task, items_, **_kw):
+        written["items"] = [dict(it) for it in items_]
+        return None, 0.0
+
+    monkeypatch.setattr(estimate_store, "write_items", fake_write_items)
+
     # 12 позиций → два батча (ESTIMATE_RETRY_CHUNK=10 + 2): первый успешный,
     # второй падает по балансу.
     from app.services.task_processor import ESTIMATE_RETRY_CHUNK
@@ -236,11 +248,9 @@ async def test_fix_empty_prices_saves_paid_batches_before_balance_pause():
     with pytest.raises(InsufficientBalanceError):
         await p.fix_empty_prices()
 
-    saved_items = task.progress_data["items"]
+    saved_items = written["items"]
     assert [it.get("work_price") for it in saved_items[:size]] == [
         100 + i for i in range(size)
     ]
     # Позиции из упавшего батча остались пустыми — их пересчитает resume.
     assert not saved_items[size].get("work_price")
-    task_commit = p.db.commit
-    assert task_commit.await_count >= 1, "цены не зафиксированы в БД перед падением"

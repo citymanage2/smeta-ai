@@ -1244,8 +1244,16 @@ def generate_estimate_export(
     transport_pct: float,
     contingency_pct: float,
     version_display_name: str,
+    coefficient: Optional[dict] = None,
 ) -> bytes:
-    """Export a single EstimateVersion to xlsx."""
+    """Export a single EstimateVersion to xlsx.
+
+    Цены выходят с коэффициентом документа (решение пользователя 4.5), а
+    накладные и транспортные считаются той же формулой, что везде в проекте:
+    накладные — от работ, транспортные — от материалов. Раньше здесь обе
+    брались от общего базиса, и выгруженная версия не сходилась с экраном.
+    """
+    from app.utils.xlsx_exporter import coefficient_for
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Смета"
@@ -1277,12 +1285,21 @@ def generate_estimate_export(
             continue
         rtype = r.get("type", "")
         is_section = rtype == "section"
+
+        k_work, k_material = coefficient_for(coefficient, r.get("id"))
+        if k_work != 1.0 or k_material != 1.0:
+            r = dict(r)
+            if r.get("price_work") is not None:
+                r["price_work"] = round(float(r["price_work"]) * k_work, 2)
+            if r.get("price_material") is not None:
+                r["price_material"] = round(float(r["price_material"]) * k_material, 2)
         cost = _row_cost_dict(r)
 
-        if rtype == "work":
-            total_works += cost
-        elif rtype == "material":
-            total_materials += cost
+        work_cost = _row_cost_dict({**r, "price_material": None})
+        material_cost = _row_cost_dict({**r, "price_work": None})
+        if not is_section:
+            total_works += work_cost
+            total_materials += material_cost
 
         ws.cell(row=row_idx, column=1, value=r.get("num") if not is_section else None)
         ws.cell(row=row_idx, column=2, value=_safe_cell(TYPE_LABELS.get(rtype, rtype)))
@@ -1308,8 +1325,9 @@ def generate_estimate_export(
     row_idx += 1
 
     base = total_works + total_materials
-    overhead = base * overhead_pct / 100
-    transport = base * transport_pct / 100
+    # Единое правило проекта: накладные — от работ, транспортные — от материалов.
+    overhead = total_works * overhead_pct / 100
+    transport = total_materials * transport_pct / 100
     contingency = base * contingency_pct / 100
     total = base + overhead + transport + contingency
     vat = total * _VAT_RATE

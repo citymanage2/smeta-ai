@@ -1,5 +1,6 @@
 import io
 from datetime import datetime
+from typing import Optional
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
@@ -114,7 +115,43 @@ def generate_project_xlsx(project, tasks: list, slot_results: dict, base_url: st
     return buf.getvalue()
 
 
-def generate_estimate_xlsx(items: list[dict]) -> bytes:
+DEFAULT_OVERHEAD_PCT = 3.0
+DEFAULT_TRANSPORT_PCT = 3.0
+
+
+def coefficient_for(coefficient: Optional[dict], row_id) -> tuple:
+    """Множители (работы, материалы) для конкретной строки.
+
+    Коэффициент — настройка документа: `{"work": 1.05, "material": 1.0,
+    "scope": "all" | ["row_id", ...]}`. Исходные цены он не меняет никогда,
+    поэтому его можно снять и получить ровно прежние числа.
+    """
+    if not isinstance(coefficient, dict):
+        return 1.0, 1.0
+
+    scope = coefficient.get("scope", "all")
+    if isinstance(scope, (list, tuple, set)):
+        if row_id is None or str(row_id) not in {str(x) for x in scope}:
+            return 1.0, 1.0
+
+    def _k(value) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 1.0
+        # Ноль и минус коэффициентом не бывают: они молча обнулили бы смету.
+        return number if number > 0 else 1.0
+
+    return _k(coefficient.get("work", 1.0)), _k(coefficient.get("material", 1.0))
+
+
+def generate_estimate_xlsx(
+    items: list[dict],
+    *,
+    overhead_pct: float = DEFAULT_OVERHEAD_PCT,
+    transport_pct: float = DEFAULT_TRANSPORT_PCT,
+    coefficient: Optional[dict] = None,
+) -> bytes:
     """
     Generate Excel estimate file for ESTIMATE_FROM_LIST task.
 
@@ -123,6 +160,11 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
       work_price, material_price,   (float | None)
       price_list_name,              (str | None — "Прайс" / "Кеш" / "Интернет")
       notes                         (str | None — примечание: источники / дата кеша / наименование в прайсе)
+
+    Проценты доп. расходов приходят снаружи (настройка проекта или версии) —
+    раньше здесь были зашиты 3%, и файл расходился с экраном у любого проекта
+    с другими ставками. Коэффициент применяется к ценам: в файл они попадают
+    уже умноженными (решение пользователя 4.5).
 
     Appends totals block at the end.
     Returns raw xlsx bytes.
@@ -176,6 +218,13 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
         qty_shown = coerce_qty_signed(item.get("quantity"))
         work_price = coerce_price(item.get("work_price"))
         mat_price = coerce_price(item.get("material_price"))
+
+        k_work, k_material = coefficient_for(coefficient, item.get("row_id"))
+        if work_price is not None and k_work != 1.0:
+            work_price = round(work_price * k_work, 2)
+        if mat_price is not None and k_material != 1.0:
+            mat_price = round(mat_price * k_material, 2)
+
         work_cost = round(qty * work_price, 2) if work_price is not None and qty else None
         mat_cost = round(qty * mat_price, 2) if mat_price is not None and qty else None
 
@@ -214,15 +263,20 @@ def generate_estimate_xlsx(items: list[dict]) -> bytes:
         row_num += 1
 
     # Totals block
-    overhead = round(total_works * 0.03, 2)
-    transport = round(total_materials * 0.03, 2)
+    overhead_rate = float(overhead_pct or 0)
+    transport_rate = float(transport_pct or 0)
+    overhead = round(total_works * overhead_rate / 100, 2)
+    transport = round(total_materials * transport_rate / 100, 2)
     grand_total = round(total_works + overhead + total_materials + transport, 2)
+
+    def _pct_label(value: float) -> str:
+        return f"{value:g}"
 
     totals = [
         ("Сумма по работам:", total_works),
-        ("Накладные расходы 3%:", overhead),
+        (f"Накладные расходы {_pct_label(overhead_rate)}%:", overhead),
         ("Сумма по материалам:", total_materials),
-        ("Транспортные расходы 3%:", transport),
+        (f"Транспортные расходы {_pct_label(transport_rate)}%:", transport),
         ("ИТОГО ПО СМЕТЕ:", grand_total),
     ]
 

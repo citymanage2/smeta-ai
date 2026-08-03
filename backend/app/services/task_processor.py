@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import math
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -733,6 +734,24 @@ class TaskProcessor:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
         task = result.scalar_one_or_none()
         return bool(task) and is_batch_pending(task.progress_data)
+
+    async def _project_expense_rates(self, task) -> tuple:
+        """Ставки накладных и транспортных проекта; без проекта — прежние 3%."""
+        from app.models.project import Project
+        from app.services.estimate_store import DEFAULT_PCT
+
+        project_id = getattr(task, "project_id", None)
+        # Только настоящий идентификатор: сюда приходит и задача без проекта,
+        # и объект-заглушка из тестов шага 3.
+        if not isinstance(project_id, (str, uuid.UUID)):
+            return DEFAULT_PCT, DEFAULT_PCT
+        project = await self.db.get(Project, str(project_id))
+        if project is None:
+            return DEFAULT_PCT, DEFAULT_PCT
+        return (
+            float(project.overhead_pct if project.overhead_pct is not None else DEFAULT_PCT),
+            float(project.transport_pct if project.transport_pct is not None else DEFAULT_PCT),
+        )
 
     async def _save_progress_data(self, data: dict) -> None:
         result = await self.db.execute(select(Task).where(Task.id == self.task_id))
@@ -2912,7 +2931,13 @@ class TaskProcessor:
 
         await self.update_progress(f"Собрано {len(final_items)} позиций. Формирование Excel сметы...")
 
-        excel_data, grand_total = generate_estimate_xlsx(final_items)
+        # Ставки доп. расходов берём у проекта: иначе свежая смета считалась бы
+        # по прежним 3%, а после первой же правки пересчиталась бы по настройке
+        # проекта — и число «само собой» поменялось бы.
+        overhead_pct, transport_pct = await self._project_expense_rates(task)
+        excel_data, grand_total = generate_estimate_xlsx(
+            final_items, overhead_pct=overhead_pct, transport_pct=transport_pct,
+        )
 
         # Save result file
         await self.save_result(self._result_filename(task, "Смета_из_перечня.xlsx"), _XLSX_MIME, excel_data)
@@ -2929,6 +2954,18 @@ class TaskProcessor:
 
         # Save items to progress_data for future use (Path B)
         await self._save_progress_data({"items": final_items})
+
+        # Рабочая версия сметы создаётся сразу: с этого момента правда — она.
+        # `progress_data['items']` выше остаётся записью «что выдал ИИ».
+        # Файл и `task.cost` уже записаны из тех же позиций, поэтому здесь
+        # только строки — пересобирать xlsx второй раз незачем.
+        from app.services import estimate_store
+        from app.utils.estimate_rows import items_to_rows
+
+        if upd_task is not None:
+            await estimate_store.ensure_working_version(
+                self.db, upd_task, items_to_rows(final_items),
+            )
 
         logger.info(
             "Estimate from list completed",
@@ -3140,15 +3177,16 @@ class _FixEmptyResult:
 async def _fix_empty_prices(self: "TaskProcessor") -> None:
     """Find items with empty prices, send to Claude, merge back, regen xlsx."""
     from datetime import date as _date
-    from decimal import Decimal as _Decimal
-    from app.utils.xlsx_exporter import generate_estimate_xlsx
+    from app.services import estimate_store
 
     task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))
     task = task_res.scalar_one_or_none()
     if not task:
         return
 
-    items: list[dict] = (task.progress_data or {}).get("items", [])
+    # Источник — рабочая версия сметы, а не то, что когда-то выдал ИИ: иначе
+    # исправление цен затёрло бы правки, сделанные человеком в редакторе.
+    items: list[dict] = await estimate_store.read_items(self.db, task)
     if not items:
         task.status = "completed"
         task.progress_message = None
@@ -3292,10 +3330,7 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         # падения, иначе перезапуск после паузы по балансу отправит те же
         # позиции в Claude заново (они снова окажутся «пустыми»).
         if fixed_count:
-            from sqlalchemy.orm.attributes import flag_modified
-            task.progress_data = {**(task.progress_data or {}), "items": items}
-            flag_modified(task, "progress_data")
-            await self.db.commit()
+            await estimate_store.write_items(self.db, task, items)
             logger.info(
                 "Saved fixed prices before batch failure",
                 task_id=self.task_id,
@@ -3310,42 +3345,18 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         f"Исправлено {fixed_count} из {total_empty} пустых цен. Пересчёт сметы..."
     )
 
-    # Regenerate xlsx and update cost
-    excel_data, grand_total = generate_estimate_xlsx(items)
-
-    existing_r = await self.db.execute(
-        select(TaskResult).where(TaskResult.task_id == self.task_id, TaskResult.slot == "estimate")
-    )
-    old_result = existing_r.scalar_one_or_none()
-    est_key = await storage_service.store_result_file(
-        self.task_id, "estimate", "Смета_из_перечня.xlsx", _XLSX_MIME, excel_data
-    )
-    if old_result:
-        old_result.storage_key = est_key
-        old_result.size_bytes = len(excel_data)
-    else:
-        self.db.add(TaskResult(
-            task_id=self.task_id,
-            file_name="Смета_из_перечня.xlsx",
-            mime_type=_XLSX_MIME,
-            storage_key=est_key,
-            size_bytes=len(excel_data),
-            slot="estimate",
-        ))
-
+    # Пересборка файла и итога — через единый источник правды: он же обновит
+    # строки рабочей версии, которые видит редактор.
     task_res2 = await self.db.execute(select(Task).where(Task.id == self.task_id))
     task2 = task_res2.scalar_one_or_none()
-    if task2:
-        if task2.status == "cancelled":
-            return
-        from sqlalchemy.orm.attributes import flag_modified
-        task2.cost = _Decimal(str(round(grand_total, 2)))
-        task2.estimation_status = "estimated"
-        task2.status = "completed"
-        task2.progress_message = None
-        task2.progress_data = {**(task2.progress_data or {}), "items": items}
-        flag_modified(task2, "progress_data")
-        task2.updated_at = datetime.now(timezone.utc)
+    if task2 is None:
+        return
+    if task2.status == "cancelled":
+        return
+
+    _, grand_total = await estimate_store.write_items(self.db, task2, items, commit=False)
+    task2.status = "completed"
+    task2.progress_message = None
     await self.db.commit()
 
     logger.info(

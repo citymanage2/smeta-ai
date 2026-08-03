@@ -108,14 +108,8 @@ function KanbanCardInner({ card, isOverlay = false }: Props) {
               title="Открыть задачу"
               onClick={(e) => {
                 e.stopPropagation()
-                const stageTaskId = {
-                  list: card.list_task_id,
-                  completeness: card.completeness_task_id,
-                  estimate: card.estimate_task_id,
-                  optimization: card.optimization_task_id,
-                }[card.stage]
-                if (stageTaskId) navigate(`/tasks/${stageTaskId}/status`)
-                else navigate(`/projects/${card.project_id}/cards/${card.id}`)
+                // Всё про этап — на странице сметы: файлы, ход обработки, таблица.
+                navigate(`/projects/${card.project_id}/cards/${card.id}?stage=${card.stage}`)
               }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#3b82f6' }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#cbd5e1' }}

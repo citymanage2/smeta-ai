@@ -5,7 +5,8 @@ import { ArrowLeft } from 'lucide-react';
 import Layout from '../components/Layout';
 import { LumaSpin } from '../components/ui/LumaSpin';
 import EstimateGrid from '../components/estimate/EstimateGrid';
-import GenericGrid from '../components/estimate/GenericGrid';
+import DocumentEditor from '../components/editor/DocumentEditor';
+import { DocumentKind, locateDocumentByTask } from '../api/documents';
 import AdditionalExpenses from '../components/estimate/AdditionalExpenses';
 import EstimateSummary from '../components/estimate/EstimateSummary';
 import VersionTabs from '../components/estimate/VersionTabs';
@@ -18,16 +19,12 @@ import {
   getVersions,
   getVersion,
   runCustomOptimization,
-  initVersionFromResult,
-  initVersionFromInput,
   initEstimateVersionFromResult,
-  saveGenericRows,
 } from '../api/estimateVersions';
 import { getTaskStatus } from '../api/tasks';
 import {
   EstimateRow,
   EstimateVersionFull,
-  GenericRow,
   GENERIC_EDITOR_TASK_TYPES,
   OptimizationProposal,
   OptimizationStep,
@@ -117,12 +114,9 @@ const EstimateOptimizer: React.FC = () => {
   const processingStartRef = React.useRef<number | null>(null);
   const stuckTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Generic mode state
-  const [genericVersions, setGenericVersions] = useState<ReturnType<typeof getVersions> extends Promise<infer T> ? T : never>([]);
-  const [activeGenericVersionId, setActiveGenericVersionId] = useState<string | null>(null);
-  const [genericRows, setGenericRows] = useState<GenericRow[]>([]);
-  const [genericDirty, setGenericDirty] = useState(false);
-  const [genericSaving, setGenericSaving] = useState(false);
+  // Плоские документы (перечень, полнота) живут в едином редакторе: здесь
+  // остаётся только найти карточку, которой принадлежит задача.
+  const [documentRef, setDocumentRef] = useState<{ cardId: string; kind: DocumentKind } | null>(null);
 
   const isGenericMode = taskType !== null && GENERIC_EDITOR_TASK_TYPES.has(taskType);
 
@@ -133,10 +127,7 @@ const EstimateOptimizer: React.FC = () => {
     setProcessingTooLong(false);
     processingStartRef.current = Date.now();
     setTaskType(null);
-    setGenericVersions([]);
-    setActiveGenericVersionId(null);
-    setGenericRows([]);
-    setGenericDirty(false);
+    setDocumentRef(null);
 
     // Show "stuck" warning after 3 minutes of processing
     stuckTimerRef.current = setTimeout(() => setProcessingTooLong(true), 3 * 60 * 1000);
@@ -158,41 +149,15 @@ const EstimateOptimizer: React.FC = () => {
         setTaskType(currentTaskType);
 
         if (GENERIC_EDITOR_TASK_TYPES.has(currentTaskType)) {
-          // Generic mode: load versions for the given file_slot
-          let versionList = await getVersions(taskId, fileSlot);
-
-          if (versionList.length === 0 && taskData.status === 'completed') {
-            // Auto-initialise version from result or input
-            try {
-              if (fileSlot === 'input') {
-                await initVersionFromInput(taskId, fileIndex);
-              } else {
-                await initVersionFromResult(taskId);
-              }
-              versionList = await getVersions(taskId, fileSlot);
-            } catch {
-              // init может вернуть 200 no-op или fail — продолжаем
-            }
+          // Единый редактор работает с документом карточки, а не с задачей:
+          // всю загрузку, черновики и историю он берёт на себя сам.
+          if (taskData.status !== 'completed') return;
+          try {
+            const located = await locateDocumentByTask(taskId);
+            setDocumentRef({ cardId: located.card_id, kind: located.kind });
+          } catch {
+            setError('Не удалось открыть документ. Возможно, задача не привязана к смете.');
           }
-
-          if (versionList.length === 0) {
-            if (taskData.status === 'completed') {
-              // Задача завершена, но версии так и не загружены — показываем ошибку
-              setProcessingMsg(null);
-              setError('Не удалось загрузить данные для редактора. Попробуйте закрыть и открыть снова.');
-              if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-              if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
-            }
-            return;
-          }
-
-          const active = versionList.find((v) => !v.is_rolled_back) ?? versionList[0];
-          const full = await getVersion(taskId, active.id);
-
-          setGenericVersions(versionList);
-          setActiveGenericVersionId(active.id);
-          setGenericRows(full.rows as unknown as GenericRow[]);
-          setGenericDirty(false);
           setProcessingMsg(null);
           setProcessingTooLong(false);
           if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
@@ -253,20 +218,6 @@ const EstimateOptimizer: React.FC = () => {
       if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
     };
   }, [taskId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Generic mode: save
-  const handleGenericSave = useCallback(async () => {
-    if (!taskId || !activeGenericVersionId) return;
-    setGenericSaving(true);
-    try {
-      await saveGenericRows(taskId, activeGenericVersionId, genericRows);
-      setGenericDirty(false);
-      try { window.parent.postMessage({ type: 'estimate-saved', taskId }, '*'); } catch { /* ignore */ }
-    } finally {
-      setGenericSaving(false);
-    }
-  }, [taskId, activeGenericVersionId, genericRows]);
-
 
   // ─── Estimate mode callbacks ───────────────────────────────────────────────
 
@@ -431,7 +382,6 @@ const EstimateOptimizer: React.FC = () => {
     .reduce((acc, r) => acc + (r.qty ?? 0) * ((r.price_work ?? 0) + (r.price_material ?? 0)), 0);
 
   const visibleVersions = versions.filter((v) => !v.is_rolled_back);
-  const visibleGenericVersions = genericVersions.filter((v) => !v.is_rolled_back);
 
   const btnBase: React.CSSProperties = {
     width: '100%',
@@ -479,11 +429,6 @@ const EstimateOptimizer: React.FC = () => {
         {isGenericMode ? (
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
             {genericTitle}
-            {genericDirty && (
-              <span style={{ marginLeft: 10, color: '#f59e0b', fontWeight: 500 }}>
-                • Несохранённые изменения
-              </span>
-            )}
           </p>
         ) : (
           <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>
@@ -547,18 +492,18 @@ const EstimateOptimizer: React.FC = () => {
         </div>
       )}
 
-      {/* ── Generic mode ────────────────────────────────────────────────── */}
-      {isGenericMode && visibleGenericVersions.length > 0 && taskId && (
-        <>
-          <GenericGrid
-            rows={genericRows}
-            isDirty={genericDirty}
-            isSaving={genericSaving}
-            isReadonly={isReadonly}
-            onRowsChange={(rows) => { setGenericRows(rows); setGenericDirty(true); }}
-            onSave={handleGenericSave}
-          />
-        </>
+      {/* ── Плоские документы: перечень и полнота ───────────────────────── */}
+      {isGenericMode && documentRef && (
+        <DocumentEditor
+          cardId={documentRef.cardId}
+          kind={documentRef.kind}
+          fileSlot={fileSlot === 'input' ? 'input' : undefined}
+          fileIndex={fileSlot === 'input' ? fileIndex : undefined}
+          onApplied={() => {
+            // Страница может быть открыта из карточки — сообщаем ей об изменении.
+            try { window.parent.postMessage({ type: 'estimate-saved', taskId }, '*'); } catch { /* нет родителя */ }
+          }}
+        />
       )}
 
       {/* ── Estimate mode ───────────────────────────────────────────────── */}
@@ -611,21 +556,22 @@ const EstimateOptimizer: React.FC = () => {
             />
           )}
 
-          {!embed && (
-            <VersionTabs
-              taskId={taskId}
-              versions={visibleVersions}
-              activeVersionId={activeVersionId}
-              activeView={activeView}
-              isOptimizationRunning={isReadonly}
-              onSelectVersion={(id) => {
-                setActiveView('version');
-                setActiveVersion(id);
-              }}
-              onSelectComparison={() => setActiveView('comparison')}
-              onVersionsChange={handleVersionsChange}
-            />
-          )}
+          {/* Вкладки версий видны всегда (решение пользователя 11). Раньше они
+              прятались при встроенном открытии, и человек правил не ту версию,
+              не зная, что версий несколько. */}
+          <VersionTabs
+            taskId={taskId}
+            versions={visibleVersions}
+            activeVersionId={activeVersionId}
+            activeView={activeView}
+            isOptimizationRunning={isReadonly}
+            onSelectVersion={(id) => {
+              setActiveView('version');
+              setActiveVersion(id);
+            }}
+            onSelectComparison={() => setActiveView('comparison')}
+            onVersionsChange={handleVersionsChange}
+          />
 
           {activeView === 'comparison' && (
             <div style={{

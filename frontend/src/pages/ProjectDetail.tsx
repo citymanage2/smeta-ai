@@ -12,6 +12,7 @@ import HistoryModal from '../components/HistoryModal';
 import { KanbanBoard } from '../components/kanban/KanbanBoard';
 import { SmetaList } from '../components/SmetaList';
 import { StageStateBadge } from '../components/StageStateBadge';
+import ProjectSettingsPanel from '../components/ProjectSettingsPanel';
 
 function formatCost(cost: number): string {
   return cost.toLocaleString('ru-RU') + ' ₽';
@@ -314,6 +315,16 @@ const ProjectDetailPage: React.FC = () => {
                   onEdit={() => { setEditDesc(project.description ?? ''); setEditingDesc(true); }}
                 />
               )}
+
+              {/* Ставки доп. расходов: одна настройка на все документы проекта. */}
+              <ProjectSettingsPanel
+                projectId={projectId!}
+                overheadPct={project.overhead_pct ?? 3}
+                transportPct={project.transport_pct ?? 3}
+                onSaved={(overhead_pct, transport_pct) => setProject(
+                  (prev) => (prev ? { ...prev, overhead_pct, transport_pct } : prev),
+                )}
+              />
             </div>
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>

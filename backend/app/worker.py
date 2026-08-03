@@ -129,6 +129,26 @@ async def _handle_retrain(payload: dict, db) -> None:
     await retraining_service.run_training_job(payload["job_id"], db)
 
 
+async def _handle_document_analogs(payload: dict, db) -> None:
+    """Поиск аналогов по позициям документа (план 2026-08-02, Фаза 11).
+
+    Задача фоновая, потому что идёт в интернет и занимает минуты. Документ она
+    не меняет: результат — предложения, которые человек принимает сам.
+    """
+    from app.services import analogs_service
+
+    run_id = payload.get("run_id")
+    if not run_id:
+        raise ValueError("document.analogs: payload без run_id")
+    try:
+        await analogs_service.process_run(db, run_id)
+    except Exception as exc:  # noqa: BLE001 — прогон не должен остаться «идущим»
+        # Без этого упавшая задача оставила бы прогон в статусе «идёт», и
+        # человек не смог бы запустить поиск заново.
+        await analogs_service.mark_failed(db, run_id, str(exc))
+        raise
+
+
 HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
     "task.process": _handle_task_process,
     "task.optimize": _handle_task_optimize,
@@ -136,6 +156,7 @@ HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
     "version.optimize": _handle_version_optimize,
     "version.fill_prices": _handle_version_fill_prices,
     "retrain": _handle_retrain,
+    "document.analogs": _handle_document_analogs,
 }
 
 

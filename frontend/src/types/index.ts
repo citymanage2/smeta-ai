@@ -6,11 +6,23 @@ export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_
 
 export const ESTIMATE_TASK_TYPES: Set<TaskType> = new Set(['ESTIMATE_FROM_LIST', 'ESTIMATE_OPTIMIZATION']);
 
+/** Документы плоского формата: строки «как в файле», без схемы сметы. */
 export const GENERIC_EDITOR_TASK_TYPES: Set<TaskType> = new Set([
   'LIST_FROM_GRAND',
   'LIST_FROM_PROJECT',
   'CHECK_LIST_COMPLETENESS',
   'CHECK_PROJECT_COMPLETENESS',
+]);
+
+/**
+ * Типы, переехавшие в единый редактор. Отличается от списка выше: смета и
+ * оптимизация — не плоские документы, но открываются тем же редактором
+ * (Фазы 5 и 6). Плоскими остаются только перечень и полнота.
+ */
+export const UNIFIED_EDITOR_TASK_TYPES: Set<TaskType> = new Set([
+  ...GENERIC_EDITOR_TASK_TYPES,
+  'ESTIMATE_FROM_LIST',
+  'ESTIMATE_OPTIMIZATION',
 ]);
 
 export interface GenericRow {
@@ -155,6 +167,9 @@ export interface Project {
   is_archived?: boolean;
   owner_id?: number | null;
   owner_name?: string | null;
+  /** Проценты доп. расходов проекта, по умолчанию 3%. */
+  overhead_pct?: number;
+  transport_pct?: number;
 }
 
 export interface ProjectCard extends Project {
