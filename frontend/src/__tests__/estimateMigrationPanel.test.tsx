@@ -8,7 +8,7 @@
  * не трогать, а расхождения разбираются по одной смете с показом обоих итогов.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../api/admin', () => ({
   getEstimateMigrationReport: vi.fn(),
@@ -38,6 +38,19 @@ const REPORT: adminApi.MigrationReport = {
       task_id: 't3', task_name: 'Детсад — смета', status: 'conflict',
       items_count: 60, version_count: 60, diff_count: 4,
       items_total: 1800000, version_total: 1755000,
+      only_order: false, same_totals: false,
+      items_rows: 60, version_rows: 58,
+      samples: [
+        { name: 'Кладка стен', items: '4,00 м3, работа 1 000,00',
+          version: '4,00 м3, работа 777,00' },
+      ],
+    },
+    {
+      task_id: 't5', task_name: 'Гараж — смета', status: 'conflict',
+      items_count: 200, version_count: 200, diff_count: 203,
+      items_total: 9127176, version_total: 9127176,
+      only_order: true, same_totals: true,
+      items_rows: 200, version_rows: 200, samples: [],
     },
     {
       task_id: 't4', task_name: 'Склад — смета', status: 'in_sync',
@@ -79,11 +92,12 @@ describe('перевод смет из админки', () => {
   it('расхождение показывает оба итога и число расходящихся позиций', async () => {
     await openPanel();
 
-    // Оба итога и число расхождений — в одной строке под названием сметы.
-    const line = screen.getByText(/расходится позиций/i);
-    expect(line).toHaveTextContent('4');
-    expect(line.textContent?.replace(/ | /g, ' ')).toContain('1 800 000');
-    expect(line.textContent?.replace(/ | /g, ' ')).toContain('1 755 000');
+    // Расхождений на экране несколько — смотрим карточку нужной сметы.
+    const card = screen.getByText('Детсад — смета').parentElement!;
+    const text = card.textContent?.replace(/\u00a0|\u202f/g, ' ') ?? '';
+    expect(text).toContain('расходится позиций: 4');
+    expect(text).toContain('1 800 000');
+    expect(text).toContain('1 755 000');
   });
 
   it('отмеченные «не трогать» уходят в исключения', async () => {
@@ -117,7 +131,8 @@ describe('перевод смет из админки', () => {
     });
     await openPanel();
 
-    fireEvent.click(screen.getByRole('button', { name: /взять из расч/i }));
+    const card = screen.getByText('Детсад — смета').parentElement!;
+    fireEvent.click(within(card).getByRole('button', { name: /взять из расч/i }));
 
     await waitFor(() =>
       expect(adminApi.resolveEstimateConflict).toHaveBeenCalledWith('t3', 'items'));
@@ -130,7 +145,9 @@ describe('перевод смет из админки', () => {
     });
     await openPanel();
 
-    fireEvent.click(screen.getByRole('button', { name: /оставить как в редакторе/i }));
+    const card = screen.getByText('Детсад — смета').parentElement!;
+    fireEvent.click(
+      within(card).getByRole('button', { name: /оставить как в редакторе/i }));
 
     await waitFor(() =>
       expect(adminApi.resolveEstimateConflict).toHaveBeenCalledWith('t3', 'version'));
@@ -156,6 +173,38 @@ describe('перевод смет из админки', () => {
 
     expect(screen.getByRole('button', { name: /создать недостающие версии/i }))
       .toBeDisabled();
+  });
+
+  it('видно, сколько строк с каждой стороны', async () => {
+    await openPanel();
+
+    // «60 против 58» сразу говорит, что состав строк разный.
+    const card = screen.getByText('Детсад — смета').parentElement;
+    expect(card).toHaveTextContent('60');
+    expect(card).toHaveTextContent('58');
+  });
+
+  it('перестановка строк объяснена словами и не пугает', async () => {
+    await openPanel();
+
+    const card = screen.getByText('Гараж — смета').parentElement;
+    expect(card).toHaveTextContent(/порядок/i);
+    expect(card).toHaveTextContent(/совпада/i);
+  });
+
+  it('пример различия показывает обе величины', async () => {
+    await openPanel();
+
+    expect(screen.getByText(/Кладка стен/)).toBeInTheDocument();
+    expect(screen.getByText(/1 000,00/)).toBeInTheDocument();
+    expect(screen.getByText(/777,00/)).toBeInTheDocument();
+  });
+
+  it('когда деньги одинаковые, это сказано прямо', async () => {
+    await openPanel();
+
+    const card = screen.getByText('Гараж — смета').parentElement;
+    expect(card).toHaveTextContent(/итоги совпадают/i);
   });
 
   it('ошибка сервера объясняется словами', async () => {

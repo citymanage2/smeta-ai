@@ -23,6 +23,9 @@ from app.models.project import Project
 from app.models.result import TaskResult
 from app.models.task import Task
 from app.models.user import User
+# Импорт ради метаданных SQLAlchemy: на document_locks висит внешний ключ к
+# workflow_cards, и при запуске одного этого файла таблица иначе не находится.
+from app.models.workflow_card import WorkflowCard  # noqa: F401
 from app.services import estimate_store
 from app.utils.auth import create_access_token, hash_password
 
@@ -304,3 +307,92 @@ class TestPermissions:
         )
 
         assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Расхождение объяснено словами (Фаза 3)
+# ---------------------------------------------------------------------------
+#
+# На боевых данных нашлось девять расхождений, и у шести итоги совпали до рубля,
+# а «расходится позиций» показывало сотни. По такому отчёту решение принять
+# нельзя: непонятно, изменились цифры или строки просто переставлены. Цена
+# ошибки — стёртые правки человека.
+
+
+def _analyze(items, version_items):
+    from app.services.estimate_migration import describe_diff
+    return describe_diff(items, version_items)
+
+
+class TestDiffExplained:
+    def test_reordered_rows_are_order_only(self):
+        """Строки переставлены местами: состав тот же, деньги те же."""
+        a = _items()
+        b = list(reversed(_items()))
+
+        d = _analyze(a, b)
+
+        assert d["only_order"] is True
+        assert d["same_totals"] is True
+
+    def test_changed_price_is_not_order_only(self):
+        a = _items(work_price=1000.0)
+        b = _items(work_price=777.0)
+
+        d = _analyze(a, b)
+
+        assert d["only_order"] is False
+        assert d["same_totals"] is False
+
+    def test_sample_shows_both_values(self):
+        """Человеку нужно увидеть, что именно разошлось."""
+        a = _items(work_price=1000.0)
+        b = _items(work_price=777.0)
+
+        d = _analyze(a, b)
+
+        assert d["samples"], "пример различия обязателен"
+        first = d["samples"][0]
+        assert "Кладка стен" in first["name"]
+        assert "1000" in first["items"] or "1 000" in first["items"]
+        assert "777" in first["version"]
+
+    def test_row_counts_are_reported(self):
+        a = _items() + [{"type": "Работа", "name": "Штукатурка", "unit": "м2",
+                         "quantity": 10, "work_price": 500.0, "material_price": None}]
+        b = _items()
+
+        d = _analyze(a, b)
+
+        assert d["items_rows"] == 3
+        assert d["version_rows"] == 2
+        assert d["only_order"] is False
+
+    def test_samples_are_capped(self):
+        """Список примеров не должен превращаться в простыню."""
+        a = [{"type": "Работа", "name": f"Работа {i}", "unit": "м2",
+              "quantity": 1, "work_price": 100.0, "material_price": None}
+             for i in range(20)]
+        b = [{**row, "work_price": 200.0} for row in a]
+
+        d = _analyze(a, b)
+
+        assert len(d["samples"]) <= 3
+
+    def test_equal_estimates_have_no_diff(self):
+        d = _analyze(_items(), _items())
+
+        assert d["only_order"] is True
+        assert d["samples"] == []
+
+    @pytest.mark.asyncio
+    async def test_report_explains_conflict(self, async_client, mig_env):
+        """Отчёт по API отдаёт разбор, а не только число расхождений."""
+        body = (await _report(async_client, mig_env)).json()
+
+        entry = _by_id(body, mig_env["conflict"])
+        assert entry["only_order"] is False
+        assert entry["same_totals"] is False
+        assert entry["items_rows"] == 2
+        assert entry["version_rows"] == 2
+        assert entry["samples"]
