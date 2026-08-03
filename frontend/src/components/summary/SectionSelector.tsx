@@ -7,6 +7,8 @@ import { LumaSpin } from '../ui/LumaSpin'
 
 interface Props {
   cards: WorkflowCard[]
+  /** Разделы, уже входящие в сводную: снятая отметка уберёт раздел из неё. */
+  currentCardIds?: string[]
   onConfirm: (sections: SectionInput[]) => Promise<void>
   onClose: () => void
 }
@@ -26,7 +28,9 @@ function versionLabel(v: EstimateVersionSummary): string {
   return VERSION_TYPES.find((vt) => vt.key === v.version_label)?.label ?? v.version_display_name
 }
 
-const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
+const SectionSelector: React.FC<Props> = ({
+  cards, currentCardIds, onConfirm, onClose,
+}) => {
   const eligibleCards = cards.filter(
     (c) => c.estimate_task_id || c.optimization_task_id,
   )
@@ -124,6 +128,12 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
     setSelectedVersionIds((prev) => ({ ...prev, [cardId]: versionId }))
   }
 
+  // Разделы, которые исчезнут из сводной вместе со своими строками. Раньше это
+  // происходило молча — и уносило правки во всех остальных разделах заодно.
+  const leaving = (currentCardIds ?? [])
+    .filter((cardId) => !checked[cardId])
+    .map((cardId) => cards.find((card) => card.id === cardId)?.name || 'без названия')
+
   const handleConfirm = async () => {
     setError('')
     const sections: SectionInput[] = eligibleCards
@@ -170,8 +180,23 @@ const SectionSelector: React.FC<Props> = ({ cards, onConfirm, onClose }) => {
           Создать сводную себестоимость
         </h2>
         <p style={{ margin: '0 0 20px', fontSize: '13px', color: '#64748b' }}>
-          Выберите разделы и версию сметы для каждого.
+          Выберите разделы и версию сметы для каждого. Разделы, которые остаются,
+          сохраняют свои строки.
         </p>
+
+        {leaving.length > 0 && (
+          <div
+            data-testid="sections-removal-warning"
+            style={{
+              marginBottom: 16, padding: '10px 12px', borderRadius: 8,
+              background: '#fffbeb', border: '1px solid #fde68a',
+              fontSize: 13, color: '#92400e',
+            }}
+          >
+            Из сводной уйдут разделы: <b>{leaving.join(', ')}</b>. Их строки
+            перестанут учитываться в бланке; сами сметы останутся на месте.
+          </div>
+        )}
 
         {loadingVersions ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '32px 0' }}>

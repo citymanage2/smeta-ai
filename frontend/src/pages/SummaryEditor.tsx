@@ -15,7 +15,7 @@ const SummaryEditor: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
 
-  const { loadSummary, reset } = useSummaryEditorStore()
+  const { loadSummary, reset, sections } = useSummaryEditorStore()
 
   const [cards, setCards] = useState<WorkflowCard[]>([])
   const [projectName] = useState<string | undefined>()
@@ -168,6 +168,7 @@ const SummaryEditor: React.FC = () => {
         {showSelector && (
           <SectionSelector
             cards={cards}
+            currentCardIds={sections.map((section) => section.card_id)}
             onConfirm={handleCreate}
             onClose={() => setShowSelector(false)}
           />

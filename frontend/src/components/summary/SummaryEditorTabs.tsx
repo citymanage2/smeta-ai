@@ -229,15 +229,28 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
             return (
               // Раздел — обычный документ единого редактора: черновик,
               // «Применить», история с автором, откат, буфер обмена, поиск.
-              // Строки живут в сводной, поэтому после «Применить» перечитываем
+              // Строки общие со сметой, поэтому после «Применить» перечитываем
               // разделы — иначе бланк считал бы по старым строкам.
-              <DocumentEditor
-                key={sec.card_id}
-                cardId={sec.card_id}
-                kind="summary-section"
-                title={sec.card_name}
-                onApplied={() => { void refreshSections() }}
-              />
+              <>
+                {/* Раздел перестал быть отдельной копией: без этой строчки
+                    человек правит сводную «для тендера», не подозревая, что
+                    меняет исходную смету. */}
+                <div style={{
+                  fontSize: 12, color: '#92400e', background: '#fffbeb',
+                  border: '1px solid #fde68a', borderRadius: 8,
+                  padding: '6px 10px', marginBottom: 8,
+                }}>
+                  Правки в этом разделе уходят в смету карточки «{sec.card_name}»
+                  — и наоборот: изменения сметы видны здесь.
+                </div>
+                <DocumentEditor
+                  key={sec.card_id}
+                  cardId={sec.card_id}
+                  kind="summary-section"
+                  title={sec.card_name}
+                  onApplied={() => { void refreshSections() }}
+                />
+              </>
             )
           })()
         )}
