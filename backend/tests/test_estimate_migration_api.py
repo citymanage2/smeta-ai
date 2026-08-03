@@ -440,3 +440,109 @@ class TestDiffExplained:
         assert entry["items_rows"] == 2
         assert entry["version_rows"] == 2
         assert entry["samples"]
+
+
+# ---------------------------------------------------------------------------
+# Расхождение — только то, что действительно разошлось (Фаза 5)
+# ---------------------------------------------------------------------------
+#
+# Первый честный отчёт по бою дал девять расхождений, из которых шесть мнимые:
+# итоги совпадают до рубля, а примеры различий выглядят одинаково с обеих
+# сторон. Расчёт хранит то, что выдал ИИ («работы», ноль в количестве), редактор
+# — приведённое к своему виду («Работа», пустое количество). Ещё две сметы
+# показали 618 и 7 расхождений там, где строк не хватает всего 5 и 3: сравнение
+# шло по номеру строки, и после первой же пропущенной всё съезжало на единицу.
+
+
+def _comparable(items):
+    from app.services.estimate_migration import comparable
+    return comparable(items)
+
+
+def _row(name: str, **over) -> dict:
+    row = {"type": "Работа", "name": name, "unit": "м2", "quantity": 1.0,
+           "work_price": 100.0, "material_price": None}
+    row.update(over)
+    return row
+
+
+class TestOnlyRealDifferences:
+    def test_type_written_differently_is_not_a_difference(self):
+        """«работы» и «Работа» — одно слово в разных поколениях кода."""
+        raw = [_row("Кладка", type="работы")]
+        stored = _items_through_editor(raw)
+
+        assert _comparable(raw) == _comparable(stored)
+
+    def test_zero_and_empty_quantity_are_the_same(self):
+        """Ноль и пустота дают одинаковый ноль в деньгах и в файле."""
+        zero = [_row("Крепления", quantity=0, work_price=None, material_price=130.0)]
+        empty = [_row("Крепления", quantity=None, work_price=None, material_price=130.0)]
+
+        assert _comparable(zero) == _comparable(empty)
+
+    def test_changed_price_is_still_a_difference(self):
+        """Приведение форматов не должно прятать настоящее расхождение."""
+        assert _comparable(_items(work_price=1000.0)) != _comparable(_items(work_price=777.0))
+
+    def test_deleted_row_does_not_shift_the_rest(self):
+        """Пропала одна строка — расхождение одно, а не хвост до конца сметы."""
+        full = [_row(f"Работа {i}") for i in range(6)]
+        without_second = [r for r in full if r["name"] != "Работа 1"]
+
+        d = _analyze(full, without_second)
+
+        assert d["diff_count"] == 1
+
+    def test_sample_names_the_changed_field(self):
+        """«Цена работы: 1 700 против 250 000» — то, по чему принимают решение."""
+        d = _analyze(_items(work_price=1000.0), _items(work_price=777.0))
+
+        what = d["samples"][0]["what"]
+        assert "цена работы" in what.lower()
+        assert "1 000.00" in what and "777.00" in what
+
+    def test_missing_row_is_named_in_words(self):
+        """Пропавшую строку нельзя показывать как изменённую."""
+        full = _items() + [_row("Штукатурка")]
+
+        d = _analyze(full, _items())
+
+        missing = [s for s in d["samples"] if "Штукатурка" in s["name"]]
+        assert missing, "пропавшая строка обязана попасть в примеры"
+        assert "нет" in missing[0]["what"].lower()
+
+    @pytest.mark.asyncio
+    async def test_formatting_difference_is_not_a_conflict(
+        self, async_client, db_session, mig_env,
+    ):
+        """Смета, где обе стороны говорят одно и то же разными словами."""
+        base = await db_session.get(Task, mig_env["in_sync"])
+        raw = [
+            _row("Кладка", type="работы"),
+            _row("Крепления", quantity=0, work_price=None, material_price=130.0),
+        ]
+        task = Task(
+            owner_id=base.owner_id, user_role="admin", task_type="ESTIMATE_FROM_LIST",
+            status="completed", input_files=[], input_file_data=[], chat_history=[],
+            project_id=base.project_id, name="Смета старого формата",
+            progress_data={"items": raw},
+        )
+        db_session.add(task)
+        await db_session.flush()
+        # Версия записана прошлым поколением кода: тип приведён к своему виду,
+        # а нулевое количество стало пустым.
+        rows = estimate_store.items_to_rows(raw)
+        rows[1]["qty"] = None
+        await estimate_store.ensure_working_version(db_session, task, rows, commit=False)
+        await db_session.commit()
+
+        r = await _report(async_client, mig_env)
+
+        assert _by_id(r.json(), str(task.id))["status"] == "in_sync"
+
+
+def _items_through_editor(items: list) -> list:
+    """Позиции такими, какими их хранит редактор."""
+    from app.utils.estimate_rows import items_to_rows, rows_to_items
+    return rows_to_items(items_to_rows(items))

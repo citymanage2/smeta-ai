@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -87,14 +88,43 @@ class Report:
         self.counts[entry.status] = self.counts.get(entry.status, 0) + 1
 
 
+def comparable(items: list) -> list:
+    """Слепок сметы в том виде, в каком она будет храниться.
+
+    Сравнивать «что выдал ИИ» со «строками редактора» напрямую нельзя: это
+    разные поколения записи одного и того же. Расчёт хранит тип так, как его
+    назвал ИИ («работы»), и ноль в количестве; редактор — приведённое к своему
+    виду («Работа») и пустоту вместо нуля. На боевых данных шесть смет из
+    девяти «расходились» именно так — при итогах, совпадающих до рубля.
+
+    Поэтому сравнивается не сырое с записанным, а **то, что миграция записала
+    бы**, с тем, что уже записано: обе стороны проходят одно приведение.
+    """
+    signature = items_signature(rows_to_items(items_to_rows(items)))
+    # Ноль и пустое количество — одно и то же: обе строки дают нулевую
+    # стоимость и пустую ячейку в файле.
+    return [(t, n, u, qty or None, w, m) for t, n, u, qty, w, m in signature]
+
+
+def _opcodes(left: list, right: list) -> list:
+    """Выравнивание двух смет строка к строке.
+
+    Пропущенная строка сдвигает всё, что идёт за ней: сравнение «первая с
+    первой» показывало 618 расхождений там, где не хватало пяти строк.
+    `autojunk` отключён — иначе на сметах длиннее двухсот строк часто
+    встречающиеся строки молча выпадают из сравнения.
+    """
+    return SequenceMatcher(None, left, right, autojunk=False).get_opcodes()
+
+
 def _diff_count(left: list, right: list) -> int:
-    """Сколько позиций расходится между двумя копиями сметы."""
-    a, b = items_signature(left), items_signature(right)
-    if len(a) != len(b):
-        return max(len(a), len(b)) - min(len(a), len(b)) + sum(
-            1 for x, y in zip(a, b) if x != y
-        )
-    return sum(1 for x, y in zip(a, b) if x != y)
+    """Сколько строк расходится между двумя копиями сметы."""
+    a, b = comparable(left), comparable(right)
+    return sum(
+        max(i2 - i1, j2 - j1)
+        for tag, i1, i2, j1, j2 in _opcodes(a, b)
+        if tag != "equal"
+    )
 
 
 SAMPLE_LIMIT = 3
@@ -127,46 +157,93 @@ def _row_text(sig: tuple) -> str:
     return ", ".join(parts) if parts else "без количества и цен"
 
 
+# Поля слепка строки в том порядке, в каком они лежат в `items_signature`.
+_FIELDS = (
+    (0, "тип строки"),
+    (1, "название"),
+    (2, "единица"),
+    (3, "количество"),
+    (4, "цена работы"),
+    (5, "цена материала"),
+)
+
+
+def _text(value) -> str:
+    return f"«{value}»" if value else "пусто"
+
+
+def _what_changed(sig_a: tuple, sig_b: tuple) -> str:
+    """Назвать поля, которыми строки отличаются, и обе величины.
+
+    Без этого пример выглядел как две одинаковые строки: расхождение сидело в
+    том, чего отчёт не показывал.
+    """
+    parts = []
+    for index, label in _FIELDS:
+        left, right = sig_a[index], sig_b[index]
+        if left == right:
+            continue
+        show = _money if index >= 3 else _text
+        parts.append(f"{label}: расчёт {show(left)}, редактор {show(right)}")
+    return "; ".join(parts) if parts else "строки одинаковые"
+
+
+def _sample(sig_a: Optional[tuple], sig_b: Optional[tuple]) -> dict:
+    """Одно различие так, как его прочтёт человек."""
+    if sig_a is None:
+        return {
+            "name": sig_b[1] or "(без названия)",
+            "what": "строки нет в расчёте — она есть только в редакторе",
+            "items": "строки нет", "version": _row_text(sig_b),
+        }
+    if sig_b is None:
+        return {
+            "name": sig_a[1] or "(без названия)",
+            "what": "строки нет в редакторе — она есть только в расчёте",
+            "items": _row_text(sig_a), "version": "строки нет",
+        }
+    return {
+        "name": sig_a[1] or sig_b[1] or "(без названия)",
+        "what": _what_changed(sig_a, sig_b),
+        "items": _row_text(sig_a), "version": _row_text(sig_b),
+    }
+
+
 def describe_diff(items: list, version_items: list) -> dict:
     """Объяснить расхождение словами, а не числом.
 
-    Отвечает на три вопроса, без которых человек не может решить, чью сторону
-    брать: одинаковые ли деньги, одинаковый ли набор строк и что именно
-    разошлось. Примеров даётся не больше трёх — отчёт должен читаться, а не
-    превращаться в простыню.
+    Отвечает на вопросы, без которых человек не может решить, чью сторону
+    брать: одинаковые ли деньги, одинаковый ли набор строк, сколько строк
+    разошлось и что именно в них разное. Примеров даётся не больше трёх —
+    отчёт должен читаться, а не превращаться в простыню.
+
+    Строки сопоставляются выравниванием, а не по номеру: иначе одна пропавшая
+    строка делает «разошедшимися» все, что идут за ней.
     """
-    left, right = items_signature(items), items_signature(version_items)
+    left, right = comparable(items), comparable(version_items)
     same_totals = round(items_total(items), 2) == round(items_total(version_items), 2)
     # Набор строк тот же, отличается только порядок: перезаписывать нечего.
     only_order = sorted(left, key=repr) == sorted(right, key=repr)
 
     samples: list = []
-    for sig_a, sig_b in zip(left, right):
-        if len(samples) >= SAMPLE_LIMIT:
-            break
-        if sig_a == sig_b:
+    diff_count = 0
+    for tag, i1, i2, j1, j2 in _opcodes(left, right):
+        if tag == "equal":
             continue
-        samples.append({
-            "name": sig_a[1] or sig_b[1] or "(без названия)",
-            "items": _row_text(sig_a),
-            "version": _row_text(sig_b),
-        })
-
-    # Строки, которых нет на одной из сторон, — тоже расхождение.
-    if len(samples) < SAMPLE_LIMIT and len(left) != len(right):
-        longer, side = (left, "items") if len(left) > len(right) else (right, "version")
-        for sig in longer[min(len(left), len(right)):]:
+        width = max(i2 - i1, j2 - j1)
+        diff_count += width
+        for offset in range(width):
             if len(samples) >= SAMPLE_LIMIT:
                 break
-            samples.append({
-                "name": sig[1] or "(без названия)",
-                "items": _row_text(sig) if side == "items" else "строки нет",
-                "version": _row_text(sig) if side == "version" else "строки нет",
-            })
+            samples.append(_sample(
+                left[i1 + offset] if i1 + offset < i2 else None,
+                right[j1 + offset] if j1 + offset < j2 else None,
+            ))
 
     return {
         "only_order": only_order,
         "same_totals": same_totals,
+        "diff_count": diff_count,
         "items_rows": len(left),
         "version_rows": len(right),
         "samples": samples,
@@ -237,7 +314,7 @@ async def migrate_estimates(
             report.add(entry)
             continue
 
-        if not items or items_signature(items) == items_signature(version_items):
+        if not items or comparable(items) == comparable(version_items):
             report.add(Entry(
                 task_id, name, STATUS_IN_SYNC,
                 items_count=len(items), version_count=len(version_items),
@@ -250,7 +327,7 @@ async def migrate_estimates(
         entry = Entry(
             task_id, name, STATUS_CONFLICT,
             items_count=len(items), version_count=len(version_items),
-            diff_count=_diff_count(items, version_items),
+            diff_count=explained["diff_count"],
             items_total=items_total(items), version_total=items_total(version_items),
             only_order=explained["only_order"], same_totals=explained["same_totals"],
             samples=explained["samples"],

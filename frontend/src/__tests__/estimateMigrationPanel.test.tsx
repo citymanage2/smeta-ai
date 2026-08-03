@@ -41,8 +41,13 @@ const REPORT: adminApi.MigrationReport = {
       only_order: false, same_totals: false,
       items_rows: 60, version_rows: 58,
       samples: [
-        { name: 'Кладка стен', items: '4,00 м3, работа 1 000,00',
+        { name: 'Кладка стен',
+          what: 'цена работы: расчёт 1 000,00, редактор 777,00',
+          items: '4,00 м3, работа 1 000,00',
           version: '4,00 м3, работа 777,00' },
+        { name: 'Штукатурка',
+          what: 'строки нет в редакторе — она есть только в расчёте',
+          items: '10,00 м2, работа 500,00', version: 'строки нет' },
       ],
     },
     {
@@ -195,9 +200,29 @@ describe('перевод смет из админки', () => {
   it('пример различия показывает обе величины', async () => {
     await openPanel();
 
-    expect(screen.getByText(/Кладка стен/)).toBeInTheDocument();
-    expect(screen.getByText(/1 000,00/)).toBeInTheDocument();
-    expect(screen.getByText(/777,00/)).toBeInTheDocument();
+    const card = screen.getByText('Детсад — смета').parentElement!;
+    expect(within(card).getByText(/Кладка стен/)).toBeInTheDocument();
+    expect(within(card).getByText(/расчёт: 4,00 м3, работа 1 000,00/))
+      .toBeInTheDocument();
+    expect(within(card).getByText(/редактор: 4,00 м3, работа 777,00/))
+      .toBeInTheDocument();
+  });
+
+  it('в примере сказано, какое поле разошлось', async () => {
+    // Две одинаковые с виду строки — самый бесполезный вид отчёта: различие
+    // сидит там, куда человек не смотрит.
+    await openPanel();
+
+    const card = screen.getByText('Детсад — смета').parentElement!;
+    expect(within(card).getByText(/цена работы: расчёт 1 000,00, редактор 777,00/))
+      .toBeInTheDocument();
+  });
+
+  it('пропавшая строка названа словами, а не показана как изменённая', async () => {
+    await openPanel();
+
+    const card = screen.getByText('Детсад — смета').parentElement!;
+    expect(within(card).getByText(/строки нет в редакторе/)).toBeInTheDocument();
   });
 
   it('когда деньги одинаковые, это сказано прямо', async () => {

@@ -197,7 +197,13 @@ export interface MigrationEntry {
   items_rows?: number;
   version_rows?: number;
   /** До трёх примеров: что именно разошлось. */
-  samples?: { name: string; items: string; version: string }[];
+  samples?: {
+    name: string;
+    /** Какое поле разошлось и обе величины, либо «строки нет в редакторе». */
+    what?: string;
+    items: string;
+    version: string;
+  }[];
 }
 
 export interface MigrationReport {

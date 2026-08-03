@@ -299,6 +299,12 @@ const EstimateMigrationPanel: React.FC = () => {
                           }}
                         >
                           <b>{s.name}</b>
+                          {/* Без названия поля пример выглядел как две
+                              одинаковые строки: различие сидело в том, чего
+                              отчёт не показывал. */}
+                          {s.what && (
+                            <div style={{ color: '#b45309' }}>{s.what}</div>
+                          )}
                           <div style={{ color: '#64748b' }}>
                             расчёт: {s.items}
                           </div>
