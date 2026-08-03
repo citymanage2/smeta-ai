@@ -15,7 +15,6 @@ from app.schemas.summary_estimate import (
     SummaryEstimateCreate,
     SummaryEstimateResponse,
     SummaryEstimateUpdate,
-    SummaryOverrides,
 )
 from app.services import summary_service
 from app.utils.auth import get_current_user
@@ -58,10 +57,9 @@ async def create_summary(
     await _project_or_404(project_id, db, current_user)
     existing = await summary_service.get_summary(project_id, db)
     if existing is not None:
-        preserved_overrides = body.overrides or SummaryOverrides(**existing.overrides)
-        await db.delete(existing)
-        await db.commit()
-        body = SummaryEstimateCreate(sections=body.sections, overrides=preserved_overrides)
+        # Сводную не пересоздаём: у разделов есть строки, черновики и история,
+        # а удаление уносило их молча — так и пропала неделя работы.
+        return await summary_service.set_sections(existing, body, db)
     return await summary_service.create_summary(project_id, body, db)
 
 

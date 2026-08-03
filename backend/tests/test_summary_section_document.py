@@ -405,3 +405,151 @@ async def test_legacy_summary_put_can_drop_and_add_sections(
 
     summary = await _reload_summary(db_session, summary_env)
     assert summary.sections == []
+
+
+# ---------------------------------------------------------------------------
+# Смена состава разделов не теряет правки (план 2026-08-04, Фаза 1)
+# ---------------------------------------------------------------------------
+#
+# «Изменить разделы» удаляла сводную целиком и собирала разделы заново из смет.
+# Человек правил разделы неделю, выгрузил файл — а после смены состава всё
+# вернулось к тому, «как посчиталось». Предупреждения не было: кнопка выглядит
+# как «поменять состав».
+
+
+async def _second_card(db_session, env: dict) -> dict:
+    """Вторая карточка со сметой — чтобы менять состав разделов было чем."""
+    task = Task(
+        owner_id=env["pm1"], user_role="project_manager",
+        task_type="ESTIMATE_FROM_LIST", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+        project_id=env["project_id"],
+    )
+    db_session.add(task)
+    await db_session.flush()
+
+    version = EstimateVersion(
+        task_id=str(task.id), version_number=0, version_label="original",
+        version_display_name="Смета ВК", rows=_estimate_rows(700),
+        file_slot="estimate", task_type="ESTIMATE_FROM_LIST",
+    )
+    db_session.add(version)
+    await db_session.flush()
+
+    card = WorkflowCard(project_id=env["project_id"], name="ВК", stage="estimate",
+                        estimate_task_id=str(task.id))
+    db_session.add(card)
+    await db_session.flush()
+    await db_session.commit()
+    return {"card_id": str(card.id), "version_id": str(version.id)}
+
+
+async def _change_sections(async_client, env: dict, sections: list):
+    return await async_client.post(
+        f"/api/projects/{env['project_id']}/summary",
+        json={"sections": sections},
+        headers=_auth(env["pm1"], "project_manager"))
+
+
+def _section_input(env: dict) -> dict:
+    return {"card_id": env["card_id"], "version_id": env["version_id"]}
+
+
+@pytest.mark.asyncio
+async def test_adding_section_keeps_rows_of_existing_ones(
+    async_client, db_session, summary_env
+):
+    """Добавили раздел — правки в прежних остались на месте."""
+    edited = _estimate_rows(1500)
+    edited[0]["price_work"] = 4200
+    await async_client.post(
+        _url(summary_env, "/apply"), json={"rev": 0, "rows": edited},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+
+    second = await _second_card(db_session, summary_env)
+    resp = await _change_sections(
+        async_client, summary_env, [_section_input(summary_env), _section_input(second)])
+
+    assert resp.status_code in (200, 201), resp.text
+    summary = await _reload_summary(db_session, summary_env)
+    kept = next(s for s in summary.sections if s["card_id"] == summary_env["card_id"])
+    assert kept["rows"][0]["price_work"] == 4200, "правка раздела пропала"
+    assert len(summary.sections) == 2
+
+
+@pytest.mark.asyncio
+async def test_removing_section_keeps_the_others(
+    async_client, db_session, summary_env
+):
+    """Убрали один раздел — остальные не тронуты."""
+    edited = _estimate_rows(1500)
+    edited[0]["price_work"] = 4200
+    await async_client.post(
+        _url(summary_env, "/apply"), json={"rev": 0, "rows": edited},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+
+    second = await _second_card(db_session, summary_env)
+    await _change_sections(
+        async_client, summary_env, [_section_input(summary_env), _section_input(second)])
+
+    resp = await _change_sections(async_client, summary_env, [_section_input(summary_env)])
+
+    assert resp.status_code in (200, 201), resp.text
+    summary = await _reload_summary(db_session, summary_env)
+    assert [s["card_id"] for s in summary.sections] == [summary_env["card_id"]]
+    assert summary.sections[0]["rows"][0]["price_work"] == 4200
+
+
+@pytest.mark.asyncio
+async def test_changing_sections_keeps_draft_and_rev(
+    async_client, db_session, summary_env
+):
+    """Черновик и счётчик правок переживают смену состава.
+
+    Иначе человек, вернувшись к разделу, потерял бы несохранённую работу, а
+    открытый рядом редактор получил бы отказ на ровном месте.
+    """
+    applied = _estimate_rows(1500)
+    applied[0]["price_work"] = 4200
+    await async_client.post(
+        _url(summary_env, "/apply"), json={"rev": 0, "rows": applied},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+    draft = _estimate_rows(1900)
+    await async_client.put(
+        _url(summary_env, "/draft"), json={"rows": draft},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+
+    second = await _second_card(db_session, summary_env)
+    await _change_sections(
+        async_client, summary_env, [_section_input(summary_env), _section_input(second)])
+
+    db_session.expire_all()
+    res = await db_session.execute(
+        select(SummarySectionDoc).where(
+            SummarySectionDoc.card_id == summary_env["card_id"])
+    )
+    doc = res.scalar_one()
+    assert doc.draft_rows is not None, "черновик раздела пропал"
+    assert doc.draft_rows[0]["price_work"] == 1900
+    assert doc.rev == 1
+
+
+@pytest.mark.asyncio
+async def test_changing_sections_to_the_same_set_changes_nothing(
+    async_client, db_session, summary_env
+):
+    """Повторный вызов с тем же составом безопасен."""
+    edited = _estimate_rows(1500)
+    edited[0]["price_work"] = 4200
+    await async_client.post(
+        _url(summary_env, "/apply"), json={"rev": 0, "rows": edited},
+        headers=_auth(summary_env["pm1"], "project_manager"))
+
+    before = await _reload_summary(db_session, summary_env)
+    summary_id, sections = before.id, [dict(s) for s in before.sections]
+
+    await _change_sections(async_client, summary_env, [_section_input(summary_env)])
+
+    after = await _reload_summary(db_session, summary_env)
+    assert after.id == summary_id, "сводная пересоздана — история и черновики потеряны"
+    assert after.sections == sections
