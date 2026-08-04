@@ -121,11 +121,13 @@ class TestPerechenSheet:
         assert ws.cell(row=3, column=3).value == "Демонтаж стен"
 
     def test_parsed_back_without_junk_row(self):
-        from app.services.excel_service import generate_list
+        from app.services.excel_service import data_sheet_titles, generate_list
 
-        rows = parse_xlsx_to_generic_rows(generate_list([
-            {"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5},
-        ]))
+        items = [{"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5}]
+        # Как в проде: только листы данных, без сводок «Работы» и «Материалы».
+        rows = parse_xlsx_to_generic_rows(
+            generate_list(items), sheets=data_sheet_titles(items),
+        )
 
         assert len(rows) == 1
         assert rows[0]["cells"]["Наименование"] == "Демонтаж стен"

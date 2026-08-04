@@ -7,6 +7,7 @@ from openpyxl.styles import Font, PatternFill
 
 from app.constants import TASK_TYPE_LABELS, ESTIMATION_STATUS_LABELS
 from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
+from app.utils.sheet_names import group_by_sheet, safe_sheet_title
 
 _HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -145,61 +146,66 @@ def coefficient_for(coefficient: Optional[dict], row_id) -> tuple:
     return _k(coefficient.get("work", 1.0)), _k(coefficient.get("material", 1.0))
 
 
-def generate_estimate_xlsx(
-    items: list[dict],
-    *,
-    overhead_pct: float = DEFAULT_OVERHEAD_PCT,
-    transport_pct: float = DEFAULT_TRANSPORT_PCT,
-    coefficient: Optional[dict] = None,
-) -> bytes:
+
+# Лист «Смета» — единственный, когда исходный файл был из одного листа. Строки
+# без листа собираются в «Прочее»: подмешать их к чужому разделу нельзя.
+ESTIMATE_SHEET_TITLE = "Смета"
+UNSORTED_SHEET_TITLE = "Прочее"
+SUMMARY_SHEET_TITLE = "Итого по смете"
+
+_EST_HEADERS = [
+    "№",
+    "Наименование",
+    "Ед. изм.",
+    "Кол-во",
+    "Цена работ",
+    "Стоимость работ",
+    "Цена матер.",
+    "Стоимость матер.",
+    "Источник цены",
+    "Примечание",
+]
+_EST_COL_WIDTHS = [5, 50, 10, 10, 14, 18, 14, 18, 12, 60]
+
+_HEADER_FILL_EST = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+_WORK_ROW_FILL = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
+_TOTAL_FILL_EST = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+_GRAND_TOTAL_FILL = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
+
+
+def _pct_label(value: float) -> str:
+    return f"{value:g}"
+
+
+def _estimate_sheet_groups(items: list) -> list:
+    """Листы сметы: `[(имя листа, позиции), ...]` в порядке появления.
+
+    Один лист (или ни одного) — прежний единственный «Смета»: у всех
+    существующих смет имя листа менять незачем.
     """
-    Generate Excel estimate file for ESTIMATE_FROM_LIST task.
+    groups = group_by_sheet(items)
+    named = [title for title, _ in groups if title is not None]
+    if len(named) < 2:
+        return [(ESTIMATE_SHEET_TITLE, list(items or []))]
 
-    Each item dict must have:
-      type, name, unit, quantity,
-      work_price, material_price,   (float | None)
-      price_list_name,              (str | None — "Прайс" / "Кеш" / "Интернет")
-      notes                         (str | None — примечание: источники / дата кеша / наименование в прайсе)
-
-    Проценты доп. расходов приходят снаружи (настройка проекта или версии) —
-    раньше здесь были зашиты 3%, и файл расходился с экраном у любого проекта
-    с другими ставками. Коэффициент применяется к ценам: в файл они попадают
-    уже умноженными (решение пользователя 4.5).
-
-    Appends totals block at the end.
-    Returns raw xlsx bytes.
-    """
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Смета"
-
-    HEADER_FILL_EST = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-    WORK_ROW_FILL = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
-    TOTAL_FILL_EST = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
-    GRAND_TOTAL_FILL = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
-
-    headers = [
-        "№",
-        "Наименование",
-        "Ед. изм.",
-        "Кол-во",
-        "Цена работ",
-        "Стоимость работ",
-        "Цена матер.",
-        "Стоимость матер.",
-        "Источник цены",
-        "Примечание",
+    used: set = set()
+    return [
+        (safe_sheet_title(title if title is not None else UNSORTED_SHEET_TITLE, used), group)
+        for title, group in groups
     ]
-    for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = HEADER_FILL_EST
 
-    # Column widths
-    col_widths = [5, 50, 10, 10, 14, 18, 14, 18, 12, 60]
-    for i, w in enumerate(col_widths, 1):
-        from openpyxl.utils import get_column_letter
-        ws.column_dimensions[get_column_letter(i)].width = w
+
+def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict]) -> tuple:
+    """Позиции одного листа. Возвращает (сумма работ, сумма материалов, след. строка)."""
+    from openpyxl.utils import get_column_letter
+
+    for col, header in enumerate(_EST_HEADERS, 1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = _HEADER_FILL_EST
+
+    for i, width in enumerate(_EST_COL_WIDTHS, 1):
+        ws.column_dimensions[get_column_letter(i)].width = width
 
     total_works = 0.0
     total_materials = 0.0
@@ -235,7 +241,7 @@ def generate_estimate_xlsx(
 
         is_work = str(item.get("type", "")).strip() == "Работа"
 
-        row_fill = WORK_ROW_FILL if is_work else None
+        row_fill = _WORK_ROW_FILL if is_work else None
 
         values = [
             idx,
@@ -262,28 +268,14 @@ def generate_estimate_xlsx(
                 cell.number_format = "#,##0.##"
         row_num += 1
 
-    # Totals block
-    overhead_rate = float(overhead_pct or 0)
-    transport_rate = float(transport_pct or 0)
-    overhead = round(total_works * overhead_rate / 100, 2)
-    transport = round(total_materials * transport_rate / 100, 2)
-    grand_total = round(total_works + overhead + total_materials + transport, 2)
+    return total_works, total_materials, row_num
 
-    def _pct_label(value: float) -> str:
-        return f"{value:g}"
 
-    totals = [
-        ("Сумма по работам:", total_works),
-        (f"Накладные расходы {_pct_label(overhead_rate)}%:", overhead),
-        ("Сумма по материалам:", total_materials),
-        (f"Транспортные расходы {_pct_label(transport_rate)}%:", transport),
-        ("ИТОГО ПО СМЕТЕ:", grand_total),
-    ]
-
-    row_num += 1  # blank separator
-    for label, value in totals:
-        is_grand = label.startswith("ИТОГО")
-        fill = GRAND_TOTAL_FILL if is_grand else TOTAL_FILL_EST
+def _write_totals_block(ws, row_num: int, rows: list) -> int:
+    """Блок итогов: подпись слева, число в последней колонке."""
+    for label, value in rows:
+        is_grand = label.startswith("ИТОГО") or label.startswith("ВСЕГО")
+        fill = _GRAND_TOTAL_FILL if is_grand else _TOTAL_FILL_EST
         label_cell = ws.cell(row=row_num, column=1, value=label)
         label_cell.font = Font(bold=True)
         label_cell.fill = fill
@@ -294,6 +286,88 @@ def generate_estimate_xlsx(
         val_cell.fill = fill
         val_cell.number_format = "#,##0.00"
         row_num += 1
+    return row_num
+
+
+def generate_estimate_xlsx(
+    items: list[dict],
+    *,
+    overhead_pct: float = DEFAULT_OVERHEAD_PCT,
+    transport_pct: float = DEFAULT_TRANSPORT_PCT,
+    coefficient: Optional[dict] = None,
+) -> tuple:
+    """
+    Generate Excel estimate file for ESTIMATE_FROM_LIST task.
+
+    Each item dict must have:
+      type, name, unit, quantity,
+      work_price, material_price,   (float | None)
+      price_list_name,              (str | None — "Прайс" / "Кеш" / "Интернет")
+      notes,                        (str | None — примечание: источники / дата кеша / наименование в прайсе)
+      sheet                         (str | None — лист исходного файла)
+
+    Проценты доп. расходов приходят снаружи (настройка проекта или версии) —
+    раньше здесь были зашиты 3%, и файл расходился с экраном у любого проекта
+    с другими ставками. Коэффициент применяется к ценам: в файл они попадают
+    уже умноженными (решение пользователя 4.5).
+
+    Позиции, размеченные листами исходного файла, раскладываются по листам с
+    теми же именами. У каждого листа свой блок итогов — лист гранд-сметы это
+    самостоятельная локальная смета, — а последним идёт «Итого по смете» со
+    сводкой по листам и общей суммой.
+
+    Возвращает (байты файла, общий итог).
+    """
+    wb = openpyxl.Workbook()
+
+    overhead_rate = float(overhead_pct or 0)
+    transport_rate = float(transport_pct or 0)
+
+    groups = _estimate_sheet_groups(items)
+    per_sheet: list = []
+
+    for index, (title, group) in enumerate(groups):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = title
+
+        works, materials, row_num = _write_estimate_sheet(ws, group, coefficient)
+        overhead = round(works * overhead_rate / 100, 2)
+        transport = round(materials * transport_rate / 100, 2)
+        sheet_total = round(works + overhead + materials + transport, 2)
+
+        row_num += 1  # blank separator
+        _write_totals_block(ws, row_num, [
+            ("Сумма по работам:", works),
+            (f"Накладные расходы {_pct_label(overhead_rate)}%:", overhead),
+            ("Сумма по материалам:", materials),
+            (f"Транспортные расходы {_pct_label(transport_rate)}%:", transport),
+            ("ИТОГО ПО СМЕТЕ:" if len(groups) == 1 else f"ИТОГО ПО ЛИСТУ «{title}»:", sheet_total),
+        ])
+        per_sheet.append((title, sheet_total))
+
+    grand_total = round(sum(total for _, total in per_sheet), 2)
+
+    if len(groups) > 1:
+        # Сумма контракта — одно число, и искать его по последнему листу нельзя:
+        # листы равноправны. Отдельный лист со сводкой отвечает на вопрос «сколько
+        # всего» сразу, а `extract_total_cost` берёт из него же строку «ВСЕГО».
+        ws_total = wb.create_sheet(SUMMARY_SHEET_TITLE)
+        from openpyxl.utils import get_column_letter
+
+        for i, width in enumerate(_EST_COL_WIDTHS, 1):
+            ws_total.column_dimensions[get_column_letter(i)].width = width
+        header = ws_total.cell(row=1, column=1, value="Лист")
+        header.font = Font(bold=True, color="FFFFFF")
+        header.fill = _HEADER_FILL_EST
+        ws_total.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
+        header_total = ws_total.cell(row=1, column=10, value="Итого, руб.")
+        header_total.font = Font(bold=True, color="FFFFFF")
+        header_total.fill = _HEADER_FILL_EST
+
+        _write_totals_block(
+            ws_total, 2,
+            [(title, total) for title, total in per_sheet] + [("ВСЕГО ПО СМЕТЕ:", grand_total)],
+        )
 
     buf = io.BytesIO()
     wb.save(buf)

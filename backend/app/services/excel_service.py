@@ -6,6 +6,7 @@ from openpyxl.utils import get_column_letter
 import structlog
 from app.config import settings
 from app.utils.price_coercion import coerce_price, coerce_qty
+from app.utils.sheet_names import group_by_sheet, safe_sheet_title
 
 logger = structlog.get_logger()
 
@@ -210,34 +211,79 @@ def _auto_fit_columns(ws, min_width: int = 10, max_width: int = 60) -> None:
         ws.column_dimensions[col_letter].width = adjusted
 
 
+# Листы перечня. «Перечень» — единственный лист данных, когда исходный файл был
+# из одного листа; «Прочее» собирает позиции, у которых лист не проставлен, — их
+# нельзя молча подмешать к чужому разделу.
+LIST_SHEET_TITLE = "Перечень"
+NOTE_SHEET_TITLE = "Пояснительная записка"
+UNSORTED_SHEET_TITLE = "Прочее"
+
+
+def _list_sheet_groups(items: list) -> list:
+    """Листы данных перечня: `[(имя листа, позиции), ...]` в порядке появления.
+
+    Исходный файл из одного листа даёт прежний единственный «Перечень» — иначе
+    у всех существующих смет разъехались бы имена листов. Несколько листов —
+    лист на исходный лист, имя то же самое.
+    """
+    groups = group_by_sheet(items)
+    named = [title for title, _ in groups if title is not None]
+    if len(named) < 2:
+        return [(LIST_SHEET_TITLE, list(items or []))]
+
+    used: set = set()
+    return [
+        (safe_sheet_title(title if title is not None else UNSORTED_SHEET_TITLE, used), group)
+        for title, group in groups
+    ]
+
+
+def data_sheet_titles(items: list) -> list:
+    """Имена листов данных, которые создаст `generate_list` для этих позиций.
+
+    Нужны разбору результата: в файле рядом с данными лежат сводки «Работы» и
+    «Материалы» и пояснительная записка, и без этого списка документ получил бы
+    вкладки-двойники.
+    """
+    return [title for title, _ in _list_sheet_groups(items)]
+
+
 def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     """
     Generate Excel file with list of works/materials.
-    items: list of dicts with keys: type, name, unit, quantity
+    items: list of dicts with keys: type, name, unit, quantity, sheet
     changes_summary: optional explanatory text about deviations from TZ
+
+    Позиции, размеченные листами исходного файла, раскладываются по листам с
+    теми же именами. Сводки «Работы» и «Материалы» при этом не создаются: из
+    пяти разделов получилось бы шестнадцать листов, в которых не разобраться.
     """
     wb = openpyxl.Workbook()
 
-    # Sheet 1: Перечень (All items)
-    ws_all = wb.active
-    ws_all.title = "Перечень"
-    _write_perechen_sheet(ws_all, items, with_sections=False)
-    ws_all.freeze_panes = "A2"
+    groups = _list_sheet_groups(items)
+    single_sheet = len(groups) == 1
 
-    # Sheet 2: Работы
-    works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
-    ws_works = wb.create_sheet("Работы")
-    _write_perechen_sheet(ws_works, works, with_sections=False)
-    ws_works.freeze_panes = "A2"
+    for index, (title, group) in enumerate(groups):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = title
+        _write_perechen_sheet(ws, group, with_sections=False)
+        ws.freeze_panes = "A2"
 
-    # Sheet 3: Материалы
-    materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
-    ws_mats = wb.create_sheet("Материалы")
-    _write_perechen_sheet(ws_mats, materials, with_sections=False)
-    ws_mats.freeze_panes = "A2"
+    if single_sheet:
+        # Sheet 2: Работы
+        works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
+        ws_works = wb.create_sheet("Работы")
+        _write_perechen_sheet(ws_works, works, with_sections=False)
+        ws_works.freeze_panes = "A2"
 
-    # Sheet 4: Пояснительная записка
-    ws_note = wb.create_sheet("Пояснительная записка")
+        # Sheet 3: Материалы
+        materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
+        ws_mats = wb.create_sheet("Материалы")
+        _write_perechen_sheet(ws_mats, materials, with_sections=False)
+        ws_mats.freeze_panes = "A2"
+
+    # Последний лист: Пояснительная записка
+    ws_note = wb.create_sheet(NOTE_SHEET_TITLE)
     note_text = (
         changes_summary
         if changes_summary

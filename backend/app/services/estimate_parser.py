@@ -145,19 +145,8 @@ def link_materials_to_works(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
-    """Parse xlsx bytes into a list of EstimateRow dicts.
-
-    Uses openpyxl with data_only=True so formula cells return computed values.
-    Returns an empty list if the file cannot be parsed or no recognizable header found.
-    """
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-    except Exception:
-        return []
-
-    ws = wb.active
-
+def _parse_estimate_sheet(ws) -> list[dict]:
+    """Строки одного листа сметы. Шапка ищется в нём же — у листов она своя."""
     # Build merged-cell lookup: (1-based row, 1-based col) → span width
     # Section headers in construction estimates are typically merged across all columns.
     merged_spans: dict[tuple[int, int], int] = {}
@@ -310,3 +299,33 @@ def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
         })
 
     return link_materials_to_works(result)
+
+
+def parse_estimate_excel(file_bytes: bytes) -> list[dict]:
+    """Parse xlsx bytes into a list of EstimateRow dicts.
+
+    Uses openpyxl with data_only=True so formula cells return computed values.
+    Returns an empty list if the file cannot be parsed or no recognizable header found.
+
+    Разбираются все листы файла: смету присылают разбитой по листам — по листу
+    на раздел или корпус, — и взятый один первый лист терял остальные молча.
+    Лист остаётся при строке полем `sheet` и становится вкладкой в редакторе.
+    Лист без опознаваемой шапки (титульный, сводка итогов) строк не даёт.
+    """
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception:
+        return []
+
+    by_sheet = [(ws, _parse_estimate_sheet(ws)) for ws in wb.worksheets]
+    multi_sheet = sum(1 for _, rows in by_sheet if rows) > 1
+
+    result: list[dict] = []
+    for ws, rows in by_sheet:
+        for row in rows:
+            # Один лист — признак не ставим: документ остаётся без вкладок и
+            # ведёт себя ровно как до появления многолистовых файлов.
+            if multi_sheet:
+                row["sheet"] = ws.title
+            result.append(row)
+    return result

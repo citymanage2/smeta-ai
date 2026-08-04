@@ -35,6 +35,21 @@ def _cells(rows: list[dict]) -> list[dict]:
     return [r["cells"] for r in rows]
 
 
+def _build_multi(sheets: dict) -> bytes:
+    """Собрать xlsx из нескольких листов: {имя листа: матрица значений}."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for title, matrix in sheets.items():
+        ws = wb.create_sheet(title)
+        for r, row in enumerate(matrix, start=1):
+            for c, value in enumerate(row, start=1):
+                if value is not None:
+                    ws.cell(row=r, column=c, value=value)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Регресс: однострочные шапки — поведение не меняется
 # ---------------------------------------------------------------------------
@@ -128,13 +143,16 @@ class TestNumberingRow:
 
     def test_generated_perechen_has_no_junk_first_row(self):
         """Файл нашего же генератора: строка «1 2 3 4 5 6» в данные не попадает."""
-        from app.services.excel_service import generate_list
+        from app.services.excel_service import data_sheet_titles, generate_list
 
-        xlsx = generate_list([
+        items = [
             {"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5},
             {"type": "Материал", "name": "Кирпич", "unit": "шт", "quantity": 400},
-        ])
-        rows = parse_xlsx_to_generic_rows(xlsx)
+        ]
+        # Как в проде: разбираются только листы данных. Сводки «Работы» и
+        # «Материалы» повторяют те же позиции, и без ограничения документ
+        # получил бы их вторым и третьим разом.
+        rows = parse_xlsx_to_generic_rows(generate_list(items), sheets=data_sheet_titles(items))
 
         assert len(rows) == 2
         first = _cells(rows)[0]
@@ -229,14 +247,113 @@ class TestIdempotency:
         assert _cells(again) == _cells(rows)
 
     def test_generated_perechen_roundtrip_is_stable(self):
-        from app.services.excel_service import generate_list
+        from app.services.excel_service import data_sheet_titles, generate_list
 
-        xlsx = generate_list([
-            {"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5},
-        ])
-        first = parse_xlsx_to_generic_rows(xlsx)
+        items = [{"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5}]
+        xlsx = generate_list(items)
+        sheets = data_sheet_titles(items)
+        first = parse_xlsx_to_generic_rows(xlsx, sheets=sheets)
         second = parse_xlsx_to_generic_rows(rows_to_xlsx(first))
         third = parse_xlsx_to_generic_rows(rows_to_xlsx(second))
 
         assert _cells(second) == _cells(first)
         assert _cells(third) == _cells(second)
+
+
+# ---------------------------------------------------------------------------
+# Несколько листов (план 2026-08-04)
+# ---------------------------------------------------------------------------
+
+class TestMultipleSheets:
+    def test_rows_of_all_sheets_are_parsed(self):
+        data = _build_multi({
+            "Раздел 1": [
+                ["Наименование", "Ед. изм", "Кол-во"],
+                ["Демонтаж стен", "м2", 12.5],
+            ],
+            "Раздел 2": [
+                ["Наименование", "Ед. изм", "Кол-во"],
+                ["Кладка кирпича", "м3", 4],
+                ["Штукатурка", "м2", 30],
+            ],
+        })
+        rows = parse_xlsx_to_generic_rows(data)
+
+        assert len(rows) == 3
+        assert [r["sheet"] for r in rows] == ["Раздел 1", "Раздел 2", "Раздел 2"]
+
+    def test_sheet_without_data_rows_is_skipped(self):
+        data = _build_multi({
+            "Титульный": [["ЛОКАЛЬНЫЙ СМЕТНЫЙ РАСЧЁТ"]],
+            "Раздел 1": [
+                ["Наименование", "Ед. изм", "Кол-во"],
+                ["Демонтаж стен", "м2", 12.5],
+            ],
+        })
+        rows = parse_xlsx_to_generic_rows(data)
+
+        assert [r["sheet"] for r in rows] == ["Раздел 1"]
+
+    def test_unknown_sheet_names_fall_back_to_first_sheet(self):
+        # Перечень, пересобранный до появления вкладок: лист назван по
+        # умолчанию, и по списку имён документ открылся бы пустым.
+        data = _build_multi({"Sheet": [["Наименование"], ["Демонтаж стен"]]})
+        rows = parse_xlsx_to_generic_rows(data, sheets=["Перечень"])
+
+        assert [r["cells"]["Наименование"] for r in rows] == ["Демонтаж стен"]
+
+    def test_sheets_argument_limits_and_orders_parsing(self):
+        data = _build_multi({
+            "Перечень": [["Наименование"], ["Демонтаж стен"]],
+            "Работы": [["Наименование"], ["Демонтаж стен"]],
+        })
+        rows = parse_xlsx_to_generic_rows(data, sheets=["Перечень"])
+
+        assert [r["sheet"] for r in rows] == ["Перечень"]
+
+    def test_columns_of_each_sheet_are_independent(self):
+        data = _build_multi({
+            "Работы": [["Наименование", "Кол-во"], ["Демонтаж стен", 12.5]],
+            "Оборудование": [["Позиция", "Цена, руб"], ["Насос", 45000]],
+        })
+        rows = parse_xlsx_to_generic_rows(data)
+
+        assert _cells(rows)[0] == {"Наименование": "Демонтаж стен", "Кол-во": 12.5}
+        assert _cells(rows)[1] == {"Позиция": "Насос", "Цена, руб": 45000}
+
+    def test_roundtrip_preserves_sheets_rows_and_columns(self):
+        data = _build_multi({
+            "Раздел 1": [["Наименование", "Кол-во"], ["Демонтаж стен", 12.5]],
+            "Раздел 2": [["Позиция", "Цена, руб"], ["Насос", 45000]],
+        })
+        first = parse_xlsx_to_generic_rows(data)
+        second = parse_xlsx_to_generic_rows(rows_to_xlsx(first))
+
+        assert [r["sheet"] for r in second] == [r["sheet"] for r in first]
+        assert _cells(second) == _cells(first)
+
+    def test_saved_file_has_a_sheet_per_tab(self):
+        rows = [
+            {"row_id": "1", "sheet": "Раздел 1", "cells": {"Наименование": "А"}},
+            {"row_id": "2", "sheet": "Раздел 2", "cells": {"Наименование": "Б"}},
+        ]
+        wb = openpyxl.load_workbook(io.BytesIO(rows_to_xlsx(rows)))
+
+        assert wb.sheetnames == ["Раздел 1", "Раздел 2"]
+
+    def test_forbidden_sheet_name_does_not_break_saving(self):
+        rows = [{"row_id": "1", "sheet": "Смета: часть 1/2", "cells": {"Наименование": "А"}}]
+        wb = openpyxl.load_workbook(io.BytesIO(rows_to_xlsx(rows)))
+
+        assert len(wb.sheetnames) == 1
+        assert ":" not in wb.sheetnames[0] and "/" not in wb.sheetnames[0]
+
+    def test_legacy_rows_without_sheet_stay_one_sheet(self):
+        rows = [
+            {"row_id": "1", "cells": {"Наименование": "А"}},
+            {"row_id": "2", "cells": {"Наименование": "Б"}},
+        ]
+        wb = openpyxl.load_workbook(io.BytesIO(rows_to_xlsx(rows)))
+
+        assert len(wb.sheetnames) == 1
+        assert wb[wb.sheetnames[0]].max_row == 3  # шапка + две строки

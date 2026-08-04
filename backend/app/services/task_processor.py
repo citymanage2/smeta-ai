@@ -28,6 +28,7 @@ from app.constants import ESTIMATE_TASK_TYPES, TERMINAL_TASK_STATUSES
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.price_coercion import coerce_price, is_negative_qty
+from app.utils.sheet_names import group_by_sheet, sheet_of
 from app.utils.pdf_text_extractor import chunk_project_pdf
 from app.utils.pdf_ocr_extractor import (
     chunk_pdf_pages,
@@ -420,10 +421,30 @@ PROMPT_ENRICH_NORMS = """Ты — опытный инженер-сметчик �
 ВАЖНО: отвечай ТОЛЬКО валидным JSON. Никакого текста до { или после }."""
 
 
-def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
-    """Split items into chunks at 'Работа' boundaries when possible, or by hard size limit."""
-    if not items:
-        return []
+def _chunk_sheet(chunk: list) -> Optional[str]:
+    """Лист, которому принадлежит чанк. `None` — файл был из одного листа."""
+    for record in chunk or []:
+        title = sheet_of(record)
+        if title is not None:
+            return title
+    return None
+
+
+def _tag_sheet(items: list, sheet: Optional[str]) -> None:
+    """Проставить лист позициям, вернувшимся из ИИ.
+
+    ИИ о листах не знает: он получает строки чанка и возвращает позиции. Лист
+    известен нам — чанк целиком принадлежит одному листу. Уже проставленный
+    лист не трогаем: позиция могла прийти из чекпоинта.
+    """
+    if sheet is None:
+        return
+    for item in items or []:
+        if isinstance(item, dict) and sheet_of(item) is None:
+            item["sheet"] = sheet
+
+
+def _chunk_one_sheet_by_work(items: list, max_chunk_size: int) -> list:
     chunks = []
     current_chunk: list = []
     for item in items:
@@ -439,6 +460,20 @@ def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
         current_chunk.append(item)
     if current_chunk:
         chunks.append(current_chunk)
+    return chunks
+
+
+def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
+    """Split items into chunks at 'Работа' boundaries when possible, or by hard size limit.
+
+    Чанк не пересекает границу листа: позиции чанка получают его лист, и
+    смешанный чанк отправил бы часть строк на чужую вкладку.
+    """
+    if not items:
+        return []
+    chunks: list = []
+    for _, sheet_items in group_by_sheet(items):
+        chunks.extend(_chunk_one_sheet_by_work(sheet_items, max_chunk_size))
     return chunks
 
 
@@ -687,10 +722,19 @@ class TaskProcessor:
         if old_key and old_key != storage_key:
             await storage_service.delete_key_safe(old_key)  # прежний объект слота
 
-    async def _create_initial_generic_version(self, file_data: bytes, task_type: str) -> None:
-        """Create V0 EstimateVersion for LIST/COMPLETENESS tasks (idempotent)."""
+    async def _create_initial_generic_version(
+        self, file_data: bytes, task_type: str, items: list
+    ) -> None:
+        """Create V0 EstimateVersion for LIST/COMPLETENESS tasks (idempotent).
+
+        `items` — позиции, из которых собран файл: по ним известно, какие листы
+        в нём данные. Рядом с ними в файле лежат сводки «Работы» и «Материалы» и
+        пояснительная записка, и без этого ограничения документ получил бы
+        вкладки-двойники с теми же позициями.
+        """
         import uuid as _uuid
         from app.models.estimate_version import EstimateVersion
+        from app.services.excel_service import data_sheet_titles
         from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
 
         existing = await self.db.execute(
@@ -702,7 +746,7 @@ class TaskProcessor:
         if existing.scalar_one_or_none() is not None:
             return
 
-        rows = parse_xlsx_to_generic_rows(file_data)
+        rows = parse_xlsx_to_generic_rows(file_data, sheets=data_sheet_titles(items))
         version = EstimateVersion(
             id=str(_uuid.uuid4()),
             task_id=self.task_id,
@@ -1750,6 +1794,9 @@ class TaskProcessor:
                         use_web_search=False,
                     )
                     chunk_items = data.get("items", [])
+                    # Чанк целиком принадлежит одному листу исходного файла — его
+                    # же получают позиции, которые ИИ собрал из этого чанка.
+                    _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
                     accumulated_items.extend(chunk_items)
 
                     # Сохраняем прогресс после каждого успешного чанка
@@ -1806,7 +1853,7 @@ class TaskProcessor:
             _XLSX_MIME,
             excel_data,
         )
-        await self._create_initial_generic_version(excel_data, task.task_type)
+        await self._create_initial_generic_version(excel_data, task.task_type, accumulated_items)
         logger.info("List from Grand task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
 
     async def _handle_list_from_grand_pdf(self, task: Task, pdf_bytes: bytes) -> None:
@@ -1993,7 +2040,7 @@ class TaskProcessor:
             _XLSX_MIME,
             excel_data,
         )
-        await self._create_initial_generic_version(excel_data, task.task_type)
+        await self._create_initial_generic_version(excel_data, task.task_type, accumulated_items)
         logger.info("List from Grand PDF task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
 
     async def _handle_check_completeness(self, task: Task) -> None:
@@ -2052,7 +2099,12 @@ class TaskProcessor:
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
-            all_items.extend(data.get("items", []))
+            chunk_items = data.get("items", [])
+            # Проверка полноты дописывает недостающие материалы: у новых позиций
+            # листа нет, и без разметки они ушли бы на первую вкладку — прочь от
+            # работы, к которой относятся.
+            _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
+            all_items.extend(chunk_items)
             summary = data.get("changes_summary", "")
             if summary:
                 changes_summary_parts.append(summary)
@@ -2070,7 +2122,7 @@ class TaskProcessor:
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
-        await self._create_initial_generic_version(excel_data, task.task_type)
+        await self._create_initial_generic_version(excel_data, task.task_type, all_items)
         logger.info(
             "Check completeness task completed",
             task_id=self.task_id,
@@ -2289,7 +2341,7 @@ class TaskProcessor:
 
         excel_data = await asyncio.to_thread(generate_list,items)
         await self.save_result(self._result_filename(task, "Перечень_из_проекта.xlsx"), _XLSX_MIME, excel_data)
-        await self._create_initial_generic_version(excel_data, task.task_type)
+        await self._create_initial_generic_version(excel_data, task.task_type, items)
         logger.info(
             "List from project task completed",
             task_id=self.task_id,
@@ -2371,7 +2423,7 @@ class TaskProcessor:
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_по_проекту.xlsx"), _XLSX_MIME, excel_data)
-        await self._create_initial_generic_version(excel_data, task.task_type)
+        await self._create_initial_generic_version(excel_data, task.task_type, all_items)
         logger.info(
             "Check project completeness task completed",
             task_id=self.task_id,

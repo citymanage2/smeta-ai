@@ -29,7 +29,11 @@ from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
 # Поля позиции, которые нужны генератору xlsx и показываются человеку, но не
 # входят в схему строки. Переносим как есть, чтобы источник цены и найденные
 # ссылки не пропадали при первом же сохранении из редактора.
-PASSTHROUGH_FIELDS = ("price_list_name", "sources", "notes")
+#
+# `sheet` — лист исходного файла, если он был разбит на несколько. Он же
+# вкладка в редакторе и лист в скачиваемом файле, поэтому терять его при
+# переводе позиция↔строка нельзя: смета собралась бы в один лист.
+PASSTHROUGH_FIELDS = ("price_list_name", "sources", "notes", "sheet")
 
 _LABEL_TO_TYPE = {
     "работа": "work", "работы": "work", "work": "work",

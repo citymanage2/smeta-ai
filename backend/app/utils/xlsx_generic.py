@@ -1,13 +1,20 @@
 """Generic xlsx parser/generator for LIST and COMPLETENESS tasks.
 
 Does NOT map columns to estimate schema — preserves xlsx structure as-is.
-Row format: {"row_id": str(uuid), "cells": {"ColName": value, ...}}
+Row format: {"row_id": str(uuid), "sheet": "Раздел 1", "cells": {"ColName": value, ...}}
+
+Разбираются все листы файла: заказчики разбивают смету по листам — по листу на
+раздел или корпус, — и взятый один первый лист терял остальные молча. Лист
+остаётся при строке полем `sheet` и становится вкладкой в редакторе.
 """
 import io
 import uuid
 from datetime import datetime, date
+from typing import Optional
 
 import openpyxl
+
+from app.utils.sheet_names import group_by_sheet, safe_sheet_title
 
 # Строку нумерации колонок («1 2 3 4 5 6») ищем только рядом с началом листа:
 # ниже такая строка — уже данные, а не часть шапки.
@@ -149,10 +156,8 @@ def _build_headers(ws, all_rows, header_idx: list, width: int) -> list:
     return unique
 
 
-def parse_xlsx_to_generic_rows(file_bytes: bytes) -> list[dict]:
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-    ws = wb.active
-
+def _parse_sheet(ws) -> list[dict]:
+    """Строки одного листа. Шапка ищется в нём же — у листов она своя."""
     all_rows = list(ws.iter_rows(values_only=True))
     if not all_rows:
         return []
@@ -178,8 +183,40 @@ def parse_xlsx_to_generic_rows(file_bytes: bytes) -> list[dict]:
             else:
                 cells[header] = val
 
-        result.append({"row_id": str(uuid.uuid4()), "cells": cells})
+        result.append({"row_id": str(uuid.uuid4()), "sheet": ws.title, "cells": cells})
 
+    return result
+
+
+def parse_xlsx_to_generic_rows(
+    file_bytes: bytes, sheets: Optional[list] = None
+) -> list[dict]:
+    """Строки всех листов файла подряд, каждая помечена своим листом.
+
+    `sheets` ограничивает разбор перечисленными листами и задаёт их порядок.
+    Нужен там, где часть листов файла служебная: наш собственный перечень несёт
+    рядом с данными сводки «Работы» и «Материалы», и без ограничения документ
+    получил бы вкладки-двойники с теми же позициями.
+
+    Если ни одно из перечисленных имён в файле не нашлось — берём первый лист.
+    Так открываются перечни, пересобранные до появления вкладок: у их файла
+    лист назван по умолчанию, и по списку имён документ оказался бы пустым.
+    """
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+
+    if sheets is None:
+        targets = list(wb.worksheets)
+    else:
+        by_title = {ws.title: ws for ws in wb.worksheets}
+        targets = [by_title[title] for title in sheets if title in by_title]
+        if not targets and wb.worksheets:
+            targets = [wb.worksheets[0]]
+
+    result: list[dict] = []
+    for ws in targets:
+        # Лист без единой строки данных вкладки не создаёт: титульные листы и
+        # листы подписей есть почти в каждой выгрузке Гранд-сметы.
+        result.extend(_parse_sheet(ws))
     return result
 
 
@@ -213,16 +250,13 @@ def _as_number(value):
     return int(number) if number == int(number) and "." not in normalized else number
 
 
-def rows_to_xlsx(rows: list[dict]) -> bytes:
-    wb = openpyxl.Workbook()
-    ws = wb.active
+def _write_sheet(ws, rows: list[dict]) -> None:
+    """Один лист: колонки берутся у его же строк.
 
-    if not rows:
-        buf = io.BytesIO()
-        wb.save(buf)
-        return buf.getvalue()
-
-    # Collect column order from all rows, preserving first-seen order
+    Набор колонок считается по строкам этого листа, а не всего документа: у
+    разных листов исходного файла шапки разные, и общий набор дал бы каждому
+    листу пустые колонки соседа.
+    """
     all_keys: list[str] = list(dict.fromkeys(k for row in rows for k in row.get("cells", {}).keys()))
     money_cols = {
         i for i, key in enumerate(all_keys, 1)
@@ -239,6 +273,22 @@ def rows_to_xlsx(rows: list[dict]) -> bytes:
                            value=value if number is None else number)
             if col_idx in money_cols and isinstance(cell.value, (int, float)):
                 cell.number_format = _MONEY_FMT
+
+
+def rows_to_xlsx(rows: list[dict]) -> bytes:
+    """Строки документа → xlsx: по листу на каждую вкладку, в её порядке."""
+    wb = openpyxl.Workbook()
+
+    if not rows:
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    used: set = set()
+    for index, (title, sheet_rows) in enumerate(group_by_sheet(rows)):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = safe_sheet_title(title, used)
+        _write_sheet(ws, sheet_rows)
 
     buf = io.BytesIO()
     wb.save(buf)

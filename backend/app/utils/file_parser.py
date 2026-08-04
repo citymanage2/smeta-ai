@@ -6,6 +6,8 @@ from typing import Any, Optional, Tuple
 import openpyxl
 import structlog
 
+from app.utils.sheet_names import group_by_sheet
+
 logger = structlog.get_logger()
 
 
@@ -143,102 +145,128 @@ def _is_trash_row(name: str) -> bool:
     return bool(_LABOR_ROW.match(name) or _COLNUM_ROW.match(name) or _COMPONENT_ROW.match(name))
 
 
+def _parse_grand_sheet(ws) -> "list[dict]":
+    """Значимые строки одного листа гранд-сметы. Шапка ищется в нём же."""
+    all_rows = list(ws.iter_rows(values_only=True))
+    header_row_idx, name_col, unit_col, qty_col, qty_total_col = _find_header_row(all_rows)
+    if header_row_idx is None or name_col is None:
+        return []
+
+    # Используем колонку итогового количества если найдена, иначе базовую
+    effective_qty_col = qty_total_col if qty_total_col is not None else qty_col
+    logger.info(
+        "Grand-смета: заголовок найден",
+        sheet=ws.title,
+        header_row=header_row_idx,
+        name_col=name_col,
+        unit_col=unit_col,
+        qty_col=qty_col,
+        qty_total_col=qty_total_col,
+    )
+
+    rows: list[dict] = []
+    for row in all_rows[header_row_idx + 1:]:
+        cells = [str(c).strip() if c is not None else "" for c in row]
+
+        name = cells[name_col] if name_col < len(cells) else ""
+        if not name or name == "None":
+            # Проверяем col 0 — там могут быть заголовки разделов (объединённые ячейки)
+            col0 = cells[0] if cells else ""
+            if col0 and col0 != "None" and _SECTION_HEADER.match(col0):
+                rows.append({"name": col0, "unit": "", "quantity": None, "is_section": True})
+            continue
+
+        if _is_total_row(name):
+            continue
+        if _is_trash_row(name):
+            continue
+
+        # Заголовки разделов: нет единицы и количества, текст похож на раздел
+        unit = cells[unit_col] if unit_col is not None and unit_col < len(cells) else ""
+        unit = unit if unit != "None" else ""
+        qty_raw = row[effective_qty_col] if effective_qty_col is not None and effective_qty_col < len(row) else None
+        qty = _parse_quantity(qty_raw)
+
+        # Пропускаем строки с процентными единицами (НР/СП не отфильтрованные по имени)
+        if unit.strip() == "%":
+            continue
+
+        # Пропускаем строки с единицами нормо-часов (остатки труда/машин)
+        unit_lower = unit.lower().replace(".", "").replace("-", "").strip()
+        if unit_lower in ("челч", "чч", "мчч", "машч"):
+            continue
+
+        # Заголовок раздела не имеет ни единицы измерения, ни объёма.
+        # Строка с ними — позиция сметы, как бы она ни называлась.
+        is_section = bool(_SECTION_HEADER.match(name)) and not unit and qty is None
+        rows.append({"name": name, "unit": unit, "quantity": qty, "is_section": is_section})
+
+    return rows
+
+
+def _parse_grand_sheet_fallback(ws) -> "list[dict]":
+    """Шапку не нашли — берём все непустые строки, первая ячейка = наименование."""
+    rows: list[dict] = []
+    for row in ws.iter_rows(values_only=True):
+        cells = [str(c).strip() if c is not None else "" for c in row]
+        non_empty = [c for c in cells if c and c != "None"]
+        if not non_empty:
+            continue
+        name = non_empty[0]
+        if _is_total_row(name) or _is_trash_row(name):
+            continue
+        rows.append({"name": name, "unit": "", "quantity": None, "is_section": False})
+    return rows
+
+
 def parse_xlsx_grand(data: bytes) -> "list[dict]":
     """
     Умный парсинг Excel-файла гранд-сметы.
 
-    Возвращает список словарей {name, unit, quantity, is_section} — только
+    Возвращает список словарей {name, unit, quantity, is_section, sheet} — только
     значимые строки с работами/материалами и заголовки разделов.
     Без итоговых строк, строк НР/СП/ФОТ, нормо-часов и пустых строк.
 
-    Если колонки определить не удалось — возвращает весь текст построчно
-    в поле name (fallback-режим).
+    Разбираются все листы файла: гранд-смету присылают разбитой по листам — по
+    листу на раздел или корпус, — и взятый один первый лист терял остальные, а
+    задача при этом завершалась успешно. Лист остаётся при строке полем `sheet`.
+
+    Если колонки определить не удалось ни на одном листе — возвращает весь текст
+    построчно в поле name (fallback-режим).
     """
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
-        ws = wb.active  # берём первый лист
 
-        all_rows = list(ws.iter_rows(values_only=True))
-        header_row_idx, name_col, unit_col, qty_col, qty_total_col = _find_header_row(all_rows)
+        # Лист без шапки строк не даёт: титульный лист и лист подписей есть почти
+        # в каждой выгрузке, и их содержимое в перечне — мусор.
+        by_sheet = [(ws, _parse_grand_sheet(ws)) for ws in wb.worksheets]
 
-        rows: list[dict] = []
-
-        if header_row_idx is not None and name_col is not None:
-            # Используем колонку итогового количества если найдена, иначе базовую
-            effective_qty_col = qty_total_col if qty_total_col is not None else qty_col
-            logger.info(
-                "Grand-смета: заголовок найден",
-                header_row=header_row_idx,
-                name_col=name_col,
-                unit_col=unit_col,
-                qty_col=qty_col,
-                qty_total_col=qty_total_col,
-            )
-            data_rows = all_rows[header_row_idx + 1:]
-            for row in data_rows:
-                cells = [str(c).strip() if c is not None else "" for c in row]
-
-                name = cells[name_col] if name_col < len(cells) else ""
-                if not name or name == "None":
-                    # Проверяем col 0 — там могут быть заголовки разделов (объединённые ячейки)
-                    col0 = cells[0] if cells else ""
-                    if col0 and col0 != "None" and _SECTION_HEADER.match(col0):
-                        rows.append({"name": col0, "unit": "", "quantity": None, "is_section": True})
-                    continue
-
-                if _is_total_row(name):
-                    continue
-                if _is_trash_row(name):
-                    continue
-
-                # Заголовки разделов: нет единицы и количества, текст похож на раздел
-                unit = cells[unit_col] if unit_col is not None and unit_col < len(cells) else ""
-                unit = unit if unit != "None" else ""
-                qty_raw = row[effective_qty_col] if effective_qty_col is not None and effective_qty_col < len(row) else None
-                qty = _parse_quantity(qty_raw)
-
-                # Пропускаем строки с процентными единицами (НР/СП не отфильтрованные по имени)
-                if unit.strip() == "%":
-                    continue
-
-                # Пропускаем строки с единицами нормо-часов (остатки труда/машин)
-                unit_lower = unit.lower().replace(".", "").replace("-", "").strip()
-                if unit_lower in ("челч", "чч", "мчч", "машч"):
-                    continue
-
-                # Заголовок раздела не имеет ни единицы измерения, ни объёма.
-                # Строка с ними — позиция сметы, как бы она ни называлась.
-                is_section = bool(_SECTION_HEADER.match(name)) and not unit and qty is None
-                rows.append({"name": name, "unit": unit, "quantity": qty, "is_section": is_section})
-        else:
-            # Fallback: не нашли заголовок — берём все непустые строки,
-            # первая непустая ячейка = наименование
+        if not any(sheet_rows for _, sheet_rows in by_sheet):
+            # Шапку не нашли нигде — прежний fallback, теперь по всем листам.
             logger.warning("Grand-смета: заголовок не найден, fallback-режим")
-            for row in all_rows:
-                cells = [str(c).strip() if c is not None else "" for c in row]
-                non_empty = [c for c in cells if c and c != "None"]
-                if not non_empty:
-                    continue
-                name = non_empty[0]
-                if _is_total_row(name) or _is_trash_row(name):
-                    continue
-                rows.append({"name": name, "unit": "", "quantity": None, "is_section": False})
+            by_sheet = [(ws, _parse_grand_sheet_fallback(ws)) for ws in wb.worksheets]
+
+        multi_sheet = sum(1 for _, sheet_rows in by_sheet if sheet_rows) > 1
+        rows: list[dict] = []
+        for ws, sheet_rows in by_sheet:
+            for row in sheet_rows:
+                # Один лист — признак не ставим: документ остаётся без вкладок и
+                # ведёт себя ровно как до появления многолистовых файлов.
+                if multi_sheet:
+                    row["sheet"] = ws.title
+                rows.append(row)
 
         work_rows = sum(1 for r in rows if not r.get("is_section") and r.get("unit"))
         logger.info(
             "Grand-смета: строк извлечено",
             count=len(rows),
             work_rows=work_rows,
-            name_col=name_col,
-            unit_col=unit_col,
-            qty_col=qty_col,
-            qty_total_col=qty_total_col,
+            sheets=[ws.title for ws, sheet_rows in by_sheet if sheet_rows],
         )
         if rows and work_rows == 0:
             logger.warning(
                 "Grand-смета: не найдено ни одной строки с работами/материалами — "
                 "возможно, неверно определена колонка наименования",
-                name_col=name_col,
             )
         return rows
 
@@ -247,16 +275,7 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
         return []
 
 
-def chunk_rows(rows: "list[dict]", chunk_size: int = 250) -> "list[list[dict]]":
-    """
-    Делит список строк на чанки по chunk_size.
-    По возможности не разрывает группу: если последняя строка чанка —
-    не «Работа» (нет unit/quantity) — сдвигаем границу назад до ближайшей
-    строки без unit (предполагаем работу).
-    """
-    if not rows:
-        return []
-
+def _chunk_one_sheet(rows: "list[dict]", chunk_size: int) -> "list[list[dict]]":
     chunks = []
     start = 0
     total = len(rows)
@@ -275,6 +294,25 @@ def chunk_rows(rows: "list[dict]", chunk_size: int = 250) -> "list[list[dict]]":
         chunks.append(rows[start:end])
         start = end
 
+    return chunks
+
+
+def chunk_rows(rows: "list[dict]", chunk_size: int = 250) -> "list[list[dict]]":
+    """
+    Делит список строк на чанки по chunk_size.
+    По возможности не разрывает группу: если последняя строка чанка —
+    не «Работа» (нет unit/quantity) — сдвигаем границу назад до ближайшей
+    строки без unit (предполагаем работу).
+
+    Чанк не пересекает границу листа: позиции чанка получают лист этого чанка,
+    и смешанный чанк отправил бы половину строк на чужую вкладку.
+    """
+    if not rows:
+        return []
+
+    chunks: list = []
+    for _, sheet_rows in group_by_sheet(rows):
+        chunks.extend(_chunk_one_sheet(sheet_rows, chunk_size))
     return chunks
 
 

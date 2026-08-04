@@ -88,26 +88,15 @@ def _to_float(val) -> float:
         return 0.0
 
 
-def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
-    """
-    Parse estimate xlsx. Finds header row by 'наименование' keyword in first 10 rows.
-    Returns list of items: {row_index, name, type, quantity, unit,
-                             price_excl_vat, price_incl_vat, total}
-    Skips rows without a name value and rows matching 'extra' keywords (totals/НДС rows).
-    """
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-    except Exception as e:
-        raise ValueError(f"Не удалось открыть xlsx файл: {e}") from e
-    ws = wb.active
-
+def _parse_estimate_sheet(ws) -> list[dict]:
+    """Позиции одного листа. Лист без опознаваемой шапки даёт пустой список."""
     header_row = _find_header_row(ws)
     if header_row is None:
-        raise ValueError("Не удалось найти строку заголовков в xlsx (поиск по 'наименование')")
+        return []
 
     cols = _map_columns(ws, header_row)
     if "name" not in cols:
-        raise ValueError("Колонка 'Наименование' не найдена в xlsx")
+        return []
 
     items = []
     for row_idx in range(header_row + 1, ws.max_row + 1):
@@ -168,6 +157,9 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
             total = quantity * price_incl_vat
 
         items.append({
+            # Позиция адресуется парой (лист, строка): в многолистовом файле
+            # номер строки сам по себе указывает сразу на несколько позиций.
+            "sheet": ws.title,
             "row_index": row_idx,
             "name": name,
             "type": item_type,
@@ -178,6 +170,30 @@ def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
             "total": round(total, 2),
         })
 
+    return items
+
+
+def parse_estimate_xlsx(file_bytes: bytes) -> list[dict]:
+    """
+    Parse estimate xlsx. Finds header row by 'наименование' keyword in first 10 rows.
+    Returns list of items: {sheet, row_index, name, type, quantity, unit,
+                             price_excl_vat, price_incl_vat, total}
+    Skips rows without a name value and rows matching 'extra' keywords (totals/НДС rows).
+
+    Разбираются все листы файла: смета бывает разбита по листам, и взятый один
+    первый лист оставлял остальные разделы без оптимизации.
+    """
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть xlsx файл: {e}") from e
+
+    items: list[dict] = []
+    for ws in wb.worksheets:
+        items.extend(_parse_estimate_sheet(ws))
+
+    if not items:
+        raise ValueError("Не удалось найти строку заголовков в xlsx (поиск по 'наименование')")
     return items
 
 
@@ -208,20 +224,8 @@ def get_top_items(items: list[dict], categories: list[str], threshold: float = 0
     return result
 
 
-def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[dict]) -> bytes:
-    """
-    Open original xlsx, add 4 columns to first sheet:
-      'Цена сниженная', 'Стоимость сниженная', 'Источник', 'Примечание'
-    Apply green fill (#E2EFDA) for found analogues, yellow (#FFEB9C) for 'Не найдено'.
-    Add sheet 'Сравнение' with before/after comparison table.
-    Returns modified xlsx as bytes.
-    """
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
-    except Exception as e:
-        raise ValueError(f"Не удалось открыть xlsx файл для оптимизации: {e}") from e
-    ws = wb.active
-
+def _apply_optimization_to_sheet(ws, optimization_results: list[dict]) -> None:
+    """Дописать в лист 4 колонки с результатом оптимизации его позиций."""
     # Find actual header row (may not be row 1)
     header_row = _find_header_row(ws) or 1
 
@@ -281,6 +285,35 @@ def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[di
         if savings_pct is not None:
             note_cell.value = f"Экономия {savings_pct:.1f}%"
         note_cell.fill = fill
+
+
+def generate_optimized_xlsx(original_bytes: bytes, optimization_results: list[dict]) -> bytes:
+    """
+    Open original xlsx, add 4 columns to every sheet that has optimized rows:
+      'Цена сниженная', 'Стоимость сниженная', 'Источник', 'Примечание'
+    Apply green fill (#E2EFDA) for found analogues, yellow (#FFEB9C) for 'Не найдено'.
+    Add sheet 'Сравнение' with before/after comparison table.
+    Returns modified xlsx as bytes.
+
+    Позиция адресуется парой (лист, строка): в многолистовом файле номер строки
+    сам по себе указывает сразу на несколько позиций, и результат по разделу 2
+    лёг бы поверх раздела 1.
+    """
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
+    except Exception as e:
+        raise ValueError(f"Не удалось открыть xlsx файл для оптимизации: {e}") from e
+
+    by_title = {ws.title: ws for ws in wb.worksheets}
+    # Результат без листа пришёл от прежнего клиента — тогда лист был один.
+    fallback = wb.active
+    per_sheet: dict = {}
+    for opt in optimization_results:
+        ws = by_title.get(opt.get("sheet") or "", fallback)
+        per_sheet.setdefault(ws.title, []).append(opt)
+
+    for title, opts in per_sheet.items():
+        _apply_optimization_to_sheet(by_title.get(title, fallback), opts)
 
     # Add comparison sheet
     ws_cmp = wb.create_sheet("Сравнение")

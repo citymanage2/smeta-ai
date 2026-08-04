@@ -42,34 +42,26 @@ def extract_total_cost(file_bytes: bytes) -> Optional[Decimal]:
     return last_cost
 
 
-def parse_list_sheet(file_bytes: bytes) -> list[dict]:
+# Сводки, которые наш собственный генератор перечня кладёт рядом с данными.
+# Их позиции — те же самые, и второй раз их брать нельзя.
+_LEGACY_SUMMARY_SHEETS = ("работы", "материалы")
+_NOTE_SHEET = "пояснительная записка"
+
+
+def _is_legacy_list_workbook(wb) -> bool:
+    """Файл нашего генератора до появления вкладок: «Перечень» + две сводки.
+
+    В нём лист «Перечень» — единственный с данными, а «Работы» и «Материалы»
+    повторяют его позиции. Признак строгий (нужны все три листа), чтобы файл
+    заказчика с разделом, честно названным «Работы», не потерял этот раздел.
     """
-    Parse Excel file exported by generate_list():
-      Sheet "Перечень" (case-insensitive, also accepts "Перечень работ" etc.)
-      Columns: №, Тип, Наименование, Ед. изм., Кол-во, Примечание
-    Returns list of dicts {type, name, unit, quantity, notes}.
-    Raises ValueError if sheet not found or format unrecognised.
-    """
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
-    except Exception as exc:
-        raise ValueError(f"Не удалось открыть xlsx-файл: {exc}") from exc
+    titles = {ws.title.strip().lower() for ws in wb.worksheets}
+    has_list = any("перечень" in title for title in titles)
+    return has_list and all(name in titles for name in _LEGACY_SUMMARY_SHEETS)
 
-    # Find the sheet — name must contain "перечень" (case-insensitive)
-    target_ws = None
-    for ws in wb.worksheets:
-        if "перечень" in ws.title.lower():
-            target_ws = ws
-            break
 
-    if target_ws is None:
-        available = ", ".join(f'"{ws.title}"' for ws in wb.worksheets)
-        raise ValueError(
-            f'Лист "Перечень" не найден в файле. '
-            f"Доступные листы: {available}. "
-            "Убедитесь, что файл содержит лист с именем «Перечень» (или «Перечень работ»)."
-        )
-
+def _parse_list_worksheet(ws) -> list[dict]:
+    """Позиции одного листа перечня. Пустой лист даёт пустой список."""
     items: list[dict] = []
     # Detect column positions from header row (row 1)
     header_map: dict[str, int] = {}  # canonical_key -> 0-based col index
@@ -83,10 +75,10 @@ def parse_list_sheet(file_bytes: bytes) -> list[dict]:
         "примечание": "notes",
     }
 
-    rows_iter = target_ws.iter_rows(values_only=True)
+    rows_iter = ws.iter_rows(values_only=True)
     header_row = next(rows_iter, None)
     if header_row is None:
-        raise ValueError('Лист "Перечень" пустой.')
+        return []
 
     for col_idx, cell_val in enumerate(header_row):
         if cell_val is None:
@@ -141,7 +133,55 @@ def parse_list_sheet(file_bytes: bytes) -> list[dict]:
             "notes": notes,
         })
 
+    return items
+
+
+def parse_list_sheet(file_bytes: bytes) -> list[dict]:
+    """
+    Parse Excel file with a list of works/materials.
+      Columns: №, Тип, Наименование, Ед. изм., Кол-во, Примечание
+    Returns list of dicts {type, name, unit, quantity, notes, sheet}.
+    Raises ValueError if nothing recognisable was found.
+
+    Разбираются все листы файла: смету на основе загруженного Excel считают по
+    файлу заказчика, а он бывает разбит по листам — по листу на раздел. Взятый
+    один лист терял остальные, и сумма контракта выходила заниженной.
+
+    Исключение — наш собственный перечень старого вида: рядом с «Перечнем» в
+    нём лежат сводки «Работы» и «Материалы» с теми же позициями, и брать их
+    второй раз нельзя.
+    """
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError(f"Не удалось открыть xlsx-файл: {exc}") from exc
+
+    if _is_legacy_list_workbook(wb):
+        targets = [ws for ws in wb.worksheets if "перечень" in ws.title.strip().lower()]
+    else:
+        targets = [
+            ws for ws in wb.worksheets
+            if ws.title.strip().lower() != _NOTE_SHEET
+        ]
+
+    by_sheet = [(ws, _parse_list_worksheet(ws)) for ws in targets]
+    multi_sheet = sum(1 for _, sheet_items in by_sheet if sheet_items) > 1
+
+    items: list[dict] = []
+    for ws, sheet_items in by_sheet:
+        for item in sheet_items:
+            # Один лист — признак не ставим: документ остаётся без вкладок и
+            # ведёт себя ровно как до появления многолистовых файлов.
+            if multi_sheet:
+                item["sheet"] = ws.title
+            items.append(item)
+
     if not items:
-        raise ValueError('Лист "Перечень" не содержит позиций. Проверьте содержимое файла.')
+        available = ", ".join(f'"{ws.title}"' for ws in wb.worksheets)
+        raise ValueError(
+            "В файле не найдено ни одной позиции. "
+            f"Доступные листы: {available}. "
+            "Проверьте, что в файле есть таблица с колонкой «Наименование»."
+        )
 
     return items

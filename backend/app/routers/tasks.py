@@ -1428,6 +1428,9 @@ class OptimizeAnalyzeBody(BaseModel):
 
 
 class OptimizeItem(BaseModel):
+    # Лист исходного файла. Пусто — запрос от прежнего клиента, когда лист был
+    # один; тогда позиция адресуется одним номером строки, как раньше.
+    sheet: str = ""
     row_index: int
     name: str
     type: str
@@ -1535,6 +1538,7 @@ async def _process_single_item(
         source = "Не найдено (цена не ниже)"
 
     return {
+        "sheet": item.get("sheet", ""),
         "row_index": item["row_index"],
         "name": name,
         "original_price": original_price,
@@ -1590,12 +1594,18 @@ async def _run_optimization_background(
             total = len(items)
 
             # 6.3 — Возобновление после сбоя: читаем уже сохранённые результаты
-            already_done: dict[int, dict] = {}
+            # Ключ — пара (лист, строка): в многолистовой смете номер строки
+            # сам по себе указывает сразу на несколько позиций, и возобновление
+            # считало бы обсчитанной чужую.
+            already_done: dict[tuple, dict] = {}
             if task.progress_data:
                 for r in task.progress_data.get("partial_results", []):
-                    already_done[r["row_index"]] = r
+                    already_done[(r.get("sheet", ""), r["row_index"])] = r
 
-            items_to_process = [i for i in items if i["row_index"] not in already_done]
+            items_to_process = [
+                i for i in items
+                if (i.get("sheet", ""), i["row_index"]) not in already_done
+            ]
             optimization_results: list[dict] = list(already_done.values())
 
             if already_done:
@@ -1620,6 +1630,7 @@ async def _run_optimization_background(
                         failed_item = batch[idx]
                         _logger.warning("batch_item_failed", name=failed_item["name"], error=str(r))
                         optimization_results.append({
+                            "sheet": failed_item.get("sheet", ""),
                             "row_index": failed_item["row_index"],
                             "name": failed_item["name"],
                             "original_price": failed_item["price_incl_vat"],

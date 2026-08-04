@@ -393,6 +393,7 @@ async def ensure_versions(
         display = f"V0 — Оригинал (файл {index})"
 
     elif doc.row_format == "generic":
+        from app.services.excel_service import data_sheet_titles
         from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
 
         res = await db.execute(
@@ -404,7 +405,13 @@ async def ensure_versions(
         source = res.scalar_one_or_none()
         if source is None:
             return doc
-        rows = parse_xlsx_to_generic_rows(await storage_service.load_bytes(source.storage_key))
+        # В слоте `result` лежит наш собственный файл: рядом с листами данных в
+        # нём сводки «Работы» и «Материалы» и пояснительная записка. Какие листы
+        # данные — знают позиции, из которых файл собран.
+        sheets = data_sheet_titles((doc.task.progress_data or {}).get("items") or [])
+        rows = parse_xlsx_to_generic_rows(
+            await storage_service.load_bytes(source.storage_key), sheets=sheets,
+        )
 
     elif doc.kind == KIND_ESTIMATE:
         from app.services.estimate_parser import parse_estimate_excel

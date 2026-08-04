@@ -305,8 +305,14 @@ async def init_from_result(
     if tr is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TaskResult не найден")
 
+    # Файл собран нашим генератором: рядом с листами данных в нём сводки
+    # «Работы» и «Материалы» и пояснительная записка, и без ограничения документ
+    # получил бы вкладки-двойники. Какие листы данные — знают позиции задачи.
+    from app.services.excel_service import data_sheet_titles
+
     rows = parse_xlsx_to_generic_rows(
-        await storage_service.load_bytes(tr.storage_key)
+        await storage_service.load_bytes(tr.storage_key),
+        sheets=data_sheet_titles((task.progress_data or {}).get("items") or []),
     )
     count_res = await db.execute(select(EstimateVersion).where(EstimateVersion.task_id == task_id))
     all_versions = count_res.scalars().all()

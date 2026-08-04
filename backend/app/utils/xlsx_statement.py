@@ -17,6 +17,8 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from app.utils.sheet_names import group_by_sheet, safe_sheet_title
+
 # Корпоративное оформление: синяя шапка, светлая заливка итога.
 _HEADER_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -64,23 +66,23 @@ def _column_width(label: str, key: str, rows: list) -> int:
     return max(10, min(55, longest + 4))
 
 
-def generate_statement_xlsx(
+# Лист строки в выгрузке помечен служебным ключом: ключи полей здесь приходят
+# из колонок документа, и заказчик мог назвать колонку «sheet».
+STATEMENT_SHEET_KEY = "__sheet"
+
+
+def _write_statement_sheet(
+    ws,
     columns: list,
     rows: list,
     *,
-    title: str = "",
-    object_name: str = "",
-    project_name: str = "",
-    show_date: bool = True,
-    show_total: bool = True,
-    sheet_name: str = "Выгрузка",
-    generated_at: Optional[datetime] = None,
-) -> bytes:
-    """Собрать ведомость. `columns` — [{key, label, numeric}], `rows` — словари."""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = (sheet_name or "Выгрузка")[:31]
-
+    title: str,
+    object_name: str,
+    project_name: str,
+    show_date: bool,
+    show_total: bool,
+    generated_at: Optional[datetime],
+) -> None:
     keys = [str(c.get("key")) for c in columns]
     labels = [str(c.get("label") or c.get("key") or "") for c in columns]
     numeric = [bool(c.get("numeric")) for c in columns]
@@ -155,6 +157,44 @@ def generate_statement_xlsx(
                 cell.value = round(totals[col - 1], 2)
                 cell.font = _BOLD
                 cell.number_format = _NUM_FMT
+
+
+def generate_statement_xlsx(
+    columns: list,
+    rows: list,
+    *,
+    title: str = "",
+    object_name: str = "",
+    project_name: str = "",
+    show_date: bool = True,
+    show_total: bool = True,
+    sheet_name: str = "Выгрузка",
+    generated_at: Optional[datetime] = None,
+) -> bytes:
+    """Собрать ведомость. `columns` — [{key, label, numeric}], `rows` — словари.
+
+    Документ с вкладками листов выгружается листом на вкладку — с тем же
+    именем и своим итогом. Иначе разделы слиплись бы в одну таблицу, и итог по
+    разделу пришлось бы считать руками.
+    """
+    wb = openpyxl.Workbook()
+    groups = group_by_sheet(rows, key=STATEMENT_SHEET_KEY)
+    used: set = set()
+
+    for index, (sheet_title, sheet_rows) in enumerate(groups or [(None, [])]):
+        ws = wb.active if index == 0 else wb.create_sheet()
+        ws.title = safe_sheet_title(sheet_title or sheet_name or "Выгрузка", used)
+        _write_statement_sheet(
+            ws, columns, sheet_rows,
+            # Шапку с названием и датой ставим на каждый лист: лист выгрузки
+            # печатают и пересылают по отдельности.
+            title=title,
+            object_name=object_name,
+            project_name=project_name,
+            show_date=show_date,
+            show_total=show_total,
+            generated_at=generated_at,
+        )
 
     buf = io.BytesIO()
     wb.save(buf)
