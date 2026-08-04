@@ -63,14 +63,11 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
                                 wrap_text=(col in (3, 6)))
         c.border = _P_BORDER
 
-    # Row 2: column numbers 1..6 — center, Arial 9
-    for col in range(1, 7):
-        c = ws.cell(row=2, column=col, value=col)
-        c.font = _P_FONT_BLACK
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        c.border = _P_BORDER
-
-    data_row = 3
+    # Строки нумерации колонок («1 2 3 4 5 6») здесь нет намеренно. В Гранд-смете
+    # она часть шапки, а у нас лист уезжает в редактор: там она садилась первой
+    # строкой данных и выглядела мусором. Разбор без неё работает — шапкой
+    # считается первая строка листа.
+    data_row = 2
     item_num = 0
     current_section = object()  # sentinel — no section seen yet
     section_num = 0
@@ -225,19 +222,19 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     ws_all = wb.active
     ws_all.title = "Перечень"
     _write_perechen_sheet(ws_all, items, with_sections=False)
-    ws_all.freeze_panes = "A3"
+    ws_all.freeze_panes = "A2"
 
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
     ws_works = wb.create_sheet("Работы")
     _write_perechen_sheet(ws_works, works, with_sections=False)
-    ws_works.freeze_panes = "A3"
+    ws_works.freeze_panes = "A2"
 
     # Sheet 3: Материалы
     materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
     ws_mats = wb.create_sheet("Материалы")
     _write_perechen_sheet(ws_mats, materials, with_sections=False)
-    ws_mats.freeze_panes = "A3"
+    ws_mats.freeze_panes = "A2"
 
     # Sheet 4: Пояснительная записка
     ws_note = wb.create_sheet("Пояснительная записка")
@@ -277,19 +274,19 @@ def generate_list_project(items: list, changes_summary: Optional[str] = None) ->
     ws_all = wb.active
     ws_all.title = "Перечень"
     _write_perechen_sheet(ws_all, items, with_sections=True)
-    ws_all.freeze_panes = "A3"
+    ws_all.freeze_panes = "A2"
 
     # Sheet 2: Работы
     works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
     ws_works = wb.create_sheet("Работы")
     _write_perechen_sheet(ws_works, works, with_sections=False)
-    ws_works.freeze_panes = "A3"
+    ws_works.freeze_panes = "A2"
 
     # Sheet 3: Материалы
     materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
     ws_mats = wb.create_sheet("Материалы")
     _write_perechen_sheet(ws_mats, materials, with_sections=False)
-    ws_mats.freeze_panes = "A3"
+    ws_mats.freeze_panes = "A2"
 
     # Sheet 4: Пояснительная записка (two sections)
     ws_note = wb.create_sheet("Пояснительная записка")

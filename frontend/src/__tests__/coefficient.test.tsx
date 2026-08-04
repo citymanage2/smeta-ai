@@ -215,8 +215,9 @@ describe('коэффициент в редакторе', () => {
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
 
     await waitFor(() => expect(screen.getByText('Накладные расходы 20%:')).toBeInTheDocument());
-    // 4000 работ × 20% = 800; транспортные 0 → ИТОГО 9800
-    expect(screen.getByText('9 800 ₽')).toBeInTheDocument();
+    // 4000 работ × 20% = 800; транспортные 0 → ИТОГО 9800.
+    // Итог с копейками — как и колонки стоимостей.
+    expect(screen.getByText('9 800,00 ₽')).toBeInTheDocument();
   });
 
   it('в перечне коэффициента нет — там нет цен', async () => {

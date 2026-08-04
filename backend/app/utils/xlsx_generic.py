@@ -56,6 +56,18 @@ def _is_numbering_row(row) -> bool:
     return min(numbers) <= 2 and max(numbers) <= len(numbers) + 3
 
 
+def is_numbering_cells(cells) -> bool:
+    """Строка нумерации колонок в уже разобранном документе.
+
+    Разбор отсекает её с 2 августа 2026, но документы, созданные раньше, хранят
+    её как обычную строку данных. Сервис документов не отдаёт такие строки
+    редактору — по тем же признакам, что и парсер.
+    """
+    if not isinstance(cells, dict):
+        return False
+    return _is_numbering_row(list(cells.values()))
+
+
 def _detect_header(all_rows) -> tuple:
     """Вернуть (индексы строк шапки, индекс первой строки данных).
 
@@ -171,6 +183,36 @@ def parse_xlsx_to_generic_rows(file_bytes: bytes) -> list[dict]:
     return result
 
 
+_MONEY_FMT = "#,##0.00"
+_MONEY_WORDS = ("цена", "стоимость", "сумма")
+
+
+def _as_number(value):
+    """Числовая строка → число. Иначе None.
+
+    После правки в редакторе значение приходит строкой: человек набрал «1234,56»
+    или вставил «1 234,56» из другой таблицы. Записанное строкой, оно попадёт в
+    Excel текстом, и колонку в скачанном файле не просуммировать.
+
+    Ведущий ноль («007», «0123») — признак кода, а не числа: такие значения
+    оставляем как есть, иначе артикул превратится в 7.
+    """
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return None
+    text = str(value or "").strip().replace(" ", "").replace(" ", "")
+    if not text:
+        return None
+    normalized = text.replace(",", ".")
+    lead = normalized[1:] if normalized[:1] in "+-" else normalized
+    if len(lead) > 1 and lead[0] == "0" and not lead.startswith("0."):
+        return None
+    try:
+        number = float(normalized)
+    except ValueError:
+        return None
+    return int(number) if number == int(number) and "." not in normalized else number
+
+
 def rows_to_xlsx(rows: list[dict]) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -182,11 +224,21 @@ def rows_to_xlsx(rows: list[dict]) -> bytes:
 
     # Collect column order from all rows, preserving first-seen order
     all_keys: list[str] = list(dict.fromkeys(k for row in rows for k in row.get("cells", {}).keys()))
+    money_cols = {
+        i for i, key in enumerate(all_keys, 1)
+        if any(word in str(key).lower() for word in _MONEY_WORDS)
+    }
 
     ws.append(all_keys)
-    for row in rows:
+    for row_idx, row in enumerate(rows, 2):
         cells = row.get("cells", {})
-        ws.append([cells.get(k, "") for k in all_keys])
+        for col_idx, key in enumerate(all_keys, 1):
+            value = cells.get(key, "")
+            number = _as_number(value)
+            cell = ws.cell(row=row_idx, column=col_idx,
+                           value=value if number is None else number)
+            if col_idx in money_cols and isinstance(cell.value, (int, float)):
+                cell.number_format = _MONEY_FMT
 
     buf = io.BytesIO()
     wb.save(buf)

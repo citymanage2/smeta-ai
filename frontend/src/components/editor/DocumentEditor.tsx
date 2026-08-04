@@ -14,6 +14,7 @@ import {
 import { useDocumentEditorStore } from '../../stores/documentEditor';
 import { LumaSpin } from '../ui/LumaSpin';
 import { EditorColumn, GridRow } from './adapters/types';
+import { formatMoney } from '../../utils/formatNumber';
 import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clipboard';
 import EditorToolbar from './EditorToolbar';
 import EditorHistoryPanel from './EditorHistoryPanel';
@@ -89,7 +90,9 @@ function TextEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<G
   );
 }
 
-const fmtRub = (n: number) => Math.round(n).toLocaleString('ru-RU');
+// Итоги — с копейками, как и колонки стоимостей: округление до рубля
+// расходилось бы с суммой того, что видно в таблице.
+const fmtRub = formatMoney;
 
 // Название документа для шапки выгрузки, когда заголовка на экране нет.
 const KIND_TITLES: Record<DocumentKind, string> = {
@@ -275,12 +278,29 @@ export const DocumentEditor: React.FC<Props> = ({
       resizable: true,
       editable: editable && column.editable && !column.computed,
       cellClass: column.numeric ? 'de-cell-numeric' : undefined,
+      // Формат — только на показе: в строке остаётся число, поэтому в выгрузку и
+      // в файл уходит число, а не текст с пробелами.
+      renderCell: ({ row }) => {
+        const shown = adapter.displayValue?.(row, column.key);
+        if (shown !== null && shown !== undefined) return shown;
+        const raw = row[column.key];
+        return raw === null || raw === undefined ? '' : String(raw);
+      },
       renderEditCell: TextEditor,
     }));
     return editable
       ? [{ ...SelectColumn, frozen: true }, dragColumn, ...data]
       : [{ ...SelectColumn, frozen: true }, ...data];
-  }, [columns, canWrite, handleRowDrop]);
+  }, [columns, canWrite, handleRowDrop, adapter]);
+
+  // Работа, материал и раздел различаются цветом: в смете на тысячу строк тип,
+  // написанный словом в первой колонке, глазом не выделяется.
+  const rowClass = useCallback((row: GridRow) => {
+    const kind = adapter.rowKind(row);
+    const byKind = kind ? `de-row-${kind}` : '';
+    const byState = adapter.rowClass?.(row);
+    return [byKind, byState].filter(Boolean).join(' ') || undefined;
+  }, [adapter]);
 
   // --- Правка ячейки --------------------------------------------------------
 
@@ -782,7 +802,7 @@ export const DocumentEditor: React.FC<Props> = ({
                   columns={gridColumns}
                   rows={displayedRows}
                   rowKeyGetter={(row) => row.__key}
-                  rowClass={(row) => adapter.rowClass?.(row)}
+                  rowClass={rowClass}
                   onRowsChange={handleGridRowsChange}
                   selectedRows={selectedKeys}
                   onSelectedRowsChange={(keys) => setSelected(new Set(keys as Set<string>))}

@@ -1,3 +1,4 @@
+import { formatDecimal, formatMoney } from '../../../utils/formatNumber';
 import {
   DocumentTotals,
   EditorAdapter,
@@ -39,6 +40,12 @@ const COST_MAT_KEYWORDS = ['стоимость материал'];
 
 const NUMERIC_KEYWORDS = [
   ...QTY_KEYWORDS, ...PRICE_WORK_KEYWORDS, ...PRICE_MAT_KEYWORDS,
+  ...COST_WORK_KEYWORDS, ...COST_MAT_KEYWORDS,
+];
+
+// Деньги показываем как `1 111 111,11`, ноль — пустой ячейкой.
+const MONEY_KEYWORDS = [
+  ...PRICE_WORK_KEYWORDS, ...PRICE_MAT_KEYWORDS,
   ...COST_WORK_KEYWORDS, ...COST_MAT_KEYWORDS,
 ];
 
@@ -180,6 +187,20 @@ export const genericAdapter: EditorAdapter = {
     const overhead = (sumWork * pct.overhead_pct) / 100;
     const transport = (sumMat * pct.transport_pct) / 100;
     return { sumWork, overhead, sumMat, transport, grand: sumWork + overhead + sumMat + transport };
+  },
+
+  displayValue(row: GridRow, key: string): string | null {
+    // Колонки приходят из файла заказчика, поэтому опознаём их по названию — тем
+    // же ключевым словам, по которым работает пересчёт «цена × объём».
+    const money = matches(key, MONEY_KEYWORDS);
+    if (!money && !matches(key, QTY_KEYWORDS)) return null;
+
+    const value = toNumber(row[key]);
+    // Не число — оставляем как есть: в перечне заказчика в колонке количества
+    // попадается текст вроде «по проекту», терять его нельзя.
+    if (value === null) return String(row[key] ?? '') === '' ? '' : null;
+    if (money) return value === 0 ? '' : formatMoney(value);
+    return formatDecimal(value);
   },
 
   emptyRow(columns: EditorColumn[], keySeed: string): GridRow {

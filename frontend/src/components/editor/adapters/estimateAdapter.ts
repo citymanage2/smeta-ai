@@ -1,5 +1,6 @@
 import { billableQty, isNegativeQty } from '../../../utils/negativeQty';
 import { calcEstimateTotals, rowCoefficient } from '../../../utils/estimateCalc';
+import { formatDecimal, formatMoney } from '../../../utils/formatNumber';
 import {
   AdapterContext,
   DocumentTotals,
@@ -61,6 +62,11 @@ const LABEL_TO_TYPE: Record<string, string> = {
 // каждое сохранение множило бы её заново.
 export const BASE_WORK = '__base_price_work';
 export const BASE_MATERIAL = '__base_price_material';
+
+// Денежные колонки: показываются как `1 111 111,11`, ноль — пустой ячейкой.
+// У работы стоимость материалов равна нулю и наоборот — считать там нечего, и
+// ноль в такой ячейке читается как посчитанный результат.
+const MONEY_COLUMNS = new Set(['price_work', 'cost_work', 'price_material', 'cost_material']);
 
 function costOf(row: GridRow, priceKey: string): number {
   const qty = billableQty(toNumber(row.qty));
@@ -188,6 +194,21 @@ export const estimateAdapter: EditorAdapter = {
     if (abc === 'C' || abc === 'С') classes.push('de-row-abc-c');
 
     return classes.length > 0 ? classes.join(' ') : undefined;
+  },
+
+  displayValue(row: GridRow, key: string): string | null {
+    if (MONEY_COLUMNS.has(key)) {
+      const value = toNumber(row[key]);
+      // Ноль гасим по значению, а не по типу строки: итог складывает обе цены у
+      // каждой строки, и гашение по типу спрятало бы деньги, которые в ИТОГО
+      // всё равно попадают.
+      return value === null || value === 0 ? '' : formatMoney(value);
+    }
+    if (key === 'qty') {
+      const value = toNumber(row[key]);
+      return value === null ? '' : formatDecimal(value);
+    }
+    return null;
   },
 
   emptyRow(_columns: EditorColumn[], keySeed: string): GridRow {

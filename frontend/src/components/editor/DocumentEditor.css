@@ -614,6 +614,36 @@
   cursor: grabbing;
 }
 
+/* Работа, материал и раздел различаются цветом. Ориентир — наш же перечень в
+   xlsx: там материал печатается синим, работа чёрным.
+ *
+ * Заливка ставится на строку, а не на ячейку: строка у react-data-grid —
+ * `display: contents`, ячейки берут её фон через `inherit`. Наведение и
+ * выделение у библиотеки описаны в `@layer`, а наши правила слоя не имеют и
+ * потому всегда сильнее — поэтому оба состояния переопределяем здесь явно,
+ * иначе строка материала перестала бы подсвечиваться под курсором.
+ *
+ * Правила состояний ниже (вычет, исключено, прайс, А/В/С) красят саму ячейку и
+ * потому перебивают цвет типа — так и задумано: они важнее. */
+.rdg-row.de-row-material {
+  background-color: #f5f9ff;
+  color: #1d4ed8;
+}
+
+.rdg-row.de-row-material:hover { background-color: #e8f1fe; }
+
+.rdg-row.de-row-material[aria-selected='true'] { background-color: #dbeafe; }
+
+.rdg-row.de-row-section {
+  background-color: #f1f5f9;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.rdg-row.de-row-section:hover { background-color: #e7edf5; }
+
+.rdg-row.de-row-section[aria-selected='true'] { background-color: #dbeafe; }
+
 /* Вычет: объём меньше нуля корректирует соседнюю позицию, стоимость по нему
    не считается. */
 .rdg-row.de-row-deduction .rdg-cell {

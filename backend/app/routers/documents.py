@@ -152,7 +152,9 @@ async def get_document_rows(
         # Строки берёт сервис: у раздела сводной они лежат не в версии, а
         # снимком внутри самой сводной.
         rows=svc.read_rows(doc, version),
-        draft_rows=version.draft_rows,
+        # Черновик мог быть сохранён до того, как строка нумерации перестала
+        # показываться, — иначе она вернулась бы на экран вместе с ним.
+        draft_rows=svc.strip_service_rows(doc, version.draft_rows),
     )
 
 

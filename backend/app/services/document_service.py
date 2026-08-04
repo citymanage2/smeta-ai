@@ -522,6 +522,33 @@ def pick_version(doc: ResolvedDocument, version_id: Optional[str]) -> Any:
     return doc.active
 
 
+def strip_service_rows(doc: ResolvedDocument, rows: Optional[list]) -> Optional[list]:
+    """Убрать из плоского документа служебную строку нумерации колонок «1 2 3…».
+
+    Разбор xlsx отсекает её с 2 августа 2026, но перечни и полнота, созданные
+    раньше, хранят её первой строкой данных. Мигрировать хранилище ради этого
+    незачем: строку не отдаём редактору, и при первом «Применить» она уходит из
+    документа сама.
+
+    Смотрим только начало документа. Признак «все ячейки — разные небольшие
+    числа подряд» ниже по таблице может совпасть с настоящей позицией, а терять
+    строку сметы из-за косметики нельзя.
+    """
+    if rows is None or doc.row_format != "generic":
+        return rows
+
+    from app.utils.xlsx_generic import is_numbering_cells
+
+    first = 0
+    while (
+        first < len(rows)
+        and isinstance(rows[first], dict)
+        and is_numbering_cells(rows[first].get("cells"))
+    ):
+        first += 1
+    return rows[first:] if first else rows
+
+
 def read_rows(doc: ResolvedDocument, version: Any) -> list:
     """Рабочие строки документа.
 
@@ -534,7 +561,7 @@ def read_rows(doc: ResolvedDocument, version: Any) -> list:
             return []
         section = sections[doc.section_index]
         return list(section.get("rows") or []) if isinstance(section, dict) else []
-    return list(version.rows or [])
+    return strip_service_rows(doc, list(version.rows or [])) or []
 
 
 async def summary_divergence(db: AsyncSession, doc: ResolvedDocument) -> Optional[dict]:
