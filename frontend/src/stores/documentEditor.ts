@@ -16,6 +16,27 @@ import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 import { genericAdapter } from '../components/editor/adapters/genericAdapter';
 import { EditorAdapter, EditorColumn, GridRow } from '../components/editor/adapters/types';
 
+/** Строки одной вкладки. `null` — документ без вкладок, вкладка одна на всё. */
+export function rowsOfSheet(
+  adapter: EditorAdapter, rows: GridRow[], sheet: string | null,
+): GridRow[] {
+  if (sheet === null) return rows;
+  return rows.filter((row) => adapter.sheetOf(row) === sheet);
+}
+
+/** Вкладки документа с числом строк, в порядке появления строк. */
+export function sheetsOf(adapter: EditorAdapter, rows: GridRow[]): Array<{ name: string; count: number }> {
+  const order: string[] = [];
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const name = adapter.sheetOf(row);
+    if (name === null) continue;
+    if (!counts.has(name)) order.push(name);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return order.map((name) => ({ name, count: counts.get(name) ?? 0 }));
+}
+
 /**
  * Состояние открытого документа.
  *
@@ -54,6 +75,14 @@ interface DocumentEditorState {
   isDirty: boolean;
   selectedKeys: Set<string>;
   tab: EditorTab;
+  /**
+   * Открытая вкладка листа. `null` — документ из одного листа.
+   *
+   * Вкладка — только фильтр показа: в `rows` всегда лежат строки **всех**
+   * вкладок, поэтому «Применить» записывает документ целиком, а не ту вкладку,
+   * которая была открыта в момент нажатия.
+   */
+  sheet: string | null;
   search: string;
   lock: LockInfo | null;
   undoStack: GridRow[][];
@@ -69,6 +98,7 @@ interface DocumentEditorState {
   undo: () => void;
   redo: () => void;
   setTab: (tab: EditorTab) => void;
+  setSheet: (sheet: string | null) => void;
   setSearch: (search: string) => void;
   setSelected: (keys: Set<string>) => void;
   heartbeat: () => Promise<void>;
@@ -91,7 +121,7 @@ function adapterFor(meta: DocumentMeta | null): EditorAdapter {
 const EMPTY: Pick<
   DocumentEditorState,
   'ref' | 'meta' | 'versionId' | 'columns' | 'rows' | 'baseline' | 'loading' | 'error' | 'conflict'
-  | 'applying' | 'draftState' | 'isDirty' | 'selectedKeys' | 'tab' | 'search'
+  | 'applying' | 'draftState' | 'isDirty' | 'selectedKeys' | 'tab' | 'sheet' | 'search'
   | 'lock' | 'undoStack' | 'redoStack'
 > = {
   ref: null,
@@ -108,6 +138,7 @@ const EMPTY: Pick<
   isDirty: false,
   selectedKeys: new Set<string>(),
   tab: 'all',
+  sheet: null,
   search: '',
   lock: null,
   undoStack: [],
@@ -134,13 +165,18 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
       // сразу, но «как было» помним — иначе не отличить правку от исходника.
       const draft = data.draft_rows ? adapter.toGrid(data.draft_rows, ctx) : null;
       const rows = draft ?? applied;
+      // Открываем первую вкладку. Колонки считаются по её строкам: у листов
+      // исходного файла шапки разные, и общий набор дал бы каждой вкладке
+      // пустые колонки соседа.
+      const sheet = sheetsOf(adapter, rows)[0]?.name ?? null;
 
       set({
         meta: { ...meta, rev: data.rev },
         versionId: data.version_id,
         adapter,
-        columns: adapter.columns(rows),
+        columns: adapter.columns(rowsOfSheet(adapter, rows, sheet)),
         rows,
+        sheet,
         baseline: applied,
         isDirty: draft !== null,
         lock: meta.lock,
@@ -259,6 +295,19 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
   },
 
   setTab: (tab) => set({ tab }),
+
+  setSheet: (sheet) => {
+    const { adapter, rows } = get();
+    set({
+      sheet,
+      // Колонки пересчитываются под вкладку: у разных листов исходного файла
+      // свой набор столбцов.
+      columns: adapter.columns(rowsOfSheet(adapter, rows, sheet)),
+      // Отметки снимаем: они стоят на строках прежней вкладки, и «удалить
+      // отмеченные» унесло бы строки, которых человек уже не видит.
+      selectedKeys: new Set<string>(),
+    });
+  },
   setSearch: (search) => set({ search }),
   setSelected: (selectedKeys) => set({ selectedKeys }),
 

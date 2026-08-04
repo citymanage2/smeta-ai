@@ -11,7 +11,7 @@ import {
   AnalogVariant, AnalogsState, DocumentKind, DocumentRef,
   cancelAnalogs, exportDocument, getAnalogsState, resolveSectionDivergence,
 } from '../../api/documents';
-import { useDocumentEditorStore } from '../../stores/documentEditor';
+import { rowsOfSheet, sheetsOf, useDocumentEditorStore } from '../../stores/documentEditor';
 import { LumaSpin } from '../ui/LumaSpin';
 import { EditorColumn, GridRow } from './adapters/types';
 import { formatMoney } from '../../utils/formatNumber';
@@ -55,8 +55,10 @@ interface Props {
   /** Версия и вкладка из ссылки: по ней коллега должен увидеть то же самое. */
   initialVersionId?: string;
   initialTab?: 'all' | 'works' | 'materials';
-  /** Открытая версия и вкладка — чтобы страница положила их в адрес. */
-  onStateChange?: (state: { versionId: string | null; tab: string }) => void;
+  /** Вкладка листа из ссылки. */
+  initialSheet?: string;
+  /** Открытая версия и вкладки — чтобы страница положила их в адрес. */
+  onStateChange?: (state: { versionId: string | null; tab: string; sheet: string | null }) => void;
   onClose?: () => void;
   onApplied?: () => void;
 }
@@ -107,13 +109,13 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 
 export const DocumentEditor: React.FC<Props> = ({
   cardId, kind, fileSlot, fileIndex, title, startFullscreen = false,
-  initialVersionId, initialTab, onStateChange, onClose, onApplied,
+  initialVersionId, initialTab, initialSheet, onStateChange, onClose, onApplied,
 }) => {
   const {
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
-    isDirty, selectedKeys, tab, search, lock, undoStack, redoStack,
+    isDirty, selectedKeys, tab, sheet, search, lock, undoStack, redoStack,
     load, setRows, applyChanges, discardChanges, undo, redo, selectVersion,
-    setTab, setSearch, setSelected, heartbeat, reset, setCoefficient,
+    setTab, setSheet, setSearch, setSelected, heartbeat, reset, setCoefficient,
   } = useDocumentEditorStore();
 
   const [fullscreen, setFullscreen] = useState(startFullscreen);
@@ -155,11 +157,11 @@ export const DocumentEditor: React.FC<Props> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRef, load, reset]);
 
-  // Открытая версия и вкладка — наружу, чтобы страница положила их в адрес и
+  // Открытая версия и вкладки — наружу, чтобы страница положила их в адрес и
   // ссылка открывала ровно то состояние, из которого её скопировали.
   useEffect(() => {
-    onStateChange?.({ versionId, tab });
-  }, [versionId, tab, onStateChange]);
+    onStateChange?.({ versionId, tab, sheet });
+  }, [versionId, tab, sheet, onStateChange]);
 
   // Присутствие: раз в 20 секунд отмечаемся и узнаём, не открыл ли документ кто-то ещё.
   useEffect(() => {
@@ -179,28 +181,54 @@ export const DocumentEditor: React.FC<Props> = ({
 
   const canWrite = !!meta?.can_write;
 
+  // --- Вкладки листов -------------------------------------------------------
+  //
+  // Исходный файл бывает разбит по листам — по листу на раздел или корпус.
+  // Вкладка это только фильтр показа: в `rows` лежат строки всех вкладок,
+  // поэтому «Применить» записывает документ целиком.
+
+  const sheets = useMemo(() => sheetsOf(adapter, rows), [adapter, rows]);
+  const showSheetTabs = sheets.length > 1;
+
+  // Вкладка из ссылки применяется, когда документ уже загружен: до этого
+  // списка листов ещё нет, и проверить имя не по чему.
+  const sheetFromLinkRef = useRef(initialSheet);
+  useEffect(() => {
+    const wanted = sheetFromLinkRef.current;
+    // Пока строк нет, списка листов тоже нет — ждём загрузку, а не забываем
+    // имя из ссылки на первом же прогоне.
+    if (!wanted || sheets.length === 0) return;
+    sheetFromLinkRef.current = undefined;
+    if (sheets.some((item) => item.name === wanted)) setSheet(wanted);
+  }, [sheets, setSheet]);
+
+  // Строки открытой вкладки — основа и для показа, и для колонок, и для итога.
+  const sheetRows = useMemo(
+    () => rowsOfSheet(adapter, rows, sheet), [adapter, rows, sheet],
+  );
+
   // --- Фильтрация -----------------------------------------------------------
 
   const deferredSearch = useDeferredValue(search);
 
   const showTabs = useMemo(
-    () => rows.some((row) => adapter.rowKind(row) !== null),
-    [rows, adapter],
+    () => sheetRows.some((row) => adapter.rowKind(row) !== null),
+    [sheetRows, adapter],
   );
 
   const counts = useMemo(() => {
     let work = 0;
     let material = 0;
-    for (const row of rows) {
+    for (const row of sheetRows) {
       const rowKind = adapter.rowKind(row);
       if (rowKind === 'work') work += 1;
       if (rowKind === 'material') material += 1;
     }
     return { work, material };
-  }, [rows, adapter]);
+  }, [sheetRows, adapter]);
 
   const displayedRows = useMemo(() => {
-    let result = rows;
+    let result = sheetRows;
     if (tab !== 'all') {
       const wanted = tab === 'works' ? 'work' : 'material';
       result = result.filter((row) => adapter.rowKind(row) === wanted);
@@ -210,7 +238,7 @@ export const DocumentEditor: React.FC<Props> = ({
       result = result.filter((row) => adapter.searchText(row).toLowerCase().includes(query));
     }
     return result;
-  }, [rows, tab, deferredSearch, adapter]);
+  }, [sheetRows, tab, deferredSearch, adapter]);
 
   // Ставки доп. расходов: у проекта — общие, у версии могут быть свои. Порядок
   // тот же, что на сервере, иначе итог на экране не сошёлся бы с файлом.
@@ -222,9 +250,16 @@ export const DocumentEditor: React.FC<Props> = ({
     return meta?.project ?? { overhead_pct: 0, transport_pct: 0 };
   }, [meta, versionId]);
 
+  // Итог открытой вкладки и итог всего документа — оба сразу: человек правит
+  // раздел, но отвечает за сумму контракта.
   const totals = useMemo(
-    () => (meta ? adapter.totals(rows, expenseRates) : null),
-    [rows, adapter, meta, expenseRates],
+    () => (meta ? adapter.totals(sheetRows, expenseRates) : null),
+    [sheetRows, adapter, meta, expenseRates],
+  );
+
+  const documentTotals = useMemo(
+    () => (meta && showSheetTabs ? adapter.totals(rows, expenseRates) : null),
+    [rows, adapter, meta, expenseRates, showSheetTabs],
   );
 
   // --- Перетаскивание строк -------------------------------------------------
@@ -404,13 +439,18 @@ export const DocumentEditor: React.FC<Props> = ({
 
   const handleAddRow = useCallback(() => {
     const seed = `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const fresh = adapter.emptyRow(columns, seed);
+    // Новая строка принадлежит открытой вкладке: иначе она пропала бы с экрана
+    // сразу после появления.
+    const fresh = adapter.withSheet(adapter.emptyRow(columns, seed), sheet);
     // Новая строка встаёт после текущей — так же, как ожидается от вставки из прайса.
     const anchorKey = anchorRef.current?.rowKey;
     const anchorAt = anchorKey ? rows.findIndex((row) => row.__key === anchorKey) : -1;
-    const at = anchorAt >= 0 ? anchorAt + 1 : rows.length;
+    // Без курсора — в конец своей вкладки, а не в конец документа.
+    const lastOfSheet = rows.map((row) => adapter.sheetOf(row)).lastIndexOf(sheet);
+    const fallback = lastOfSheet >= 0 ? lastOfSheet + 1 : rows.length;
+    const at = anchorAt >= 0 ? anchorAt + 1 : fallback;
     setRows([...rows.slice(0, at), fresh, ...rows.slice(at)]);
-  }, [adapter, columns, rows, setRows]);
+  }, [adapter, columns, rows, setRows, sheet]);
 
   // --- Поиск аналогов -------------------------------------------------------
   //
@@ -501,10 +541,11 @@ export const DocumentEditor: React.FC<Props> = ({
   // вставки (решение пользователя 7.1).
   const handleInsertFromPriceList = useCallback((positions: PricePosition[]) => {
     const seed = `price-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const fresh = buildPriceRows(positions, adapter, columns, seed, meta?.coefficient);
+    const fresh = buildPriceRows(positions, adapter, columns, seed, meta?.coefficient)
+      .map((row) => adapter.withSheet(row, sheet));
     setRows(insertRowsAfter(rows, anchorRef.current?.rowKey ?? null, fresh));
     setNotice(`Вставлено позиций из прайса: ${fresh.length}`);
-  }, [adapter, columns, rows, setRows, meta?.coefficient]);
+  }, [adapter, columns, rows, setRows, meta?.coefficient, sheet]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedKeys.size === 0) return;
@@ -618,8 +659,28 @@ export const DocumentEditor: React.FC<Props> = ({
             onVersionsChange={() => load({ ...documentRef, versionId: versionId ?? undefined })}
           />
 
+          {/* Вкладки листов исходного файла. Один лист — полосы нет: у
+              документа, пришедшего из однолистового файла, выбирать нечего. */}
+          {showSheetTabs && (
+            <div className="de-sheets" role="tablist" aria-label="Листы документа">
+              {sheets.map((item) => (
+                <button
+                  key={item.name}
+                  role="tab"
+                  aria-selected={item.name === sheet}
+                  className={`de-sheet${item.name === sheet ? ' de-sheet-active' : ''}`}
+                  onClick={() => setSheet(item.name)}
+                  title={item.name}
+                >
+                  {item.name}
+                  <span className="de-sheet-count">{item.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <EditorToolbar
-            totalCount={rows.length}
+            totalCount={sheetRows.length}
             workCount={counts.work}
             materialCount={counts.material}
             showTabs={showTabs}
@@ -654,7 +715,7 @@ export const DocumentEditor: React.FC<Props> = ({
               documentTitle={title ?? KIND_TITLES[kind] ?? 'Выгрузка'}
               projectName={meta.project.name}
               columns={columnsFromEditor(columns)}
-              rows={rowsFromEditor(rows, columnsFromEditor(columns), adapter.rowKind)}
+              rows={rowsFromEditor(rows, columnsFromEditor(columns), adapter.rowKind, adapter.sheetOf)}
               preselectedIds={selectedKeys}
               onExport={(payload) => exportDocument(
                 documentRef, payload, payload.file_name ?? 'export.xlsx',
@@ -773,9 +834,21 @@ export const DocumentEditor: React.FC<Props> = ({
                 </div>
               )}
               <div className="de-totals-grand">
-                <span>{isSummarySection ? 'ИТОГО по разделу:' : 'ИТОГО:'}</span>
+                <span>
+                  {isSummarySection
+                    ? 'ИТОГО по разделу:'
+                    : showSheetTabs ? `ИТОГО по листу «${sheet}»:` : 'ИТОГО:'}
+                </span>
                 <b>{fmtRub(isSummarySection ? totals.sumWork + totals.sumMat : totals.grand)} ₽</b>
               </div>
+              {/* Сумма контракта — по всему документу, а не по открытой
+                  вкладке: иначе её пришлось бы складывать в уме. */}
+              {documentTotals && (
+                <div className="de-totals-grand de-totals-document">
+                  <span>ВСЕГО по документу:</span>
+                  <b>{fmtRub(documentTotals.grand)} ₽</b>
+                </div>
+              )}
             </div>
           )}
 

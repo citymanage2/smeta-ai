@@ -93,6 +93,63 @@
   flex-shrink: 0;
 }
 
+/* ── Вкладки листов исходного файла ─────────────────────────────────
+   Это другой уровень, чем «Все / Работы / Материалы»: там взгляд на одни и те
+   же строки, здесь — разные разделы документа. Поэтому вид как у ярлыков
+   листов Excel, а не как у фильтров: так их не перепутать. */
+.de-sheets {
+  display: flex;
+  gap: 3px;
+  padding: 7px 12px 0;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  overflow-x: auto;
+}
+
+.de-sheet {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #475569;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-bottom: none;
+  border-radius: 7px 7px 0 0;
+  margin-bottom: -1px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.de-sheet:hover { color: #2563eb; }
+
+.de-sheet-active {
+  color: #0f172a;
+  font-weight: 700;
+  background: #fff;
+  border-color: #e2e8f0;
+}
+
+.de-sheet-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: #cbd5e1;
+  color: #475569;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.de-sheet-active .de-sheet-count { background: #dbeafe; color: #2563eb; }
+
 .de-tabs {
   display: flex;
   border-bottom: 1px solid #e2e8f0;
@@ -354,6 +411,15 @@
 .de-totals-grand b {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #15803d;
+}
+
+/* Сумма по всему документу стоит рядом с итогом листа. Она главнее — это сумма
+   контракта, — но линией их не разделяем: два жирных разделителя подряд
+   читаются как две разные таблицы. */
+.de-totals-document {
+  margin-top: 4px;
+  padding-top: 0;
+  border-top: none;
 }
 
 /* ── Таблица ───────────────────────────────────────────────────────── */

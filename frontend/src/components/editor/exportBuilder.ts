@@ -21,6 +21,11 @@ export interface ExportRow {
   _kind?: 'work' | 'material' | 'section' | null;
   /** Раздел сводной, если выгрузка идёт по нескольким разделам. */
   _section?: string;
+  /**
+   * Лист документа. Сервер раскладывает выгрузку по листам с этими именами —
+   * ключ служебный, чтобы не столкнуться с колонкой файла заказчика.
+   */
+  __sheet?: string | null;
   [field: string]: unknown;
 }
 
@@ -72,9 +77,12 @@ export function rowsFromEditor(
   rows: GridRow[],
   columns: ExportColumn[],
   kindOf: (row: GridRow) => 'work' | 'material' | 'section' | null,
+  sheetOf?: (row: GridRow) => string | null,
 ): ExportRow[] {
   return rows.map((row) => {
     const exported: ExportRow = { _id: row.__key, _kind: kindOf(row) };
+    const sheet = sheetOf?.(row) ?? null;
+    if (sheet !== null) exported.__sheet = sheet;
     for (const column of columns) exported[column.key] = row[column.key] ?? null;
     return exported;
   });

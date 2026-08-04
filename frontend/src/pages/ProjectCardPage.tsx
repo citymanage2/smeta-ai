@@ -125,17 +125,19 @@ const ProjectCardPage: React.FC = () => {
   const showSoft =
     guard.blockType === 'soft' && !stageTask(card, stageForContent) && !softDismissed
 
-  // Версия и вкладка живут в адресе рядом с этапом: скопированная ссылка
+  // Версия и вкладки живут в адресе рядом с этапом: скопированная ссылка
   // должна открыть у коллеги ровно то, что видит отправитель. `replace`, чтобы
   // переключение вкладок не забивало историю браузера.
   const handleEditorState = useCallback(
-    (state: { versionId: string | null; tab: string }) => {
+    (state: { versionId: string | null; tab: string; sheet: string | null }) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev)
         if (state.versionId) next.set('version', state.versionId)
         else next.delete('version')
         if (state.tab && state.tab !== 'all') next.set('tab', state.tab)
         else next.delete('tab')
+        if (state.sheet) next.set('sheet', state.sheet)
+        else next.delete('sheet')
         return next
       }, { replace: true })
     },
@@ -239,6 +241,7 @@ const ProjectCardPage: React.FC = () => {
               title={STAGE_TITLE[stageForContent] ?? card.name}
               initialVersionId={searchParams.get('version') ?? undefined}
               initialTab={(searchParams.get('tab') as EditorTab | null) ?? undefined}
+              initialSheet={searchParams.get('sheet') ?? undefined}
               onStateChange={handleEditorState}
               onApplied={refetch}
             />

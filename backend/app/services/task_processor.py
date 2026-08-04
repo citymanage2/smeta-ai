@@ -2916,6 +2916,10 @@ class TaskProcessor:
                     "name": str(item.get("name", "")).strip(),
                     "unit": item.get("unit", ""),
                     "quantity": item.get("quantity"),
+                    # Лист исходного файла — вкладка документа и лист файла.
+                    # Позиция собирается заново из перечисленных полей, и без
+                    # этой строки она уехала бы с своего раздела в «Прочее».
+                    "sheet": item.get("sheet"),
                     "work_price": None,
                     "material_price": None,
                     "price_list_name": None,
@@ -2961,6 +2965,7 @@ class TaskProcessor:
                     "name": str(item.get("name", "")).strip(),
                     "unit": cr.get("unit") or item.get("unit", ""),
                     "quantity": item.get("quantity"),
+                    "sheet": item.get("sheet"),
                     "work_price": _wp,
                     "material_price": _mp,
                     "price_list_name": "Интернет",
@@ -2973,6 +2978,7 @@ class TaskProcessor:
                     "name": str(item.get("name", "")).strip(),
                     "unit": item.get("unit", ""),
                     "quantity": item.get("quantity"),
+                    "sheet": item.get("sheet"),
                     "work_price": None,
                     "material_price": None,
                     "price_list_name": None,

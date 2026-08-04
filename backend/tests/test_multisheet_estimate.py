@@ -169,6 +169,62 @@ class TestRoundTrip:
         assert grand_again == grand == GRAND_TOTAL
 
 
+class TestStep3KeepsSheets:
+    """Сборка сметы пересобирает позиции заново — лист обязан пережить сборку.
+
+    У шага 3 четыре ветки: цена из прайса (позиция едет как есть), цена от ИИ,
+    цена не определена и вычет. Три последние строят словарь из перечисленных
+    полей, и забытый там лист унёс бы позицию с её раздела в «Прочее».
+    """
+
+    @pytest.mark.asyncio
+    async def test_every_branch_keeps_the_sheet(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.services.task_processor import TaskProcessor
+
+        db = MagicMock()
+        db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+        )
+        db.commit = AsyncMock()
+        processor = TaskProcessor("tid-sheets", db=db)
+        processor.update_progress = AsyncMock(return_value=None)
+        processor.save_result = AsyncMock(return_value=None)
+        processor._save_progress_data = AsyncMock(return_value=None)
+        processor._result_filename = MagicMock(return_value="Смета.xlsx")
+
+        items = [
+            # из прайса
+            {"type": "Работа", "name": "Демонтаж", "unit": "м2", "quantity": 2,
+             "sheet": "Раздел 1"},
+            # цену дал ИИ
+            {"type": "Работа", "name": "Кладка", "unit": "м3", "quantity": 3,
+             "sheet": "Раздел 2"},
+            # цена не определена
+            {"type": "Материал", "name": "Раствор", "unit": "кг", "quantity": 4,
+             "sheet": "Раздел 2"},
+            # вычет
+            {"type": "Работа", "name": "Добавка", "unit": "м2", "quantity": -1,
+             "sheet": "Раздел 3"},
+        ]
+        matched = {0: {**items[0], "work_price": 1000, "price_list_name": "Прайс"}}
+        claude_results = {1: {"id": 1, "type": "Работа", "work_price": 500, "sources": "src"}}
+
+        await processor._run_estimate_step3(MagicMock(), items, matched, claude_results)
+
+        saved = processor._save_progress_data.await_args.args[0]["items"]
+        assert [it.get("sheet") for it in saved] == [
+            "Раздел 1", "Раздел 2", "Раздел 2", "Раздел 3",
+        ]
+
+        # И в файле позиции легли по своим листам, а не в «Прочее».
+        data = processor.save_result.await_args.args[2]
+        assert _wb(data).sheetnames == [
+            "Раздел 1", "Раздел 2", "Раздел 3", SUMMARY_SHEET_TITLE,
+        ]
+
+
 class TestEstimateFromUploadedFile:
     """Path A: смета на основании загруженного Excel."""
 
@@ -238,3 +294,119 @@ class TestEstimateFromUploadedFile:
 
         with pytest.raises(ValueError, match="ни одной позиции"):
             parse_list_sheet(buf.getvalue())
+
+
+class TestOptimizationAcrossSheets:
+    """Оптимизация по ABC работает по всем листам (критерий D3)."""
+
+    def _estimate(self) -> bytes:
+        data, _ = generate_estimate_xlsx(
+            ITEMS, overhead_pct=OVERHEAD_PCT, transport_pct=TRANSPORT_PCT,
+        )
+        return data
+
+    def test_items_of_every_sheet_are_analysed(self):
+        from app.utils.xlsx_optimizer import parse_estimate_xlsx
+
+        items = parse_estimate_xlsx(self._estimate())
+
+        assert {it["sheet"] for it in items} == {"Раздел 1", "Раздел 2"}
+        assert [it["name"] for it in items] == [
+            "Демонтаж стен", "Кирпич", "Кладка", "Раствор",
+        ]
+
+    def test_result_lands_on_its_own_sheet(self):
+        from app.utils.xlsx_optimizer import generate_optimized_xlsx, parse_estimate_xlsx
+
+        data = self._estimate()
+        items = parse_estimate_xlsx(data)
+        # Оптимизируем по одной позиции на каждом листе.
+        results = [
+            {"sheet": it["sheet"], "row_index": it["row_index"], "name": it["name"],
+             "original_price": it["price_incl_vat"], "new_price": 1.0,
+             "source": "поставщик", "savings_abs": 1.0, "savings_pct": 10.0}
+            for it in items if it["name"] in ("Демонтаж стен", "Кладка")
+        ]
+        wb = _wb(generate_optimized_xlsx(data, results))
+
+        for sheet, name in (("Раздел 1", "Демонтаж стен"), ("Раздел 2", "Кладка")):
+            ws = wb[sheet]
+            row = next(
+                r for r in ws.iter_rows(min_row=2)
+                if r[1].value == name
+            )
+            # «Цена сниженная» дописана в первую колонку после исходных.
+            assert any(cell.value == 1.0 for cell in row), sheet
+
+    def test_row_numbers_of_different_sheets_do_not_collide(self):
+        from app.utils.xlsx_optimizer import generate_optimized_xlsx, parse_estimate_xlsx
+
+        data = self._estimate()
+        items = parse_estimate_xlsx(data)
+        second = next(it for it in items if it["sheet"] == "Раздел 2")
+        wb = _wb(generate_optimized_xlsx(data, [{
+            "sheet": second["sheet"], "row_index": second["row_index"],
+            "name": second["name"], "original_price": second["price_incl_vat"],
+            "new_price": 7.0, "source": "поставщик",
+            "savings_abs": 1.0, "savings_pct": 10.0,
+        }]))
+
+        # Результат по «Разделу 2» не должен появиться в «Разделе 1» на строке
+        # с тем же номером.
+        assert all(
+            cell.value != 7.0
+            for row in wb["Раздел 1"].iter_rows() for cell in row
+        )
+        assert any(
+            cell.value == 7.0
+            for row in wb["Раздел 2"].iter_rows() for cell in row
+        )
+
+
+class TestStatementExport:
+    """Выгрузка-ведомость по документу с вкладками (критерий E10)."""
+
+    COLUMNS = [
+        {"key": "name", "label": "Наименование", "numeric": False},
+        {"key": "cost", "label": "Стоимость", "numeric": True},
+    ]
+
+    def test_sheet_per_tab(self):
+        from app.utils.xlsx_statement import generate_statement_xlsx
+
+        rows = [
+            {"_id": "1", "__sheet": "Раздел 1", "name": "Демонтаж", "cost": 100},
+            {"_id": "2", "__sheet": "Раздел 2", "name": "Кладка", "cost": 200},
+        ]
+        wb = _wb(generate_statement_xlsx(self.COLUMNS, rows, title="Ведомость"))
+
+        assert wb.sheetnames == ["Раздел 1", "Раздел 2"]
+
+    def test_each_sheet_has_its_own_total(self):
+        from app.utils.xlsx_statement import generate_statement_xlsx
+
+        rows = [
+            {"_id": "1", "__sheet": "Раздел 1", "name": "Демонтаж", "cost": 100},
+            {"_id": "2", "__sheet": "Раздел 1", "name": "Кладка", "cost": 250},
+            {"_id": "3", "__sheet": "Раздел 2", "name": "Штукатурка", "cost": 200},
+        ]
+        wb = _wb(generate_statement_xlsx(self.COLUMNS, rows, title="Ведомость"))
+
+        def total(ws):
+            for row in ws.iter_rows():
+                if row[0].value == "ИТОГО":
+                    return row[1].value
+            return None
+
+        assert total(wb["Раздел 1"]) == 350
+        assert total(wb["Раздел 2"]) == 200
+
+    def test_document_without_tabs_exports_one_sheet_as_before(self):
+        from app.utils.xlsx_statement import generate_statement_xlsx
+
+        rows = [{"_id": "1", "name": "Демонтаж", "cost": 100}]
+        wb = _wb(generate_statement_xlsx(
+            self.COLUMNS, rows, title="Ведомость", sheet_name="Выгрузка",
+        ))
+
+        assert wb.sheetnames == ["Выгрузка"]

@@ -1,5 +1,5 @@
 /**
- * Ссылка на состояние документа: этап, версия, вкладка.
+ * Ссылка на состояние документа: этап, версия, вкладка, лист.
  *
  * Фаза 12 плана `plans/2026-08-02-edinyy-redaktor-tablic.md`, сверка с критерием
  * приёмки «ссылка вида документ + версия + вкладка открывает ровно то
@@ -82,7 +82,7 @@ describe('состояние документа в ссылке', () => {
     );
 
     await waitFor(() => expect(onStateChange).toHaveBeenCalled());
-    expect(onStateChange).toHaveBeenLastCalledWith({ versionId: 'v1', tab: 'all' });
+    expect(onStateChange).toHaveBeenLastCalledWith({ versionId: 'v1', tab: 'all', sheet: null });
   });
 
   it('смена вкладки уходит наружу — ссылка её сохранит', async () => {
@@ -95,7 +95,7 @@ describe('состояние документа в ссылке', () => {
     fireEvent.click(screen.getByRole("tab", { name: /работы/i }));
 
     await waitFor(() =>
-      expect(onStateChange).toHaveBeenLastCalledWith({ versionId: 'v1', tab: 'works' }));
+      expect(onStateChange).toHaveBeenLastCalledWith({ versionId: 'v1', tab: 'works', sheet: null }));
   });
 
   it('ссылка с версией открывает именно её, а не активную', async () => {

@@ -6,7 +6,10 @@ import {
   GridRow,
   Percentages,
   RowKind,
+  SHEET_KEY,
   estimateWidth,
+  isServiceKey,
+  sheetName,
   toNumber,
 } from './types';
 
@@ -20,6 +23,8 @@ import {
 
 interface GenericStoredRow {
   row_id: string;
+  /** Лист исходного файла — вкладка редактора. Нет поля = документ без вкладок. */
+  sheet?: string | null;
   cells: Record<string, unknown>;
 }
 
@@ -92,6 +97,7 @@ export const genericAdapter: EditorAdapter = {
       if (!isStoredRow(row)) return { __key: `row-${index}` };
       const cells = row.cells ?? {};
       const grid: GridRow = { __key: String(row.row_id ?? `row-${index}`) };
+      grid[SHEET_KEY] = sheetName(row.sheet);
       for (const [key, value] of Object.entries(cells)) {
         if (EXCLUDED_COLUMNS.has(key)) continue;
         grid[key] = value;
@@ -104,17 +110,24 @@ export const genericAdapter: EditorAdapter = {
     return gridRows.map((grid) => {
       const cells: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(grid)) {
-        if (key === '__key') continue;
+        // Служебные ключи — не данные файла: попав в ячейки, лист стал бы
+        // колонкой таблицы и уехал бы в скачиваемый файл.
+        if (isServiceKey(key)) continue;
         cells[key] = value;
       }
-      return { row_id: grid.__key, cells };
+      const sheet = sheetName(grid[SHEET_KEY]);
+      // Документ без вкладок поля не получает — строки остаются такими же, как
+      // до появления многолистовых файлов.
+      return sheet === null
+        ? { row_id: grid.__key, cells }
+        : { row_id: grid.__key, sheet, cells };
     });
   },
 
   columns(gridRows: GridRow[]): EditorColumn[] {
     if (gridRows.length === 0) return [];
     // Порядок колонок берём из первой строки — он совпадает с порядком в файле.
-    const keys = Object.keys(gridRows[0]).filter((k) => k !== '__key');
+    const keys = Object.keys(gridRows[0]).filter((k) => !isServiceKey(k));
     const ordered = [
       ...(keys.includes(TYPE_COL) ? [TYPE_COL] : []),
       ...(keys.includes(NAME_COL) ? [NAME_COL] : []),
@@ -148,7 +161,7 @@ export const genericAdapter: EditorAdapter = {
     if (NAME_COL in row) return String(row[NAME_COL] ?? '');
     // В файле может не быть колонки «Наименование» — тогда ищем по всей строке.
     return Object.entries(row)
-      .filter(([key]) => key !== '__key')
+      .filter(([key]) => !isServiceKey(key))
       .map(([, value]) => String(value ?? ''))
       .join(' ');
   },
@@ -172,7 +185,7 @@ export const genericAdapter: EditorAdapter = {
 
   totals(rows: GridRow[], pct: Percentages): DocumentTotals | null {
     if (rows.length === 0) return null;
-    const keys = Object.keys(rows[0]).filter((k) => k !== '__key');
+    const keys = Object.keys(rows[0]).filter((k) => !isServiceKey(k));
     const costWork = keys.find((k) => matches(k, COST_WORK_KEYWORDS)) ?? null;
     const costMat = keys.find((k) => matches(k, COST_MAT_KEYWORDS)) ?? null;
     if (!costWork && !costMat) return null;
@@ -207,5 +220,13 @@ export const genericAdapter: EditorAdapter = {
     const row: GridRow = { __key: keySeed };
     for (const column of columns) row[column.key] = '';
     return row;
+  },
+
+  sheetOf(row: GridRow): string | null {
+    return sheetName(row[SHEET_KEY]);
+  },
+
+  withSheet(row: GridRow, sheet: string | null): GridRow {
+    return { ...row, [SHEET_KEY]: sheet };
   },
 };

@@ -11,6 +11,27 @@ export interface GridRow {
   [field: string]: unknown;
 }
 
+/**
+ * Лист исходного файла, которому принадлежит строка, — вкладка редактора.
+ *
+ * Ключ служебный (`__`), потому что у плоских документов ключи полей приходят
+ * из шапки файла заказчика, и колонка, честно названная «sheet», иначе стала
+ * бы вкладкой. По той же причине служебные ключи не попадают ни в колонки, ни
+ * в поиск, ни в сохраняемые ячейки.
+ */
+export const SHEET_KEY = '__sheet';
+
+/** Служебное поле строки таблицы — в документ такие ключи не сохраняются. */
+export function isServiceKey(key: string): boolean {
+  return key.startsWith('__');
+}
+
+export function sheetName(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text === '' ? null : text;
+}
+
 export type RowKind = 'work' | 'material' | 'section' | null;
 
 export interface EditorColumn {
@@ -66,6 +87,13 @@ export interface EditorAdapter {
   totals(rows: GridRow[], pct: Percentages): DocumentTotals | null;
   /** Пустая строка для «Добавить строку». */
   emptyRow(columns: EditorColumn[], keySeed: string): GridRow;
+  /**
+   * Лист, которому принадлежит строка. `null` — документ из одного листа, и
+   * вкладок в редакторе нет.
+   */
+  sheetOf(row: GridRow): string | null;
+  /** Поставить строке лист: новая строка попадает на открытую вкладку. */
+  withSheet(row: GridRow, sheet: string | null): GridRow;
   /**
    * Как показать ячейку: деньги — `1 111 111,11`, объём — с запятой, ноль в
    * денежной колонке — пустой ячейкой. `null` — показывать значение как есть.

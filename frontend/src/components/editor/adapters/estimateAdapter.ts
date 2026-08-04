@@ -9,7 +9,9 @@ import {
   GridRow,
   Percentages,
   RowKind,
+  SHEET_KEY,
   estimateWidth,
+  sheetName,
   toNumber,
 } from './types';
 
@@ -105,6 +107,7 @@ export const estimateAdapter: EditorAdapter = {
       const key = String(row.id ?? `row-${index}`);
       const grid: GridRow = { __key: key };
       for (const field of STORED_FIELDS) grid[field] = row[field] ?? null;
+      grid[SHEET_KEY] = sheetName(row.sheet);
       grid.type = TYPE_TO_LABEL[String(row.type ?? '')] ?? row.type ?? '';
 
       // Цены показываются уже с коэффициентом (решение пользователя, Фаза 8).
@@ -126,6 +129,9 @@ export const estimateAdapter: EditorAdapter = {
     return gridRows.map((grid) => {
       const row: Record<string, unknown> = { id: grid.__key };
       for (const field of STORED_FIELDS) row[field] = grid[field] ?? null;
+      // Лист хранится служебным ключом, чтобы не стать колонкой таблицы;
+      // в документ он уходит обычным полем строки.
+      row.sheet = sheetName(grid[SHEET_KEY]);
       row.type = LABEL_TO_TYPE[String(grid.type ?? '')] ?? grid.type ?? 'work';
       row.qty = toNumber(grid.qty);
 
@@ -226,5 +232,13 @@ export const estimateAdapter: EditorAdapter = {
       cost_material: 0,
       selected: false,
     };
+  },
+
+  sheetOf(row: GridRow): string | null {
+    return sheetName(row[SHEET_KEY]);
+  },
+
+  withSheet(row: GridRow, sheet: string | null): GridRow {
+    return { ...row, [SHEET_KEY]: sheet };
   },
 };
