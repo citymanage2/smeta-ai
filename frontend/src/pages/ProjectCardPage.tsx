@@ -7,13 +7,13 @@ import { useKanbanStore, computeGuard } from '../stores/kanban'
 import {
   PipelineStepper,
   PIPELINE_STAGES,
-  computeNodeState,
+  defaultStage,
   stageTask,
 } from '../components/pipeline/PipelineStepper'
 import { CardStageContent } from '../components/kanban/CardStageContent'
 import StageProcessingPanel from '../components/card/StageProcessingPanel'
 import DocumentEditor from '../components/editor/DocumentEditor'
-import { WorkflowCard, KanbanStage } from '../types/workflow'
+import { KanbanStage } from '../types/workflow'
 import { DocumentKind } from '../api/documents'
 import { EditorTab } from '../stores/documentEditor'
 
@@ -30,23 +30,8 @@ const STAGE_TITLE: Record<string, string> = {
   optimization: 'Оптимизация',
 }
 
-// ---------------------------------------------------------------------------
-// Начальный выбранный этап: показываем то, что происходит/требует внимания
-// (идёт → ошибка → первый незапущенный ПОСЛЕ последнего готового → последний
-// готовый). Важно: не открывать пустую форму пропущенного раннего этапа
-// (напр. опциональную «Полноту»), если дальше уже есть завершённые Смета/
-// Оптимизация — иначе готовая смета выглядит незавершённой.
-// ---------------------------------------------------------------------------
-function defaultStage(card: WorkflowCard): KanbanStage {
-  const states = PIPELINE_STAGES.map((s) => ({ s, st: computeNodeState(card, s) }))
-  const running = states.find((x) => x.st === 'run' || x.st === 'error')
-  if (running) return running.s
-  const lastDoneIdx = states.map((x) => x.st).lastIndexOf('done')
-  const wait = states.find((x, i) => x.st === 'wait' && i > lastDoneIdx)
-  if (wait) return wait.s
-  const lastDone = lastDoneIdx >= 0 ? states[lastDoneIdx] : undefined
-  return lastDone?.s ?? card.stage
-}
+// Начальный выбранный этап и стадия, которую показывает строка сметы в списке
+// проекта, считаются одним правилом — `defaultStage` живёт рядом со степпером.
 
 const ProjectCardPage: React.FC = () => {
   const { projectId, cardId } = useParams<{ projectId: string; cardId: string }>()

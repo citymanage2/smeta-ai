@@ -1,43 +1,10 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useKanbanStore } from '../stores/kanban'
-import { WorkflowCard, KanbanStage, TaskBrief } from '../types/workflow'
 import { CreateCardModal } from './kanban/CreateCardModal'
-// Единая палитра состояний стадии — общая с PipelineStepper/строками задач (Фаза 6).
-import { STATE_STYLE, WAITING_STATE } from '../utils/taskStatusView'
-
-const STAGE_LABELS: Record<KanbanStage, string> = {
-  list: 'Перечень',
-  completeness: 'Полнота',
-  estimate: 'Смета',
-  optimization: 'Оптимизация',
-}
-
-function stageTask(card: WorkflowCard): TaskBrief | null {
-  switch (card.stage) {
-    case 'list':
-      return card.list_task
-    case 'completeness':
-      return card.completeness_task
-    case 'estimate':
-      return card.estimate_task
-    case 'optimization':
-      return card.optimization_task
-    default:
-      return null
-  }
-}
-
-function StateBadge({ card }: { card: WorkflowCard }) {
-  const task = stageTask(card)
-  const s = task ? (STATE_STYLE[task.status] ?? WAITING_STATE) : WAITING_STATE
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: s.color, fontWeight: 600 }}>
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.color, display: 'inline-block', flexShrink: 0 }} />
-      {s.label}
-    </span>
-  )
-}
+// Дорожка стадий и правило выбора показываемой стадии — те же, что на странице сметы.
+import { CompactPipeline, defaultStage } from './pipeline/PipelineStepper'
+import { CardStageContent } from './kanban/CardStageContent'
 
 interface Props {
   projectId: string
@@ -124,25 +91,44 @@ export function SmetaList({ projectId, onCardCreated }: Props) {
               <thead>
                 <tr>
                   <th style={headerCellStyle}>Смета</th>
-                  <th style={headerCellStyle}>Этап</th>
-                  <th style={headerCellStyle}>Состояние</th>
+                  <th style={headerCellStyle}>Стадии</th>
                   <th style={{ ...headerCellStyle, textAlign: 'right' }}>Сумма</th>
                 </tr>
               </thead>
               <tbody>
                 {cards.map((card) => (
-                  <tr
-                    key={card.id}
-                    onClick={() => navigate(`/projects/${card.project_id}/cards/${card.id}`)}
-                    style={{ cursor: 'pointer' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f8fafc')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  >
-                    <td style={{ ...cellStyle, fontWeight: 600 }}>{card.name}</td>
-                    <td style={{ ...cellStyle, color: '#475569' }}>{STAGE_LABELS[card.stage]}</td>
-                    <td style={cellStyle}><StateBadge card={card} /></td>
-                    <td style={{ ...cellStyle, textAlign: 'right', color: '#94a3b8' }}>—</td>
-                  </tr>
+                  // Строка целиком не кликабельна: под ней живут раскрывающиеся
+                  // секции с файлами, и общий onClick перехватывал бы их клики.
+                  <React.Fragment key={card.id}>
+                    <tr>
+                      <td style={{ ...cellStyle, borderBottom: 'none', fontWeight: 600, verticalAlign: 'top' }}>
+                        <button
+                          onClick={() => navigate(`/projects/${card.project_id}/cards/${card.id}`)}
+                          title="Открыть смету"
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '5px',
+                            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                            font: 'inherit', color: '#1e293b', fontWeight: 600, textAlign: 'left',
+                          }}
+                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#2563eb' }}
+                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#1e293b' }}
+                        >
+                          {card.name}
+                          <span style={{ color: '#94a3b8', fontSize: '13px' }}>↗</span>
+                        </button>
+                      </td>
+                      <td style={{ ...cellStyle, borderBottom: 'none' }}>
+                        <CompactPipeline card={card} />
+                      </td>
+                      <td style={{ ...cellStyle, borderBottom: 'none', textAlign: 'right', color: '#94a3b8', verticalAlign: 'top' }}>—</td>
+                    </tr>
+                    {/* Те же свёрнутые секции стадий с файлами, что и внутри сметы. */}
+                    <tr>
+                      <td colSpan={3} style={{ padding: '0 16px 14px', borderBottom: '1px solid #f1f5f9' }}>
+                        <CardStageContent card={{ ...card, stage: defaultStage(card) }} />
+                      </td>
+                    </tr>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

@@ -72,14 +72,102 @@ export function nodeProgressCaption(task: TaskBrief | null): string | null {
   return null
 }
 
-function NodeIcon({ state, index }: { state: NodeState; index: number }) {
+/**
+ * Стадия, с которой открывается смета: показываем то, что происходит/требует
+ * внимания (идёт → ошибка → первый незапущенный ПОСЛЕ последнего готового →
+ * последний готовый). Важно: не открывать пустую форму пропущенной ранней
+ * стадии (напр. опциональной «Полноты»), если дальше уже есть завершённые
+ * Смета/Оптимизация — иначе готовая смета выглядит незавершённой.
+ *
+ * Одна функция на страницу сметы и на список смет проекта: обе показывают
+ * контент одной и той же стадии.
+ */
+export function defaultStage(card: WorkflowCard): KanbanStage {
+  const states = PIPELINE_STAGES.map((s) => ({ s, st: computeNodeState(card, s) }))
+  const running = states.find((x) => x.st === 'run' || x.st === 'error')
+  if (running) return running.s
+  const lastDoneIdx = states.map((x) => x.st).lastIndexOf('done')
+  const wait = states.find((x, i) => x.st === 'wait' && i > lastDoneIdx)
+  if (wait) return wait.s
+  const lastDone = lastDoneIdx >= 0 ? states[lastDoneIdx] : undefined
+  return lastDone?.s ?? card.stage
+}
+
+/** `scale` < 1 — для компактной дорожки в строке списка смет (узел 22px вместо 34px). */
+function NodeIcon({ state, index, scale = 1 }: { state: NodeState; index: number; scale?: number }) {
   const c = STATE_STYLE[state]
-  if (state === 'done')  return <Check size={16} color={c.icon} strokeWidth={3} />
-  if (state === 'error') return <AlertTriangle size={15} color={c.icon} />
-  if (state === 'lock')  return <Lock size={13} color={c.icon} />
-  if (state === 'run')   return <Loader2 size={15} color={c.icon} style={{ animation: 'spin 0.9s linear infinite' }} />
+  const px = (base: number) => Math.round(base * scale)
+  if (state === 'done')  return <Check size={px(16)} color={c.icon} strokeWidth={3} />
+  if (state === 'error') return <AlertTriangle size={px(15)} color={c.icon} />
+  if (state === 'lock')  return <Lock size={px(13)} color={c.icon} />
+  if (state === 'run')   return <Loader2 size={px(15)} color={c.icon} style={{ animation: 'spin 0.9s linear infinite' }} />
   // wait
-  return <span style={{ fontSize: '13px', fontWeight: 700, color: c.icon }}>{index + 1}</span>
+  return <span style={{ fontSize: `${px(13)}px`, fontWeight: 700, color: c.icon }}>{index + 1}</span>
+}
+
+// ---------------------------------------------------------------------------
+// CompactPipeline — та же дорожка в строке списка смет проекта.
+// Индикатор, а не навигация: узлы не кликабельны (внутри строки живут
+// раскрывающиеся секции с файлами, и клик по узлу уводил бы с них). Причина
+// блокировки не пишется под узлом, а уходит в title — иначе строка распухает.
+// ---------------------------------------------------------------------------
+export function CompactPipeline({ card }: { card: WorkflowCard }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '4px' }}>
+      {PIPELINE_STAGES.map((stage, i) => {
+        const state = computeNodeState(card, stage)
+        const style = STATE_STYLE[state]
+        const locked = state === 'lock'
+        const lockReason = locked ? computeGuard(card, stage).message : ''
+        const isLast = i === PIPELINE_STAGES.length - 1
+        const caption = locked
+          ? 'Заблокирована'
+          : state === 'run'
+          ? (nodeProgressCaption(stageTask(card, stage)) ?? style.caption)
+          : style.caption
+
+        return (
+          <React.Fragment key={stage}>
+            <div
+              title={locked ? `${STAGE_LABELS[stage]}: ${lockReason}` : `${STAGE_LABELS[stage]}: ${style.caption}`}
+              style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                gap: '4px', minWidth: 62,
+              }}
+            >
+              <span
+                style={{
+                  width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: style.fill,
+                  border: `2px solid ${style.ring}`,
+                }}
+              >
+                <NodeIcon state={state} index={i} scale={0.75} />
+              </span>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: style.label, lineHeight: 1.2, textAlign: 'center' }}>
+                {STAGE_LABELS[stage]}
+              </span>
+              {caption && (
+                <span style={{ fontSize: '10px', color: '#94a3b8', lineHeight: 1.2, textAlign: 'center' }}>
+                  {caption}
+                </span>
+              )}
+            </div>
+
+            {!isLast && (
+              <div
+                style={{
+                  flex: '0 0 auto', width: 16, height: 2, marginTop: 10, borderRadius: 1,
+                  background: state === 'done' ? '#10b981' : '#e2e8f0',
+                }}
+              />
+            )}
+          </React.Fragment>
+        )
+      })}
+    </div>
+  )
 }
 
 interface Props {
