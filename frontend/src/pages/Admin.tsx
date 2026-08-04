@@ -244,6 +244,27 @@ export const HealthPanel: React.FC = () => {
                       `, подобрано брошенных задач: ${queue.worker_restarts.requeued}`}
                   </div>
                 )}
+                {/* Ответы 429 «слишком часто». Тревожим только по свежим: вчерашние
+                    429 — история, а не текущая проблема. Ноль за сутки — важный
+                    ответ сам по себе: значит лишние ключи API ничего не дадут. */}
+                {queue.api_rate_limits && (
+                  <div
+                    data-testid="api-rate-limits"
+                    style={{
+                      fontSize: '12px',
+                      marginTop: '4px',
+                      color: queue.api_rate_limits.hits_1h > 0 ? '#b45309' : '#64748b',
+                      fontWeight: queue.api_rate_limits.hits_1h > 0 ? 600 : 400,
+                    }}
+                  >
+                    Ограничения API (429): {queue.api_rate_limits.hits_1h} за час,{' '}
+                    {queue.api_rate_limits.hits_24h} за сутки
+                    {queue.api_rate_limits.max_wait_s_24h !== null &&
+                      `, дольше всего ждали ${Math.round(queue.api_rate_limits.max_wait_s_24h)} с`}
+                    {` (последний ${formatAge(queue.api_rate_limits.last_age_s)} назад, `}
+                    {queue.api_rate_limits.via_proxy ? 'через посредника)' : 'напрямую)'}
+                  </div>
+                )}
               </div>
             );
           })()}

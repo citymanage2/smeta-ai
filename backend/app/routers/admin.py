@@ -1129,6 +1129,23 @@ class WorkerRestartsInfo(BaseModel):
     requeued: Optional[int]  # сколько job подобрал за упавшим предшественником
 
 
+class ApiRateLimitsInfo(BaseModel):
+    """Сколько раз API ответил 429 «слишком часто».
+
+    Отвечает на вопрос, который иначе решается гаданием: упираемся ли мы в лимит
+    ключа или в процессор машины. Лимиты Anthropic считаются на организацию, а не
+    на ключ, поэтому ноль здесь означает, что дополнительные ключи ничего не дадут
+    и параллельность надо искать в другом месте
+    (plans/2026-08-04-schetchik-429-v-adminke.md).
+    """
+
+    hits_1h: int
+    hits_24h: int
+    last_age_s: Optional[float]
+    max_wait_s_24h: Optional[float]  # самое долгое ожидание из-за лимита за сутки
+    via_proxy: bool  # шли через посредника — тогда лимит может быть его, а не Anthropic
+
+
 class QueueHealthResponse(BaseModel):
     checked_at: datetime
     counts: QueueCounts
@@ -1140,6 +1157,7 @@ class QueueHealthResponse(BaseModel):
     db_connections: Optional[DbConnectionsInfo] = None
     worker_memory: Optional[WorkerMemoryInfo] = None
     worker_restarts: Optional[WorkerRestartsInfo] = None
+    api_rate_limits: Optional[ApiRateLimitsInfo] = None
 
 
 def _age_s(dt, now: datetime) -> Optional[float]:
@@ -1253,6 +1271,56 @@ async def _worker_restarts(db: AsyncSession, now: datetime) -> Optional[WorkerRe
     )
 
 
+async def _api_rate_limits(db: AsyncSession, now: datetime) -> Optional[ApiRateLimitsInfo]:
+    """Ответы 429 за час и за сутки. None — таких ответов не было вовсе.
+
+    Суммируем в Python, а не в SQL: разбирать JSON-поля переносимо между
+    PostgreSQL и SQLite (тесты) нельзя, а строк здесь мало по построению — после
+    каждого 429 клиент спит минимум 60 с, и одновременных вызовов не больше
+    ANTHROPIC_MAX_CONCURRENCY.
+    """
+    from app.models.system_event import KIND_API_RATE_LIMITED, SystemEvent
+
+    day_ago = now - timedelta(hours=24)
+    rows = (
+        await db.execute(
+            select(SystemEvent.payload, SystemEvent.created_at)
+            .where(
+                SystemEvent.kind == KIND_API_RATE_LIMITED,
+                SystemEvent.created_at >= day_ago,
+            )
+            # По времени, а не по id: события пишут несколько процессов, и
+            # порядок вставки не обязан совпадать с порядком событий. Для
+            # «последнего 429» врать здесь нельзя — это ответ на вопрос
+            # «упираемся ли мы в лимит прямо сейчас».
+            .order_by(SystemEvent.created_at.desc(), SystemEvent.id.desc())
+        )
+    ).all()
+    if not rows:
+        return None
+
+    hits_1h = 0
+    max_wait: Optional[float] = None
+    for payload, created_at in rows:
+        # Через _age_s, а не сравнением дат: SQLite отдаёт naive-время, и прямое
+        # сравнение с aware-датой упало бы.
+        age = _age_s(created_at, now)
+        if age is not None and age <= 3600:
+            hits_1h += 1
+        wait = (payload or {}).get("wait_s")
+        if wait is not None:
+            max_wait = float(wait) if max_wait is None else max(max_wait, float(wait))
+
+    latest_payload, latest_at = rows[0]
+    return ApiRateLimitsInfo(
+        hits_1h=hits_1h,
+        hits_24h=len(rows),
+        last_age_s=_age_s(latest_at, now),
+        max_wait_s_24h=max_wait,
+        via_proxy=bool((latest_payload or {}).get("via_proxy")),
+    )
+
+
 @router.get("/queue-health", response_model=QueueHealthResponse)
 async def queue_health(
     db: AsyncSession = Depends(get_db),
@@ -1334,6 +1402,17 @@ async def queue_health(
             "заново (память или платформа), и тогда цифры памяти ниже важны."
         )
 
+    # Упор в лимит API выглядит как «задачи ползут», и без этой строки его не
+    # отличить от нехватки процессора. Тревожим только по свежим событиям:
+    # вчерашние 429 — история, а не текущая проблема.
+    rate_limits = await _api_rate_limits(db, now)
+    if rate_limits is not None and rate_limits.hits_1h > 0:
+        whose = "посредника" if rate_limits.via_proxy else "Anthropic"
+        hint += (
+            f" API отвечал 429 «слишком часто» {rate_limits.hits_1h} раз(а) за час — "
+            f"мы упираемся в лимит {whose}, и задачи ждут вместо счёта."
+        )
+
     return QueueHealthResponse(
         checked_at=now,
         counts=counts,
@@ -1345,6 +1424,7 @@ async def queue_health(
         db_connections=await _db_connections(db),
         worker_memory=await _worker_memory(db, now),
         worker_restarts=restarts,
+        api_rate_limits=rate_limits,
     )
 
 

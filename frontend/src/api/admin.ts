@@ -155,6 +155,17 @@ export interface QueueHealth {
     rss_mb: number | null;
     requeued: number | null;
   } | null;
+  // Ответы 429 «слишком часто» от API. Отвечает на вопрос, упираемся ли мы в лимит
+  // ключа или в процессор машины: лимиты Anthropic считаются на организацию, а не
+  // на ключ, поэтому ноль здесь означает, что лишние ключи ничего не дадут.
+  // null — таких ответов не было вовсе.
+  api_rate_limits: {
+    hits_1h: number;
+    hits_24h: number;
+    last_age_s: number | null;
+    max_wait_s_24h: number | null;
+    via_proxy: boolean;
+  } | null;
 }
 
 export async function getApiHealth(): Promise<ApiHealth> {

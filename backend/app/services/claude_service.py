@@ -243,6 +243,55 @@ async def _log_api_call(
     except Exception as log_err:
         logger.warning("Failed to log API call", error=str(log_err))
 
+async def _record_rate_limit(
+    e: "anthropic.RateLimitError",
+    *,
+    wait_s: float,
+    attempt: int,
+    rate_limit_count: int,
+) -> None:
+    """Записать ответ 429 в `system_events`, чтобы он был виден в админке.
+
+    Раньше 429 уходил только в лог контейнера: пользователю он недоступен, и на
+    вопрос «упираемся ли мы в лимит ключа» ответить было нечем — ровно та же
+    слепота, из-за которой спор о параллельности 29–30.07.2026 два дня шёл без
+    цифр. `via_proxy` здесь важнее прочего: лимит посредника и лимит Anthropic
+    лечатся по-разному (второй ключ у агрегатора против тарифа выше).
+
+    Никогда не бросает: диагностика не важнее самой работы.
+    """
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.system_event import KIND_API_RATE_LIMITED, SystemEvent
+
+        raw = (
+            e.response.headers.get("retry-after")
+            if getattr(e, "response", None) is not None
+            else None
+        )
+        try:
+            retry_after_s = float(raw) if raw else None
+        except (TypeError, ValueError):
+            retry_after_s = None
+
+        async with AsyncSessionLocal() as db:
+            db.add(
+                SystemEvent(
+                    kind=KIND_API_RATE_LIMITED,
+                    payload={
+                        "wait_s": round(float(wait_s), 1),
+                        "attempt": attempt,
+                        "rate_limit_count": rate_limit_count,
+                        "retry_after_s": retry_after_s,
+                        "via_proxy": bool(settings.ANTHROPIC_BASE_URL),
+                    },
+                )
+            )
+            await db.commit()
+    except Exception as err:  # noqa: BLE001 — диагностика не важнее самой работы
+        logger.warning("Rate limit event not recorded", error=str(err))
+
+
 # Seconds to wait after a 429 when the API does not send a retry-after header.
 DEFAULT_RATE_LIMIT_DELAY = 60
 
@@ -545,6 +594,13 @@ async def call_claude(
                 api_retry_after=api_retry_after,
                 actual_wait=wait,
                 error=str(e) or repr(e),
+            )
+
+            # В админку — чтобы «упираемся в лимит» перестало быть догадкой.
+            # Строго после проверки баланса выше: посредник присылает «нет денег»
+            # под видом 429, и такие ответы счётчик лимита завысили бы.
+            await _record_rate_limit(
+                e, wait_s=wait, attempt=attempt, rate_limit_count=rate_limit_count
             )
 
             if on_rate_limit_wait is not None:

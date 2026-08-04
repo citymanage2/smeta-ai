@@ -37,7 +37,10 @@ const API_OK = {
   hint: 'API доступен.',
 }
 
-function queueHealth(restarts: QueueHealth['worker_restarts']): QueueHealth {
+function queueHealth(
+  restarts: QueueHealth['worker_restarts'],
+  rateLimits: QueueHealth['api_rate_limits'] = null
+): QueueHealth {
   return {
     checked_at: new Date().toISOString(),
     counts: { queued: 0, running: 1, done: 5, failed: 0 },
@@ -49,6 +52,7 @@ function queueHealth(restarts: QueueHealth['worker_restarts']): QueueHealth {
     db_connections: null,
     worker_memory: null,
     worker_restarts: restarts,
+    api_rate_limits: rateLimits,
   }
 }
 
@@ -140,5 +144,61 @@ describe('Диагностика: перезапуски обработчика'
     const line = await screen.findByTestId('worker-restarts')
     expect(line).toHaveTextContent('слотов 4')
     expect(line.textContent).not.toContain('лимит памяти')
+  })
+})
+
+describe('Диагностика: ограничения API (429)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getApiHealth.mockResolvedValue(API_OK)
+  })
+
+  it('свежие 429 выделены — это текущая проблема, а не история', async () => {
+    getQueueHealth.mockResolvedValue(
+      queueHealth(null, {
+        hits_1h: 7,
+        hits_24h: 21,
+        last_age_s: 120,
+        max_wait_s_24h: 240,
+        via_proxy: true,
+      })
+    )
+
+    await check()
+
+    const line = await screen.findByTestId('api-rate-limits')
+    expect(line).toHaveTextContent('7 за час')
+    expect(line).toHaveTextContent('21 за сутки')
+    expect(line).toHaveTextContent('дольше всего ждали 240 с')
+    expect(line).toHaveTextContent('через посредника')
+    expect(line).toHaveStyle({ color: 'rgb(180, 83, 9)' })
+  })
+
+  it('вчерашние 429 показаны спокойно — упора в лимит сейчас нет', async () => {
+    getQueueHealth.mockResolvedValue(
+      queueHealth(null, {
+        hits_1h: 0,
+        hits_24h: 3,
+        last_age_s: 36000,
+        max_wait_s_24h: 60,
+        via_proxy: false,
+      })
+    )
+
+    await check()
+
+    const line = await screen.findByTestId('api-rate-limits')
+    expect(line).toHaveTextContent('0 за час')
+    expect(line).toHaveTextContent('напрямую')
+    expect(line).toHaveStyle({ color: 'rgb(100, 116, 139)' })
+  })
+
+  it('429 не было вовсе — строки нет', async () => {
+    getQueueHealth.mockResolvedValue(queueHealth(null, null))
+
+    await check()
+
+    await waitFor(() => expect(screen.getByText('Очередь движется штатно.')).toBeInTheDocument())
+    expect(screen.queryByTestId('api-rate-limits')).toBeNull()
   })
 })
