@@ -35,8 +35,12 @@ _COLNUM_ROW = re.compile(r"^\d{1,2}$")
 _COMPONENT_ROW = re.compile(r"^\d+\s+(ОТ|ЭМ|М|ОТм|в т\.ч\.)", re.IGNORECASE)
 # Нормативные коды расценок (ФЕР, ТЕР, ГЭСН и т.п.) — строки-наименования позиций
 _NORM_CODE = re.compile(r"^(фер|тер|гэсн|фсн|фснб|пр/|ерер|гэснр|фсем)", re.IGNORECASE)
-# Заголовки разделов/глав сметы
-_SECTION_HEADER = re.compile(r"^(раздел|глава|отдел|часть|узел|блок)\s", re.IGNORECASE)
+# Заголовки разделов/глав сметы.
+# Слов «блок», «узел», «часть», «отдел» здесь быть не должно: с них начинаются
+# наименования материалов («Блок дверной деревянный…», «Узел учёта»), и такая
+# позиция уезжала в перечень заголовком раздела — без единицы, без объёма и с
+# прямым указанием промпта «заголовки разделов пропускай». Материал исчезал.
+_SECTION_HEADER = re.compile(r"^(раздел|подраздел|глава)\s", re.IGNORECASE)
 
 
 def _col_score(header: str, keywords: list[str]) -> int:
@@ -202,7 +206,9 @@ def parse_xlsx_grand(data: bytes) -> "list[dict]":
                 if unit_lower in ("челч", "чч", "мчч", "машч"):
                     continue
 
-                is_section = bool(_SECTION_HEADER.match(name))
+                # Заголовок раздела не имеет ни единицы измерения, ни объёма.
+                # Строка с ними — позиция сметы, как бы она ни называлась.
+                is_section = bool(_SECTION_HEADER.match(name)) and not unit and qty is None
                 rows.append({"name": name, "unit": unit, "quantity": qty, "is_section": is_section})
         else:
             # Fallback: не нашли заголовок — берём все непустые строки,
