@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X, Trash2 } from 'lucide-react';
-import Layout from '../components/Layout';
+import Layout, { MAIN_PADDING_TOP } from '../components/Layout';
 import { PageLoader } from '../components/ui/LumaSpin';
 import { ProjectDetail as IProjectDetail, TaskBrief, TASK_TYPE_LABELS, ESTIMATE_TASK_TYPES } from '../types';
 import { getProject, updateProject, deleteProject } from '../api/projects';
@@ -421,11 +421,13 @@ const ProjectDetailPage: React.FC = () => {
             alignItems: 'center',
             gap: '8px',
             position: 'sticky',
-            top: 0,
+            // Минус отступ main: sticky считает от content edge, а видимая
+            // граница проходит по padding edge — см. MAIN_PADDING_TOP.
+            top: -MAIN_PADDING_TOP,
             zIndex: 30,
             backgroundColor: '#f8fafc',
-            paddingTop: '4px',
-            paddingBottom: '16px',
+            paddingTop: '10px',
+            paddingBottom: '12px',
           }}
         >
           {([['smeta', 'Сметы'], ['kanban', 'Канбан'], ['tasks', 'Задачи']] as const).map(([mode, label]) => (
@@ -451,7 +453,7 @@ const ProjectDetailPage: React.FC = () => {
         {viewMode === 'smeta' ? (
           <SmetaList
             projectId={project.id}
-            stickyTop={switcherHeight}
+            stickyTop={switcherHeight - MAIN_PADDING_TOP}
             onCardCreated={() => setViewMode('kanban')}
           />
         ) : viewMode === 'kanban' ? (

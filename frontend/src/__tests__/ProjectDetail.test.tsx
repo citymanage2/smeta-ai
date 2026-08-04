@@ -78,6 +78,7 @@ vi.mock('../utils/notificationSound', () => ({
 import { getProject } from '../api/projects';
 import { EstimationStatus } from '../types';
 import ProjectDetailPage from '../pages/ProjectDetail';
+import { MAIN_PADDING_TOP } from '../components/Layout';
 
 const TASK_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
@@ -230,5 +231,27 @@ describe('ProjectDetail — Bug 3 → Фаза 6: единый статус (с�
     expect(screen.queryByText(/рассчитана/)).toBeNull();
     expect(screen.queryByText(/оптимизирована/)).toBeNull();
     expect(screen.getByText('Готово')).toBeInTheDocument();
+  });
+});
+
+describe('ProjectDetail — закреплённый переключатель вида', () => {
+  beforeEach(() => {
+    vi.mocked(getProject).mockResolvedValue(makeProject());
+  });
+
+  it('вычитает верхний отступ окна прокрутки из top', async () => {
+    render(
+      <MemoryRouter>
+        <ProjectDetailPage />
+      </MemoryRouter>
+    );
+
+    const switcher = (await screen.findByText('Канбан')).parentElement as HTMLElement;
+
+    expect(switcher.style.position).toBe('sticky');
+    // Без вычитания MAIN_PADDING_TOP шапка прилипает на 32px ниже видимой
+    // границы, и в этой полосе видно уезжающие строки: sticky отсчитывается
+    // от content edge, а overflow обрезает по padding edge.
+    expect(switcher.style.top).toBe(`-${MAIN_PADDING_TOP}px`);
   });
 });
