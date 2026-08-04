@@ -5,18 +5,24 @@ import { CreateCardModal } from './kanban/CreateCardModal'
 // Дорожка стадий и правило выбора показываемой стадии — те же, что на странице сметы.
 import { CompactPipeline, defaultStage } from './pipeline/PipelineStepper'
 import { CardStageContent } from './kanban/CardStageContent'
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight'
 
 interface Props {
   projectId: string
   /** Вызывается после создания сметы — родитель переключает вид на канбан,
    *  где отложенный файл перечня подхватывается и запускается (Фаза 3 уберёт этот прыжок). */
   onCardCreated: () => void
+  /** Сколько пикселей сверху уже занято закреплёнными шапками родителя
+   *  (переключатель вида). Шапки списка прилипают ниже этой отметки. */
+  stickyTop?: number
 }
 
-export function SmetaList({ projectId, onCardCreated }: Props) {
+export function SmetaList({ projectId, onCardCreated, stickyTop = 0 }: Props) {
   const { cards, loading, fetchCards } = useKanbanStore()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const navigate = useNavigate()
+  // Заголовок таблицы прилипает под строкой «Сметы (N)» — её высоту меряем.
+  const { ref: titleRef, height: titleHeight } = useMeasuredHeight<HTMLDivElement>()
 
   // Поллинг через тот же стор, что и канбан — данные не дублируются.
   useEffect(() => {
@@ -51,7 +57,13 @@ export function SmetaList({ projectId, onCardCreated }: Props) {
     fontWeight: 600,
     color: '#94a3b8',
     padding: '10px 16px',
-    borderBottom: '1px solid #e2e8f0',
+    // Закреплённая ячейка: при borderCollapse рамка отрывается от th, поэтому
+    // нижняя линия нарисована тенью — она едет вместе с шапкой.
+    boxShadow: 'inset 0 -1px 0 #e2e8f0',
+    position: 'sticky',
+    top: stickyTop + titleHeight,
+    zIndex: 10,
+    backgroundColor: '#fff',
   }
 
   const cellStyle: React.CSSProperties = {
@@ -64,7 +76,19 @@ export function SmetaList({ projectId, onCardCreated }: Props) {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+      <div
+        ref={titleRef}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          position: 'sticky',
+          top: stickyTop,
+          zIndex: 20,
+          backgroundColor: '#f8fafc',
+          paddingBottom: '12px',
+        }}
+      >
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#1e293b', margin: 0 }}>
           Сметы ({cards.length})
         </h2>
@@ -85,14 +109,17 @@ export function SmetaList({ projectId, onCardCreated }: Props) {
           Смет в проекте пока нет. Нажмите «+ Добавить смету».
         </div>
       ) : (
-        <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
-          <div style={{ overflowX: 'auto' }}>
+        // Ни overflow: hidden, ни overflowX: auto здесь быть не может: любой из
+        // них делает карточку своим окном прокрутки, и заголовок таблицы
+        // перестаёт прилипать к верху страницы. Скруглённые углы шапки
+        // рисуются на самих ячейках.
+        <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr>
-                  <th style={headerCellStyle}>Смета</th>
+                  <th style={{ ...headerCellStyle, borderTopLeftRadius: '12px' }}>Смета</th>
                   <th style={headerCellStyle}>Стадии</th>
-                  <th style={{ ...headerCellStyle, textAlign: 'right' }}>Сумма</th>
+                  <th style={{ ...headerCellStyle, textAlign: 'right', borderTopRightRadius: '12px' }}>Сумма</th>
                 </tr>
               </thead>
               <tbody>
@@ -132,7 +159,6 @@ export function SmetaList({ projectId, onCardCreated }: Props) {
                 ))}
               </tbody>
             </table>
-          </div>
         </div>
       )}
 

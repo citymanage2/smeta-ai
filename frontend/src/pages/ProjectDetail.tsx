@@ -13,6 +13,7 @@ import { KanbanBoard } from '../components/kanban/KanbanBoard';
 import { SmetaList } from '../components/SmetaList';
 import { StageStateBadge } from '../components/StageStateBadge';
 import ProjectSettingsPanel from '../components/ProjectSettingsPanel';
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 
 function formatCost(cost: number): string {
   return cost.toLocaleString('ru-RU') + ' ₽';
@@ -170,6 +171,8 @@ const ProjectDetailPage: React.FC = () => {
   const [optimizingTaskId, setOptimizingTaskId] = useState<string | null>(null);
   const [historyTaskId, setHistoryTaskId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'smeta' | 'kanban' | 'tasks'>('smeta');
+  // Высота закреплённого переключателя вида: с неё начинается «этаж» шапок ниже.
+  const { ref: switcherRef, height: switcherHeight } = useMeasuredHeight<HTMLDivElement>();
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -409,8 +412,22 @@ const ProjectDetailPage: React.FC = () => {
           )}
         </div>
 
-        {/* Переключатель вида */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+        {/* Переключатель вида — прилипает к верху окна при прокрутке.
+            Под ним по этажам встают шапки списка смет (см. useMeasuredHeight). */}
+        <div
+          ref={switcherRef}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            position: 'sticky',
+            top: 0,
+            zIndex: 30,
+            backgroundColor: '#f8fafc',
+            paddingTop: '4px',
+            paddingBottom: '16px',
+          }}
+        >
           {([['smeta', 'Сметы'], ['kanban', 'Канбан'], ['tasks', 'Задачи']] as const).map(([mode, label]) => (
             <button
               key={mode}
@@ -432,7 +449,11 @@ const ProjectDetailPage: React.FC = () => {
         </div>
 
         {viewMode === 'smeta' ? (
-          <SmetaList projectId={project.id} onCardCreated={() => setViewMode('kanban')} />
+          <SmetaList
+            projectId={project.id}
+            stickyTop={switcherHeight}
+            onCardCreated={() => setViewMode('kanban')}
+          />
         ) : viewMode === 'kanban' ? (
           <KanbanBoard projectId={project.id} />
         ) : (
