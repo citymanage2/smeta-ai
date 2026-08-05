@@ -65,3 +65,33 @@ describe('подсветка комплекта материалов', () => {
     expect(css).toContain('de-row-kit-mismatch');
   });
 });
+
+describe('подсветка комплекта в смете', () => {
+  it('строка комплекта видна и после перехода в смету', async () => {
+    const { estimateAdapter } = await import('../components/editor/adapters/estimateAdapter');
+    const css = estimateAdapter.rowClass?.({
+      __key: 'm1', type: 'Материал', name: 'Лист гипсоволокнистый ГВЛ 12,5 мм',
+      qty: 21.9, price_material: 420,
+      notes: 'Добавлено по норме: 5,475 × 4 (2 слоя × 2 стороны) = 21,9 м2.',
+    });
+    expect(css).toContain('de-row-kit-added');
+  });
+
+  it('расхождение объёма видно и в смете', async () => {
+    const { estimateAdapter } = await import('../components/editor/adapters/estimateAdapter');
+    const css = estimateAdapter.rowClass?.({
+      __key: 'm2', type: 'Материал', name: 'Листы гипсоволокнистые', qty: 5.475,
+      notes: 'Расхождение с нормой: по норме 21,9 м2, в файле 5,475 м2 — проверьте.',
+    });
+    expect(css).toContain('de-row-kit-mismatch');
+  });
+
+  it('обычная строка сметы не подсвечивается комплектом', async () => {
+    const { estimateAdapter } = await import('../components/editor/adapters/estimateAdapter');
+    const css = estimateAdapter.rowClass?.({
+      __key: 'm3', type: 'Материал', name: 'Щебень', qty: 39.096,
+      notes: 'Соответствует норме',
+    });
+    expect(css ?? '').not.toContain('de-row-kit');
+  });
+});

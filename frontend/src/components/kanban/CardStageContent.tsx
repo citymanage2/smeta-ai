@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertTriangle, ChevronDown, ChevronUp, Download, Edit3, Eye, FileText } from 'lucide-react'
-import { TaskBrief, WorkflowCard } from '../../types/workflow'
+import { KanbanStage, TaskBrief, WorkflowCard } from '../../types/workflow'
 import { describeEta } from '../../utils/eta'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
@@ -20,6 +20,10 @@ import { LumaSpin } from '../ui/LumaSpin'
 import { ProgressCounter } from './ProgressCounter'
 import { UNIFIED_EDITOR_TASK_TYPES } from '../../types'
 import { kindFromTaskType } from '../../api/documents'
+import UsageChips from '../card/UsageChips'
+import { stageUsage } from '../../utils/usageMetrics'
+// Соответствие «стадия → задача» одно на весь проект — живёт рядом со степпером.
+import { stageTask } from '../pipeline/PipelineStepper'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -283,30 +287,79 @@ function SectionLabel({ color, children }: { color: string; children: React.Reac
 // CollapsibleSection — предыдущие стадии внутри карточки
 // ---------------------------------------------------------------------------
 function CollapsibleSection({
-  color, label, defaultExpanded = true, children,
+  color, label, defaultExpanded = true, task, children,
 }: {
   color: string
   label: string
   defaultExpanded?: boolean
+  /** Задача стадии: её затраты показываются справа в заголовке секции. */
+  task?: TaskBrief | null
   children: React.ReactNode
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const usage = stageUsage(task?.usage)
   return (
     <div style={{ marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #f1f5f9' }}>
       <button
         onClick={() => setExpanded(e => !e)}
         style={{
-          display: 'flex', alignItems: 'center', gap: '4px', width: '100%',
+          display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
           background: 'none', border: 'none', cursor: 'pointer',
           padding: '0 0 4px', marginBottom: expanded ? '4px' : 0,
         }}
       >
-        <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color, flex: 1, textAlign: 'left' }}>
+        <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color, textAlign: 'left' }}>
           {label}
+        </span>
+        {/* Затраты стадии — рядом с её названием: цифра нужна там, где на неё
+            смотрят, а не на отдельном экране. */}
+        <span style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', minWidth: 0 }}>
+          <UsageChips usage={usage} />
         </span>
         {expanded ? <ChevronUp size={11} color="#94a3b8" /> : <ChevronDown size={11} color="#94a3b8" />}
       </button>
       {expanded && children}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// CurrentStageUsage — затраты стадии, которую показывает карточка
+// ---------------------------------------------------------------------------
+const STAGE_LABEL: Record<KanbanStage, string> = {
+  list: 'Перечень',
+  completeness: 'Полнота',
+  estimate: 'Смета',
+  optimization: 'Оптимизация',
+}
+
+const STAGE_COLOR: Record<KanbanStage, string> = {
+  list: '#7c3aed',
+  completeness: '#3b82f6',
+  estimate: '#0f766e',
+  optimization: '#c2410c',
+}
+
+function CurrentStageUsage({ card }: { card: WorkflowCard }) {
+  const task = stageTask(card, card.stage)
+  const usage = stageUsage(task?.usage)
+  if (!usage.hasData) return null
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'baseline', gap: '8px',
+        marginTop: '10px', paddingTop: '8px', borderTop: '1px solid #f1f5f9',
+      }}
+    >
+      <span style={{
+        fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+        letterSpacing: '0.05em', color: STAGE_COLOR[card.stage],
+      }}>
+        {STAGE_LABEL[card.stage]}
+      </span>
+      <span style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', minWidth: 0 }}>
+        <UsageChips usage={usage} />
+      </span>
     </div>
   )
 }
@@ -459,6 +512,7 @@ function InputFilesSection({
 // ---------------------------------------------------------------------------
 function ResultFilesSection({
   stage,
+  task,
   taskId,
   navigateToCard,
   onOpenEditor,
@@ -469,6 +523,8 @@ function ResultFilesSection({
   footer,
 }: {
   stage: StageDetail
+  /** Задача стадии — из неё берутся затраты для заголовка секции. */
+  task?: TaskBrief | null
   taskId: string
   navigateToCard: () => void
   onOpenEditor: (state: EditorModalState) => void
@@ -480,7 +536,7 @@ function ResultFilesSection({
   footer?: React.ReactNode
 }) {
   return (
-    <CollapsibleSection color={color} label={label} defaultExpanded={defaultExpanded}>
+    <CollapsibleSection color={color} label={label} defaultExpanded={defaultExpanded} task={task}>
       {stage.result_files.length > 0 ? (
         stage.result_files.map(f => (
           <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -815,7 +871,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 
       {/* Перечень */}
       {listTask !== null && listTask.status === 'completed' && (
-        <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning}>
+        <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning} task={listTask}>
           {sourceStage && sourceStage.result_files.length > 0 ? (
             sourceStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -1014,7 +1070,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
 
       {/* Перечень */}
       {listTask !== null && listTask.status === 'completed' && (
-        <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning}>
+        <CollapsibleSection color="#7c3aed" label={listTypeLabel} defaultExpanded={!!listEditedWarning} task={listTask}>
           {sourceMetaStage && sourceMetaStage.result_files.length > 0 ? (
             sourceMetaStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -1050,7 +1106,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
 
       {/* Полнота (если есть) */}
       {completenessTask !== null && completenessTask.status === 'completed' && (
-        <CollapsibleSection color="#3b82f6" label="Полнота" defaultExpanded={!!completenessEditedWarning}>
+        <CollapsibleSection color="#3b82f6" label="Полнота" defaultExpanded={!!completenessEditedWarning} task={completenessTask}>
           {completenessMetaStage && completenessMetaStage.result_files.length > 0 ? (
             completenessMetaStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -1316,6 +1372,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
       {hasSourcePipeline && sourceMetaStage && (
         <ResultFilesSection
           stage={sourceMetaStage}
+          task={listTask}
           taskId={listTask!.id}
           navigateToCard={navigateToCard}
           onOpenEditor={onOpenEditor}
@@ -1330,6 +1387,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
       {completenessTask && completenessTask.status === 'completed' && completenessMetaStage && (
         <ResultFilesSection
           stage={completenessMetaStage}
+          task={completenessTask}
           taskId={completenessTask.id}
           navigateToCard={navigateToCard}
           onOpenEditor={onOpenEditor}
@@ -1344,6 +1402,7 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
       {hasEstimateSection && (
         <ResultFilesSection
           stage={estimateMetaStage!}
+          task={estimateTask}
           taskId={estimateTask!.id}
           navigateToCard={navigateToCard}
           onOpenEditor={onOpenEditor}
@@ -1482,6 +1541,13 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
           default:             return null
         }
       })()}
+
+      {/* Затраты текущей стадии. У предыдущих стадий цифры стоят в заголовках их
+          свёрнутых секций; у текущей своей секции нет — её содержимое рисуется
+          по-разному в пяти состояниях (не запущена, идёт, пауза, ошибка,
+          готово), и вставлять чипы в каждую ветку значило бы пять шансов
+          разойтись. Одна строка внизу закрывает все состояния сразу. */}
+      <CurrentStageUsage card={card} />
 
       {/* Все четыре типа документа открываются одним редактором. Прежний путь
           через iframe удалён вместе с Фазой 6. */}

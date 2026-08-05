@@ -7,6 +7,8 @@ import {
   EditorAdapter,
   EditorColumn,
   GridRow,
+  KIT_ADDED_PREFIX,
+  KIT_MISMATCH_PREFIX,
   Percentages,
   RowKind,
   SHEET_KEY,
@@ -193,6 +195,13 @@ export const estimateAdapter: EditorAdapter = {
     if (isNegativeQty(toNumber(row.qty))) classes.push('de-row-deduction');
     if (row.is_excluded) classes.push('de-row-excluded');
     if (row.price_list_name) classes.push('de-row-from-price');
+
+    // Комплект материалов, дописанный по нормам расхода на шаге «Полнота»,
+    // доезжает до сметы вместе с примечанием. В файле заказчика этих позиций не
+    // было, и в смете это должно быть видно так же, как в перечне.
+    const note = String(row.notes ?? '').trimStart();
+    if (note.startsWith(KIT_ADDED_PREFIX)) classes.push('de-row-kit-added');
+    if (note.startsWith(KIT_MISMATCH_PREFIX)) classes.push('de-row-kit-mismatch');
 
     const abc = String(row.abc_group ?? '').trim().toUpperCase();
     if (abc === 'A' || abc === 'А') classes.push('de-row-abc-a');

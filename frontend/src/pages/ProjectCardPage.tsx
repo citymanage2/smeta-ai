@@ -12,6 +12,8 @@ import {
 } from '../components/pipeline/PipelineStepper'
 import { CardStageContent } from '../components/kanban/CardStageContent'
 import StageProcessingPanel from '../components/card/StageProcessingPanel'
+import UsageChips from '../components/card/UsageChips'
+import { cardUsage } from '../utils/usageMetrics'
 import DocumentEditor from '../components/editor/DocumentEditor'
 import { KanbanStage } from '../types/workflow'
 import { DocumentKind } from '../api/documents'
@@ -116,6 +118,7 @@ const ProjectCardPage: React.FC = () => {
     )
   }
 
+  const cardSpend = cardUsage(card)
   const stageForContent: KanbanStage = selectedStage ?? card.stage
   const currentTask = stageTask(card, stageForContent)
   const showEditor = !!currentTask
@@ -183,6 +186,14 @@ const ProjectCardPage: React.FC = () => {
 
         {/* Пайплайн-дорожка (КП-2): 4 этапа, продвижение автоматическое, без drag */}
         <PipelineStepper card={card} selectedStage={stageForContent} onSelect={handleSelect} />
+
+        {/* Итог затрат по всей смете — под дорожкой стадий, там же, где
+            человек оценивает саму смету. Цифры по стадиям — ниже, в секциях. */}
+        {cardSpend.hasData && (
+          <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+            <UsageChips usage={cardSpend} variant="total" />
+          </div>
+        )}
 
         {/* Soft-гейт (КП-3): предупреждение на выбранном этапе, не блокирующее */}
         {showSoft && (
