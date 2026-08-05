@@ -1,5 +1,6 @@
 import json
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -28,12 +29,13 @@ from app.models.result import TaskResult
 from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.models.workflow_card import WorkflowCard
-from app.services import eta_service, storage_service
+from app.services import eta_service, storage_service, usage_metrics
 from app.schemas.workflow_card import (
     WorkflowCardCreate,
     WorkflowCardResponse,
     WorkflowCardUpdate,
     TaskBrief,
+    TaskUsage,
     InputFileBrief,
     CardDetailResponse,
     StageDetail,
@@ -55,14 +57,40 @@ _LIST_TYPES = {"LIST_FROM_GRAND", "LIST_FROM_PROJECT"}
 _TASK_TYPE_TO_FIELD = TASK_TYPE_TO_FIELD
 
 
+_STAGE_ATTRS = ("list_task", "completeness_task", "estimate_task", "optimization_task")
+
+
+def _card_tasks(cards: list[WorkflowCard]) -> list[Task]:
+    """Все задачи всех карточек одним списком — вход агрегатора метрик."""
+    return [
+        task
+        for card in cards
+        for attr in _STAGE_ATTRS
+        if (task := getattr(card, attr)) is not None
+    ]
+
+
+async def _cards_usage(db: AsyncSession, cards: list[WorkflowCard]) -> dict:
+    """Метрики затрат по всем задачам всех карточек — ОДНИМ запросом.
+
+    Список карточек поллится каждые 5 секунд: запрос на карточку превратился бы
+    здесь в сотни запросов в минуту.
+    """
+    return await usage_metrics.usage_for_tasks(db, _card_tasks(cards))
+
+
 def _build_card_response(
-    card: WorkflowCard, forecast: Optional[dict] = None
+    card: WorkflowCard,
+    forecast: Optional[dict] = None,
+    usage: Optional[dict] = None,
 ) -> WorkflowCardResponse:
     forecast = forecast or {}
+    usage = usage or {}
 
     def _task_brief(task: Optional[Task]) -> Optional[TaskBrief]:
         if task is None:
             return None
+        metrics = usage.get(str(task.id))
         raw_files = task.input_files or []
         files = [
             InputFileBrief(
@@ -83,6 +111,8 @@ def _build_card_response(
             progress_message=task.progress_message,
             progress_data=build_progress_summary(task.progress_data),
             eta=forecast.get(str(task.id)),
+            cost=float(task.cost) if task.cost is not None else None,
+            usage=TaskUsage(**asdict(metrics)) if metrics is not None else None,
         )
 
     return WorkflowCardResponse(
@@ -109,11 +139,8 @@ async def _card_forecast(db: AsyncSession, cards: list[WorkflowCard]) -> dict:
 
     На доске без активных задач это сэкономит два запроса на каждый поллинг.
     """
-    stage_attrs = ("list_task", "completeness_task", "estimate_task", "optimization_task")
     has_active = any(
-        (task := getattr(card, attr)) is not None and task.status in eta_service.ACTIVE_STATUSES
-        for card in cards
-        for attr in stage_attrs
+        task.status in eta_service.ACTIVE_STATUSES for task in _card_tasks(cards)
     )
     if not has_active:
         return {}
@@ -146,7 +173,7 @@ async def _load_card_with_tasks(
 
 def _apply_soft_delete_filter(card: WorkflowCard) -> None:
     """Обнуляет task-поля для soft-deleted задач (selectinload не поддерживает WHERE)."""
-    for attr in ("list_task", "completeness_task", "estimate_task", "optimization_task"):
+    for attr in _STAGE_ATTRS:
         task = object.__getattribute__(card, attr)
         if task is not None and task.deleted_at is not None:
             object.__setattr__(card, attr, None)
@@ -188,7 +215,8 @@ async def get_workflow_cards(
     for card in cards:
         _apply_soft_delete_filter(card)
     forecast = await _card_forecast(db, list(cards))
-    payload = [_build_card_response(c, forecast) for c in cards]
+    usage = await _cards_usage(db, list(cards))
+    payload = [_build_card_response(c, forecast, usage) for c in cards]
 
     # ETag: этот список поллится каждые 5с. Если данные не изменились — отдаём 304
     # без тела (клиент отдаёт из кэша). Cache-Control private — данные за авторизацией.
@@ -258,7 +286,9 @@ async def update_workflow_card(
 
     # Перезагружаем с task-relationship после commit
     card = await _load_card_with_tasks(card_id, db)
-    return _build_card_response(card, await _card_forecast(db, [card]))
+    return _build_card_response(
+        card, await _card_forecast(db, [card]), await _cards_usage(db, [card])
+    )
 
 
 @router.delete("/workflow-cards/{card_id}", status_code=204)
@@ -451,7 +481,7 @@ async def set_primary_version(
     await db.commit()
 
     updated = await _load_card_with_tasks(card_id, db)
-    return _build_card_response(updated)
+    return _build_card_response(updated, None, await _cards_usage(db, [updated]))
 
 
 async def _build_stage_meta(task: Optional[Task], db: AsyncSession) -> Optional[StageDetail]:
@@ -702,4 +732,8 @@ async def start_task(
 
     # Возвращаем обновлённую карточку
     updated_card = await _load_card_with_tasks(card_id, db)
-    return _build_card_response(updated_card, await _card_forecast(db, [updated_card]))
+    return _build_card_response(
+        updated_card,
+        await _card_forecast(db, [updated_card]),
+        await _cards_usage(db, [updated_card]),
+    )

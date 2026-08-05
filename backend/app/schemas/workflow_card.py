@@ -11,6 +11,28 @@ class InputFileBrief(BaseModel):
     size_bytes: int
 
 
+class TaskUsage(BaseModel):
+    """Во что обошлась стадия и сколько она шла.
+
+    Токены — сумма input + output + cache_read + cache_creation за все прогоны
+    задачи. Время — только последнего прогона: перезапуск переставляет
+    started_at/finished_at, а потраченные деньги никуда не деваются.
+
+    `extra_*` — доспросы ИИ по уже сформированному файлу стадии (цена строки,
+    аналоги, шаги оптимизации). Отдельной цифрой, потому что именно по разнице
+    видно, где утекают деньги.
+    """
+
+    tokens: int = 0
+    cost_usd: float = 0.0
+    extra_tokens: int = 0
+    extra_cost_usd: float = 0.0
+    queue_seconds: Optional[float] = None
+    work_seconds: Optional[float] = None
+    queue_running: bool = False
+    work_running: bool = False
+
+
 class TaskBrief(BaseModel):
     id: str
     task_type: str
@@ -19,6 +41,11 @@ class TaskBrief(BaseModel):
     created_at: str
     input_files: list[InputFileBrief] = []
     progress_message: Optional[str] = None
+    # Сумма сформированной сметы в рублях (task.cost). Не путать с cost_usd
+    # в usage — то стоимость запросов к ИИ, это деньги заказчика.
+    cost: Optional[float] = None
+    # Затраты и тайминги стадии. None — метрики не считались (одиночный ответ).
+    usage: Optional[TaskUsage] = None
     # Выжимка прогресса по белому списку (счётчики «N из M»), без чувствительных
     # полей progress_data. Заполняется через build_progress_summary().
     progress_data: Optional[dict] = None

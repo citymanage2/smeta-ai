@@ -14,6 +14,9 @@ import { SmetaList } from '../components/SmetaList';
 import { StageStateBadge } from '../components/StageStateBadge';
 import ProjectSettingsPanel from '../components/ProjectSettingsPanel';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
+import UsageChips from '../components/card/UsageChips';
+import { projectUsage } from '../utils/usageMetrics';
+import { useKanbanStore } from '../stores/kanban';
 
 function formatCost(cost: number): string {
   return cost.toLocaleString('ru-RU') + ' ₽';
@@ -161,6 +164,7 @@ const ProjectDetailPage: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { isAdmin } = useAuthStore();
+  const cards = useKanbanStore(state => state.cards);
 
   const [project, setProject] = useState<IProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -271,6 +275,10 @@ const ProjectDetailPage: React.FC = () => {
   const optimizedCost = project.tasks
     .filter(t => t.estimation_status === 'optimized' && t.cost)
     .reduce((sum, t) => sum + (t.cost as number), 0) || null;
+
+  // Карточки уже лежат в сторе — их поллят список смет и канбан. Считаем итог
+  // из них, а не отдельным запросом: цифры те же, что человек видит в строках.
+  const projectSpend = projectUsage(cards.filter(c => c.project_id === projectId));
 
   return (
     <Layout>
@@ -408,6 +416,15 @@ const ProjectDetailPage: React.FC = () => {
                   )}
                 </>
               )}
+            </div>
+          )}
+
+          {/* Затраты на ИИ по всему проекту — сумма по всем сметам. Отдельной
+              строкой под деньгами заказчика: это разные величины. Считаются из
+              уже поллящегося списка карточек, отдельного запроса нет. */}
+          {projectSpend.hasData && (
+            <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #f1f5f9' }}>
+              <UsageChips usage={projectSpend} variant="total" mergeTime />
             </div>
           )}
         </div>

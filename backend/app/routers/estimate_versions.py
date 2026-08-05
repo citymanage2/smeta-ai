@@ -838,6 +838,10 @@ async def _run_optimization_step(
                 image_data=image_blocks if image_blocks else None,
                 use_web_search=False,
                 processing_timeout=180.0,
+                task_id=task_id,
+                db=db,
+                # Доп: шаг оптимизации идёт по уже сформированному файлу стадии.
+                is_extra=True,
             )
 
             data = extract_json(response_text)
@@ -1150,6 +1154,10 @@ async def _run_fill_prices_step(task_id: str) -> None:
                             messages=[{"role": "user", "content": prompt_text}],
                             system_prompt=_FILL_PRICES_SYSTEM,
                             use_web_search=True,
+                            task_id=task_id,
+                            db=db,
+                            # Доп: цены проставляются в уже сформированную смету.
+                            is_extra=True,
                         )
                         data = extract_json(resp)
                         for item in data.get("items", []):
@@ -1293,6 +1301,10 @@ async def optimize_custom(
             messages=[{"role": "user", "content": prompt}],
             use_web_search=True,
             processing_timeout=120.0,
+            task_id=task_id,
+            db=db,
+            # Доп: предложения запрашиваются по строкам уже готовой сметы.
+            is_extra=True,
         )
         data = extract_json(response_text)
     except Exception as e:

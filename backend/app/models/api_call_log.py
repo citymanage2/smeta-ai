@@ -2,7 +2,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Integer, String, Numeric, ForeignKey
+from sqlalchemy import Boolean, Integer, String, Numeric, ForeignKey
 from sqlalchemy import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -33,6 +33,15 @@ class ApiCallLog(Base):
     # не создавал дубли строк и не завышал метрику. NULL для обычных вызовов.
     batch_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     batch_custom_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Дополнительный запрос: человек доспрашивает ИИ по уже сформированному файлу
+    # стадии (цена строки, аналоги, предложения по оптимизации). В карточке такие
+    # деньги показываются отдельной цифрой «допы» — иначе непонятно, где утекает.
+    # Признак ставится на месте вызова, а не выводится из called_at/finished_at:
+    # перезапуск задачи переставляет finished_at, и прежние допы задним числом
+    # стали бы основными.
+    is_extra: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 6), nullable=False, default=Decimal("0"))
     # Длительность синхронного API-вызова в миллисекундах (наблюдаемость).
     # NULL для batch-вызовов: пачка считается на серверах Anthropic асинхронно.

@@ -25,6 +25,28 @@ export interface ProgressSummary {
   items_count?: number
 }
 
+/**
+ * Во что обошлась стадия и сколько она шла.
+ *
+ * Токены — сумма всех четырёх видов за все прогоны задачи; время — только
+ * последнего прогона (перезапуск переставляет отметки, а деньги остаются).
+ * `extra_*` — доспросы ИИ по уже сформированному файлу стадии: поиск цены,
+ * аналоги, шаги оптимизации.
+ *
+ * Растущие счётчики приходят с точностью до минуты — иначе список карточек
+ * менял бы ETag на каждом опросе. См. `services/usage_metrics.py`.
+ */
+export interface TaskUsage {
+  tokens: number
+  cost_usd: number
+  extra_tokens: number
+  extra_cost_usd: number
+  queue_seconds: number | null
+  work_seconds: number | null
+  queue_running: boolean
+  work_running: boolean
+}
+
 export interface TaskBrief {
   id: string
   task_type: string
@@ -36,6 +58,10 @@ export interface TaskBrief {
   progress_data?: ProgressSummary | null
   /** Прогноз старта и готовности активной задачи (см. utils/eta). */
   eta?: TaskEta | null
+  /** Сумма сформированной сметы в рублях. Не путать с cost_usd в usage. */
+  cost?: number | null
+  /** Затраты и тайминги стадии (см. utils/usageMetrics). */
+  usage?: TaskUsage | null
 }
 
 export interface WorkflowCard {

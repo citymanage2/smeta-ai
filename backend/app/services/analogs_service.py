@@ -294,6 +294,8 @@ async def _ask_batch(batch: list, task_id: str, db: AsyncSession) -> dict:
         processing_timeout=CALL_TIMEOUT_S,
         task_id=task_id,
         db=db,
+        # Доп: аналоги ищутся по уже сформированному документу стадии.
+        is_extra=True,
     )
 
     try:

@@ -6,6 +6,29 @@ import { CreateCardModal } from './kanban/CreateCardModal'
 import { CompactPipeline, defaultStage } from './pipeline/PipelineStepper'
 import { CardStageContent } from './kanban/CardStageContent'
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight'
+import UsageChips from './card/UsageChips'
+import { cardEstimateCost, cardUsage, formatRub } from '../utils/usageMetrics'
+import { WorkflowCard } from '../types/workflow'
+
+/**
+ * Сумма сформированной сметы. Оптимизация важнее сметы: если смету
+ * оптимизировали, в тендер идёт её сумма. Прочерк — только когда сметы ещё нет.
+ */
+function EstimateSum({ card }: { card: WorkflowCard }) {
+  const cost = cardEstimateCost(card)
+  if (cost == null) {
+    return <span style={{ color: '#94a3b8' }}>—</span>
+  }
+  const optimized = card.optimization_task?.cost != null
+  return (
+    <span
+      title={optimized ? 'Сумма после оптимизации' : 'Сумма сформированной сметы'}
+      style={{ fontWeight: 600, color: optimized ? '#c2410c' : '#0f766e', whiteSpace: 'nowrap' }}
+    >
+      {formatRub(cost)}
+    </span>
+  )
+}
 
 interface Props {
   projectId: string
@@ -147,8 +170,16 @@ export function SmetaList({ projectId, onCardCreated, stickyTop = 0 }: Props) {
                       </td>
                       <td style={{ ...cellStyle, borderBottom: 'none' }}>
                         <CompactPipeline card={card} />
+                        {/* Затраты на ИИ по всей смете — под дорожкой стадий, а не
+                            в колонке «Сумма»: там деньги заказчика, здесь наша
+                            себестоимость, и путать их нельзя. */}
+                        <div style={{ marginTop: '6px' }}>
+                          <UsageChips usage={cardUsage(card)} variant="total" />
+                        </div>
                       </td>
-                      <td style={{ ...cellStyle, borderBottom: 'none', textAlign: 'right', color: '#94a3b8', verticalAlign: 'top' }}>—</td>
+                      <td style={{ ...cellStyle, borderBottom: 'none', textAlign: 'right', verticalAlign: 'top' }}>
+                        <EstimateSum card={card} />
+                      </td>
                     </tr>
                     {/* Те же свёрнутые секции стадий с файлами, что и внутри сметы. */}
                     <tr>
