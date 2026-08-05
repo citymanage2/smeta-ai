@@ -34,6 +34,8 @@ const EXCLUDED_COLUMNS = new Set(['№', '#']);
 const TYPE_COL = 'Тип';
 const NAME_COL = 'Наименование';
 const NOTES_COL = 'примечание';
+/** Номер позиции исходной сметы — им сверяют перечень со сметой заказчика. */
+const SOURCE_NO_COL = '№ в исходной смете';
 
 /** Примечание строки. Колонка приходит из файла, поэтому ищем по началу имени. */
 function noteOf(row: GridRow): string {
@@ -140,11 +142,10 @@ export const genericAdapter: EditorAdapter = {
     if (gridRows.length === 0) return [];
     // Порядок колонок берём из первой строки — он совпадает с порядком в файле.
     const keys = Object.keys(gridRows[0]).filter((k) => !isServiceKey(k));
-    const ordered = [
-      ...(keys.includes(TYPE_COL) ? [TYPE_COL] : []),
-      ...(keys.includes(NAME_COL) ? [NAME_COL] : []),
-      ...keys.filter((k) => k !== TYPE_COL && k !== NAME_COL),
-    ];
+    // Номер позиции исходной сметы идёт первым — с него начинается сверка
+    // перечня со сметой заказчика, ради неё колонка и появилась.
+    const pinned = [SOURCE_NO_COL, TYPE_COL, NAME_COL].filter((k) => keys.includes(k));
+    const ordered = [...pinned, ...keys.filter((k) => !pinned.includes(k))];
     const { pairs } = findRecalcConfig(ordered);
     const computed = new Set(pairs.map((p) => p.costCol));
 

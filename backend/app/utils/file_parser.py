@@ -224,7 +224,8 @@ def _parse_grand_sheet(ws) -> "list[dict]":
             col0 = cells[0] if cells else ""
             if col0 and col0 != "None" and _SECTION_HEADER.match(col0):
                 rows.append(
-                    {"name": col0, "unit": "", "quantity": None, "is_section": True, "__numbered": False}
+                    {"name": col0, "unit": "", "quantity": None, "is_section": True,
+                     "source_no": "", "__numbered": False}
                 )
             continue
 
@@ -252,15 +253,20 @@ def _parse_grand_sheet(ws) -> "list[dict]":
         # Строка с ними — позиция сметы, как бы она ни называлась.
         is_section = bool(_SECTION_HEADER.match(name)) and not unit and qty is None
         row_no = str(row[num_col]).strip() if num_col is not None and num_col < len(row) and row[num_col] is not None else ""
+        numbered = bool(_POSITION_NO.match(row_no))
         rows.append(
             {
                 "name": name,
                 "unit": unit,
                 "quantity": qty,
                 "is_section": is_section,
+                # Номер позиции ЛСР — по нему менеджер сверяет перечень с
+                # исходной сметой. Только настоящий номер: в этой же колонке
+                # ГРАНД-Смета печатает пометки ресурсов («Н», «П,Н»).
+                "source_no": row_no if numbered else "",
                 # Позиция сметы: номер в «№ п/п» — или, если номера нет,
                 # полноценная строка со своей стоимостью (см. _has_own_cost).
-                "__numbered": bool(_POSITION_NO.match(row_no))
+                "__numbered": numbered
                 or bool(unit and qty is not None and _has_own_cost(row, cost_col)),
             }
         )
@@ -303,7 +309,9 @@ def _parse_grand_sheet_fallback(ws) -> "list[dict]":
         name = non_empty[0]
         if _is_total_row(name) or _is_trash_row(name):
             continue
-        rows.append({"name": name, "unit": "", "quantity": None, "is_section": False})
+        # Шапку не нашли — колонку «№ п/п» тем более: номера у таких строк нет.
+        rows.append({"name": name, "unit": "", "quantity": None,
+                     "is_section": False, "source_no": ""})
     return rows
 
 

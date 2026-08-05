@@ -50,18 +50,49 @@ _P_COL_WIDTHS = [6.5, 10.33, 67.33, 10.33, 10.33, 57.5]
 _P_HEADERS = ["№ п/п", "Тип", "Наименование", "Ед. изм", "Кол-во", "Примечание"]
 _P_QTY_FMT = "0.00"
 
+# Номер позиции исходной сметы — им менеджер сверяет перечень со сметой
+# заказчика построчно. Колонка необязательная: у перечня из проекта и у
+# PDF-скана исходного номера нет, и пустой столбец им ни к чему.
+SOURCE_NO_HEADER = "№ в исходной смете"
+_P_SOURCE_NO_WIDTH = 12.0
 
-def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
-    """Fill worksheet with the standard Перечень format (6 columns)."""
-    for i, width in enumerate(_P_COL_WIDTHS, 1):
+
+def has_source_numbers(items: list) -> bool:
+    """True, если хоть одна позиция знает свой номер в исходной смете."""
+    return any(str((it or {}).get("source_no") or "").strip() for it in items or [])
+
+
+def _source_no_value(item: dict):
+    """Номер для ячейки: «12» числом, «1.1» и «2а» — текстом, как в смете."""
+    number = str(item.get("source_no") or "").strip()
+    if not number:
+        return None
+    return int(number) if number.isdigit() else number
+
+
+def _write_perechen_sheet(ws, items: list, with_sections: bool = False,
+                          with_source_no: bool = False) -> None:
+    """Fill worksheet with the standard Перечень format (6 columns).
+
+    `with_source_no` добавляет первой колонку «№ в исходной смете». Решение
+    принимается один раз на весь файл (`generate_list`), а не по листу: сводки
+    «Работы» и «Материалы» обязаны иметь тот же набор колонок, что и данные.
+    """
+    headers = ([SOURCE_NO_HEADER] if with_source_no else []) + _P_HEADERS
+    widths = ([_P_SOURCE_NO_WIDTH] if with_source_no else []) + _P_COL_WIDTHS
+    # Сдвиг колонок из-за необязательного первого столбца.
+    off = 1 if with_source_no else 0
+    wrapped = {3 + off, 6 + off}
+
+    for i, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     # Row 1: headers — bold, center, Arial 9
-    for col, h in enumerate(_P_HEADERS, 1):
+    for col, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=col, value=h)
         c.font = _P_FONT_BLACK_BOLD
         c.alignment = Alignment(horizontal="center", vertical="center",
-                                wrap_text=(col in (3, 6)))
+                                wrap_text=(col in wrapped or col == 1 and with_source_no))
         c.border = _P_BORDER
 
     # Строки нумерации колонок («1 2 3 4 5 6») здесь нет намеренно. В Гранд-смете
@@ -84,33 +115,40 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
                 current_section = sec
                 section_num += 1
                 label = f"Раздел {section_num}. {sec}" if sec else f"Раздел {section_num}"
-                for col in range(1, 7):
+                for col in range(1, 7 + off):
                     c = ws.cell(row=data_row, column=col,
-                                value=label if col == 3 else None)
-                    c.font = _P_FONT_BLACK_BOLD if col == 3 else _P_FONT_BLACK
+                                value=label if col == 3 + off else None)
+                    c.font = _P_FONT_BLACK_BOLD if col == 3 + off else _P_FONT_BLACK
                     c.alignment = Alignment(horizontal="center", vertical="center",
-                                           wrap_text=(col == 3))
+                                           wrap_text=(col == 3 + off))
                     c.border = _P_BORDER
                 data_row += 1
 
         item_num += 1
 
+        # Col 0 (опционально): номер позиции в исходной смете — center
+        if with_source_no:
+            c0 = ws.cell(row=data_row, column=1, value=_source_no_value(item))
+            c0.font = _P_FONT_BLACK
+            c0.alignment = Alignment(horizontal="center", vertical="center")
+            c0.border = _P_BORDER
+
         # Col 1: порядковый номер — integer, center
-        c1 = ws.cell(row=data_row, column=1, value=item_num)
+        c1 = ws.cell(row=data_row, column=1 + off, value=item_num)
         c1.font = _P_FONT_BLACK
         c1.alignment = Alignment(horizontal="center", vertical="center")
         c1.number_format = "0"
         c1.border = _P_BORDER
 
         # Col 2: тип — center; materials: blue italic
-        c2 = ws.cell(row=data_row, column=2, value=item_type)
+        c2 = ws.cell(row=data_row, column=2 + off, value=item_type)
         c2.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
         c2.alignment = Alignment(horizontal="center", vertical="center")
         c2.border = _P_BORDER
 
         # Col 3: наименование — left (work) / right (material), wrap
         name = str(item.get("name", "") or "")
-        c3 = ws.cell(row=data_row, column=3, value=name)
+        c3 = ws.cell(row=data_row, column=3 + off, value=name)
         c3.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
         c3.alignment = Alignment(
             horizontal="right" if is_material else "left",
@@ -120,7 +158,7 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
 
         # Col 4: ед. изм. — center (work) / right (material)
         unit = str(item.get("unit", "") or "")
-        c4 = ws.cell(row=data_row, column=4, value=unit)
+        c4 = ws.cell(row=data_row, column=4 + off, value=unit)
         c4.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
         c4.alignment = Alignment(
             horizontal="right" if is_material else "center",
@@ -130,7 +168,7 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
 
         # Col 5: кол-во — center (work) / right (material), 2 decimals
         qty = item.get("quantity")
-        c5 = ws.cell(row=data_row, column=5, value=qty)
+        c5 = ws.cell(row=data_row, column=5 + off, value=qty)
         c5.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
         c5.alignment = Alignment(
             horizontal="right" if is_material else "center",
@@ -145,7 +183,7 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False) -> None:
         if _is_calculated_from_drawing(item) and qty is not None:
             notes_text = (f"рассчитано по чертежам | {notes_text}"
                           if notes_text else "рассчитано по чертежам")
-        c6 = ws.cell(row=data_row, column=6, value=notes_text)
+        c6 = ws.cell(row=data_row, column=6 + off, value=notes_text)
         c6.font = _P_FONT_BLACK
         c6.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         c6.border = _P_BORDER
@@ -257,29 +295,34 @@ def generate_list(items: list, changes_summary: Optional[str] = None) -> bytes:
     Позиции, размеченные листами исходного файла, раскладываются по листам с
     теми же именами. Сводки «Работы» и «Материалы» при этом не создаются: из
     пяти разделов получилось бы шестнадцать листов, в которых не разобраться.
+
+    Колонка «№ в исходной смете» появляется первой, если номер известен хоть у
+    одной позиции. Решение общее на весь файл: у листов одного файла набор
+    колонок обязан совпадать.
     """
     wb = openpyxl.Workbook()
 
     groups = _list_sheet_groups(items)
     single_sheet = len(groups) == 1
+    with_source_no = has_source_numbers(items)
 
     for index, (title, group) in enumerate(groups):
         ws = wb.active if index == 0 else wb.create_sheet()
         ws.title = title
-        _write_perechen_sheet(ws, group, with_sections=False)
+        _write_perechen_sheet(ws, group, with_sections=False, with_source_no=with_source_no)
         ws.freeze_panes = "A2"
 
     if single_sheet:
         # Sheet 2: Работы
         works = [it for it in items if it.get("type", "").lower() in ("работа", "work", "работы")]
         ws_works = wb.create_sheet("Работы")
-        _write_perechen_sheet(ws_works, works, with_sections=False)
+        _write_perechen_sheet(ws_works, works, with_sections=False, with_source_no=with_source_no)
         ws_works.freeze_panes = "A2"
 
         # Sheet 3: Материалы
         materials = [it for it in items if it.get("type", "").lower() in ("материал", "material", "материалы")]
         ws_mats = wb.create_sheet("Материалы")
-        _write_perechen_sheet(ws_mats, materials, with_sections=False)
+        _write_perechen_sheet(ws_mats, materials, with_sections=False, with_source_no=with_source_no)
         ws_mats.freeze_panes = "A2"
 
     # Последний лист: Пояснительная записка

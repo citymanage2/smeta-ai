@@ -22,6 +22,9 @@ _HEADER_ALIASES = {
     "ед": "unit",
     "кол": "quantity",
     "примечание": "notes",
+    # Номер позиции исходной сметы: в перечне он есть, в остальных документах —
+    # нет. Без псевдонима правка строки в редакторе стирала бы его из позиций.
+    "№ в исходной смете": "source_no",
 }
 
 
@@ -79,6 +82,9 @@ def generic_rows_to_items(rows: list) -> list[dict]:
             "quantity": _number(values.get("quantity")),
             "notes": str(values.get("notes") or "").strip(),
         }
+        source_no = str(values.get("source_no") or "").strip()
+        if source_no:
+            item["source_no"] = source_no
         sheet = row.get("sheet")
         if sheet:
             item["sheet"] = str(sheet)

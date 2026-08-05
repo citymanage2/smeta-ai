@@ -39,6 +39,7 @@ from app.utils.pdf_ocr_extractor import (
 )
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
+from app.utils.source_numbers import attach_source_numbers
 from app.utils.unit_normalizer import normalize_items
 from app.services import price_service as _price_svc
 
@@ -429,6 +430,18 @@ def _chunk_sheet(chunk: list) -> Optional[str]:
         if title is not None:
             return title
     return None
+
+
+def _without_source_no(items: list) -> list:
+    """Копии позиций без номера в исходной смете — для промптов дальних стадий.
+
+    Номер нужен только перечню. Дальше он не едет: там его пришлось бы гонять
+    через ИИ, а тот вернул бы часть номеров и потерял часть.
+    """
+    return [
+        {k: v for k, v in item.items() if k != "source_no"} if isinstance(item, dict) else item
+        for item in items or []
+    ]
 
 
 def _tag_sheet(items: list, sheet: Optional[str]) -> None:
@@ -1864,6 +1877,9 @@ class TaskProcessor:
                     # Чанк целиком принадлежит одному листу исходного файла — его
                     # же получают позиции, которые ИИ собрал из этого чанка.
                     _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
+                    # Номер позиции ЛСР через ИИ не гоняется: он сопоставляется
+                    # со строками этого же чанка по наименованию.
+                    attach_source_numbers(chunk_items, chunks[i])
                     accumulated_items.extend(chunk_items)
 
                     # Сохраняем прогресс после каждого успешного чанка
@@ -2189,7 +2205,12 @@ class TaskProcessor:
             else:
                 await self.update_progress("Проверяем полноту материалов по ГЭСН...")
 
-            chunk_json = json.dumps({"items": chunks[i]}, ensure_ascii=False, indent=2)
+            # Номер позиции исходной сметы в промпт не уходит: ИИ переписывает
+            # чанк целиком, и часть номеров он вернул бы, а часть потерял. Пусть
+            # колонка живёт только в перечне, где она заполнена детерминированно.
+            chunk_json = json.dumps(
+                {"items": _without_source_no(chunks[i])}, ensure_ascii=False, indent=2
+            )
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
 
             try:
