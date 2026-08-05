@@ -278,12 +278,17 @@ def _expand_block(work: dict, materials: list[dict], result: ExpandResult) -> li
         )
         if existing is not None:
             existing_qty = _qty(existing.get("quantity"))
-            if existing_qty is None or existing_qty == 0:
-                # Пустой объём терять нечего — проставляем расчётный.
+            existing_unit = _unit(existing.get("unit"))
+            if (existing_qty is None or existing_qty == 0) and existing_unit in (unit, ""):
+                # Пустой объём терять нечего — проставляем расчётный. Но только
+                # в своей единице: норма задана на 1 м² конструкции, и число,
+                # положенное в чужую единицу, стало бы тихой ошибкой.
                 existing["quantity"] = _qty_out(expected, unit)
+                if not existing_unit:
+                    existing["unit"] = unit
                 _with_note(existing, note)
                 result.added += 1
-            elif _unit(existing.get("unit")) == unit and expected > 0:
+            elif existing_unit == unit and existing_qty and expected > 0:
                 deviation = abs(existing_qty - expected) / expected
                 if deviation > Decimal(str(MISMATCH_TOLERANCE)):
                     _with_note(existing, (
