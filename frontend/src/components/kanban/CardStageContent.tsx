@@ -5,7 +5,8 @@ import { TaskBrief, WorkflowCard } from '../../types/workflow'
 import { describeEta } from '../../utils/eta'
 import { useKanbanStore } from '../../stores/kanban'
 import { downloadSlotFile } from '../../api/projects'
-import { restartTask } from '../../api/tasks'
+import { restartTask, resumeTask } from '../../api/tasks'
+import { formatApiDetail } from '../../utils/formatError'
 import {
   CardDetail,
   StageDetail,
@@ -323,6 +324,7 @@ interface StageProps {
   filesMeta: CardDetail | null
   onOpenEditor: (state: EditorModalState) => void
   onRestart: (taskId: string) => Promise<void>
+  onResume: (taskId: string) => Promise<void>
 }
 
 function RestartBtn({ taskId, onRestart }: { taskId: string; onRestart: (id: string) => Promise<void> }) {
@@ -343,6 +345,67 @@ function RestartBtn({ taskId, onRestart }: { taskId: string; onRestart: (id: str
     >
       {loading ? 'Запускаю…' : '↺ Перезапустить'}
     </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// PausedBlock — задача остановлена по балансу API
+// ---------------------------------------------------------------------------
+/**
+ * Пауза — не ошибка: прогресс сохранён, и поллер возобновит задачу сам, как
+ * только баланс пополнят. Но ждать десять минут не всегда уместно, поэтому
+ * рядом с объяснением стоит кнопка немедленного продолжения — тот же
+ * `/tasks/{id}/resume`, что и на странице задачи.
+ */
+function PausedBlock({ taskId, onResume }: { taskId: string; onResume: (id: string) => Promise<void> }) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleClick = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      await onResume(taskId)
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(formatApiDetail(detail, 'Не удалось возобновить задачу. Попробуйте ещё раз.'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div
+      data-testid="kanban-paused"
+      style={{
+        marginTop: '6px',
+        background: '#fffbeb', border: '1px solid #fcd34d',
+        borderRadius: '8px', padding: '8px 10px',
+      }}
+    >
+      <div style={{ fontSize: '11px', color: '#92400e', lineHeight: 1.45 }}>
+        Баланс API Anthropic исчерпан. Прогресс сохранён — задача продолжится сама
+        после пополнения счёта, уже посчитанное заново не считается.
+      </div>
+      {error && (
+        <div style={{ color: '#dc2626', fontSize: '11px', marginTop: '4px' }}>{error}</div>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={loading}
+        style={{
+          marginTop: '6px',
+          display: 'inline-flex', alignItems: 'center', gap: '4px',
+          background: loading ? '#fcd34d' : '#d97706',
+          color: '#fff', border: 'none',
+          borderRadius: '6px', padding: '4px 10px',
+          fontSize: '11px', fontWeight: 600,
+          cursor: loading ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {loading ? 'Возобновляю…' : '▸ Продолжить сейчас'}
+      </button>
+    </div>
   )
 }
 
@@ -453,7 +516,7 @@ function ResultFilesSection({
 // ---------------------------------------------------------------------------
 // Stage: Перечень
 // ---------------------------------------------------------------------------
-function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
+function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
   const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
   const navigate = useNavigate()
   const pending = pendingListTasks[card.id]
@@ -647,6 +710,21 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
     )
   }
 
+  // Пауза по балансу: форму повторного запуска не показываем — она создала бы
+  // задачу с нуля вместо продолжения с сохранённого чекпоинта.
+  if (task.status === 'paused') {
+    return (
+      <div>
+        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
+          <TaskStatusBadge task={task} />
+          <ArrowBtn onClick={navigateToCard} />
+        </div>
+        <PausedBlock taskId={task.id} onResume={onResume} />
+      </div>
+    )
+  }
+
   // Ошибка / отменено
   return (
     <div>
@@ -682,7 +760,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
 // ---------------------------------------------------------------------------
 // Stage: Полнота
 // ---------------------------------------------------------------------------
-function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
+function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const navigate = useNavigate()
   const submitting = submittingCardIds.has(card.id)
@@ -834,6 +912,17 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
         </div>
       )}
 
+      {task !== null && task.status === 'paused' && (
+        <div>
+          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <TaskStatusBadge task={task} />
+            <ArrowBtn onClick={navigateToCard} />
+          </div>
+          <PausedBlock taskId={task.id} onResume={onResume} />
+        </div>
+      )}
+
       {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
         <div>
           <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
@@ -856,7 +945,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
 // ---------------------------------------------------------------------------
 // Stage: Смета
 // ---------------------------------------------------------------------------
-function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
+function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
   const { startTask, submittingCardIds } = useKanbanStore()
   const navigate = useNavigate()
   const submitting = submittingCardIds.has(card.id)
@@ -1051,6 +1140,16 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
         </div>
       )}
 
+      {task !== null && task.status === 'paused' && (
+        <div style={{ marginBottom: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <TaskStatusBadge task={task} />
+            <ArrowBtn onClick={navigateToCard} />
+          </div>
+          <PausedBlock taskId={task.id} onResume={onResume} />
+        </div>
+      )}
+
       {estimateEditedWarning && nextStage && (
         <ManualEditWarning editedAt={estimateMetaStage!.manually_edited_at!} prevStageName="Смета из перечня" />
       )}
@@ -1090,7 +1189,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps)
 // ---------------------------------------------------------------------------
 // Stage: Оптимизация
 // ---------------------------------------------------------------------------
-function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StageProps) {
+function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
   const navigate = useNavigate()
   const { startTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
@@ -1164,6 +1263,9 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
         </div>
       )}
       <TaskStatusBadge task={task} />
+      {task !== null && task.status === 'paused' && (
+        <PausedBlock taskId={task.id} onResume={onResume} />
+      )}
       {canStart && (
         <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
           <div style={{ marginBottom: '8px' }}>
@@ -1318,6 +1420,9 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart }: StagePr
 // CardStageContent — диспетчер с загрузкой filesMeta
 // ---------------------------------------------------------------------------
 export function CardStageContent({ card }: { card: WorkflowCard }) {
+  // Через селектор: диспетчер рендерится и вне доски (список смет, карточка),
+  // подписка на весь стор дёргала бы его на каждый цикл опроса карточек.
+  const fetchCards = useKanbanStore(s => s.fetchCards)
   const [filesMeta, setFilesMeta] = useState<CardDetail | null>(null)
   const metaFetching = useRef(false)
   const [editorModal, setEditorModal] = useState<EditorModalState | null>(null)
@@ -1354,7 +1459,17 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
     await fetchMeta()
   }, [fetchMeta])
 
-  const stageProps: StageProps = { card, filesMeta, onOpenEditor: setEditorModal, onRestart: handleRestart }
+  // Доска опрашивается раз в пять секунд, но после ручного «Продолжить сейчас»
+  // ждать смены статуса неприятно — перечитываем карточки сразу.
+  const handleResume = useCallback(async (taskId: string) => {
+    await resumeTask(taskId)
+    await fetchMeta()
+    await fetchCards(card.project_id)
+  }, [fetchMeta, fetchCards, card.project_id])
+
+  const stageProps: StageProps = {
+    card, filesMeta, onOpenEditor: setEditorModal, onRestart: handleRestart, onResume: handleResume,
+  }
 
   return (
     <>
