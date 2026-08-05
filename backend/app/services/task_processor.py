@@ -25,6 +25,7 @@ from app.services.claude_service import (
 from app.services.excel_service import generate_list
 from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES, TERMINAL_TASK_STATUSES
+from app.services.material_kits import expand_completeness_items
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
 from app.utils.price_coercion import coerce_price, is_negative_qty
@@ -2043,6 +2044,45 @@ class TaskProcessor:
         await self._create_initial_generic_version(excel_data, task.task_type, accumulated_items)
         logger.info("List from Grand PDF task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
 
+    async def _apply_material_kits(
+        self, all_items: list, changes_summary_parts: list, total_chunks: int
+    ) -> list:
+        """Дописать комплекты материалов каркасных работ и сохранить итог задачи.
+
+        Вызывается после цикла чанков, а не до него: ИИ переписывает присланный
+        чанк целиком и мог бы потерять наши строки или добавить свой профиль без
+        объёма. Идя следом, движок видит и то, что добавил ИИ, и не задваивает.
+
+        Итог кладётся в `progress_data`: смета со стадии «После проверки полноты»
+        читает именно его. Без этой записи комплект остался бы только в файле и в
+        редакторе, а в смету уехал бы перечень без него.
+        """
+        await self.update_progress("Разворачиваем комплекты материалов по нормам расхода...")
+        kit_result = expand_completeness_items(all_items)
+
+        if kit_result.added or kit_result.flagged:
+            changes_summary_parts.append(
+                "Комплекты материалов по нормам расхода: добавлено позиций — "
+                f"{kit_result.added}, помечено расхождений объёма — {kit_result.flagged}. "
+                f"Работы: {'; '.join(kit_result.handled_works)}."
+            )
+        logger.info(
+            "Material kits expanded",
+            task_id=self.task_id,
+            added=kit_result.added,
+            flagged=kit_result.flagged,
+            works=len(kit_result.handled_works),
+        )
+
+        items = normalize_items(kit_result.items)
+        await self._save_progress_data({
+            "chunks_done": total_chunks,
+            "total_chunks": total_chunks,
+            "items": items,
+            "summaries": changes_summary_parts,
+        })
+        return items
+
     async def _handle_check_completeness(self, task: Task) -> None:
         source_task_id = (task.user_prompt or "").strip()
         if not source_task_id:
@@ -2116,9 +2156,9 @@ class TaskProcessor:
                 "summaries": changes_summary_parts,
             })
 
+        all_items = await self._apply_material_kits(all_items, changes_summary_parts, total_chunks)
         changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
 
-        all_items = normalize_items(all_items)
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
@@ -2417,9 +2457,9 @@ class TaskProcessor:
                 "summaries": changes_summary_parts,
             })
 
+        all_items = await self._apply_material_kits(all_items, changes_summary_parts, total_chunks)
         changes_summary = "\n\n".join(changes_summary_parts) if changes_summary_parts else None
 
-        all_items = normalize_items(all_items)
         await self.update_progress(f"Проверено {len(all_items)} позиций. Формирование Excel...")
         excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_по_проекту.xlsx"), _XLSX_MIME, excel_data)

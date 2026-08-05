@@ -730,6 +730,25 @@
   box-shadow: inset 3px 0 0 #22c55e;
 }
 
+/* Материал, дописанный комплектом по нормам расхода: в файле заказчика его не
+   было. Человек решает, оставлять ли позицию, поэтому она должна быть видна. */
+.rdg-row.de-row-kit-added .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #0ea5e9;
+}
+
+.rdg-row.de-row-kit-added .rdg-cell {
+  background: #f0f9ff;
+}
+
+/* Объём заказчика разошёлся с нормой. Число не тронуто — решает человек. */
+.rdg-row.de-row-kit-mismatch .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+.rdg-row.de-row-kit-mismatch .rdg-cell {
+  background: #fffbeb;
+}
+
 /* Группы А/В/С: где сосредоточены деньги сметы. */
 .rdg-row.de-row-abc-a .rdg-cell:first-child {
   box-shadow: inset 3px 0 0 #ef4444;

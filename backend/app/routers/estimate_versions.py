@@ -190,6 +190,7 @@ async def save_rows(
     from datetime import datetime, timezone
     from app.models.result import TaskResult
     from app.services import estimate_store
+    from app.utils.generic_items import generic_rows_to_items
     from app.utils.xlsx_generic import rows_to_xlsx
 
     version = await _get_version_or_404(task_id, version_id, db)
@@ -204,6 +205,16 @@ async def save_rows(
     # For LIST/COMPLETENESS: regenerate xlsx and persist back to source record
     if version.task_type in _LIST_COMPLETENESS_TYPES:
         xlsx_bytes = rows_to_xlsx(body.rows)
+
+        # Правки едут и в позиции задачи. Смета строится из
+        # `progress_data['items']`, и без этой записи поправленный в редакторе
+        # объём остался бы только в документе: в смету уехал бы перечень до
+        # правок — молча и без следа.
+        progress = dict(task.progress_data or {})
+        items = generic_rows_to_items(body.rows)
+        if items:
+            progress["items"] = items
+            task.progress_data = progress
 
         if version.file_slot == "result":
             res = await db.execute(
