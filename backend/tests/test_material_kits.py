@@ -218,6 +218,31 @@ def test_existing_material_without_quantity_is_filled():
     assert profile["notes"].startswith(KIT_ADDED_PREFIX)
 
 
+def test_empty_quantity_in_another_unit_is_left_alone():
+    """Норма задана на 1 м² конструкции. Число, положенное в чужую единицу,
+    стало бы тихой ошибкой — молчать про профиль в м² безопаснее."""
+    items = [
+        _work(PARTITION_2X2),
+        _material("Профиль стоечный ПС 50х50", unit="м2", qty=None),
+    ]
+    result = expand_completeness_items(items)
+    profile = _find(result.items, "Профиль стоечный")
+    assert profile["quantity"] is None
+    assert profile["unit"] == "м2"
+
+
+def test_empty_quantity_without_unit_gets_both():
+    """У строки без единицы терять нечего — проставляем и объём, и единицу."""
+    items = [
+        _work(PARTITION_2X2),
+        _material("Профиль направляющий ПН", unit="", qty=None),
+    ]
+    result = expand_completeness_items(items)
+    profile = _find(result.items, "Профиль направляющий")
+    assert profile["quantity"] == 4.38
+    assert profile["unit"] == "м"
+
+
 def test_insulation_of_customer_is_recognised_by_keywords():
     """«Материалы теплоизоляционные из минеральных волокон» — тот же утеплитель."""
     items = [
