@@ -197,6 +197,7 @@ async def _log_api_call(
     web_search_requests: int = 0,
     batch_id: Optional[str] = None,
     batch_custom_id: Optional[str] = None,
+    is_extra: bool = False,
 ) -> None:
     """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5.
 
@@ -205,6 +206,9 @@ async def _log_api_call(
     web_search_requests — число поисков; тарифицируется отдельно от токенов.
     batch_id/batch_custom_id — координаты записи в пачке. Заданы → повторный сбор
     той же пачки (resume после рестарта поллера) не создаёт дубль строки.
+    is_extra — доп: запрос по уже сформированному файлу стадии (цена строки,
+    аналоги, шаги оптимизации). В карточке сметы такие деньги показываются
+    отдельной цифрой от основной обработки.
     """
     if db is None or task_id is None:
         return
@@ -229,6 +233,7 @@ async def _log_api_call(
             duration_ms=duration_ms,
             batch_id=batch_id,
             batch_custom_id=batch_custom_id,
+            is_extra=is_extra,
         )
         # Независимая сессия — caller может параллельно использовать свою db (cancel-checks).
         async with AsyncSessionLocal() as log_db:
@@ -467,6 +472,7 @@ async def call_claude(
     task_id: Optional[str] = None,
     db: Optional[AsyncSession] = None,
     max_tokens: int = 32000,
+    is_extra: bool = False,
 ) -> str:
     """
     Call Claude API (non-streaming) with retry logic and optional web search.
@@ -478,6 +484,10 @@ async def call_claude(
 
     on_rate_limit_wait — optional callback(wait_seconds) invoked just before each
         rate-limit sleep so callers can react (e.g. extend a batch deadline).
+
+    is_extra — вызов сделан по уже сформированному файлу стадии (доспрос из
+        редактора: цена строки, аналоги, шаги оптимизации), а не обработчиком
+        задачи. Разводит две статьи расходов в карточке сметы.
     """
     kwargs = _build_message_params(
         messages,
@@ -573,6 +583,7 @@ async def call_claude(
             await _log_api_call(
                 task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
                 duration_ms=call_duration_ms, web_search_requests=searches_t,
+                is_extra=is_extra,
             )
 
             return result
