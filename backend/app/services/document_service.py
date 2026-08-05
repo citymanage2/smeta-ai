@@ -849,6 +849,31 @@ async def _rebuild_result_xlsx(
     tr.size_bytes = len(xlsx_bytes)
 
 
+def _sync_task_items(doc: ResolvedDocument, rows: list) -> None:
+    """Перечень и полнота: правки строк едут и в позиции задачи.
+
+    Смета со стадии «Исходный перечень» / «После проверки полноты» строится из
+    `task.progress_data['items']`. Пока сюда не писали, поправленный в редакторе
+    объём оставался в документе и в скачиваемом файле, а в смету уезжал перечень
+    до правок — молча, без единого следа.
+    """
+    if doc.file_slot != "result":
+        return
+    if doc.task.task_type not in _XLSX_REBUILD_TYPES:
+        return
+
+    from app.utils.generic_items import generic_rows_to_items
+
+    items = generic_rows_to_items(rows)
+    if not items:
+        # Пустой разбор — признак того, что колонок перечня в строках нет.
+        # Затирать позиции задачи в таком случае нельзя.
+        return
+    progress = dict(doc.task.progress_data or {})
+    progress["items"] = items
+    doc.task.progress_data = progress
+
+
 async def _sync_estimate_artifacts(
     db: AsyncSession, doc: ResolvedDocument, rows: list, version: Any = None
 ) -> None:
@@ -948,6 +973,7 @@ async def apply_rows(
     await discard_draft(db, version)
 
     await _rebuild_result_xlsx(db, doc, new_rows)
+    _sync_task_items(doc, new_rows)
     await _sync_estimate_artifacts(db, doc, new_rows, version)
     if doc.kind != KIND_SUMMARY_SECTION:
         # Раздел сводной — снимок: правка в нём не означает, что руками правили

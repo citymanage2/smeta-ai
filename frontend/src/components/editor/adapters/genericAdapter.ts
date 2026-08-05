@@ -31,6 +31,21 @@ interface GenericStoredRow {
 const EXCLUDED_COLUMNS = new Set(['№', '#']);
 const TYPE_COL = 'Тип';
 const NAME_COL = 'Наименование';
+const NOTES_COL = 'примечание';
+
+// Начало примечания у строк, дописанных комплектом материалов по нормам расхода
+// (`backend/app/services/material_kits.py`). Меняете там — меняйте и здесь.
+const KIT_ADDED_PREFIX = 'Добавлено по норме';
+const KIT_MISMATCH_PREFIX = 'Расхождение с нормой';
+
+/** Примечание строки. Колонка приходит из файла, поэтому ищем по началу имени. */
+function noteOf(row: GridRow): string {
+  for (const [key, value] of Object.entries(row)) {
+    if (isServiceKey(key)) continue;
+    if (key.trim().toLowerCase().startsWith(NOTES_COL)) return String(value ?? '');
+  }
+  return '';
+}
 
 const COL_MIN = 60;
 const COL_MAX = 280;
@@ -155,6 +170,15 @@ export const genericAdapter: EditorAdapter = {
     if (value === 'Работа') return 'work';
     if (value === 'Материал') return 'material';
     return null;
+  },
+
+  rowClass(row: GridRow): string | undefined {
+    // Признак берём из примечания, а не из служебного поля: строки документа
+    // собираются из xlsx, и ключ вне ячеек не пережил бы ни файл, ни сохранение.
+    const note = noteOf(row).trimStart();
+    if (note.startsWith(KIT_ADDED_PREFIX)) return 'de-row-kit-added';
+    if (note.startsWith(KIT_MISMATCH_PREFIX)) return 'de-row-kit-mismatch';
+    return undefined;
   },
 
   searchText(row: GridRow): string {
