@@ -512,6 +512,11 @@ class TaskProcessor:
         # «зависший» прогон отличает себя от того, кто считает задачу сейчас.
         self.job_attempt = job_attempt
         self._input_files_cache: list[dict] | None = None
+        # Счёт частей текущего этапа чанков: {"label", "done", "total"}. Живая
+        # строка «готово N из M» идёт мимо progress_log, поэтому в истории задачи
+        # не оставалось ни одной цифры — пауза по балансу выглядела как «отправили
+        # 9 частей и тишина». Отсюда берутся вехи и приписка к сообщениям об обрыве.
+        self._chunk_tally: dict | None = None
 
     async def _load_input_files(self, task: Task) -> list[dict]:
         """Return input files with content_b64, loading bytes from S3 by storage_key.
@@ -640,6 +645,67 @@ class TaskProcessor:
             task.updated_at = datetime.now(timezone.utc)
             await self.db.commit()
         logger.info("Task progress", task_id=self.task_id, message=message)
+
+    # ── Счёт частей: видимость работы, за которую уже заплачено ─────────────
+    def _set_chunk_tally(self, total: int, label: str) -> None:
+        """Начать счёт нового этапа чанков. Повторный проход ведёт свой счёт."""
+        self._chunk_tally = {"label": label, "done": 0, "total": max(0, int(total))}
+
+    def _note_chunk_progress(self, applied: int) -> None:
+        """Учесть применённые (= оплаченные и сохранённые) части."""
+        if self._chunk_tally is not None:
+            self._chunk_tally["done"] += max(0, int(applied))
+
+    def _chunk_tally_line(self) -> str:
+        """«Расчёт цен: посчитано 4 из 9 частей, осталось 5.» Пусто, если этап не начат."""
+        tally = self._chunk_tally
+        if not tally or not tally.get("total"):
+            return ""
+        done, total = tally["done"], tally["total"]
+        left = max(0, total - done)
+        return f"{tally['label']}: посчитано {done} из {total} частей, осталось {left}."
+
+    async def _log_chunk_tally(self, applied: int = 0) -> None:
+        """Веха в историю: столько-то частей посчитано, столько-то осталось.
+
+        Пишется по вехам (после группы чанков и при обрыве), а не по тику — иначе
+        «ХОД ВЫПОЛНЕНИЯ» распух бы на сотни строк за один этап.
+        """
+        if self._chunk_tally is None:
+            return
+        self._note_chunk_progress(applied)
+        line = self._chunk_tally_line()
+        if line:
+            await self.update_progress(line)
+
+    async def _report_stage_interrupted(self, message: str) -> None:
+        """Сообщение об обрыве (пауза, ошибка, таймаут) вместе со счётом частей.
+
+        Без счёта пользователь не может отличить «встали сразу» от «встали, посчитав
+        восемь частей из девяти» — а от этого зависит, ждать возобновления или
+        перезапускать с нуля.
+        """
+        line = self._chunk_tally_line()
+        await self.update_progress(f"{message} {line}".strip() if line else message)
+
+    @staticmethod
+    def _chunks_launch_line(matched: int, unmatched: int, pending_chunks: int, restored: int) -> str:
+        """Строка запуска этапа Claude.
+
+        Печатает число РЕАЛЬНО отправляемых частей, а не длину полного списка: после
+        возобновления часть позиций уже посчитана, и «отправляем 9» читалось бы как
+        «платим за всё заново».
+        """
+        base = (
+            f"Прайс: {matched} позиций найдено, {unmatched} — нет. "
+            f"Отправляем {pending_chunks} чанк(а) в Claude..."
+        )
+        if restored > 0:
+            base += (
+                f" Восстановлено из чекпоинта: {restored} позиций уже посчитано, "
+                "повторно не оплачиваются."
+            )
+        return base
 
     async def update_progress_message(self, message: str) -> None:
         """Обновить ТОЛЬКО живую строку статуса, не дописывая её в историю.
@@ -1650,7 +1716,7 @@ class TaskProcessor:
             except Exception:
                 pass
             await self.update_status("failed", error=str(deadline_error))
-            await self.update_progress(f"⏱ {deadline_error}")
+            await self._report_stage_interrupted(f"⏱ {deadline_error}")
         except InsufficientBalanceError as balance_error:
             # Баланс API исчерпан — не failed, а пауза. Чекпоинт (progress_data)
             # к этому моменту уже сохранён отдельными сессиями и переживает
@@ -1672,7 +1738,7 @@ class TaskProcessor:
             # Сырой ответ API — в шаг прогресса: на сервере запросы идут через
             # агрегатор, и без этой строки нельзя понять, чей счёт пуст (диагноз
             # иначе только по логам worker'а).
-            await self.update_progress(
+            await self._report_stage_interrupted(
                 "⏸ На паузе: баланс API исчерпан. Возобновление произойдёт автоматически после пополнения."
                 + _balance_error_detail(balance_error)
             )
@@ -1683,7 +1749,7 @@ class TaskProcessor:
             except Exception:
                 pass
             await self.update_status("failed", error=str(e))
-            await self.update_progress(f"Ошибка: {str(e)[:400]}")
+            await self._report_stage_interrupted(f"Ошибка: {str(e)[:400]}")
         finally:
             stop_event.set()
             heartbeat_task.cancel()
@@ -2827,15 +2893,19 @@ class TaskProcessor:
                         failed_chunks=len(results) - applied,
                         error=str(first_error),
                     )
+                # Веха до проброса: обработчик статуса допишет её к сообщению о
+                # паузе/ошибке, и в истории останется, сколько успели посчитать.
+                await self._log_chunk_tally(applied)
                 if isinstance(first_error, asyncio.CancelledError):
                     raise TaskCancelledError("Задача остановлена пользователем")
                 raise first_error
+
+            await self._log_chunk_tally(applied)
 
         if unmatched_by_gidx:
             unmatched_list = list(unmatched_by_gidx.values())
             current_date = _date.today().strftime("%d.%m.%Y")
             chunks = _chunk_by_work_boundaries(unmatched_list, max_chunk_size=10)
-            total_chunks = len(chunks)
 
             mode = getattr(task, "processing_mode", "fast")
             if mode == "batch":
@@ -2845,16 +2915,19 @@ class TaskProcessor:
                 )
                 return
 
-            await self.update_progress(
-                f"Прайс: {n_matched} позиций найдено, {n_unmatched} — нет. "
-                f"Отправляем {total_chunks} чанк(а) в Claude..."
-            )
-
             concurrency = FAST_CHUNK_CONCURRENCY if mode == "fast" else 1
             # Главный проход группами: после каждой группы — промежуточный
             # чекпоинт claude_partial (устойчивость к паузе на балансе).
             # Пропускаем позиции, уже посчитанные в предыдущем запуске (resume).
             pending = self._pending_chunks(chunks, set(claude_results.keys()))
+
+            await self.update_progress(self._chunks_launch_line(
+                matched=n_matched,
+                unmatched=n_unmatched,
+                pending_chunks=len(pending),
+                restored=len(_resume_claude_results),
+            ))
+            self._set_chunk_tally(len(pending), label="Расчёт цен")
             for _gi in range(0, len(pending), ESTIMATE_MAIN_CHECKPOINT_GROUP):
                 group = pending[_gi:_gi + ESTIMATE_MAIN_CHECKPOINT_GROUP]
                 await self._check_cancelled()
@@ -2885,6 +2958,7 @@ class TaskProcessor:
                     for i in range(0, len(problem_items), ESTIMATE_RETRY_CHUNK)
                 ]
                 await self._check_cancelled()
+                self._set_chunk_tally(len(retry_chunks), label="Повторный расчёт")
                 await _process_chunks(
                     retry_chunks, label_prefix="retry-", concurrency=concurrency,
                     progress_label="Повторный расчёт: готово {done} из {total} частей...",
