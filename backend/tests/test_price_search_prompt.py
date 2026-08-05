@@ -34,7 +34,7 @@ async def test_web_search_material_price_includes_ekaterinburg():
     import app.services.price_service as ps
     captured: list[list] = []
 
-    async def mock_call_claude(messages, system_prompt="", use_web_search=False):
+    async def mock_call_claude(messages, system_prompt="", use_web_search=False, **kwargs):
         captured.append(messages)
         return '{"price": 100, "source": "test"}'
 
@@ -54,7 +54,7 @@ async def test_web_search_work_price_includes_ekaterinburg():
     import app.services.price_service as ps
     captured: list[list] = []
 
-    async def mock_call_claude(messages, system_prompt="", use_web_search=False):
+    async def mock_call_claude(messages, system_prompt="", use_web_search=False, **kwargs):
         captured.append(messages)
         return '{"price": 500, "unit": "м2", "source": "test"}'
 
@@ -75,7 +75,7 @@ async def test_web_search_material_price_includes_user_prompt():
     captured: list[list] = []
     user_prompt = "найди самую низкую цену от официальных дилеров"
 
-    async def mock_call_claude(messages, system_prompt="", use_web_search=False):
+    async def mock_call_claude(messages, system_prompt="", use_web_search=False, **kwargs):
         captured.append(messages)
         return '{"price": 100, "source": "test"}'
 
@@ -96,7 +96,7 @@ async def test_web_search_work_price_includes_user_prompt():
     captured: list[list] = []
     user_prompt = "предпочитай государственные расценки"
 
-    async def mock_call_claude(messages, system_prompt="", use_web_search=False):
+    async def mock_call_claude(messages, system_prompt="", use_web_search=False, **kwargs):
         captured.append(messages)
         return '{"price": 500, "unit": "м2", "source": "test"}'
 

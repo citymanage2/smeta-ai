@@ -453,8 +453,17 @@ async def find_top_n_materials_combined(name: str, n: int = 3) -> list[dict]:
         return []
 
 
-async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
-    """Use Claude with web search to find lower price for the same work item."""
+async def _web_search_work_price(
+    name: str,
+    user_prompt: str = "",
+    task_id: Optional[str] = None,
+    db=None,
+) -> Optional[dict]:
+    """Use Claude with web search to find lower price for the same work item.
+
+    task_id/db заданы → вызов попадёт в журнал затрат как доп (цена ищется по
+    строке уже сформированной сметы). Без них поиск платный, но невидимый.
+    """
     extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
     messages = [
         {
@@ -476,6 +485,9 @@ async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[d
             messages,
             system_prompt="Ты эксперт по ценообразованию в строительстве.",
             use_web_search=True,
+            task_id=task_id,
+            db=db,
+            is_extra=True,
         )
         try:
             data = extract_json(response)
@@ -492,8 +504,16 @@ async def _web_search_work_price(name: str, user_prompt: str = "") -> Optional[d
         return None
 
 
-async def _web_search_material_price(name: str, user_prompt: str = "") -> Optional[float]:
-    """Use Claude with web search to find lower price for the same material."""
+async def _web_search_material_price(
+    name: str,
+    user_prompt: str = "",
+    task_id: Optional[str] = None,
+    db=None,
+) -> Optional[float]:
+    """Use Claude with web search to find lower price for the same material.
+
+    task_id/db — см. `_web_search_work_price`: попадание вызова в журнал затрат.
+    """
     extra = f"\nДополнительные инструкции: {user_prompt}" if user_prompt.strip() else ""
     messages = [
         {
@@ -514,6 +534,9 @@ async def _web_search_material_price(name: str, user_prompt: str = "") -> Option
             messages,
             system_prompt="Ты эксперт по строительным материалам и ценообразованию.",
             use_web_search=True,
+            task_id=task_id,
+            db=db,
+            is_extra=True,
         )
         try:
             data = extract_json(response)
@@ -932,8 +955,17 @@ async def save_to_cache(
     _bg_task.add_done_callback(_background_tasks.discard)
 
 
-async def find_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
-    """Find work price: exact match -> embedding search -> web search."""
+async def find_work_price(
+    name: str,
+    user_prompt: str = "",
+    task_id: Optional[str] = None,
+    db=None,
+) -> Optional[dict]:
+    """Find work price: exact match -> embedding search -> web search.
+
+    task_id/db доезжают только до веб-поиска: прайс-лист и эмбеддинги бесплатны,
+    в журнал затрат попадать нечему.
+    """
     # 1. Exact match
     result = _exact_match_work(name)
     if result:
@@ -945,12 +977,20 @@ async def find_work_price(name: str, user_prompt: str = "") -> Optional[dict]:
         return result
 
     # 3. Web search (passes user_prompt for region/instructions context)
-    result = await _web_search_work_price(name, user_prompt=user_prompt)
+    result = await _web_search_work_price(name, user_prompt=user_prompt, task_id=task_id, db=db)
     return result
 
 
-async def find_material_price(name: str, user_prompt: str = "") -> Optional[float]:
-    """Find material price: exact match -> embedding search -> web search."""
+async def find_material_price(
+    name: str,
+    user_prompt: str = "",
+    task_id: Optional[str] = None,
+    db=None,
+) -> Optional[float]:
+    """Find material price: exact match -> embedding search -> web search.
+
+    task_id/db — см. `find_work_price`.
+    """
     # 1. Exact match
     result = _exact_match_material(name)
     if result is not None:
@@ -962,20 +1002,24 @@ async def find_material_price(name: str, user_prompt: str = "") -> Optional[floa
         return result
 
     # 3. Web search (passes user_prompt for region/instructions context)
-    result = await _web_search_material_price(name, user_prompt=user_prompt)
+    result = await _web_search_material_price(name, user_prompt=user_prompt, task_id=task_id, db=db)
     return result
 
 
 class PriceService:
     """Singleton wrapper for price service functions."""
 
-    async def find_work_price(self, name: str, user_prompt: str = "") -> Optional[dict]:
+    async def find_work_price(
+        self, name: str, user_prompt: str = "", task_id: Optional[str] = None, db=None
+    ) -> Optional[dict]:
         """Find lower price for the same work item."""
-        return await find_work_price(name, user_prompt=user_prompt)
+        return await find_work_price(name, user_prompt=user_prompt, task_id=task_id, db=db)
 
-    async def find_material_price(self, name: str, user_prompt: str = "") -> Optional[float]:
+    async def find_material_price(
+        self, name: str, user_prompt: str = "", task_id: Optional[str] = None, db=None
+    ) -> Optional[float]:
         """Find lower price for the same material."""
-        return await find_material_price(name, user_prompt=user_prompt)
+        return await find_material_price(name, user_prompt=user_prompt, task_id=task_id, db=db)
 
     async def load_cache(self) -> None:
         """Load price cache from DB."""

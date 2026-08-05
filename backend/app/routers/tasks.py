@@ -1501,10 +1501,15 @@ async def _process_single_item(
     item: dict,
     price_service,
     prompt: str,
+    task_id: Optional[str] = None,
+    db=None,
 ) -> dict:
     """Обработать одну позицию сметы: найти цену, вернуть optimization_result.
 
-    Не обращается к БД — только вычисляет.
+    Сам в БД не пишет и не читает — только вычисляет. task_id/db едут насквозь
+    в веб-поиск цены: он платный и должен попадать в журнал затрат задачи как
+    доп (цена ищется по строке уже сформированной сметы).
+
     Все исключения поглощает внутри и возвращает заглушку.
     """
     name = item["name"]
@@ -1516,12 +1521,16 @@ async def _process_single_item(
 
     try:
         if item_type == "work":
-            price_data = await price_service.find_work_price(name, user_prompt=prompt)
+            price_data = await price_service.find_work_price(
+                name, user_prompt=prompt, task_id=task_id, db=db
+            )
             if price_data:
                 found_price = float(price_data["min_price"])
                 source = price_data.get("source", "Прайс-лист")
         else:
-            material_price = await price_service.find_material_price(name, user_prompt=prompt)
+            material_price = await price_service.find_material_price(
+                name, user_prompt=prompt, task_id=task_id, db=db
+            )
             if material_price is not None:
                 found_price = float(material_price)
                 source = "Прайс-лист"
@@ -1621,7 +1630,10 @@ async def _run_optimization_background(
                 batch = items_to_process[batch_start: batch_start + OPTIMIZATION_BATCH_SIZE]
 
                 batch_results = await _asyncio.gather(
-                    *[_process_single_item(item, price_service, prompt) for item in batch],
+                    *[
+                        _process_single_item(item, price_service, prompt, task_id=task_id, db=db)
+                        for item in batch
+                    ],
                     return_exceptions=True,
                 )
 
@@ -1946,6 +1958,10 @@ async def reprice_estimate_item(
             messages=[{"role": "user", "content": prompt_text}],
             use_web_search=True,
             processing_timeout=120.0,
+            task_id=task_id,
+            db=db,
+            # Доп: цена ищется для строки уже готовой сметы.
+            is_extra=True,
         )
         data = extract_json(response_text)
     except Exception as e:
