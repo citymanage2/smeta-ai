@@ -11,7 +11,7 @@ from app.config import settings
 
 logger = structlog.get_logger()
 
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-sonnet-5"
 
 
 class ResponseTruncatedError(ValueError):
@@ -101,6 +101,15 @@ WEB_SEARCH_COST_PER_REQUEST = 10.0 / 1000
 
 # USD per token for cost calculation
 _COST_PER_TOKEN: dict[str, dict[str, float]] = {
+    # До 31.08.2026 у Sonnet 5 вводная цена $2/$10 — считаем по обычной $3/$15,
+    # чтобы после её окончания расчёт не занизил траты. До этой даты цифры в
+    # логе завышены примерно на треть.
+    "claude-sonnet-5": {
+        "input": 3.0 / 1_000_000,
+        "output": 15.0 / 1_000_000,
+        "cache_read": 0.30 / 1_000_000,
+        "cache_creation": 3.75 / 1_000_000,
+    },
     "claude-sonnet-4-6": {
         "input": 3.0 / 1_000_000,
         "output": 15.0 / 1_000_000,
@@ -419,12 +428,20 @@ def _build_message_params(
     image_data: Optional[list[dict]] = None,
     max_tokens: int = 32000,
 ) -> dict[str, Any]:
-    """Собрать params для Messages API (модель, tokens, temperature, messages,
-    закэшированный system, web_search tool). Общий код для call_claude и batch."""
+    """Собрать params для Messages API (модель, tokens, размышления, messages,
+    закэшированный system, web_search tool). Общий код для call_claude и batch.
+
+    Sonnet 5 не принимает temperature/top_p/top_k — любое значение это 400.
+    Вместо них поведение задаётся промптом и уровнем усилий: `effort=medium` у
+    Sonnet 5 по интеллекту примерно равен `high` у Sonnet 4.6, то есть тому, что
+    было до перехода. Размышления оставлены включёнными (adaptive): с
+    выключенными модель реже сама тянется к web_search, а поиск цен на нём держится.
+    """
     params: dict[str, Any] = {
         "model": CLAUDE_MODEL,
         "max_tokens": max_tokens,
-        "temperature": 0.1,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "medium"},
         "messages": _build_messages(messages, image_data),
     }
     if system_prompt:
@@ -715,6 +732,9 @@ async def api_ping() -> dict:
             await _get_client().messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=1,
+                # Пинг проверяет доступ и деньги, а не качество ответа — размышления
+                # тут только жгут токены (у Sonnet 5 они включены по умолчанию).
+                thinking={"type": "disabled"},
                 messages=[{"role": "user", "content": "ping"}],
             )
         return {**info, "ok": True, "status_code": 200, "error": None, "is_balance_error": False}
