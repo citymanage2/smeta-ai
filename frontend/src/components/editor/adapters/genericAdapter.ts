@@ -4,6 +4,8 @@ import {
   EditorAdapter,
   EditorColumn,
   GridRow,
+  KIT_ADDED_PREFIX,
+  KIT_MISMATCH_PREFIX,
   Percentages,
   RowKind,
   SHEET_KEY,
@@ -32,11 +34,6 @@ const EXCLUDED_COLUMNS = new Set(['№', '#']);
 const TYPE_COL = 'Тип';
 const NAME_COL = 'Наименование';
 const NOTES_COL = 'примечание';
-
-// Начало примечания у строк, дописанных комплектом материалов по нормам расхода
-// (`backend/app/services/material_kits.py`). Меняете там — меняйте и здесь.
-const KIT_ADDED_PREFIX = 'Добавлено по норме';
-const KIT_MISMATCH_PREFIX = 'Расхождение с нормой';
 
 /** Примечание строки. Колонка приходит из файла, поэтому ищем по началу имени. */
 function noteOf(row: GridRow): string {

@@ -21,6 +21,16 @@ export interface GridRow {
  */
 export const SHEET_KEY = '__sheet';
 
+/**
+ * Начало примечания у строк, дописанных комплектом материалов по нормам расхода
+ * (`backend/app/services/material_kits.py`). Признак живёт в тексте примечания,
+ * а не в отдельном поле: строки перечня собираются из xlsx, и служебный ключ не
+ * пережил бы ни файл, ни сохранение. Меняете формулировку на бэкенде — меняйте
+ * здесь: по ней подсвечиваются строки и в перечне, и в смете.
+ */
+export const KIT_ADDED_PREFIX = 'Добавлено по норме';
+export const KIT_MISMATCH_PREFIX = 'Расхождение с нормой';
+
 /** Служебное поле строки таблицы — в документ такие ключи не сохраняются. */
 export function isServiceKey(key: string): boolean {
   return key.startsWith('__');
