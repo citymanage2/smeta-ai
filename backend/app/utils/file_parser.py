@@ -43,6 +43,13 @@ _NORM_CODE = re.compile(r"^(фер|тер|гэсн|фсн|фснб|пр/|ере�
 # позиция уезжала в перечень заголовком раздела — без единицы, без объёма и с
 # прямым указанием промпта «заголовки разделов пропускай». Материал исчезал.
 _SECTION_HEADER = re.compile(r"^(раздел|подраздел|глава)\s", re.IGNORECASE)
+# Номер позиции сметы в колонке «№ п/п»: «12», «1.1», «12а».
+# Всё, что раскрыто внутри расценки (ОТ/ЭМ/М, ресурсы «Н» и «П,Н», ЗТ, Итого,
+# НР/СП, Всего по позиции), номера не имеет — это и отличает позицию от её
+# внутренностей.
+_POSITION_NO = re.compile(r"^\d+(?:[.,]\d+)*\s*[а-яa-z]?$", re.IGNORECASE)
+# Минимум пронумерованных строк, при котором нумерации на листе можно доверять
+_MIN_NUMBERED_ROWS = 2
 
 
 def _col_score(header: str, keywords: list[str]) -> int:
@@ -123,6 +130,45 @@ def _find_header_row(all_rows) -> Tuple[Optional[int], Optional[int], Optional[i
     return (best_row_idx, name_col, unit_col, qty_col, qty_total_col)
 
 
+def _find_number_col(header_row, name_col: int) -> Optional[int]:
+    """Колонка «№ п/п» в строке заголовка — или None, если её там нет.
+
+    Ищем только левее наименования: номер позиции в ЛСР всегда первая колонка, а
+    «№» правее — это уже что-то другое (номер расценки, номер приказа).
+    """
+    for col_idx, cell in enumerate(header_row[:name_col]):
+        if cell is None:
+            continue
+        if str(cell).strip().startswith("№"):
+            return col_idx
+    return None
+
+
+def _find_cost_col(all_rows, header_row_idx: int) -> Optional[int]:
+    """Первая колонка стоимости («Сметная стоимость», «Стоимость единицы»…).
+
+    Нужна как страховка: у справочного ресурса расценки стоимости не бывает —
+    она уже внутри расценки, — а у позиции без номера в нестандартной выгрузке
+    она есть, и такую строку терять нельзя.
+    """
+    for row_idx in range(header_row_idx, min(header_row_idx + 5, len(all_rows))):
+        for col_idx, cell in enumerate(all_rows[row_idx]):
+            if cell is not None and "стоимост" in str(cell).lower():
+                return col_idx
+    return None
+
+
+def _has_own_cost(row, cost_col: Optional[int]) -> bool:
+    """True если в строке есть число в колонках стоимости.
+
+    Именно число: правее колонок стоимости ГРАНД-Смета дублирует наименования
+    служебным текстом, и проверка «ячейка не пуста» считала бы стоимостью его.
+    """
+    if cost_col is None:
+        return False
+    return any(_parse_quantity(cell) is not None for cell in row[cost_col:])
+
+
 def _is_total_row(name: str) -> bool:
     """True если строка — итог/суммарная, её нужно пропустить."""
     return bool(_TOTAL_KEYWORDS.search(name))
@@ -154,6 +200,8 @@ def _parse_grand_sheet(ws) -> "list[dict]":
 
     # Используем колонку итогового количества если найдена, иначе базовую
     effective_qty_col = qty_total_col if qty_total_col is not None else qty_col
+    num_col = _find_number_col(all_rows[header_row_idx], name_col)
+    cost_col = _find_cost_col(all_rows, header_row_idx)
     logger.info(
         "Grand-смета: заголовок найден",
         sheet=ws.title,
@@ -162,6 +210,8 @@ def _parse_grand_sheet(ws) -> "list[dict]":
         unit_col=unit_col,
         qty_col=qty_col,
         qty_total_col=qty_total_col,
+        num_col=num_col,
+        cost_col=cost_col,
     )
 
     rows: list[dict] = []
@@ -173,7 +223,9 @@ def _parse_grand_sheet(ws) -> "list[dict]":
             # Проверяем col 0 — там могут быть заголовки разделов (объединённые ячейки)
             col0 = cells[0] if cells else ""
             if col0 and col0 != "None" and _SECTION_HEADER.match(col0):
-                rows.append({"name": col0, "unit": "", "quantity": None, "is_section": True})
+                rows.append(
+                    {"name": col0, "unit": "", "quantity": None, "is_section": True, "__numbered": False}
+                )
             continue
 
         if _is_total_row(name):
@@ -199,9 +251,45 @@ def _parse_grand_sheet(ws) -> "list[dict]":
         # Заголовок раздела не имеет ни единицы измерения, ни объёма.
         # Строка с ними — позиция сметы, как бы она ни называлась.
         is_section = bool(_SECTION_HEADER.match(name)) and not unit and qty is None
-        rows.append({"name": name, "unit": unit, "quantity": qty, "is_section": is_section})
+        row_no = str(row[num_col]).strip() if num_col is not None and num_col < len(row) and row[num_col] is not None else ""
+        rows.append(
+            {
+                "name": name,
+                "unit": unit,
+                "quantity": qty,
+                "is_section": is_section,
+                # Позиция сметы: номер в «№ п/п» — или, если номера нет,
+                # полноценная строка со своей стоимостью (см. _has_own_cost).
+                "__numbered": bool(_POSITION_NO.match(row_no))
+                or bool(unit and qty is not None and _has_own_cost(row, cost_col)),
+            }
+        )
 
-    return rows
+    return _drop_recipe_internals(rows, sheet=ws.title)
+
+
+def _drop_recipe_internals(rows: "list[dict]", sheet: str) -> "list[dict]":
+    """Убирает строки, раскрывающие состав расценки, оставляя позиции сметы.
+
+    Неучтённый ресурс расценки («Н 04.3.01.09 Раствор готовый кладочный тяжелый
+    цементный, м3, 15,63864») выглядит как обычная позиция: есть наименование,
+    единица и объём. Но это справочная строка — тот же материал ниже добавлен
+    отдельной пронумерованной позицией ФССЦ, и в перечень он уезжал дважды.
+
+    Признак позиции — номер в колонке «№ п/п» (или собственная стоимость, см.
+    `_has_own_cost`). Если нумерации на листе нет, фильтр не включается: иначе
+    выгрузка без «№ п/п» опустела бы целиком.
+    """
+    numbered = sum(1 for r in rows if r["__numbered"])
+    keep = rows if numbered < _MIN_NUMBERED_ROWS else [r for r in rows if r["__numbered"] or r["is_section"]]
+
+    dropped = len(rows) - len(keep)
+    if dropped:
+        logger.info("Grand-смета: строки внутри расценок отброшены", sheet=sheet, dropped=dropped)
+
+    for row in keep:
+        del row["__numbered"]
+    return keep
 
 
 def _parse_grand_sheet_fallback(ws) -> "list[dict]":
