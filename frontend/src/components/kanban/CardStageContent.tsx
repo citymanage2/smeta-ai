@@ -380,6 +380,19 @@ interface StageProps {
   onResume: (taskId: string) => Promise<void>
 }
 
+/**
+ * Тело стадии — её собственное содержимое, без секций предыдущих стадий.
+ *
+ * Два вида показывают одни и те же стадии по-разному: канбан и страница сметы
+ * рисуют одну стадию с историей предыдущих, список смет проекта — все четыре
+ * стадии аккордеоном. Тело общее, иначе формы запуска, пауза, ошибки и архив
+ * версий разошлись бы между видами.
+ *
+ * `showLabel` — где название стадии пишет само тело (канбан), а где его берёт
+ * на себя заголовок раскрывающейся секции (аккордеон).
+ */
+type StageBodyProps = StageProps & { showLabel?: boolean }
+
 function RestartBtn({ taskId, onRestart }: { taskId: string; onRestart: (id: string) => Promise<void> }) {
   const [loading, setLoading] = useState(false)
   return (
@@ -572,7 +585,7 @@ function ResultFilesSection({
 // ---------------------------------------------------------------------------
 // Stage: Перечень
 // ---------------------------------------------------------------------------
-function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
+function ListStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, showLabel = true }: StageBodyProps) {
   const { startTask, submittingCardIds, pendingListTasks, clearPendingListTask } = useKanbanStore()
   const navigate = useNavigate()
   const pending = pendingListTasks[card.id]
@@ -600,6 +613,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
 
   const effectiveType = (task?.task_type ?? taskType) as string
   const typeLabel = TYPE_LABEL[effectiveType] ?? effectiveType
+  const label = showLabel ? <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel> : null
 
   const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const added = Array.from(e.target.files ?? [])
@@ -647,7 +661,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
   if (task === null) {
     return (
       <div>
-        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+        {label}
         <FileList />
         <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleAddFiles} />
         <AddFileBtn />
@@ -676,7 +690,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
   if (task.status === 'pending' || task.status === 'processing') {
     return (
       <div>
-        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+        {label}
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
           <LumaSpin size="sm" color="#d97706" />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -695,7 +709,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
   if (task.status === 'completed') {
     return (
       <div>
-        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+        {label}
 
         {/* Исходный файл */}
         {sourceStage && sourceStage.input_files.length > 0 && (
@@ -771,7 +785,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
   if (task.status === 'paused') {
     return (
       <div>
-        <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+        {label}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
           <TaskStatusBadge task={task} />
           <ArrowBtn onClick={navigateToCard} />
@@ -784,7 +798,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
   // Ошибка / отменено
   return (
     <div>
-      <SectionLabel color="#7c3aed">{typeLabel}</SectionLabel>
+      {label}
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', marginBottom: '8px' }}>
         <TaskStatusBadge task={task} />
         <ArrowBtn onClick={navigateToCard} />
@@ -817,10 +831,7 @@ function ListStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: Stage
 // Stage: Полнота
 // ---------------------------------------------------------------------------
 function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
-  const { startTask, submittingCardIds } = useKanbanStore()
   const navigate = useNavigate()
-  const submitting = submittingCardIds.has(card.id)
-  const task = card.completeness_task
   const listTask = card.list_task
 
   // Идём прямо на страницу сметы, на нужный этап: адрес задачи туда же
@@ -833,27 +844,12 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
     ? 'Перечень из Гранд-сметы'
     : 'Перечень'
 
-  const getCompletenessType = () =>
-    card.list_task?.task_type === 'LIST_FROM_PROJECT'
-      ? 'CHECK_PROJECT_COMPLETENESS'
-      : 'CHECK_LIST_COMPLETENESS'
-
   const sourceStage = filesMeta?.source_stage
   const completenessStage = filesMeta?.completeness_stage
-  const nextStage: StageDetail | null = filesMeta?.estimate_stage ?? filesMeta?.optimization_stage ?? null
 
   const listEditedWarning = sourceStage?.manually_edited_at && completenessStage
     ? wasEditedBefore(sourceStage.manually_edited_at, completenessStage.task_created_at)
     : false
-
-  const completenessEditedWarning = completenessStage?.manually_edited_at && nextStage
-    ? wasEditedBefore(completenessStage.manually_edited_at, nextStage.task_created_at)
-    : false
-
-  const sectionLabelStyle: React.CSSProperties = {
-    fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: '0.05em', marginBottom: '4px',
-  }
 
   return (
     <div>
@@ -905,7 +901,46 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
         </CollapsibleSection>
       )}
 
-      {/* Задача проверки полноты */}
+      <CompletenessStageBody
+        card={card}
+        filesMeta={filesMeta}
+        onOpenEditor={onOpenEditor}
+        onRestart={onRestart}
+        onResume={onResume}
+      />
+    </div>
+  )
+}
+
+function CompletenessStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, showLabel = true }: StageBodyProps) {
+  const { startTask, submittingCardIds } = useKanbanStore()
+  const navigate = useNavigate()
+  const submitting = submittingCardIds.has(card.id)
+  const task = card.completeness_task
+
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=completeness`)
+
+  const getCompletenessType = () =>
+    card.list_task?.task_type === 'LIST_FROM_PROJECT'
+      ? 'CHECK_PROJECT_COMPLETENESS'
+      : 'CHECK_LIST_COMPLETENESS'
+
+  const completenessStage = filesMeta?.completeness_stage
+  const nextStage: StageDetail | null = filesMeta?.estimate_stage ?? filesMeta?.optimization_stage ?? null
+
+  const completenessEditedWarning = completenessStage?.manually_edited_at && nextStage
+    ? wasEditedBefore(completenessStage.manually_edited_at, nextStage.task_created_at)
+    : false
+
+  const sectionLabelStyle: React.CSSProperties = {
+    fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+    letterSpacing: '0.05em', marginBottom: '4px',
+  }
+  const label = (text: string) =>
+    showLabel ? <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>{text}</div> : null
+
+  return (
+    <div>
       {task === null && (
         <ActionButton onClick={async () => { await startTask(card.id, { task_type: getCompletenessType() }) }} disabled={submitting}>
           {submitting ? 'Запускаю…' : 'Запустить проверку полноты'}
@@ -914,7 +949,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 
       {task !== null && (task.status === 'pending' || task.status === 'processing') && (
         <div>
-          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          {label('Проверка полноты')}
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
             <LumaSpin size="sm" color="#d97706" />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -933,7 +968,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 
       {task !== null && task.status === 'completed' && (
         <div>
-          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Полнота</div>
+          {label('Полнота')}
           {completenessStage && completenessStage.result_files.length > 0 ? (
             completenessStage.result_files.map(f => (
               <div key={f.result_id} style={{ marginBottom: '3px' }}>
@@ -970,7 +1005,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 
       {task !== null && task.status === 'paused' && (
         <div>
-          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          {label('Проверка полноты')}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <TaskStatusBadge task={task} />
             <ArrowBtn onClick={navigateToCard} />
@@ -981,7 +1016,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 
       {task !== null && (task.status === 'failed' || task.status === 'cancelled') && (
         <div>
-          <div style={{ ...sectionLabelStyle, color: '#3b82f6' }}>Проверка полноты</div>
+          {label('Проверка полноты')}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <TaskStatusBadge task={task} />
             <ArrowBtn onClick={navigateToCard} />
@@ -1002,10 +1037,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 // Stage: Смета
 // ---------------------------------------------------------------------------
 function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
-  const { startTask, submittingCardIds } = useKanbanStore()
   const navigate = useNavigate()
-  const submitting = submittingCardIds.has(card.id)
-  const task = card.estimate_task
   const listTask = card.list_task
   const completenessTask = card.completeness_task
 
@@ -1013,28 +1045,15 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
   // и редиректит, но лишним переходом и морганием экрана.
   const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=estimate`)
 
-  const listCompleted = listTask?.status === 'completed'
-  const completenessCompleted = completenessTask?.status === 'completed'
-
-  const [sourceStageNum, setSourceStageNum] = useState<1 | 2>(completenessCompleted ? 2 : 1)
-
-  const noSource = !listCompleted && !completenessCompleted
-
   const listTypeLabel = listTask?.task_type === 'LIST_FROM_PROJECT'
     ? 'Перечень из проекта'
     : listTask?.task_type === 'LIST_FROM_GRAND'
     ? 'Перечень из Гранд-сметы'
     : 'Перечень'
 
-  const sectionLabelStyle: React.CSSProperties = {
-    fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
-    letterSpacing: '0.05em', marginBottom: '4px',
-  }
-
   const sourceMetaStage = filesMeta?.source_stage
   const completenessMetaStage = filesMeta?.completeness_stage
   const estimateMetaStage = filesMeta?.estimate_stage
-  const nextStage: StageDetail | null = filesMeta?.optimization_stage ?? null
 
   const listEditedWarning = sourceMetaStage?.manually_edited_at && estimateMetaStage
     ? wasEditedBefore(sourceMetaStage.manually_edited_at, estimateMetaStage.task_created_at)
@@ -1043,16 +1062,6 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
   const completenessEditedWarning = completenessMetaStage?.manually_edited_at && estimateMetaStage
     ? wasEditedBefore(completenessMetaStage.manually_edited_at, estimateMetaStage.task_created_at)
     : false
-
-  const estimateEditedWarning = estimateMetaStage?.manually_edited_at && nextStage
-    ? wasEditedBefore(estimateMetaStage.manually_edited_at, nextStage.task_created_at)
-    : false
-
-  const canCreate = task === null || task.status === 'failed' || task.status === 'cancelled'
-
-  const handleCreate = async () => {
-    await startTask(card.id, { task_type: 'ESTIMATE_FROM_LIST', source_stage: sourceStageNum })
-  }
 
   return (
     <div>
@@ -1140,8 +1149,57 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
         </CollapsibleSection>
       )}
 
-      {/* Смета */}
-      <div style={{ ...sectionLabelStyle, color: '#0f766e' }}>Смета из перечня</div>
+      <EstimateStageBody
+        card={card}
+        filesMeta={filesMeta}
+        onOpenEditor={onOpenEditor}
+        onRestart={onRestart}
+        onResume={onResume}
+      />
+    </div>
+  )
+}
+
+function EstimateStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, showLabel = true }: StageBodyProps) {
+  const { startTask, submittingCardIds } = useKanbanStore()
+  const navigate = useNavigate()
+  const submitting = submittingCardIds.has(card.id)
+  const task = card.estimate_task
+  const listTask = card.list_task
+  const completenessTask = card.completeness_task
+
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=estimate`)
+
+  const listCompleted = listTask?.status === 'completed'
+  const completenessCompleted = completenessTask?.status === 'completed'
+
+  const [sourceStageNum, setSourceStageNum] = useState<1 | 2>(completenessCompleted ? 2 : 1)
+
+  const noSource = !listCompleted && !completenessCompleted
+
+  const estimateMetaStage = filesMeta?.estimate_stage
+  const nextStage: StageDetail | null = filesMeta?.optimization_stage ?? null
+
+  const estimateEditedWarning = estimateMetaStage?.manually_edited_at && nextStage
+    ? wasEditedBefore(estimateMetaStage.manually_edited_at, nextStage.task_created_at)
+    : false
+
+  const canCreate = task === null || task.status === 'failed' || task.status === 'cancelled'
+
+  const handleCreate = async () => {
+    await startTask(card.id, { task_type: 'ESTIMATE_FROM_LIST', source_stage: sourceStageNum })
+  }
+
+  return (
+    <div>
+      {showLabel && (
+        <div style={{
+          fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+          letterSpacing: '0.05em', marginBottom: '4px', color: '#0f766e',
+        }}>
+          Смета из перечня
+        </div>
+      )}
 
       {task !== null && (task.status === 'pending' || task.status === 'processing') && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', flexWrap: 'nowrap' }}>
@@ -1247,29 +1305,18 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
 // ---------------------------------------------------------------------------
 function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: StageProps) {
   const navigate = useNavigate()
-  const { startTask, submittingCardIds } = useKanbanStore()
-  const submitting = submittingCardIds.has(card.id)
   const task = card.optimization_task
   const listTask = card.list_task
   const completenessTask = card.completeness_task
   const estimateTask = card.estimate_task
-  const [file, setFile] = useState<File | null>(null)
-  const [fileError, setFileError] = useState<string | null>(null)
-  const [archiveExpanded, setArchiveExpanded] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
 
   // Идём прямо на страницу сметы, на нужный этап: адрес задачи туда же
   // и редиректит, но лишним переходом и морганием экрана.
   const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=optimization`)
 
-  const estimateCompleted = estimateTask?.status === 'completed'
-  const optimizationMeta = filesMeta?.optimization_stage
   const sourceMetaStage = filesMeta?.source_stage
   const completenessMetaStage = filesMeta?.completeness_stage
   const estimateMetaStage = filesMeta?.estimate_stage
-
-  const mainFile = optimizationMeta?.result_files.find(f => f.slot === 'optimized') ?? optimizationMeta?.result_files[0]
-  const archiveFiles = optimizationMeta?.result_files.filter(f => f.slot !== 'optimized' && f.slot !== 'source') ?? []
 
   const hasSourcePipeline = !!(listTask && listTask.status === 'completed')
 
@@ -1279,79 +1326,23 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
     ? 'Перечень из Гранд-сметы'
     : 'Перечень'
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] ?? null
-    if (f && f.size > FILE_SIZE_LIMIT) {
-      setFileError('Файл превышает 50 МБ')
-      setFile(null)
-    } else {
-      setFileError(null)
-      setFile(f)
-    }
-  }
-
-  const handleUsePrevious = async () => {
-    await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', use_previous_stage: true })
-  }
-
-  const handleUpload = async () => {
-    if (!file) return
-    await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', file })
-    setFile(null)
-    if (fileRef.current) fileRef.current.value = ''
-  }
-
   const canStart = task === null || task.status === 'failed' || task.status === 'cancelled'
-
   // Секция «Смета» показывается, только если смета уже готова на предыдущей стадии.
   const hasEstimateSection = !!(estimateTask && estimateTask.status === 'completed' && estimateMetaStage)
   // Блок запуска живёт внутри секции «Смета» — прямо под сметой, которую оптимизируем.
-  const nestedLaunch = canStart && hasEstimateSection
+  // Готового результата в этот момент быть не может (`canStart` и «завершено»
+  // исключают друг друга), поэтому в секцию уезжает всё тело стадии целиком.
+  const nested = canStart && hasEstimateSection
 
-  const launchBlock = (
-    <div style={nestedLaunch
-      ? { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #e2e8f0' }
-      : undefined}
-    >
-      {nestedLaunch && (
-        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#c2410c', marginBottom: '4px' }}>
-          Оптимизация
-        </div>
-      )}
-      <TaskStatusBadge task={task} />
-      {task !== null && task.status === 'paused' && (
-        <PausedBlock taskId={task.id} onResume={onResume} />
-      )}
-      {canStart && (
-        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
-          <div style={{ marginBottom: '8px' }}>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Использовать смету из предыдущей стадии:</div>
-            <ActionButton onClick={handleUsePrevious} disabled={!estimateCompleted || submitting}>
-              {submitting ? 'Запускаю…' : 'Использовать смету'}
-            </ActionButton>
-            {!estimateCompleted && (
-              <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '4px' }}>
-                Сначала создайте смету на стадии «Смета»
-              </div>
-            )}
-          </div>
-          <div>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Или загрузить смету с ПК:</div>
-            <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
-              <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
-            </div>
-            {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
-            {file && (
-              <div style={{ marginTop: '6px' }}>
-                <ActionButton onClick={handleUpload} disabled={submitting}>
-                  {submitting ? 'Запускаю…' : 'Загрузить и оптимизировать'}
-                </ActionButton>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+  const body = (
+    <OptimizationStageBody
+      card={card}
+      filesMeta={filesMeta}
+      onOpenEditor={onOpenEditor}
+      onRestart={onRestart}
+      onResume={onResume}
+      nested={nested}
+    />
   )
 
   return (
@@ -1409,13 +1400,118 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
           label="Смета"
           color="#0f766e"
           fallbackSlot="result"
-          defaultExpanded={nestedLaunch}
-          footer={nestedLaunch ? launchBlock : undefined}
+          defaultExpanded={nested}
+          footer={nested ? body : undefined}
         />
       )}
 
       {/* Оптимизация — на уровне стадии, если смета из предыдущей стадии недоступна */}
-      {!nestedLaunch && launchBlock}
+      {!nested && body}
+    </div>
+  )
+}
+
+/**
+ * Тело стадии оптимизации: блок запуска и результат.
+ *
+ * `nested` — тело показано внутри секции «Смета» (канбан): тогда у него своя
+ * шапка «Оптимизация» и отбивка сверху. В аккордеоне стадий шапку даёт сам
+ * заголовок секции, и отбивка не нужна.
+ */
+function OptimizationStageBody({
+  card, filesMeta, onOpenEditor, onRestart, onResume, nested = false,
+}: StageProps & { nested?: boolean }) {
+  const navigate = useNavigate()
+  const { startTask, submittingCardIds } = useKanbanStore()
+  const submitting = submittingCardIds.has(card.id)
+  const task = card.optimization_task
+  const estimateTask = card.estimate_task
+  const [file, setFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [archiveExpanded, setArchiveExpanded] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const navigateToCard = () => navigate(`/projects/${card.project_id}/cards/${card.id}?stage=optimization`)
+
+  const estimateCompleted = estimateTask?.status === 'completed'
+  const optimizationMeta = filesMeta?.optimization_stage
+
+  const mainFile = optimizationMeta?.result_files.find(f => f.slot === 'optimized') ?? optimizationMeta?.result_files[0]
+  const archiveFiles = optimizationMeta?.result_files.filter(f => f.slot !== 'optimized' && f.slot !== 'source') ?? []
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] ?? null
+    if (f && f.size > FILE_SIZE_LIMIT) {
+      setFileError('Файл превышает 50 МБ')
+      setFile(null)
+    } else {
+      setFileError(null)
+      setFile(f)
+    }
+  }
+
+  const handleUsePrevious = async () => {
+    await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', use_previous_stage: true })
+  }
+
+  const handleUpload = async () => {
+    if (!file) return
+    await startTask(card.id, { task_type: 'ESTIMATE_OPTIMIZATION', file })
+    setFile(null)
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  const canStart = task === null || task.status === 'failed' || task.status === 'cancelled'
+
+  const launchBlock = (
+    <div style={nested
+      ? { marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #e2e8f0' }
+      : undefined}
+    >
+      {nested && (
+        <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#c2410c', marginBottom: '4px' }}>
+          Оптимизация
+        </div>
+      )}
+      <TaskStatusBadge task={task} />
+      {task !== null && task.status === 'paused' && (
+        <PausedBlock taskId={task.id} onResume={onResume} />
+      )}
+      {canStart && (
+        <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
+          <div style={{ marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Использовать смету из предыдущей стадии:</div>
+            <ActionButton onClick={handleUsePrevious} disabled={!estimateCompleted || submitting}>
+              {submitting ? 'Запускаю…' : 'Использовать смету'}
+            </ActionButton>
+            {!estimateCompleted && (
+              <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '4px' }}>
+                Сначала создайте смету на стадии «Смета»
+              </div>
+            )}
+          </div>
+          <div>
+            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Или загрузить смету с ПК:</div>
+            <div style={{ overflow: 'hidden', maxWidth: '100%' }}>
+              <input ref={fileRef} type="file" style={{ fontSize: '13px', maxWidth: '100%' }} onChange={handleFileChange} />
+            </div>
+            {fileError && <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>{fileError}</div>}
+            {file && (
+              <div style={{ marginTop: '6px' }}>
+                <ActionButton onClick={handleUpload} disabled={submitting}>
+                  {submitting ? 'Запускаю…' : 'Загрузить и оптимизировать'}
+                </ActionButton>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <div>
+      {launchBlock}
 
       {task !== null && task.status === 'completed' && (
         <div style={{ marginTop: '8px' }}>
@@ -1478,8 +1574,15 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
 // ---------------------------------------------------------------------------
 // CardStageContent — диспетчер с загрузкой filesMeta
 // ---------------------------------------------------------------------------
-export function CardStageContent({ card }: { card: WorkflowCard }) {
-  // Через селектор: диспетчер рендерится и вне доски (список смет, карточка),
+/**
+ * Метаданные файлов стадий, модалка редактора и перезапуск/продолжение задачи.
+ *
+ * Один загрузчик на оба вида стадий (диспетчер канбана и аккордеон списка
+ * смет): запрос `getCardFilesMeta` и обновление после сохранения в редакторе
+ * должны работать одинаково, разойтись им нельзя.
+ */
+function useCardStageProps(card: WorkflowCard) {
+  // Через селектор: хук работает и вне доски (список смет, карточка),
   // подписка на весь стор дёргала бы его на каждый цикл опроса карточек.
   const fetchCards = useKanbanStore(s => s.fetchCards)
   const [filesMeta, setFilesMeta] = useState<CardDetail | null>(null)
@@ -1530,11 +1633,32 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
     card, filesMeta, onOpenEditor: setEditorModal, onRestart: handleRestart, onResume: handleResume,
   }
 
+  // Все четыре типа документа открываются одним редактором. Прежний путь
+  // через iframe удалён вместе с Фазой 6.
+  const editor = editorModal?.taskType && UNIFIED_EDITOR_TASK_TYPES.has(editorModal.taskType) ? (
+    <DocumentEditor
+      cardId={card.id}
+      kind={kindFromTaskType(editorModal.taskType)!}
+      fileSlot={editorModal.fileSlot === 'input' ? 'input' : undefined}
+      fileIndex={editorModal.fileSlot === 'input' ? editorModal.fileIndex : undefined}
+      title={editorModal.title}
+      startFullscreen
+      onClose={() => setEditorModal(null)}
+      onApplied={fetchMeta}
+    />
+  ) : null
+
+  return { stageProps, editor }
+}
+
+export function CardStageContent({ card }: { card: WorkflowCard }) {
+  const { stageProps, editor } = useCardStageProps(card)
+
   return (
     <>
       {(() => {
         switch (card.stage) {
-          case 'list':         return <ListStage {...stageProps} />
+          case 'list':         return <ListStageBody {...stageProps} />
           case 'completeness': return <CompletenessStage {...stageProps} />
           case 'estimate':     return <EstimateStage {...stageProps} />
           case 'optimization': return <OptimizationStage {...stageProps} />
@@ -1549,20 +1673,7 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
           разойтись. Одна строка внизу закрывает все состояния сразу. */}
       <CurrentStageUsage card={card} />
 
-      {/* Все четыре типа документа открываются одним редактором. Прежний путь
-          через iframe удалён вместе с Фазой 6. */}
-      {editorModal?.taskType && UNIFIED_EDITOR_TASK_TYPES.has(editorModal.taskType) && (
-        <DocumentEditor
-          cardId={card.id}
-          kind={kindFromTaskType(editorModal.taskType)!}
-          fileSlot={editorModal.fileSlot === 'input' ? 'input' : undefined}
-          fileIndex={editorModal.fileSlot === 'input' ? editorModal.fileIndex : undefined}
-          title={editorModal.title}
-          startFullscreen
-          onClose={() => setEditorModal(null)}
-          onApplied={fetchMeta}
-        />
-      )}
+      {editor}
     </>
   )
 }
