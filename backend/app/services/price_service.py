@@ -100,9 +100,18 @@ def _exact_match_work(name: str) -> Optional[dict]:
     return _works_by_norm.get(normalize_text(name))
 
 
+def _exact_match_material_row(name: str) -> Optional[dict]:
+    """Точное совпадение по прайсу материалов — за O(1) через индекс.
+
+    Отдаёт запись целиком: цена без единицы измерения ничего не значит — цена за
+    тонну и цена за килограмм различаются в тысячу раз (см. `unit_compat`).
+    """
+    return _materials_by_norm.get(normalize_text(name))
+
+
 def _exact_match_material(name: str) -> Optional[float]:
-    """Точное совпадение по прайсу материалов — за O(1) через индекс."""
-    item = _materials_by_norm.get(normalize_text(name))
+    """Только цена — для мест, где единица позиции неизвестна (оптимизация, аналоги)."""
+    item = _exact_match_material_row(name)
     return item.get("price") if item is not None else None
 
 
@@ -214,8 +223,12 @@ async def batch_embedding_match_works(names: list[str]) -> "list[Optional[dict]]
         return [None] * len(names)
 
 
-async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[float]]":
-    """Batch cosine-similarity search for materials — one Cohere call for all names."""
+async def batch_embedding_match_material_rows(names: list[str]) -> "list[Optional[dict]]":
+    """Batch cosine-similarity search for materials — one Cohere call for all names.
+
+    Отдаёт записи целиком: единица измерения нужна вызывающему, чтобы сверить её
+    с единицей позиции (см. `_exact_match_material_row`).
+    """
     if not names:
         return []
     if not _numpy_available or _materials_embeddings is None or _materials_row_norms is None:
@@ -236,7 +249,7 @@ async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[fl
         best_idx = np.argmax(scores, axis=0)                             # (M,)
         best_scores = scores[best_idx, np.arange(len(names))]            # (M,)
 
-        results: list[Optional[float]] = []
+        results: list[Optional[dict]] = []
         for i, (bidx, bscore) in enumerate(zip(best_idx.tolist(), best_scores.tolist())):
             if query_norms[i] == 0:
                 results.append(None)
@@ -245,7 +258,7 @@ async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[fl
             matched_name = _materials_cache[cache_idx]["name"] if _materials_cache else "?"
             if bscore >= SIMILARITY_THRESHOLD:
                 logger.info("Batch emb material HIT", query=names[i], matched=matched_name, score=bscore)
-                results.append(_materials_cache[cache_idx].get("price"))
+                results.append(_materials_cache[cache_idx])
             else:
                 logger.debug("Batch emb material MISS", query=names[i], best=matched_name, score=bscore)
                 results.append(None)
@@ -253,6 +266,12 @@ async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[fl
     except Exception as e:
         logger.error("Batch embedding material match failed", error=str(e))
         return [None] * len(names)
+
+
+async def batch_embedding_match_materials(names: list[str]) -> "list[Optional[float]]":
+    """Только цены — для мест, где единица позиции неизвестна."""
+    rows = await batch_embedding_match_material_rows(names)
+    return [row.get("price") if row is not None else None for row in rows]
 
 
 async def find_top_n_works(name: str, n: int = 3) -> list[dict]:

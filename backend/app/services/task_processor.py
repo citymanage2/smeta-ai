@@ -41,6 +41,14 @@ from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.source_numbers import attach_source_numbers
 from app.utils.unit_normalizer import normalize_items
+from app.utils.unit_compat import (
+    STATUS_CONVERTED,
+    STATUS_INCOMPATIBLE,
+    append_note,
+    converted_note,
+    convert_price,
+    mismatch_note,
+)
 from app.services import price_service as _price_svc
 
 # Fast-режим: сколько чанков ESTIMATE_FROM_LIST обрабатывать параллельно.
@@ -65,6 +73,74 @@ CHUNK_STAGE_DEADLINE_S = _settings.CHUNK_STAGE_DEADLINE_S
 # Примечание для позиций с отрицательным объёмом. Без него строка без цены
 # выглядит как недоработка расчёта, а не как сознательно пропущенный вычет.
 NEGATIVE_QTY_NOTE = "Отрицательный объём — цена не определяется"
+
+# Причина «цену не взяли из-за единицы измерения» едет при самой позиции.
+# Позиция после отказа идёт к следующему источнику, и если тот цену найдёт,
+# причина не понадобится; если не найдёт — человек прочитает её в примечании.
+UNIT_NOTE_KEY = "_unit_note"
+
+
+def _take_price(
+    items: list[dict],
+    gidx: int,
+    enriched: dict,
+    price: object,
+    price_unit: Optional[str],
+    source_label: str,
+    field: str,
+) -> bool:
+    """Записать цену в позицию, если единица цены подходит единице позиции.
+
+    Цена без единицы ничего не значит: 73 770 ₽ за тонну и 73 770 ₽ за килограмм
+    отличаются в тысячу раз, а название позиции у них одно и то же. Поэтому цена
+    либо совпадает по единице, либо пересчитывается точным коэффициентом, либо
+    не берётся вовсе — и тогда `False`, а позиция идёт к следующему источнику.
+    """
+    item_unit = items[gidx].get("unit")
+    value, status = convert_price(price, price_unit, item_unit)
+
+    if status == STATUS_INCOMPATIBLE:
+        items[gidx].setdefault(
+            UNIT_NOTE_KEY, mismatch_note(price_unit, item_unit, source_label),
+        )
+        return False
+    if value is None:
+        return False
+
+    enriched[field] = value
+    if status == STATUS_CONVERTED:
+        enriched[UNIT_NOTE_KEY] = converted_note(
+            price, price_unit, value, item_unit, source_label,
+        )
+    return True
+
+
+def _apply_ai_unit(
+    work_price: Optional[float],
+    material_price: Optional[float],
+    ai_unit: Optional[str],
+    item_unit: Optional[str],
+) -> tuple[Optional[float], Optional[float], list[str]]:
+    """Цены от ИИ, приведённые к единице позиции, и пометки для человека.
+
+    ИИ ищет цену на рынке, а рынок торгует мешками, рулонами и «за 100 м2».
+    Правило то же, что для прайса: сводимо — пересчитываем, несводимо — цены
+    нет.
+    """
+    notes: list[str] = []
+
+    def _one(price: Optional[float]) -> Optional[float]:
+        if price is None:
+            return None
+        value, status = convert_price(price, ai_unit, item_unit)
+        if status == STATUS_INCOMPATIBLE:
+            notes.append(mismatch_note(ai_unit, item_unit, "ИИ"))
+            return None
+        if status == STATUS_CONVERTED and value is not None:
+            notes.append(converted_note(price, ai_unit, value, item_unit, "ИИ"))
+        return value
+
+    return (_one(work_price), _one(material_price), notes)
 
 
 def _chunk_stage_deadline(n_chunks: int, concurrency: int) -> float:
@@ -360,6 +436,18 @@ PROMPT_ESTIMATE_FROM_LIST = """Ты — эксперт по строительн
 3. Укажи все 3 источника с ценами в поле sources
 4. Цена работ → в поле work_price (если тип "Работа")
 5. Цена материалов → в поле material_price (если тип "Материал")
+
+КРИТИЧЕСКИ ВАЖНО ПРО ЕДИНИЦУ ИЗМЕРЕНИЯ: цена ОБЯЗАНА быть за 1 (одну) единицу
+измерения позиции — ту, что указана в поле "unit" входных данных.
+Рынок торгует иначе, чем считает смета, поэтому пересчитывай:
+  - цена за мешок/упаковку/рулон/бухту/канистру, а позиция в кг, м2 или л →
+    раздели цену на содержимое упаковки (мешок 25 кг → цена мешка ÷ 25);
+  - цена за тонну, а позиция в кг → раздели на 1000;
+  - цена за 100 м2 или за 1000 шт, а позиция в м2 или шт → раздели на 100 или 1000.
+В поле "unit" ответа верни РОВНО ту единицу, что была во входных данных.
+Если пересчитать честно нельзя — верни цену за ту единицу, за которую она
+найдена, и укажи эту единицу в "unit". Подгонять число под чужую единицу нельзя:
+завышенная в 100 раз цена хуже отсутствующей.
 
 ВАЖНО ПРО НДС: поля work_price и material_price ВСЕГДА должны содержать цену БЕЗ НДС.
 Если найденная рыночная цена включает НДС — раздели её на 1.22, чтобы получить цену без НДС.
@@ -2689,8 +2777,10 @@ class TaskProcessor:
 
             if item_type == "Работа":
                 work_info = _price_svc._exact_match_work(name)
-                if work_info is not None and work_info.get("min_price") is not None:
-                    enriched["work_price"] = work_info.get("min_price")
+                if work_info is not None and _take_price(
+                    items, gidx, enriched,
+                    work_info.get("min_price"), work_info.get("unit"), "прайс", "work_price",
+                ):
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = work_info.get("name")
                     matched_by_gidx[gidx] = enriched
@@ -2699,9 +2789,11 @@ class TaskProcessor:
                     need_emb_works.append((gidx, name))
 
             elif item_type == "Материал":
-                mat_price = _price_svc._exact_match_material(name)
-                if mat_price is not None:
-                    enriched["material_price"] = mat_price
+                mat_info = _price_svc._exact_match_material_row(name)
+                if mat_info is not None and _take_price(
+                    items, gidx, enriched,
+                    mat_info.get("price"), mat_info.get("unit"), "прайс", "material_price",
+                ):
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = name
                     matched_by_gidx[gidx] = enriched
@@ -2719,8 +2811,10 @@ class TaskProcessor:
             work_results = await _price_svc.batch_embedding_match_works(work_names)
             for (gidx, name), work_info in zip(need_emb_works, work_results):
                 enriched = enriched_map[gidx]
-                if work_info is not None and work_info.get("min_price") is not None:
-                    enriched["work_price"] = work_info.get("min_price")
+                if work_info is not None and _take_price(
+                    items, gidx, enriched,
+                    work_info.get("min_price"), work_info.get("unit"), "прайс", "work_price",
+                ):
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = work_info.get("name")
                     matched_by_gidx[gidx] = enriched
@@ -2732,11 +2826,13 @@ class TaskProcessor:
         # ── Проход 3: батч-эмбеддинг для материалов (1 вызов Cohere) ────────
         if need_emb_materials:
             mat_names = [n for _, n in need_emb_materials]
-            mat_results = await _price_svc.batch_embedding_match_materials(mat_names)
-            for (gidx, name), mat_price in zip(need_emb_materials, mat_results):
+            mat_results = await _price_svc.batch_embedding_match_material_rows(mat_names)
+            for (gidx, name), mat_info in zip(need_emb_materials, mat_results):
                 enriched = enriched_map[gidx]
-                if mat_price is not None:
-                    enriched["material_price"] = mat_price
+                if mat_info is not None and _take_price(
+                    items, gidx, enriched,
+                    mat_info.get("price"), mat_info.get("unit"), "прайс", "material_price",
+                ):
                     enriched["price_list_name"] = "Прайс"
                     enriched["_price_source_name"] = name
                     matched_by_gidx[gidx] = enriched
@@ -2786,8 +2882,10 @@ class TaskProcessor:
 
             if item_type == "Работа":
                 cache_work_info = _price_svc._exact_match_cache_work(name)
-                if cache_work_info is not None and cache_work_info.get("price") is not None:
-                    enriched["work_price"] = cache_work_info.get("price")
+                if cache_work_info is not None and _take_price(
+                    items, gidx, enriched,
+                    cache_work_info.get("price"), cache_work_info.get("unit"), "кеш", "work_price",
+                ):
                     enriched["price_list_name"] = "Кеш"
                     _upd_at = cache_work_info.get("updated_at")
                     enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
@@ -2800,8 +2898,10 @@ class TaskProcessor:
 
             elif item_type == "Материал":
                 cache_mat_info = _price_svc._exact_match_cache_material(name)
-                if cache_mat_info is not None:
-                    enriched["material_price"] = cache_mat_info.get("price")
+                if cache_mat_info is not None and _take_price(
+                    items, gidx, enriched,
+                    cache_mat_info.get("price"), cache_mat_info.get("unit"), "кеш", "material_price",
+                ):
                     enriched["price_list_name"] = "Кеш"
                     _upd_at = cache_mat_info.get("updated_at")
                     enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
@@ -2818,8 +2918,10 @@ class TaskProcessor:
             cache_work_results = await _price_svc.batch_embedding_match_cache_works(cache_work_names)
             for (gidx, name), cache_work_info in zip(need_cache_emb_works, cache_work_results):
                 enriched = enriched_map[gidx]
-                if cache_work_info is not None and cache_work_info.get("price") is not None:
-                    enriched["work_price"] = cache_work_info.get("price")
+                if cache_work_info is not None and _take_price(
+                    items, gidx, enriched,
+                    cache_work_info.get("price"), cache_work_info.get("unit"), "кеш", "work_price",
+                ):
                     enriched["price_list_name"] = "Кеш"
                     _upd_at = cache_work_info.get("updated_at")
                     enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
@@ -2832,14 +2934,16 @@ class TaskProcessor:
         if need_cache_emb_materials:
             cache_mat_names = [n for _, n in need_cache_emb_materials]
             cache_mat_results = await _price_svc.batch_embedding_match_cache_materials(cache_mat_names)
-            for (gidx, name), cache_mat_price in zip(need_cache_emb_materials, cache_mat_results):
+            for (gidx, name), cache_mat_info in zip(need_cache_emb_materials, cache_mat_results):
                 enriched = enriched_map[gidx]
-                if cache_mat_price is not None:
-                    enriched["material_price"] = cache_mat_price.get("price")
+                if cache_mat_info is not None and _take_price(
+                    items, gidx, enriched,
+                    cache_mat_info.get("price"), cache_mat_info.get("unit"), "кеш", "material_price",
+                ):
                     enriched["price_list_name"] = "Кеш"
-                    _upd_at = cache_mat_price.get("updated_at")
+                    _upd_at = cache_mat_info.get("updated_at")
                     enriched["_cache_updated_at"] = _upd_at.isoformat() if hasattr(_upd_at, "isoformat") else _upd_at
-                    enriched["sources"] = cache_mat_price.get("sources")
+                    enriched["sources"] = cache_mat_info.get("sources")
                     matched_by_gidx[gidx] = enriched
                     del unmatched_by_gidx[gidx]
                     logger.debug("Material MATCHED in price cache", task_id=self.task_id, name=name, method="embedding_cache")
@@ -3078,6 +3182,11 @@ class TaskProcessor:
                         parts.append(cache_sources)
                     matched["notes"] = ", ".join(parts)
                     matched["sources"] = ""
+                # Пометка о пересчёте цены дописывается последней: выше notes
+                # собираются заново под источник цены и затёрли бы её.
+                unit_note = matched.get(UNIT_NOTE_KEY)
+                if unit_note:
+                    matched["notes"] = append_note(matched.get("notes"), unit_note)
                 final_items.append(matched)
                 continue
             cr = claude_results.get(gidx)
@@ -3095,10 +3204,24 @@ class TaskProcessor:
                 if cr.get("material_price") is not None and _mp is None:
                     _ai_notes = (_ai_notes + "; " if _ai_notes else "") + \
                         f"ИИ вернул непригодную цену материала ({cr.get('material_price')!r}) — отброшена"
+
+                # Единицу ИИ сверяем так же, как единицу прайса: он ищет цену на
+                # рынке, а рынок торгует мешками и рулонами. Цена за упаковку в
+                # строке с килограммами — та же ошибка в разы, только от ИИ.
+                _wp, _mp, _unit_notes = _apply_ai_unit(
+                    _wp, _mp, cr.get("unit"), item.get("unit"),
+                )
+                for _note in _unit_notes:
+                    _ai_notes = append_note(_ai_notes, _note)
+                if _wp is None and _mp is None and item.get(UNIT_NOTE_KEY):
+                    # Цену не нашёл никто: причина отказа прайса тоже пригодится.
+                    _ai_notes = append_note(_ai_notes, item[UNIT_NOTE_KEY])
                 enriched = {
                     "type": item.get("type", ""),
                     "name": str(item.get("name", "")).strip(),
-                    "unit": cr.get("unit") or item.get("unit", ""),
+                    # Единица позиции — из перечня, а не из ответа ИИ: объём
+                    # посчитан в ней, и подмена единицы разошлась бы с объёмом.
+                    "unit": item.get("unit") or cr.get("unit") or "",
                     "quantity": item.get("quantity"),
                     "sheet": item.get("sheet"),
                     "work_price": _wp,
@@ -3118,7 +3241,10 @@ class TaskProcessor:
                     "material_price": None,
                     "price_list_name": None,
                     "sources": "",
-                    "notes": "Цена не определена",
+                    # Если цену отвергли из-за единицы измерения — причина
+                    # называется прямо: «цена не определена» ничего не объясняет,
+                    # а человеку решать, подходит ли цена за мешок позиции в кг.
+                    "notes": item.get(UNIT_NOTE_KEY) or "Цена не определена",
                 }
             final_items.append(enriched)
 
