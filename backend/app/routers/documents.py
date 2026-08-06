@@ -29,6 +29,8 @@ from app.schemas.document import (
     HistoryEntryOut,
     PriceListRequest,
     PriceListResponse,
+    PriceUnitsCheckRequest,
+    PriceUnitsCheckResponse,
     ProjectSettings,
     ResolveDivergenceRequest,
     SaveDraftRequest,
@@ -302,6 +304,25 @@ async def add_document_rows_to_price_list(
     doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
     items = [item.model_dump() for item in body.items]
     return await svc.add_to_price_list(db, doc, items, current_user)
+
+
+@router.post("/{card_id}/{kind}/price-units-check", response_model=PriceUnitsCheckResponse)
+async def check_document_price_units(
+    card_id: str,
+    kind: str,
+    body: PriceUnitsCheckRequest,
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Пометить строки, где цена похожа на цену за другую единицу измерения.
+
+    Для смет, посчитанных до того, как подбор цены начал сверять единицу. Цены не
+    меняются: проверка показывает, где смотреть, а решает человек.
+    """
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    version = svc.pick_version(doc, body.version_id)
+    return await svc.check_price_units(db, doc, version, body.rev, current_user)
 
 
 @router.post("/{card_id}/{kind}/analogs", response_model=AnalogsStartResponse)

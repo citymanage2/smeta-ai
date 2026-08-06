@@ -160,6 +160,20 @@ class PriceListResponse(BaseModel):
     skipped_reasons: dict = Field(default_factory=dict)
 
 
+class PriceUnitsCheckRequest(BaseModel):
+    version_id: Optional[str] = None
+    # rev, на котором работал клиент: пометки пишутся в строки, как обычная правка.
+    rev: int
+
+
+class PriceUnitsCheckResponse(BaseModel):
+    # Сколько строк с ценой проверено и в скольких единица вызвала подозрение.
+    checked: int
+    flagged: int
+    version_id: str
+    rev: int
+
+
 class AnalogRowIn(BaseModel):
     """Позиция, отправленная на поиск аналогов."""
     row_id: str

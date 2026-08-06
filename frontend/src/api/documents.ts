@@ -276,6 +276,36 @@ export async function addToPriceList(
   return res.data;
 }
 
+// --- Проверка единиц измерения у цен ----------------------------------------
+
+export interface PriceUnitsCheckResult {
+  /** Сколько строк с ценой проверено. */
+  checked: number;
+  /** В скольких единица цены разошлась с единицей позиции. */
+  flagged: number;
+  version_id: string;
+  rev: number;
+}
+
+/**
+ * Пройти по смете и пометить строки, где цена похожа на цену за другую единицу
+ * измерения. Нужна сметам, посчитанным до того, как подбор цены начал сверять
+ * единицу: цена за тонну могла встать в строку с килограммами.
+ *
+ * Цены не меняются — проверка показывает, где смотреть, решает человек.
+ */
+export async function checkPriceUnits(
+  ref: DocumentRef,
+  rev: number,
+): Promise<PriceUnitsCheckResult> {
+  const res = await apiClient.post<PriceUnitsCheckResult>(
+    `${base(ref)}/price-units-check`,
+    { rev, version_id: ref.versionId },
+    { params: slotParams(ref) },
+  );
+  return res.data;
+}
+
 // --- Поиск аналогов через ИИ -------------------------------------------------
 
 export interface AnalogVariant {

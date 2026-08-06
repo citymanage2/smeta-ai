@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
-import { RotateCcw, Wand2 } from 'lucide-react';
+import { Ruler, RotateCcw, Wand2 } from 'lucide-react';
 
 import { fixEmptyPrices, repriceEstimateItem } from '../../../api/tasks';
+import { DocumentRef, checkPriceUnits } from '../../../api/documents';
 import { GridRow } from '../adapters/types';
 
 /**
@@ -17,6 +18,9 @@ import { GridRow } from '../adapters/types';
 
 interface Props {
   taskId: string;
+  documentRef: DocumentRef;
+  /** rev открытой версии — проверка цен пишет пометки как обычная правка. */
+  rev: number;
   rows: GridRow[];
   selectedKeys: Set<string>;
   isDirty: boolean;
@@ -41,7 +45,7 @@ export function hasEmptyPrice(row: GridRow): boolean {
 }
 
 const PriceActions: React.FC<Props> = ({
-  taskId, rows, selectedKeys, isDirty, onReload, onNotice, onStarted,
+  taskId, documentRef, rev, rows, selectedKeys, isDirty, onReload, onNotice, onStarted,
 }) => {
   const [busy, setBusy] = useState(false);
 
@@ -90,6 +94,26 @@ const PriceActions: React.FC<Props> = ({
     }
   }, [taskId, repriceIndex, onNotice, onReload]);
 
+  // Сметы, посчитанные до сверки единиц, могли получить цену за тонну в строку
+  // с килограммами. Проверка ничего не пересчитывает — только помечает строки,
+  // где цена похожа на цену за другую единицу.
+  const handleUnitsCheck = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await checkPriceUnits(documentRef, rev);
+      onNotice(
+        res.flagged > 0
+          ? `Проверено позиций: ${res.checked}. Помечено подозрительных: ${res.flagged}`
+          : `Проверено позиций: ${res.checked}. Расхождений по ед. изм. нет`,
+      );
+      if (res.flagged > 0) onReload();
+    } catch {
+      onNotice('Не удалось проверить цены');
+    } finally {
+      setBusy(false);
+    }
+  }, [documentRef, rev, onNotice, onReload]);
+
   const dirtyHint = isDirty ? 'Сначала примените правки' : undefined;
 
   return (
@@ -118,6 +142,18 @@ const PriceActions: React.FC<Props> = ({
       >
         <RotateCcw size={14} />
         Цена
+      </button>
+      <button
+        className="de-btn"
+        onClick={handleUnitsCheck}
+        disabled={busy || isDirty}
+        title={
+          dirtyHint
+          ?? 'Сверить единицы измерения цен с прайсом и пометить подозрительные строки'
+        }
+      >
+        <Ruler size={14} />
+        Проверить цены
       </button>
     </div>
   );

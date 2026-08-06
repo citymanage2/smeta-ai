@@ -9,6 +9,7 @@ import {
   GridRow,
   KIT_ADDED_PREFIX,
   KIT_MISMATCH_PREFIX,
+  PRICE_UNIT_MISMATCH_PREFIX,
   Percentages,
   RowKind,
   SHEET_KEY,
@@ -202,6 +203,10 @@ export const estimateAdapter: EditorAdapter = {
     const note = String(row.notes ?? '').trimStart();
     if (note.startsWith(KIT_ADDED_PREFIX)) classes.push('de-row-kit-added');
     if (note.startsWith(KIT_MISMATCH_PREFIX)) classes.push('de-row-kit-mismatch');
+
+    // Единица цены разошлась с единицей позиции: цена либо не подобрана, либо
+    // подозрительна. Ищем вхождением — пометка могла дописаться к прежней.
+    if (note.includes(PRICE_UNIT_MISMATCH_PREFIX)) classes.push('de-row-price-unit-mismatch');
 
     const abc = String(row.abc_group ?? '').trim().toUpperCase();
     if (abc === 'A' || abc === 'А') classes.push('de-row-abc-a');

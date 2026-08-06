@@ -749,6 +749,16 @@
   background: #fffbeb;
 }
 
+/* Единица цены разошлась с единицей позиции: цена за тонну в строке с
+   килограммами. Цена не тронута — решает человек, но видеть он должен сразу. */
+.rdg-row.de-row-price-unit-mismatch .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #dc2626;
+}
+
+.rdg-row.de-row-price-unit-mismatch .rdg-cell {
+  background: #fef2f2;
+}
+
 /* Группы А/В/С: где сосредоточены деньги сметы. */
 .rdg-row.de-row-abc-a .rdg-cell:first-child {
   box-shadow: inset 3px 0 0 #ef4444;

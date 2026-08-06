@@ -36,6 +36,14 @@ from app.models.workflow_card import WorkflowCard
 from app.services import price_bulk
 from app.utils.auth import current_user_id
 from app.utils.permissions import can_edit
+from app.utils.unit_compat import (
+    PRICE_UNIT_MISMATCH_PREFIX,
+    STATUS_CONVERTED,
+    STATUS_INCOMPATIBLE,
+    append_note,
+    compare_units,
+    mismatch_note,
+)
 
 logger = structlog.get_logger()
 
@@ -1138,6 +1146,193 @@ async def add_to_price_list(
         card_id=str(doc.card.id), kind=doc.kind, user=user_name, **summary,
     )
     return summary
+
+
+async def check_price_units(
+    db: AsyncSession,
+    doc: ResolvedDocument,
+    version: Any,
+    client_rev: int,
+    current_user: dict,
+) -> dict:
+    """Пройти по смете и пометить строки, где цена похожа на цену за другую единицу.
+
+    Нужна для смет, посчитанных до того, как подбор цены начал сверять единицу
+    измерения: там цена за тонну могла встать в строку с килограммами, и снаружи
+    это выглядит обычным числом.
+
+    Цены не меняются. Пересчитать «на глаз» нельзя: цена могла быть исправлена
+    руками, а могла прийти из другого источника — решает человек. Проверка лишь
+    показывает, где смотреть.
+    """
+    if doc.row_format != "estimate":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="У этого документа нет цен и единиц измерения — проверять нечего",
+        )
+    ensure_writable(doc, current_user)
+
+    rows = read_rows(doc, version)
+
+    # Подбор повторяем ровно тот же, каким считалась смета: сначала точное
+    # совпадение по названию, потом эмбеддинги. Иначе проверка отвечала бы не про
+    # ту запись прайса, из которой цена и пришла.
+    checked: list[tuple[int, dict, str, str]] = []  # (индекс, строка, поле цены, вид)
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("type") or "").strip()
+        field = "price_work" if kind == "work" else "price_material" if kind == "material" else ""
+        if not field:
+            continue
+        if _to_number(row.get(field)) is None:
+            continue
+        if not str(row.get("name") or "").strip():
+            continue
+        checked.append((index, row, field, kind))
+
+    entries = await _price_entries_for(checked)
+
+    flagged = 0
+    new_rows = [dict(row) if isinstance(row, dict) else row for row in rows]
+    for position, (index, row, field, _kind) in enumerate(checked):
+        entry = entries[position]
+        if entry is None:
+            continue
+        note = _unit_suspicion(
+            _to_number(row.get(field)),
+            _to_number(entry.get("price")),
+            entry.get("unit"),
+            row.get("unit"),
+        )
+        if note is None:
+            continue
+        target = new_rows[index]
+        updated = append_note(target.get("notes"), note)
+        if updated == target.get("notes"):
+            continue  # уже помечали — второй раз не пишем
+        target["notes"] = updated
+        flagged += 1
+
+    if flagged == 0:
+        return {"checked": len(checked), "flagged": 0,
+                "version_id": str(version.id), "rev": version.rev}
+
+    applied = await apply_rows(
+        db, doc, version, new_rows, client_rev, current_user,
+        operation_type="price_units_check",
+        description_override=(
+            f"{await user_display_name(db, current_user)}: проверка цен — "
+            f"помечено позиций: {flagged}"
+        ),
+    )
+    return {"checked": len(checked), "flagged": flagged,
+            "version_id": applied["version_id"], "rev": applied["rev"]}
+
+
+def _to_number(value: Any) -> Optional[float]:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+async def _price_entries_for(
+    checked: list[tuple[int, dict, str, str]],
+) -> list[Optional[dict]]:
+    """Запись прайса для каждой проверяемой строки (или None)."""
+    from app.services import price_service as _ps
+
+    entries: list[Optional[dict]] = [None] * len(checked)
+    need_embedding: list[tuple[int, str, str]] = []  # (позиция, название, вид)
+
+    for position, (_index, row, _field, kind) in enumerate(checked):
+        name = str(row.get("name") or "").strip()
+        entry = (
+            _ps._exact_match_work(name) if kind == "work"
+            else _ps._exact_match_material_row(name)
+        )
+        if entry is None:
+            entry = (
+                _ps._exact_match_cache_work(name) if kind == "work"
+                else _ps._exact_match_cache_material(name)
+            )
+        if entry is not None:
+            entries[position] = _normalized_entry(entry)
+        else:
+            need_embedding.append((position, name, kind))
+
+    work_queue = [(p, n) for p, n, k in need_embedding if k == "work"]
+    mat_queue = [(p, n) for p, n, k in need_embedding if k == "material"]
+
+    if work_queue:
+        found = await _ps.batch_embedding_match_works([n for _, n in work_queue])
+        for (position, _name), entry in zip(work_queue, found):
+            if entry is not None:
+                entries[position] = _normalized_entry(entry)
+    if mat_queue:
+        found = await _ps.batch_embedding_match_material_rows([n for _, n in mat_queue])
+        for (position, _name), entry in zip(mat_queue, found):
+            if entry is not None:
+                entries[position] = _normalized_entry(entry)
+
+    return entries
+
+
+def _normalized_entry(entry: dict) -> dict:
+    """Запись прайса или кеша к одному виду: у работ цена лежит в `min_price`."""
+    price = entry.get("price")
+    if price is None:
+        price = entry.get("min_price")
+    return {"price": price, "unit": entry.get("unit")}
+
+
+def _unit_suspicion(
+    row_price: Optional[float],
+    entry_price: Optional[float],
+    entry_unit: Optional[str],
+    row_unit: Optional[str],
+) -> Optional[str]:
+    """Пометка, если цена строки похожа на цену за единицу прайса, а не позиции.
+
+    Совпадение цены строки с ценой прайса — и есть признак: значит, число взяли
+    как есть, не пересчитав. Если в строке уже стоит пересчитанная цена (или
+    любая другая), тревожить человека незачем.
+    """
+    if row_price is None or entry_price is None:
+        return None
+
+    status_name, factor = compare_units(entry_unit, row_unit)
+    if status_name == STATUS_INCOMPATIBLE:
+        if _close(row_price, entry_price):
+            return mismatch_note(entry_unit, row_unit, "прайс")
+        return None
+
+    if status_name != STATUS_CONVERTED or factor is None:
+        return None
+
+    expected = round(entry_price * factor, 6)
+    if _close(row_price, expected):
+        return None  # цена уже приведена к единице позиции
+    if not _close(row_price, entry_price):
+        return None  # цена откуда-то ещё — судить о ней по прайсу нельзя
+    return (
+        f"{PRICE_UNIT_MISMATCH_PREFIX} — прайс: «{entry_unit}», "
+        f"позиция: «{row_unit}». Цена за единицу позиции — около "
+        f"{_money(expected)} ₽. Проверьте."
+    )
+
+
+def _close(left: float, right: float) -> bool:
+    """Одно и то же число с точностью до копеечных расхождений округления."""
+    if right == 0:
+        return left == 0
+    return abs(left - right) <= abs(right) * 0.01
+
+
+def _money(value: float) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
 async def start_analogs(

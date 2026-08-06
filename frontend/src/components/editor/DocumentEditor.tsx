@@ -747,6 +747,8 @@ export const DocumentEditor: React.FC<Props> = ({
           {canWrite && (kind === 'estimate' || kind === 'optimization') && meta.task_id && (
             <PriceActions
               taskId={meta.task_id}
+              documentRef={documentRef}
+              rev={meta.rev}
               rows={rows}
               selectedKeys={selectedKeys}
               isDirty={isDirty}
