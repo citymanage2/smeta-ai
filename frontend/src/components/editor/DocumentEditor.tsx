@@ -748,6 +748,7 @@ export const DocumentEditor: React.FC<Props> = ({
             <PriceActions
               taskId={meta.task_id}
               documentRef={documentRef}
+              versionId={versionId}
               rev={meta.rev}
               rows={rows}
               selectedKeys={selectedKeys}

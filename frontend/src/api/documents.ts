@@ -296,11 +296,12 @@ export interface PriceUnitsCheckResult {
  */
 export async function checkPriceUnits(
   ref: DocumentRef,
+  versionId: string,
   rev: number,
 ): Promise<PriceUnitsCheckResult> {
   const res = await apiClient.post<PriceUnitsCheckResult>(
     `${base(ref)}/price-units-check`,
-    { rev, version_id: ref.versionId },
+    { version_id: versionId, rev },
     { params: slotParams(ref) },
   );
   return res.data;

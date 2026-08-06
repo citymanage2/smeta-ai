@@ -19,7 +19,9 @@ import { GridRow } from '../adapters/types';
 interface Props {
   taskId: string;
   documentRef: DocumentRef;
-  /** rev открытой версии — проверка цен пишет пометки как обычная правка. */
+  /** Открытая версия и её rev: пометки пишутся в неё, как обычная правка.
+      Пока версия не выбрана (документ ещё грузится) проверять нечего. */
+  versionId: string | null;
   rev: number;
   rows: GridRow[];
   selectedKeys: Set<string>;
@@ -45,7 +47,7 @@ export function hasEmptyPrice(row: GridRow): boolean {
 }
 
 const PriceActions: React.FC<Props> = ({
-  taskId, documentRef, rev, rows, selectedKeys, isDirty, onReload, onNotice, onStarted,
+  taskId, documentRef, versionId, rev, rows, selectedKeys, isDirty, onReload, onNotice, onStarted,
 }) => {
   const [busy, setBusy] = useState(false);
 
@@ -98,9 +100,10 @@ const PriceActions: React.FC<Props> = ({
   // с килограммами. Проверка ничего не пересчитывает — только помечает строки,
   // где цена похожа на цену за другую единицу.
   const handleUnitsCheck = useCallback(async () => {
+    if (!versionId) return;
     setBusy(true);
     try {
-      const res = await checkPriceUnits(documentRef, rev);
+      const res = await checkPriceUnits(documentRef, versionId, rev);
       onNotice(
         res.flagged > 0
           ? `Проверено позиций: ${res.checked}. Помечено подозрительных: ${res.flagged}`
@@ -112,7 +115,7 @@ const PriceActions: React.FC<Props> = ({
     } finally {
       setBusy(false);
     }
-  }, [documentRef, rev, onNotice, onReload]);
+  }, [documentRef, versionId, rev, onNotice, onReload]);
 
   const dirtyHint = isDirty ? 'Сначала примените правки' : undefined;
 
@@ -146,7 +149,7 @@ const PriceActions: React.FC<Props> = ({
       <button
         className="de-btn"
         onClick={handleUnitsCheck}
-        disabled={busy || isDirty}
+        disabled={busy || isDirty || !versionId}
         title={
           dirtyHint
           ?? 'Сверить единицы измерения цен с прайсом и пометить подозрительные строки'

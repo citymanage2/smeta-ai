@@ -166,6 +166,21 @@ async def test_prays_bez_edinicy_ne_lomaet_podbor(monkeypatch):
 # Кеш прошлых задач
 # ---------------------------------------------------------------------------
 
+async def test_pozicii_ishodnoy_zadachi_ne_pravyatsya(monkeypatch):
+    """Причина отказа пишется в позиции сметы, а не в задачу-перечень.
+
+    По Path B список приходит прямо из progress_data перечня — общий объект.
+    Правка в нём означала бы, что расчёт сметы молча меняет чужую задачу.
+    """
+    fake = _FakePriceSvc(material={"name": "Смеси сухие", "price": 500.0, "unit": "мешок"})
+    source_items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
+
+    matched, out_items = await _run_lookup(monkeypatch, fake, source_items)
+
+    assert PRICE_UNIT_MISMATCH_PREFIX in out_items[0][UNIT_NOTE_KEY]
+    assert UNIT_NOTE_KEY not in source_items[0], "позиция перечня осталась нетронутой"
+
+
 async def test_kesh_tozhe_sveryaet_edinicu(monkeypatch):
     class _CacheSvc(_FakePriceSvc):
         def _exact_match_cache_material(self, name):

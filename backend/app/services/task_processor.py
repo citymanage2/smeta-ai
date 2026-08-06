@@ -2712,6 +2712,11 @@ class TaskProcessor:
             items = parse_list_sheet(excel_bytes)
             logger.info("Parsed list sheet", task_id=self.task_id, items=len(items))
 
+        # Позиции — свои: по Path B список приходит прямо из `progress_data`
+        # задачи-перечня, а расчёт дописывает в строки причину, по которой цена
+        # не подошла. Без копии эта пометка легла бы в чужую задачу.
+        items = [dict(item) if isinstance(item, dict) else item for item in items]
+
         # ── Шаг 1: Поиск цен по прайсу ─────────────────────────────────────
         await self.update_progress(f"Поиск цен для {len(items)} позиций по корпоративному прайсу...")
 
