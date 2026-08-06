@@ -22,8 +22,18 @@ import { UNIFIED_EDITOR_TASK_TYPES } from '../../types'
 import { kindFromTaskType } from '../../api/documents'
 import UsageChips from '../card/UsageChips'
 import { stageUsage } from '../../utils/usageMetrics'
-// Соответствие «стадия → задача» одно на весь проект — живёт рядом со степпером.
-import { stageTask } from '../pipeline/PipelineStepper'
+// Соответствие «стадия → задача», состояния узлов и их подписи — одни на весь
+// проект, живут рядом со степпером.
+import {
+  NodeIcon,
+  PIPELINE_STAGES,
+  STATE_STYLE,
+  computeNodeState,
+  defaultStage,
+  stageCaption,
+  stageTask,
+} from '../pipeline/PipelineStepper'
+import { computeGuard } from '../../stores/kanban'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1649,6 +1659,126 @@ function useCardStageProps(card: WorkflowCard) {
   ) : null
 
   return { stageProps, editor }
+}
+
+// ---------------------------------------------------------------------------
+// CardStagesAccordion — все четыре стадии секциями (список смет проекта)
+// ---------------------------------------------------------------------------
+
+/** Название секции стадии. У перечня — с типом: «из проекта» и «из Гранд-сметы»
+ *  готовятся по-разному, и в списке смет это первое, что нужно видеть. */
+function stageSectionLabel(card: WorkflowCard, stage: KanbanStage): string {
+  if (stage !== 'list') return STAGE_LABEL[stage]
+  const type = card.list_task?.task_type
+  return (type && TYPE_LABEL[type]) || STAGE_LABEL.list
+}
+
+function StageSection({
+  card, stage, index, defaultExpanded, children,
+}: {
+  card: WorkflowCard
+  stage: KanbanStage
+  index: number
+  defaultExpanded: boolean
+  children: React.ReactNode
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const state = computeNodeState(card, stage)
+  const style = STATE_STYLE[state]
+  const locked = state === 'lock'
+  const label = stageSectionLabel(card, stage)
+  const caption = stageCaption(card, stage)
+  // Заблокированную стадию не раскрываем: внутри форма запуска, а гейт всё
+  // равно не пустит. Причина — в подсказке заголовка.
+  const reason = locked ? computeGuard(card, stage).message : caption
+  const open = expanded && !locked
+  const usage = stageUsage(stageTask(card, stage)?.usage)
+
+  return (
+    <div style={{ borderTop: '1px solid #f1f5f9' }}>
+      <button
+        type="button"
+        onClick={() => setExpanded(e => !e)}
+        disabled={locked}
+        title={`${label}: ${reason}`}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '7px', width: '100%',
+          background: 'none', border: 'none', padding: '7px 0',
+          cursor: locked ? 'not-allowed' : 'pointer', textAlign: 'left',
+        }}
+      >
+        <span
+          style={{
+            width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: style.fill, border: `2px solid ${style.ring}`,
+          }}
+        >
+          <NodeIcon state={state} index={index} scale={0.65} />
+        </span>
+        <span style={{
+          fontSize: '10px', fontWeight: 700, textTransform: 'uppercase',
+          letterSpacing: '0.05em', color: STAGE_COLOR[stage], minWidth: 0,
+        }}>
+          {label}
+        </span>
+        {caption && (
+          <span style={{ fontSize: '10px', color: style.label, flexShrink: 0 }}>{caption}</span>
+        )}
+        <span style={{ flex: 1 }} />
+        {!locked && (expanded ? <ChevronUp size={12} color="#94a3b8" /> : <ChevronDown size={12} color="#94a3b8" />)}
+      </button>
+
+      {/* Затраты стадии — под её названием: в 1/3 ширины они не влезают
+          в одну строку с заголовком, а прятать их за раскрытием нельзя —
+          цифру смотрят, не открывая стадию. */}
+      {usage.hasData && (
+        <div style={{ padding: '0 0 6px 25px' }}>
+          <UsageChips usage={usage} />
+        </div>
+      )}
+
+      {open && <div style={{ paddingBottom: '8px' }}>{children}</div>}
+    </div>
+  )
+}
+
+/**
+ * Все четыре стадии сметы секциями — вид списка смет проекта.
+ *
+ * Раскрыта активная стадия (`defaultStage`), остальные свёрнуты. Дорожки-
+ * таймлайна нет: состояние стадии показывает кружок в её заголовке, и второго
+ * места, где то же самое написано другими словами, быть не должно.
+ */
+export function CardStagesAccordion({ card }: { card: WorkflowCard }) {
+  const { stageProps, editor } = useCardStageProps(card)
+  // Раскрытая стадия выбирается один раз при монтировании: карточки
+  // опрашиваются каждые 5 секунд, и пересчёт схлопывал бы секцию под руками.
+  const [initialStage] = useState(() => defaultStage(card))
+
+  const body: Record<KanbanStage, React.ReactNode> = {
+    list: <ListStageBody {...stageProps} showLabel={false} />,
+    completeness: <CompletenessStageBody {...stageProps} showLabel={false} />,
+    estimate: <EstimateStageBody {...stageProps} showLabel={false} />,
+    optimization: <OptimizationStageBody {...stageProps} />,
+  }
+
+  return (
+    <div>
+      {PIPELINE_STAGES.map((stage, i) => (
+        <StageSection
+          key={stage}
+          card={card}
+          stage={stage}
+          index={i}
+          defaultExpanded={stage === initialStage}
+        >
+          {body[stage]}
+        </StageSection>
+      ))}
+      {editor}
+    </div>
+  )
 }
 
 export function CardStageContent({ card }: { card: WorkflowCard }) {

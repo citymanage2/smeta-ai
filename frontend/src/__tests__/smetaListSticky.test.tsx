@@ -1,11 +1,11 @@
 /**
- * Закреплённые шапки списка смет.
+ * Закреплённая шапка списка смет.
  *
- * При прокрутке страницы проекта сверху остаются: строка «Сметы (N) +
- * Добавить смету» и заголовок таблицы «Смета / Стадии / Сумма».
+ * При прокрутке страницы проекта сверху остаётся строка «Сметы (N) +
+ * Добавить смету».
  *
- * Отдельно стережём overflow у карточки таблицы: `overflow: hidden` или
- * `overflowX: auto` делают её собственным окном прокрутки, и заголовок
+ * Отдельно стережём overflow над сеткой карточек: `overflow: hidden` или
+ * `overflowX: auto` делают список собственным окном прокрутки, и шапка
  * перестаёт прилипать к верху страницы — визуально это ломается тихо.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -54,7 +54,7 @@ function renderList(stickyTop = 50) {
   )
 }
 
-describe('SmetaList — закреплённые шапки', () => {
+describe('SmetaList — закреплённая шапка', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(getWorkflowCards).mockResolvedValue([makeCard()])
@@ -68,29 +68,20 @@ describe('SmetaList — закреплённые шапки', () => {
 
     expect(row.style.position).toBe('sticky')
     expect(row.style.top).toBe('50px')
+    // Фон обязателен: без него карточки просвечивают сквозь шапку.
+    expect(row.style.backgroundColor).toBeTruthy()
   })
 
-  it('заголовок таблицы прилипает ниже строки «Сметы (N)»', async () => {
-    renderList(50)
+  it('сетка карточек не создаёт своё окно прокрутки', async () => {
+    const { container } = renderList()
 
-    const header = await screen.findByRole('columnheader', { name: 'Смета' })
-    expect(header.style.position).toBe('sticky')
-    // Высота строки «Сметы (N)» в jsdom нулевая, поэтому этаж совпадает с
-    // отметкой родителя. Проверяем, что заголовок вообще участвует в стопке.
-    expect(header.style.top).toBe('50px')
-    // Фон обязателен: без него строки таблицы просвечивают сквозь заголовок.
-    expect(header.style.backgroundColor).toBeTruthy()
-  })
+    const grid = await waitFor(() => {
+      const el = container.querySelector('.smeta-grid')
+      expect(el).toBeTruthy()
+      return el as HTMLElement
+    })
 
-  it('карточка таблицы не создаёт своё окно прокрутки', async () => {
-    renderList()
-
-    const header = await screen.findByRole('columnheader', { name: 'Смета' })
-    const table = header.closest('table') as HTMLElement
-
-    await waitFor(() => expect(table).toBeInTheDocument())
-
-    for (let el = table.parentElement; el && el.tagName !== 'BODY'; el = el.parentElement) {
+    for (let el = grid.parentElement; el && el.tagName !== 'BODY'; el = el.parentElement) {
       const { overflow, overflowX, overflowY } = (el as HTMLElement).style
       expect([overflow, overflowX, overflowY].filter(Boolean)).toEqual([])
     }

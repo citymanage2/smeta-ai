@@ -13,9 +13,10 @@ import { MemoryRouter } from 'react-router-dom'
 import { TaskBrief, TaskUsage, WorkflowCard } from '../types/workflow'
 
 // Карточка рисует раскрывающиеся секции, которые лезут в сеть за метаданными
-// файлов. Списку смет это не нужно — здесь проверяются числа в строке.
+// файлов. Списку смет это не нужно — здесь проверяются числа в шапке карточки.
 vi.mock('../components/kanban/CardStageContent', () => ({
   CardStageContent: () => null,
+  CardStagesAccordion: () => null,
 }))
 
 vi.mock('../api/workflowCards', () => ({

@@ -6,21 +6,16 @@ import { useGlobalTaskPoller } from '../hooks/useGlobalTaskPoller';
 import { useSystemNotifications } from '../hooks/useSystemNotifications';
 import { ROLE_LABELS } from '../api/adminUsers';
 import ProjectsSidebar from './ProjectsSidebar';
+import { MAIN_PADDING_TOP, MAIN_PADDING_X } from './layoutMetrics';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
-/**
- * Верхний отступ области прокрутки (`<main>`).
- *
- * Закреплённые шапки обязаны вычитать его из своего `top`. Причина неочевидна:
- * `position: sticky` отсчитывает смещение от content edge окна прокрутки, то
- * есть уже ЗА паддингом, а `overflow` обрезает контент по padding edge. Без
- * вычитания над прилипшей шапкой остаётся полоса в 32px, сквозь которую видно
- * уезжающие строки. Проверено в Chrome: gapFromMainPaddingEdge = 32.
- */
-export const MAIN_PADDING_TOP = 32;
+// Цифры отступов живут в `layoutMetrics`: их берут и виды, которым сам Layout
+// (с его поллерами и звуком уведомлений) не нужен. Реэкспорт — чтобы прежние
+// импорты из Layout продолжали работать.
+export { MAIN_PADDING_TOP, MAIN_PADDING_X };
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
@@ -157,7 +152,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             style={{
               flex: 1,
               overflowY: 'auto',
-              padding: `${MAIN_PADDING_TOP}px 24px`,
+              padding: `${MAIN_PADDING_TOP}px ${MAIN_PADDING_X}px`,
               boxSizing: 'border-box',
             }}
           >

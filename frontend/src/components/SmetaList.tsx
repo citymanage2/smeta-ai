@@ -2,13 +2,16 @@ import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useKanbanStore } from '../stores/kanban'
 import { CreateCardModal } from './kanban/CreateCardModal'
-// Дорожка стадий и правило выбора показываемой стадии — те же, что на странице сметы.
-import { CompactPipeline, defaultStage } from './pipeline/PipelineStepper'
-import { CardStageContent } from './kanban/CardStageContent'
-import { useMeasuredHeight } from '../hooks/useMeasuredHeight'
+// Все четыре стадии секциями — тот же контент стадий, что и внутри сметы.
+import { CardStagesAccordion } from './kanban/CardStageContent'
+import { MAIN_PADDING_X } from './layoutMetrics'
 import UsageChips from './card/UsageChips'
 import { cardEstimateCost, cardUsage, formatRub } from '../utils/usageMetrics'
 import { WorkflowCard } from '../types/workflow'
+
+/** Поля слева и справа у сетки смет. Уже общих полей страницы: в ряду три
+ *  карточки, и каждый лишний пиксель поля отъедает у них ширину. */
+const GRID_GUTTER = 8
 
 /**
  * Сумма сформированной сметы. Оптимизация важнее сметы: если смету
@@ -35,18 +38,69 @@ interface Props {
   /** Вызывается после создания сметы — родитель переключает вид на канбан,
    *  где отложенный файл перечня подхватывается и запускается (Фаза 3 уберёт этот прыжок). */
   onCardCreated: () => void
-  /** Готовое значение `top` для первой шапки списка: высота закреплённых шапок
+  /** Готовое значение `top` для шапки списка: высота закреплённых шапок
    *  родителя минус верхний отступ окна прокрутки (`MAIN_PADDING_TOP`).
    *  Бывает отрицательным — так и должно быть, компенсация паддинга. */
   stickyTop?: number
 }
 
+/** Одна смета: шапка с именем, суммой и затратами — и стадии секциями. */
+function SmetaCard({ card }: { card: WorkflowCard }) {
+  const navigate = useNavigate()
+  const usage = cardUsage(card)
+
+  return (
+    <article
+      style={{
+        backgroundColor: '#fff',
+        border: '1px solid #e2e8f0',
+        borderRadius: '10px',
+        padding: '10px 12px',
+        minWidth: 0,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+        <button
+          onClick={() => navigate(`/projects/${card.project_id}/cards/${card.id}`)}
+          title="Открыть смету"
+          style={{
+            display: 'inline-flex', alignItems: 'baseline', gap: '5px', minWidth: 0,
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            font: 'inherit', color: '#1e293b', fontWeight: 600, fontSize: '15px', textAlign: 'left',
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#2563eb' }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#1e293b' }}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {card.name}
+          </span>
+          <span style={{ color: '#94a3b8', fontSize: '13px', flexShrink: 0 }}>↗</span>
+        </button>
+        {/* Сумма — справа в шапке: деньги заказчика, их сравнивают между
+            карточками, поэтому место у них одно и то же в каждой. */}
+        <span style={{ marginLeft: 'auto', fontSize: '14px' }}>
+          <EstimateSum card={card} />
+        </span>
+      </div>
+
+      {/* Затраты на ИИ по всей смете — под суммой, а не рядом: там деньги
+          заказчика, здесь наша себестоимость, и путать их нельзя. */}
+      {usage.hasData && (
+        <div style={{ marginTop: '4px' }}>
+          <UsageChips usage={usage} variant="total" />
+        </div>
+      )}
+
+      <div style={{ marginTop: '8px' }}>
+        <CardStagesAccordion card={card} />
+      </div>
+    </article>
+  )
+}
+
 export function SmetaList({ projectId, onCardCreated, stickyTop = 0 }: Props) {
   const { cards, loading, fetchCards } = useKanbanStore()
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const navigate = useNavigate()
-  // Заголовок таблицы прилипает под строкой «Сметы (N)» — её высоту меряем.
-  const { ref: titleRef, height: titleHeight } = useMeasuredHeight<HTMLDivElement>()
 
   // Поллинг через тот же стор, что и канбан — данные не дублируются.
   useEffect(() => {
@@ -75,33 +129,18 @@ export function SmetaList({ projectId, onCardCreated, stickyTop = 0 }: Props) {
     }
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const headerCellStyle: React.CSSProperties = {
-    textAlign: 'left',
-    fontSize: '12px',
-    fontWeight: 600,
-    color: '#94a3b8',
-    padding: '10px 16px',
-    // Закреплённая ячейка: при borderCollapse рамка отрывается от th, поэтому
-    // нижняя линия нарисована тенью — она едет вместе с шапкой.
-    boxShadow: 'inset 0 -1px 0 #e2e8f0',
-    position: 'sticky',
-    top: stickyTop + titleHeight,
-    zIndex: 10,
-    backgroundColor: '#fff',
-  }
-
-  const cellStyle: React.CSSProperties = {
-    fontSize: '14px',
-    color: '#1e293b',
-    padding: '14px 16px',
-    borderBottom: '1px solid #f1f5f9',
-    verticalAlign: 'middle',
+  const placeholderStyle: React.CSSProperties = {
+    textAlign: 'center', padding: '32px', backgroundColor: '#fff',
+    borderRadius: '12px', border: '1px solid #e2e8f0', color: '#94a3b8', fontSize: '14px',
   }
 
   return (
-    <div>
+    // Сетка выходит за поля страницы целиком, а своё поле в 8px рисует сама:
+    // три карточки в ряд стоят того, чтобы поле было 8px вместо общих 24px.
+    // Ни overflow, ни overflowX здесь быть не может — любой из них делает
+    // список своим окном прокрутки, и шапка перестаёт прилипать к верху.
+    <div style={{ margin: `0 ${-MAIN_PADDING_X}px` }}>
       <div
-        ref={titleRef}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -110,7 +149,7 @@ export function SmetaList({ projectId, onCardCreated, stickyTop = 0 }: Props) {
           top: stickyTop,
           zIndex: 20,
           backgroundColor: '#f8fafc',
-          paddingBottom: '12px',
+          padding: `0 ${GRID_GUTTER}px 12px`,
         }}
       >
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#1e293b', margin: 0 }}>
@@ -124,75 +163,21 @@ export function SmetaList({ projectId, onCardCreated, stickyTop = 0 }: Props) {
         </button>
       </div>
 
-      {loading && cards.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '32px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', color: '#94a3b8', fontSize: '14px' }}>
-          Загрузка…
-        </div>
-      ) : cards.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '32px', backgroundColor: '#fff', borderRadius: '12px', border: '1px solid #e2e8f0', color: '#94a3b8', fontSize: '14px' }}>
-          Смет в проекте пока нет. Нажмите «+ Добавить смету».
-        </div>
-      ) : (
-        // Ни overflow: hidden, ни overflowX: auto здесь быть не может: любой из
-        // них делает карточку своим окном прокрутки, и заголовок таблицы
-        // перестаёт прилипать к верху страницы. Скруглённые углы шапки
-        // рисуются на самих ячейках.
-        <div style={{ backgroundColor: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ ...headerCellStyle, borderTopLeftRadius: '12px' }}>Смета</th>
-                  <th style={headerCellStyle}>Стадии</th>
-                  <th style={{ ...headerCellStyle, textAlign: 'right', borderTopRightRadius: '12px' }}>Сумма</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cards.map((card) => (
-                  // Строка целиком не кликабельна: под ней живут раскрывающиеся
-                  // секции с файлами, и общий onClick перехватывал бы их клики.
-                  <React.Fragment key={card.id}>
-                    <tr>
-                      <td style={{ ...cellStyle, borderBottom: 'none', fontWeight: 600, verticalAlign: 'top' }}>
-                        <button
-                          onClick={() => navigate(`/projects/${card.project_id}/cards/${card.id}`)}
-                          title="Открыть смету"
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '5px',
-                            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                            font: 'inherit', color: '#1e293b', fontWeight: 600, textAlign: 'left',
-                          }}
-                          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#2563eb' }}
-                          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = '#1e293b' }}
-                        >
-                          {card.name}
-                          <span style={{ color: '#94a3b8', fontSize: '13px' }}>↗</span>
-                        </button>
-                      </td>
-                      <td style={{ ...cellStyle, borderBottom: 'none' }}>
-                        <CompactPipeline card={card} />
-                        {/* Затраты на ИИ по всей смете — под дорожкой стадий, а не
-                            в колонке «Сумма»: там деньги заказчика, здесь наша
-                            себестоимость, и путать их нельзя. */}
-                        <div style={{ marginTop: '6px' }}>
-                          <UsageChips usage={cardUsage(card)} variant="total" />
-                        </div>
-                      </td>
-                      <td style={{ ...cellStyle, borderBottom: 'none', textAlign: 'right', verticalAlign: 'top' }}>
-                        <EstimateSum card={card} />
-                      </td>
-                    </tr>
-                    {/* Те же свёрнутые секции стадий с файлами, что и внутри сметы. */}
-                    <tr>
-                      <td colSpan={3} style={{ padding: '0 16px 14px', borderBottom: '1px solid #f1f5f9' }}>
-                        <CardStageContent card={{ ...card, stage: defaultStage(card) }} />
-                      </td>
-                    </tr>
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-        </div>
-      )}
+      <div style={{ padding: `0 ${GRID_GUTTER}px` }}>
+        {loading && cards.length === 0 ? (
+          <div style={placeholderStyle}>Загрузка…</div>
+        ) : cards.length === 0 ? (
+          <div style={placeholderStyle}>Смет в проекте пока нет. Нажмите «+ Добавить смету».</div>
+        ) : (
+          // Колонки и промежутки — в `.smeta-grid` (index.css): три в ряд,
+          // на узком экране два и один. Медиазапросы инлайновым стилем не задать.
+          <div className="smeta-grid">
+            {cards.map((card) => (
+              <SmetaCard key={card.id} card={card} />
+            ))}
+          </div>
+        )}
+      </div>
 
       {showCreateModal && (
         <CreateCardModal
