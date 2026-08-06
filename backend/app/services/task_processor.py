@@ -48,6 +48,7 @@ from app.utils.unit_compat import (
     converted_note,
     convert_price,
     mismatch_note,
+    prices_for_unit,
 )
 from app.services import price_service as _price_svc
 
@@ -115,32 +116,6 @@ def _take_price(
     return True
 
 
-def _apply_ai_unit(
-    work_price: Optional[float],
-    material_price: Optional[float],
-    ai_unit: Optional[str],
-    item_unit: Optional[str],
-) -> tuple[Optional[float], Optional[float], list[str]]:
-    """Цены от ИИ, приведённые к единице позиции, и пометки для человека.
-
-    ИИ ищет цену на рынке, а рынок торгует мешками, рулонами и «за 100 м2».
-    Правило то же, что для прайса: сводимо — пересчитываем, несводимо — цены
-    нет.
-    """
-    notes: list[str] = []
-
-    def _one(price: Optional[float]) -> Optional[float]:
-        if price is None:
-            return None
-        value, status = convert_price(price, ai_unit, item_unit)
-        if status == STATUS_INCOMPATIBLE:
-            notes.append(mismatch_note(ai_unit, item_unit, "ИИ"))
-            return None
-        if status == STATUS_CONVERTED and value is not None:
-            notes.append(converted_note(price, ai_unit, value, item_unit, "ИИ"))
-        return value
-
-    return (_one(work_price), _one(material_price), notes)
 
 
 def _chunk_stage_deadline(n_chunks: int, concurrency: int) -> float:
@@ -3208,7 +3183,7 @@ class TaskProcessor:
                 # Единицу ИИ сверяем так же, как единицу прайса: он ищет цену на
                 # рынке, а рынок торгует мешками и рулонами. Цена за упаковку в
                 # строке с килограммами — та же ошибка в разы, только от ИИ.
-                _wp, _mp, _unit_notes = _apply_ai_unit(
+                _wp, _mp, _unit_notes = prices_for_unit(
                     _wp, _mp, cr.get("unit"), item.get("unit"),
                 )
                 for _note in _unit_notes:
@@ -3635,14 +3610,29 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
             if orig_idx not in empty_set:
                 continue
             orig = items[orig_idx]
-            wp = result_item.get("work_price")
-            mp = result_item.get("material_price")
+            # Единицу ответа сверяем до записи: ИИ ищет цену на рынке, а рынок
+            # торгует мешками и «за 100 м2». Иначе добор пустых цен вернул бы
+            # ту же ошибку в разы, от которой избавлен основной проход.
+            wp, mp, unit_notes = prices_for_unit(
+                result_item.get("work_price"),
+                result_item.get("material_price"),
+                result_item.get("unit"),
+                orig.get("unit"),
+            )
+            notes = result_item.get("notes", orig.get("notes", ""))
+            for unit_note in unit_notes:
+                notes = append_note(notes, unit_note)
+            sources = result_item.get("sources", orig.get("sources", ""))
             if orig.get("type") == "Работа" and wp:
-                items[orig_idx] = {**orig, "work_price": wp, "sources": result_item.get("sources", orig.get("sources", "")), "notes": result_item.get("notes", orig.get("notes", ""))}
+                items[orig_idx] = {**orig, "work_price": wp, "sources": sources, "notes": notes}
                 fixed_count += 1
             elif orig.get("type") == "Материал" and mp:
-                items[orig_idx] = {**orig, "material_price": mp, "sources": result_item.get("sources", orig.get("sources", "")), "notes": result_item.get("notes", orig.get("notes", ""))}
+                items[orig_idx] = {**orig, "material_price": mp, "sources": sources, "notes": notes}
                 fixed_count += 1
+            elif unit_notes:
+                # Цену отвергли из-за единицы — позиция остаётся без цены, но
+                # причина должна быть видна, иначе кнопка «молча не сработала».
+                items[orig_idx] = {**orig, "notes": notes}
 
     if first_error is not None:
         # Успевшие батчи уже оплачены Anthropic — фиксируем найденные цены до

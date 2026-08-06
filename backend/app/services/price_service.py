@@ -149,7 +149,16 @@ async def _embedding_match_work(name: str) -> Optional[dict]:
 
 
 async def _embedding_match_material(name: str) -> Optional[float]:
-    """Find matching material via cosine similarity of Cohere embeddings."""
+    """Только цена — для мест, где единица позиции неизвестна."""
+    row = await _embedding_match_material_row(name)
+    return row.get("price") if row is not None else None
+
+
+async def _embedding_match_material_row(name: str) -> Optional[dict]:
+    """Find matching material via cosine similarity of Cohere embeddings.
+
+    Отдаёт запись целиком: без единицы измерения цена непроверяема.
+    """
     if not _numpy_available or _materials_embeddings is None or _materials_row_norms is None:
         return None
 
@@ -173,7 +182,7 @@ async def _embedding_match_material(name: str) -> Optional[float]:
         best_name = _materials_cache[cache_idx]["name"] if _materials_cache else "?"
         if best_score >= SIMILARITY_THRESHOLD:
             logger.info("Embedding material match HIT", query=name, matched=best_name, score=best_score)
-            return _materials_cache[cache_idx].get("price")
+            return _materials_cache[cache_idx]
         logger.debug("Embedding material match MISS", query=name, best=best_name, score=best_score, threshold=SIMILARITY_THRESHOLD)
         return None
     except Exception as e:

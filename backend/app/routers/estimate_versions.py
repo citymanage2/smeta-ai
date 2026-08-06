@@ -20,6 +20,7 @@ from app.models.task_input_file import TaskInputFile
 from app.services import storage_service
 from app.utils.file_parser import parse_file as _parse_file
 from app.utils.price_coercion import is_negative_qty
+from app.utils.unit_compat import convert_price
 from app.schemas.estimate_version import (
     EstimateVersionResponse,
     EstimateVersionSummary,
@@ -1089,27 +1090,38 @@ async def _run_fill_prices_step(task_id: str) -> None:
                 r_type = row.get("type", "")
                 found = False
 
+                # Единица прайса сверяется с единицей строки: цена за тонну в
+                # строке с килограммами завышает оптимизированную версию в
+                # тысячу раз ровно так же, как завышала бы саму смету.
                 if r_type == "work":
                     work_info = _ps._exact_match_work(name)
                     if work_info is None:
                         work_info = await _ps._embedding_match_work(name)
                     if work_info and work_info.get("min_price"):
-                        price_list_hits[row_id] = {
-                            "price_work": float(work_info["min_price"]),
-                            "price_list_name": work_info.get("name", name),
-                        }
-                        found = True
+                        price, _status = convert_price(
+                            work_info["min_price"], work_info.get("unit"), row.get("unit"),
+                        )
+                        if price is not None:
+                            price_list_hits[row_id] = {
+                                "price_work": float(price),
+                                "price_list_name": work_info.get("name", name),
+                            }
+                            found = True
 
                 elif r_type == "material":
-                    mat = _ps._exact_match_material(name)
+                    mat = _ps._exact_match_material_row(name)
                     if mat is None:
-                        mat = await _ps._embedding_match_material(name)
-                    if mat is not None:
-                        price_list_hits[row_id] = {
-                            "price_material": float(mat),
-                            "price_list_name": name,
-                        }
-                        found = True
+                        mat = await _ps._embedding_match_material_row(name)
+                    if mat is not None and mat.get("price") is not None:
+                        price, _status = convert_price(
+                            mat["price"], mat.get("unit"), row.get("unit"),
+                        )
+                        if price is not None:
+                            price_list_hits[row_id] = {
+                                "price_material": float(price),
+                                "price_list_name": name,
+                            }
+                            found = True
 
                 if not found:
                     for_claude.append({

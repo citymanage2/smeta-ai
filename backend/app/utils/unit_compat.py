@@ -131,6 +131,35 @@ def convert_price(
     return (_round_money(number * factor), status)
 
 
+def prices_for_unit(
+    work_price: Optional[float],
+    material_price: Optional[float],
+    price_unit: Optional[str],
+    item_unit: Optional[str],
+    source_label: str = "ИИ",
+) -> tuple[Optional[float], Optional[float], list[str]]:
+    """Пара цен, приведённая к единице позиции, и пометки для человека.
+
+    Отдельная функция, потому что цену от ИИ принимают три места: расчёт сметы,
+    добор пустых цен и пересчёт одной строки. Правило у них обязано быть одно —
+    разъехавшись, оно даст три разных ответа на один и тот же вопрос.
+    """
+    notes: list[str] = []
+
+    def _one(price: Optional[float]) -> Optional[float]:
+        if price is None:
+            return None
+        value, status = convert_price(price, price_unit, item_unit)
+        if status == STATUS_INCOMPATIBLE:
+            notes.append(mismatch_note(price_unit, item_unit, source_label))
+            return None
+        if status == STATUS_CONVERTED and value is not None:
+            notes.append(converted_note(price, price_unit, value, item_unit, source_label))
+        return value
+
+    return (_one(work_price), _one(material_price), notes)
+
+
 def _fmt(value: float | int | Decimal) -> str:
     """Число для человека: 73.77 → «73,77», 73770 → «73770»."""
     decimal_value = value if isinstance(value, Decimal) else Decimal(str(value))

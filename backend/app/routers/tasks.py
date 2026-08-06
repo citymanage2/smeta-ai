@@ -40,7 +40,8 @@ from app.utils.volume_probe import UNIT_ITEMS as ETA_UNIT_ITEMS
 from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_STAGE, TASK_TYPE_LABELS
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
-from app.utils.price_coercion import is_negative_qty
+from app.utils.price_coercion import coerce_price, is_negative_qty
+from app.utils.unit_compat import append_note, prices_for_unit
 
 logger = structlog.get_logger()
 
@@ -1946,9 +1947,14 @@ async def reprice_estimate_item(
         "Инструкция:\n"
         "1. Найди 3 актуальных цены в г. Екатеринбург\n"
         "2. Поставь среднюю из трёх\n"
-        "3. Перечисли все 3 источника с ценами\n\n"
+        "3. Перечисли все 3 источника с ценами\n"
+        f"4. Цена должна быть за 1 (одну) единицу измерения позиции — за «{item.get('unit', '')}».\n"
+        "   Если рынок продаёт мешками, рулонами, тоннами или «за 100 м2» — пересчитай\n"
+        "   на одну единицу позиции. В поле \"unit\" верни ту единицу, за которую\n"
+        "   указана цена: подгонять число под чужую единицу нельзя.\n\n"
         "Верни СТРОГО в формате JSON, без markdown:\n"
         '{"work_price": число или null, "material_price": число или null, '
+        '"unit": "ед. изм., за которую указана цена", '
         '"sources": "Источник 1: цена; Источник 2: цена; Источник 3: цена", '
         '"notes": "Примечание по НДС"}'
     )
@@ -1967,24 +1973,37 @@ async def reprice_estimate_item(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка при обращении к Claude: {e}")
 
-    new_price = data.get("work_price") if item.get("type") == "Работа" else data.get("material_price")
+    # Единица ответа сверяется с единицей позиции: цена за мешок в строке с
+    # килограммами завышает стоимость в разы, а на вид ничем не отличается от
+    # правильной. Сводимую единицу пересчитываем, несводимую не берём.
+    work_price, material_price, unit_notes = prices_for_unit(
+        coerce_price(data.get("work_price")),
+        coerce_price(data.get("material_price")),
+        data.get("unit"),
+        item.get("unit"),
+    )
+    notes = data.get("notes", "") or ""
+    for unit_note in unit_notes:
+        notes = append_note(notes, unit_note)
+
+    new_price = work_price if item.get("type") == "Работа" else material_price
     if new_price is not None:
         items[item_index] = {
             **item,
-            "work_price": data.get("work_price"),
-            "material_price": data.get("material_price"),
+            "work_price": work_price,
+            "material_price": material_price,
             "sources": data.get("sources", ""),
-            "notes": data.get("notes", ""),
+            "notes": notes,
             "price_list_name": None,
         }
         await estimate_store.write_items(db, task, items)
 
     return {
         "item_index": item_index,
-        "work_price": data.get("work_price"),
-        "material_price": data.get("material_price"),
+        "work_price": work_price,
+        "material_price": material_price,
         "sources": data.get("sources", ""),
-        "notes": data.get("notes", ""),
+        "notes": notes,
     }
 
 

@@ -23,8 +23,6 @@ from app.utils.unit_compat import (  # noqa: E402
     PRICE_UNIT_MISMATCH_PREFIX,
 )
 
-pytestmark = pytest.mark.asyncio
-
 
 def _proc() -> TaskProcessor:
     db = MagicMock()
