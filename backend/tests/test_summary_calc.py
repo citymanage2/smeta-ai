@@ -97,6 +97,41 @@ def test_sections_use_their_own_tax():
     assert ov["materials_with_vat"] == pytest.approx(48952.5, rel=1e-9)
 
 
+_TAX_SECTION_ROWS = [_row("work", 10, work=100), _row("material", 2, material=500)]
+_TAX_OVERRIDES = {"coefficient": 1}
+
+
+def test_section_taxes_works_and_materials_are_independent():
+    """Работы и материалы раздела облагаются каждый по своей ставке."""
+    calc = calc_summary(
+        [{
+            "card_id": "c", "card_name": "Раздел",
+            "tax_pct_works": 0, "tax_pct_materials": 22,
+            "rows": _TAX_SECTION_ROWS,
+        }],
+        _TAX_OVERRIDES,
+    )
+    section = calc["section_totals"][0]
+    assert section["works_raw"] == pytest.approx(1000, rel=1e-9)
+    assert section["materials_raw"] == pytest.approx(1000, rel=1e-9)
+    # Работы: подрядчик с НДС — добавляем 22%. Материалы: самозанятый — НДС в цене.
+    assert section["works_with_vat"] == pytest.approx(1220, rel=1e-9)
+    assert section["materials_with_vat"] == pytest.approx(1000, rel=1e-9)
+
+
+def test_section_with_legacy_single_tax_is_unchanged():
+    """Сводная, сохранённая с одной ставкой, считается как считалась."""
+    calc = calc_summary(
+        [{"card_id": "c", "card_name": "Раздел", "tax_pct": 5, "rows": _TAX_SECTION_ROWS}],
+        _TAX_OVERRIDES,
+    )
+    section = calc["section_totals"][0]
+    assert section["tax_pct_works"] == 5
+    assert section["tax_pct_materials"] == 5
+    assert section["works_with_vat"] == pytest.approx(1170, rel=1e-9)
+    assert section["materials_with_vat"] == pytest.approx(1170, rel=1e-9)
+
+
 def test_hidden_rows_are_counted_but_not_in_subtotal():
     calc = calc_summary(SECTIONS, OVERRIDES)
     # Строки скрыты пользователем: значения считаются и показываются, но в
@@ -138,3 +173,32 @@ def test_exported_summary_matches_screen(tmp_path):
 
     grand = next(v for k, v in totals.items() if "Заказчик" in k)
     assert grand == pytest.approx(222647.82, abs=0.01)
+
+
+def test_exported_sections_show_both_taxes():
+    """В файле у раздела две колонки налога — работы и материалы отдельно."""
+    import io
+
+    import openpyxl
+
+    from app.utils.xlsx_summary import generate_summary_xlsx
+
+    class _Summary:
+        sections = [{
+            "card_id": "c", "card_name": "Раздел",
+            "tax_pct_works": 0, "tax_pct_materials": 22,
+            "rows": _TAX_SECTION_ROWS,
+        }]
+        overrides = _TAX_OVERRIDES
+
+    wb = openpyxl.load_workbook(io.BytesIO(generate_summary_xlsx(_Summary())))
+    ws = wb["Сводная"]
+    right = lambda row: [ws.cell(row=row, column=col).value for col in range(6, 13)]  # noqa: E731
+
+    assert right(1) == [
+        "Раздел", "Работы (с/с)", "Налог работ, %", "Работы с НДС",
+        "Материалы (с/с)", "Налог матер., %", "Материалы с НДС",
+    ]
+    assert right(2) == ["Раздел", 1000, 0, 1220, 1000, 22, 1000]
+    # ИТОГО: суммируются только деньги, налоговые колонки пустые.
+    assert right(3) == ["ИТОГО", 1000, None, 1220, 1000, None, 1000]

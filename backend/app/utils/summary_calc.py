@@ -88,6 +88,20 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _section_tax(section: dict, side: str) -> float:
+    """Ставка налога половины раздела: у работ и материалов она своя.
+
+    `tax_pct` — одна ставка на обе половины, как было до раздельных налогов.
+    Сохранённые раньше сводные лежат в базе именно так, поэтому она остаётся
+    запасным значением. То же правило на экране — `sectionTaxPct` в
+    `stores/summaryEditorStore.ts`.
+    """
+    value = section.get(f"tax_pct_{side}")
+    if value is None or value == "":
+        value = section.get("tax_pct")
+    return _num(value)
+
+
 def _billable_qty(qty: Any) -> float:
     """Объём для умножения на цену: вычет (< 0) стоимости не даёт.
 
@@ -123,17 +137,18 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
 
         works_raw *= coefficient
         materials_raw *= coefficient
-        tax_pct = _num(section.get("tax_pct"))
-        multiplier = VAT - tax_pct / 100
+        tax_pct_works = _section_tax(section, "works")
+        tax_pct_materials = _section_tax(section, "materials")
 
         section_totals.append({
             "card_id": section.get("card_id"),
             "card_name": section.get("card_name") or "",
-            "tax_pct": tax_pct,
+            "tax_pct_works": tax_pct_works,
+            "tax_pct_materials": tax_pct_materials,
             "works_raw": works_raw,
             "materials_raw": materials_raw,
-            "works_with_vat": works_raw * multiplier,
-            "materials_with_vat": materials_raw * multiplier,
+            "works_with_vat": works_raw * (VAT - tax_pct_works / 100),
+            "materials_with_vat": materials_raw * (VAT - tax_pct_materials / 100),
         })
 
     works_with_vat = sum(s["works_with_vat"] for s in section_totals)

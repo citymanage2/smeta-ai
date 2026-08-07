@@ -4,10 +4,23 @@ import {
   SummaryOverrides,
   SummaryCalcResult,
   SectionCalcRow,
+  TaxSide,
   DEFAULT_OVERRIDES,
 } from '../types/summary';
 import { getSummary, updateSummary } from '../api/summaryEstimate';
 import { billableQty } from '../utils/negativeQty';
+
+/**
+ * Ставка налога половины раздела: у работ и материалов она своя.
+ *
+ * `tax_pct` — одна ставка на обе половины, как было раньше. Сводные, сохранённые
+ * до раздельных налогов, лежат в базе именно так, поэтому она остаётся запасным
+ * значением. То же правило на сервере — `_section_tax` в `utils/summary_calc.py`.
+ */
+export function sectionTaxPct(section: SectionTab, side: TaxSide): number {
+  const own = side === 'works' ? section.tax_pct_works : section.tax_pct_materials;
+  return Number(own ?? section.tax_pct ?? 0);
+}
 
 function rowAmount(value: number | null, qty: number | null): number {
   // billableQty: строка с отрицательным объёмом — вычет, а не работа. Считать
@@ -35,16 +48,17 @@ export function calcSummary(
     }
     works_raw *= coeff;
     materials_raw *= coeff;
-    const tax_pct = sec.tax_pct ?? 0;
-    const multiplier = 1.22 - tax_pct / 100;
+    const tax_pct_works = sectionTaxPct(sec, 'works');
+    const tax_pct_materials = sectionTaxPct(sec, 'materials');
     return {
       card_id: sec.card_id,
       card_name: sec.card_name,
-      tax_pct,
+      tax_pct_works,
+      tax_pct_materials,
       works_raw,
       materials_raw,
-      works_with_vat: works_raw * multiplier,
-      materials_with_vat: materials_raw * multiplier,
+      works_with_vat: works_raw * (1.22 - tax_pct_works / 100),
+      materials_with_vat: materials_raw * (1.22 - tax_pct_materials / 100),
     };
   });
 
@@ -187,7 +201,7 @@ interface SummaryEditorState {
   loadSummary: (projectId: string) => Promise<void>;
   /** Перечитать строки разделов, не трогая несохранённые настройки бланка. */
   refreshSections: () => Promise<void>;
-  updateSectionTaxPct: (sectionIndex: number, taxPct: number) => void;
+  updateSectionTaxPct: (sectionIndex: number, side: TaxSide, taxPct: number) => void;
   updateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => void;
   setActiveTabIndex: (index: number) => void;
   save: () => Promise<void>;
@@ -261,7 +275,14 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     // мог поменять и ещё не сохранить — перечитывание не должно их стирать.
     const merged = summary.sections.map((remote) => {
       const mine = local.find((section) => section.card_id === remote.card_id);
-      return mine ? { ...remote, tax_pct: mine.tax_pct } : remote;
+      return mine
+        ? {
+            ...remote,
+            tax_pct: mine.tax_pct,
+            tax_pct_works: mine.tax_pct_works,
+            tax_pct_materials: mine.tax_pct_materials,
+          }
+        : remote;
     });
     set({ sections: merged });
 
@@ -277,11 +298,19 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
     });
   },
 
-  updateSectionTaxPct: (sectionIndex: number, taxPct: number) => {
+  updateSectionTaxPct: (sectionIndex: number, side: TaxSide, taxPct: number) => {
     const { sections } = get();
-    const newSections = sections.map((sec, i) =>
-      i === sectionIndex ? { ...sec, tax_pct: taxPct } : sec,
-    );
+    const newSections = sections.map((sec, i) => {
+      if (i !== sectionIndex) return sec;
+      // Пишем обе ставки: вторую — её текущим действующим значением. Так у
+      // тронутого раздела обе половины заданы явно, и старое поле `tax_pct`
+      // больше не участвует в его расчёте — читать нечего, кроме своих ставок.
+      return {
+        ...sec,
+        tax_pct_works: side === 'works' ? taxPct : sectionTaxPct(sec, 'works'),
+        tax_pct_materials: side === 'materials' ? taxPct : sectionTaxPct(sec, 'materials'),
+      };
+    });
     set({ sections: newSections, isDirty: true });
   },
 

@@ -1,11 +1,11 @@
 import React from 'react'
-import { SummaryOverrides, SummaryCalcResult, CustomCostRow, FIXED_ROW_KEYS } from '../../types/summary'
+import { SummaryOverrides, SummaryCalcResult, CustomCostRow, FIXED_ROW_KEYS, TaxSide } from '../../types/summary'
 
 interface Props {
   calc: SummaryCalcResult
   overrides: SummaryOverrides
   onUpdateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => void
-  onUpdateSectionTaxPct: (sectionIndex: number, taxPct: number) => void
+  onUpdateSectionTaxPct: (sectionIndex: number, side: TaxSide, taxPct: number) => void
 }
 
 const fmt = (n: number) =>
@@ -605,7 +605,8 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
             Разбивка по разделам
           </div>
           <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px' }}>
-            Налог: 0% — подрядчик с НДС (добавляем 22%); 22% — самозанятый (НДС уже в цене)
+            Налог: 0% — подрядчик с НДС (добавляем 22%); 22% — самозанятый (НДС уже в цене).
+            У работ и материалов раздела ставки независимы.
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -637,15 +638,15 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
                     <td style={td()}>{sec.card_name}</td>
                     <td style={tdR()}>{fmt(sec.works_raw)}</td>
                     <td style={td({ textAlign: 'center' })}>
-                      <NumberInput value={sec.tax_pct} onCommit={(v) => onUpdateSectionTaxPct(idx, v)} suffix="%" />
+                      <NumberInput value={sec.tax_pct_works} onCommit={(v) => onUpdateSectionTaxPct(idx, 'works', v)} suffix="%" />
                     </td>
-                    <td style={tdR({ color: sec.tax_pct > 0 ? '#059669' : undefined })}>{fmtVal(sec.works_with_vat)}</td>
+                    <td style={tdR({ color: sec.tax_pct_works > 0 ? '#059669' : undefined })}>{fmtVal(sec.works_with_vat)}</td>
                     <td style={{ padding: 0, borderLeft: '2px solid #e2e8f0', background: '#e2e8f0', borderBottom: '1px solid #f1f5f9' }} />
                     <td style={tdR({ borderLeft: '2px solid #e2e8f0' })}>{fmt(sec.materials_raw)}</td>
                     <td style={td({ textAlign: 'center' })}>
-                      <NumberInput value={sec.tax_pct} onCommit={(v) => onUpdateSectionTaxPct(idx, v)} suffix="%" />
+                      <NumberInput value={sec.tax_pct_materials} onCommit={(v) => onUpdateSectionTaxPct(idx, 'materials', v)} suffix="%" />
                     </td>
-                    <td style={tdR({ color: sec.tax_pct > 0 ? '#059669' : undefined })}>{fmtVal(sec.materials_with_vat)}</td>
+                    <td style={tdR({ color: sec.tax_pct_materials > 0 ? '#059669' : undefined })}>{fmtVal(sec.materials_with_vat)}</td>
                   </tr>
                 ))}
                 <tr style={{ background: '#f8fafc' }}>

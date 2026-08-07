@@ -173,43 +173,49 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
     for i, w in enumerate([42, 18, 18, 20], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    # ── Правая таблица: разделы со своими налогами (колонки F-K) ──────────
+    # ── Правая таблица: разделы со своими налогами (колонки F-L) ──────────
+    # Налогов у раздела два: работы и материалы облагаются независимо
+    # (работы — самозанятый, материалы — подрядчик с НДС, и наоборот).
     OFF = 6
     right_headers = [
-        "Раздел", "Налог, %", "Работы (с/с)", "Работы с НДС",
-        "Материалы (с/с)", "Материалы с НДС",
+        "Раздел", "Работы (с/с)", "Налог работ, %", "Работы с НДС",
+        "Материалы (с/с)", "Налог матер., %", "Материалы с НДС",
     ]
     for col, h in enumerate(right_headers, OFF):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = _BOLD_WHITE
         cell.fill = _HEADER_FILL
 
-    for i, w in enumerate([30, 12, 18, 18, 18, 18], OFF):
+    for i, w in enumerate([30, 18, 14, 18, 18, 14, 18], OFF):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    totals_right = [0.0] * 4
+    # Колонки денег (смещение от OFF) — их суммируем и форматируем как рубли.
+    MONEY_COLS = (1, 3, 4, 6)
+    totals_right = dict.fromkeys(MONEY_COLS, 0.0)
     for r_idx, section in enumerate(calc["section_totals"], 2):
         values = [
-            section["card_name"], section["tax_pct"],
-            section["works_raw"], section["works_with_vat"],
-            section["materials_raw"], section["materials_with_vat"],
+            section["card_name"],
+            section["works_raw"], section["tax_pct_works"], section["works_with_vat"],
+            section["materials_raw"], section["tax_pct_materials"], section["materials_with_vat"],
         ]
-        for i, value in enumerate(values[2:]):
-            totals_right[i] += value
-        for col, value in enumerate(values, OFF):
+        for offset, value in enumerate(values):
             cell = ws.cell(
-                row=r_idx, column=col,
+                row=r_idx, column=OFF + offset,
                 value=round(value, 2) if isinstance(value, float) else value,
             )
-            if isinstance(value, float):
+            if offset in MONEY_COLS:
+                totals_right[offset] += value
                 cell.number_format = _NUM_FMT
 
     total_row = len(calc["section_totals"]) + 2
-    for col, value in enumerate(["ИТОГО", None] + [round(v, 2) for v in totals_right], OFF):
-        cell = ws.cell(row=total_row, column=col, value=value)
+    for offset in range(len(right_headers)):
+        value = "ИТОГО" if offset == 0 else (
+            round(totals_right[offset], 2) if offset in MONEY_COLS else None
+        )
+        cell = ws.cell(row=total_row, column=OFF + offset, value=value)
         cell.font = _BOLD
         cell.fill = _TOTAL_FILL
-        if isinstance(value, float):
+        if offset in MONEY_COLS:
             cell.number_format = _NUM_FMT
 
 

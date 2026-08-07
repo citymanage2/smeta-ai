@@ -15,7 +15,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
 import { calcSummary } from '../stores/summaryEditorStore';
+import { EstimateRow } from '../types';
+import { DEFAULT_OVERRIDES, SectionTab, SummaryOverrides } from '../types/summary';
 import { OVERRIDES, SECTIONS } from './summaryRegressFixture';
+
+function taxRow(over: Partial<EstimateRow> & { id: string }): EstimateRow {
+  return {
+    lineage_id: over.id,
+    num: 1,
+    type: 'work',
+    name: 'Строка',
+    unit: 'м2',
+    qty: 1,
+    price_work: null,
+    price_material: null,
+    cost: null,
+    selected: false,
+    ...over,
+  } as EstimateRow;
+}
 
 // --- Регресс бланка «Сводная» ---------------------------------------------
 
@@ -61,6 +79,61 @@ describe('итоги сводной не изменились', () => {
     expect(calc.ppr_with_vat).toBeGreaterThan(0);
     const withThem = calc.subtotal_with_vat + calc.cleanup_with_vat + calc.ppr_with_vat;
     expect(withThem).toBeGreaterThan(calc.subtotal_with_vat);
+  });
+});
+
+// --- Раздельные налоги работ и материалов ----------------------------------
+
+describe('налог работ и налог материалов раздела независимы', () => {
+  const taxOverrides: SummaryOverrides = { ...DEFAULT_OVERRIDES, coefficient: 1 };
+
+  function taxSection(over: Partial<SectionTab>): SectionTab {
+    return {
+      card_id: 'card-tax',
+      card_name: 'Раздел',
+      version_id: 'v-tax',
+      version_display_name: 'Исходная смета',
+      rows: [
+        taxRow({ id: 't1', type: 'work', qty: 10, price_work: 100 }),
+        taxRow({ id: 't2', type: 'material', qty: 2, price_material: 500 }),
+      ],
+      ...over,
+    };
+  }
+
+  it('каждая половина считается по своей ставке', () => {
+    const calc = calcSummary(
+      [taxSection({ tax_pct_works: 0, tax_pct_materials: 22 })],
+      taxOverrides,
+    );
+    const [sec] = calc.section_totals;
+    expect(sec.works_raw).toBeCloseTo(1000, 6);
+    expect(sec.materials_raw).toBeCloseTo(1000, 6);
+    // Работы: подрядчик с НДС — добавляем 22%. Материалы: самозанятый — НДС уже в цене.
+    expect(sec.works_with_vat).toBeCloseTo(1220, 6);
+    expect(sec.materials_with_vat).toBeCloseTo(1000, 6);
+  });
+
+  it('сводная со старой одной ставкой считается как раньше', () => {
+    // Сохранённые до этой правки разделы знают только `tax_pct` — обе половины
+    // берут её, иначе итог такой сводной поехал бы при первом же открытии.
+    const calc = calcSummary([taxSection({ tax_pct: 5 })], taxOverrides);
+    const [sec] = calc.section_totals;
+    expect(sec.tax_pct_works).toBe(5);
+    expect(sec.tax_pct_materials).toBe(5);
+    expect(sec.works_with_vat).toBeCloseTo(1170, 6);
+    expect(sec.materials_with_vat).toBeCloseTo(1170, 6);
+  });
+
+  it('правка ставки работ не меняет ставку материалов', () => {
+    useSummaryEditorStore.setState({ sections: [taxSection({ tax_pct: 5 })] });
+
+    useSummaryEditorStore.getState().updateSectionTaxPct(0, 'works', 0);
+
+    const [saved] = useSummaryEditorStore.getState().sections;
+    expect(saved.tax_pct_works).toBe(0);
+    // Материалы остаются на действующей ставке, а не «уезжают» вслед за работами.
+    expect(saved.tax_pct_materials).toBe(5);
   });
 });
 
@@ -157,11 +230,11 @@ describe('вкладки разделов', () => {
     render(<SummaryEditorTabs projectId="proj-1" />);
     await screen.findByTestId('document-editor');
 
-    useSummaryEditorStore.getState().updateSectionTaxPct(0, 11);
+    useSummaryEditorStore.getState().updateSectionTaxPct(0, 'works', 11);
     screen.getByText('применить-в-тесте').click();
 
     await waitFor(() => {
-      expect(useSummaryEditorStore.getState().sections[0].tax_pct).toBe(11);
+      expect(useSummaryEditorStore.getState().sections[0].tax_pct_works).toBe(11);
     });
     // Итог с несохранённым бланком не сохраняем: сохранит кнопка «Сохранить».
     expect(summaryApi.updateSummary).not.toHaveBeenCalled();

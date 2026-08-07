@@ -80,13 +80,25 @@ export interface SectionTab {
   version_id: string;
   version_display_name: string;
   rows: EstimateRow[];
+  /** Налог работ раздела, %. */
+  tax_pct_works?: number;
+  /** Налог материалов раздела, %. */
+  tax_pct_materials?: number;
+  /**
+   * Одна ставка на работы и материалы — как было до раздельных налогов.
+   * Остаётся запасным значением для сводных, сохранённых раньше.
+   */
   tax_pct?: number;
 }
+
+/** Половина раздела, у которой своя ставка налога. */
+export type TaxSide = 'works' | 'materials';
 
 export interface SectionCalcRow {
   card_id: string;
   card_name: string;
-  tax_pct: number;
+  tax_pct_works: number;
+  tax_pct_materials: number;
   works_raw: number;
   materials_raw: number;
   works_with_vat: number;
