@@ -176,27 +176,32 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
     # ── Правая таблица: разделы со своими налогами (колонки F-L) ──────────
     # Налогов у раздела два: работы и материалы облагаются независимо
     # (работы — самозанятый, материалы — подрядчик с НДС, и наоборот).
+    #
+    # Второй налог добавлен колонкой в конец, а не рядом с материалами: колонки
+    # F-K остаются там же, где были, и формулы, написанные людьми поверх прежних
+    # выгрузок, не съезжают на соседний столбец.
     OFF = 6
     right_headers = [
-        "Раздел", "Работы (с/с)", "Налог работ, %", "Работы с НДС",
-        "Материалы (с/с)", "Налог матер., %", "Материалы с НДС",
+        "Раздел", "Налог работ, %", "Работы (с/с)", "Работы с НДС",
+        "Материалы (с/с)", "Материалы с НДС", "Налог матер., %",
     ]
     for col, h in enumerate(right_headers, OFF):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = _BOLD_WHITE
         cell.fill = _HEADER_FILL
 
-    for i, w in enumerate([30, 18, 14, 18, 18, 14, 18], OFF):
+    for i, w in enumerate([30, 14, 18, 18, 18, 18, 14], OFF):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     # Колонки денег (смещение от OFF) — их суммируем и форматируем как рубли.
-    MONEY_COLS = (1, 3, 4, 6)
+    MONEY_COLS = (2, 3, 4, 5)
     totals_right = dict.fromkeys(MONEY_COLS, 0.0)
     for r_idx, section in enumerate(calc["section_totals"], 2):
         values = [
-            section["card_name"],
-            section["works_raw"], section["tax_pct_works"], section["works_with_vat"],
-            section["materials_raw"], section["tax_pct_materials"], section["materials_with_vat"],
+            section["card_name"], section["tax_pct_works"],
+            section["works_raw"], section["works_with_vat"],
+            section["materials_raw"], section["materials_with_vat"],
+            section["tax_pct_materials"],
         ]
         for offset, value in enumerate(values):
             cell = ws.cell(
