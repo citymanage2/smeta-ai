@@ -25,6 +25,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.correction_signal import FIELD_ROW
 from app.models.document_lock import LOCK_TTL_SECONDS, DocumentLock
 from app.models.estimate_version import EstimateVersion
 from app.models.history import TaskHistory
@@ -33,7 +34,7 @@ from app.models.summary_section_doc import SummarySectionDoc
 from app.models.task import Task
 from app.models.user import User
 from app.models.workflow_card import WorkflowCard
-from app.services import price_bulk
+from app.services import correction_log, price_bulk
 from app.utils.auth import current_user_id
 from app.utils.permissions import can_edit
 from app.utils.unit_compat import (
@@ -774,6 +775,12 @@ def diff_rows(old_rows: list, new_rows: list, row_format: str) -> list[dict]:
     Сопоставление строк — по идентификатору; строки без идентификатора
     сравниваются по позиции. Добавление и удаление строк фиксируются одной
     записью на строку, а не по каждому полю.
+
+    Рядом с человекочитаемыми `field` и `row_id` кладутся `field_key` и
+    `row_key` — машинный ключ поля и тот самый ключ сопоставления. Показывает их
+    только журнал корректировок (`correction_log`): по подписи «Цена работ» не
+    сгруппируешь и не применишь знание, а по позиционному `__pos_N` — отличишь
+    первую правку ячейки от повторной у строк без идентификатора.
     """
     changes: list[dict] = []
     old_by_key = {}
@@ -792,7 +799,8 @@ def diff_rows(old_rows: list, new_rows: list, row_format: str) -> list[dict]:
         if old_row is None:
             changes.append({
                 "row_number": idx + 1, "row_id": key, "row_name": row_name,
-                "field": "Строка", "previous": None, "new": "добавлена",
+                "row_key": lookup, "field": "Строка", "field_key": FIELD_ROW,
+                "previous": None, "new": "добавлена",
             })
             continue
 
@@ -804,7 +812,8 @@ def diff_rows(old_rows: list, new_rows: list, row_format: str) -> list[dict]:
                 continue
             changes.append({
                 "row_number": idx + 1, "row_id": key, "row_name": row_name,
-                "field": _field_label(field, row_format),
+                "row_key": lookup,
+                "field": _field_label(field, row_format), "field_key": field,
                 "previous": before, "new": after,
             })
 
@@ -816,7 +825,8 @@ def diff_rows(old_rows: list, new_rows: list, row_format: str) -> list[dict]:
         changes.append({
             "row_number": idx + 1, "row_id": key,
             "row_name": _row_name(old_row, row_format),
-            "field": "Строка", "previous": "была", "new": "удалена",
+            "row_key": lookup, "field": "Строка", "field_key": FIELD_ROW,
+            "previous": "была", "new": "удалена",
         })
 
     return changes
@@ -1015,6 +1025,24 @@ async def apply_rows(
     await db.flush()
     await _trim_history(db, task_id, kind)
     await db.commit()
+
+    # Журнал корректировок — отдельной транзакцией и уже после того, как правка
+    # сохранена: знание «система посчитала так, человек поставил иначе» полезно,
+    # но правка документа важнее, и сбой журнала не имеет права её отменить.
+    # Пишем только ручную правку: проверка единиц, коэффициент, откат и
+    # оптимизация идут через этот же метод, но там система правит саму себя.
+    if operation_type == correction_log.MANUAL_OPERATION:
+        await correction_log.record_edit_signals(
+            db,
+            task_id=task_id,
+            document_kind=kind,
+            row_format=doc.row_format,
+            changes=changes,
+            old_rows=old_rows,
+            new_rows=new_rows,
+            user_id=current_user_id(current_user),
+            user_name=user_name,
+        )
 
     logger.info(
         "document_applied", card_id=str(doc.card.id), kind=doc.kind,

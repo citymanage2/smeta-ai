@@ -19,7 +19,7 @@ export { MAIN_PADDING_TOP, MAIN_PADDING_X };
 
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const navigate = useNavigate();
-  const { role, logout, isAdmin, isAuthenticated } = useAuthStore();
+  const { role, logout, isAdmin, isManager, isAuthenticated } = useAuthStore();
   useGlobalTaskPoller();
   useSystemNotifications();
 
@@ -105,6 +105,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               style={headerBtnStyle}
             >
               Дообучение
+            </button>
+          )}
+          {isManager && (
+            <button
+              onClick={() => navigate('/corrections')}
+              style={headerBtnStyle}
+            >
+              Правки
             </button>
           )}
           {isAdmin && (
