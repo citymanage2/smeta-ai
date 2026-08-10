@@ -198,6 +198,13 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
 
     result = {
         "section_totals": section_totals,
+        # Ввод человека из колонки «% / Кол-во» бланка: в файл он едет отдельным
+        # столбцом, а не приклеивается к названию строки.
+        "coefficient": coefficient,
+        "transport_pct": _ov("transport_pct"),
+        "cleanup_pct": _ov("cleanup_pct"),
+        "overhead_pct": _ov("overhead_pct"),
+        "daily_workers_qty": _num(overrides.get("daily_workers_cost")),
         "subtotal_with_vat": subtotal_with_vat,
         "subtotal_without_vat": subtotal_without_vat,
         "contingency_with_vat": contingency_with_vat,

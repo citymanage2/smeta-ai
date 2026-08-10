@@ -12,9 +12,18 @@ _HEADER_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
 _GRAND_FILL = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
 _WORK_FILL = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
+_COEF_FILL = PatternFill(start_color="F3E8FF", end_color="F3E8FF", fill_type="solid")
 _BOLD_WHITE = Font(bold=True, color="FFFFFF")
 _BOLD = Font(bold=True)
 _NUM_FMT = "#,##0.00"
+# Ввод человека из колонки «% / Кол-во»: число остаётся числом, подпись — в формате.
+_PCT_FMT = '0.##"%"'
+_QTY_FMT = '0.##" чел"'
+_COEF_FMT = "0.####"
+
+# Левый блок бланка: № | Наименование | % / Кол-во | Стоимость с НДС | без НДС.
+_COL_NUM, _COL_NAME, _COL_INPUT, _COL_WITH_VAT, _COL_WITHOUT_VAT = 1, 2, 3, 4, 5
+_LEFT_COLS = 5
 
 
 def _to_f(v) -> float:
@@ -103,84 +112,111 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
     `calcSummary`. Раньше здесь была своя, более старая формула: без
     коэффициента, без налогов разделов, без восьми строк расходов, с другой
     прибылью и НДС. Файл расходился с экраном на десятки процентов.
+
+    Колонки бланка те же, что на экране (`components/summary/SummarySheet.tsx`):
+    № | Наименование | % / Кол-во | Стоимость с НДС | Стоимость без НДС.
+    Раскладка закреплена тестом `backend/tests/test_xlsx_summary.py`.
     """
     calc = calc_summary(sections, overrides)
     hidden = calc["hidden_fixed_rows"]
 
-    # ── Левая таблица: строки бланка (колонки A-D) ────────────────────────
-    for col, h in enumerate(["Статья затрат", "Без НДС (₽)", "С НДС (₽)", "Сумма (₽)"], 1):
+    # ── Левая таблица: бланк «Себестоимость и цена для заказчика» (A-E) ────
+    # Колонки те же, что на экране, и у каждой строки те же числа: и с НДС, и
+    # без НДС. Раньше половина бланка (непредвиденные, прибыль, налоги, итог)
+    # уезжала одной суммой в отдельную колонку «Сумма», а ввод человека (%,
+    # количество, коэффициент) в файл не попадал вовсе.
+    headers = ["№", "Наименование", "% / Кол-во", "Стоимость с НДС", "Стоимость без НДС"]
+    for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = _BOLD_WHITE
         cell.fill = _HEADER_FILL
 
+    for i, w in enumerate([5, 52, 14, 20, 20], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
     row_idx = 2
+
+    ws.cell(row=row_idx, column=_COL_NAME, value="Коэффициент к ценам (×все цены)").font = _BOLD
+    _input_cell(ws, row_idx, calc["coefficient"], _COEF_FMT)
+    for col in range(1, _LEFT_COLS + 1):
+        ws.cell(row=row_idx, column=col).fill = _COEF_FILL
+    row_idx += 1
+
+    # Строки, где в колонке «% / Кол-во» стоит ввод человека.
+    row_inputs = {
+        "transport": (calc["transport_pct"], _PCT_FMT),
+        "cleanup": (calc["cleanup_pct"], _PCT_FMT),
+        "overhead": (calc["overhead_pct"], _PCT_FMT),
+        "daily_workers": (calc["daily_workers_qty"], _QTY_FMT),
+    }
+
+    num = 0
     for key in FIXED_ROW_KEYS:
         if key in hidden:
             continue
-        ws.cell(row=row_idx, column=1, value=FIXED_ROW_LABELS[key])
-        for col, value in (
-            (2, calc[f"{key}_without_vat"]), (3, calc[f"{key}_with_vat"]),
-        ):
-            cell = ws.cell(row=row_idx, column=col, value=round(value, 2))
-            cell.number_format = _NUM_FMT
+        num += 1
+        ws.cell(row=row_idx, column=_COL_NUM, value=num)
+        ws.cell(row=row_idx, column=_COL_NAME, value=FIXED_ROW_LABELS[key])
+        if key in row_inputs:
+            _input_cell(ws, row_idx, *row_inputs[key])
+        _money(ws, row_idx, _COL_WITH_VAT, calc[f"{key}_with_vat"])
+        _money(ws, row_idx, _COL_WITHOUT_VAT, calc[f"{key}_without_vat"])
         row_idx += 1
 
     for custom in calc["custom_rows_before"]:
-        ws.cell(row=row_idx, column=1, value=str(custom.get("label") or ""))
-        without_vat = _to_f(custom.get("without_vat"))
-        for col, value in ((2, without_vat), (3, without_vat * 1.22)):
-            cell = ws.cell(row=row_idx, column=col, value=round(value, 2))
-            cell.number_format = _NUM_FMT
-        row_idx += 1
+        num += 1
+        ws.cell(row=row_idx, column=_COL_NUM, value=num)
+        row_idx = _custom_row(ws, row_idx, custom)
 
-    _bold_row(ws, row_idx, "ИТОГО себестоимость объекта", calc["subtotal_with_vat"], _TOTAL_FILL)
-    ws.cell(row=row_idx, column=2, value=round(calc["subtotal_without_vat"], 2)).number_format = _NUM_FMT
-    ws.cell(row=row_idx, column=3, value=round(calc["subtotal_with_vat"], 2)).number_format = _NUM_FMT
+    _total_row(ws, row_idx, "ИТОГО себестоимость объекта", _TOTAL_FILL,
+               calc["subtotal_with_vat"], calc["subtotal_without_vat"])
     row_idx += 1
 
-    for label, value in (
-        (f"Непредвиденные расходы {calc['contingency_pct']:g}%", calc["contingency_with_vat"]),
-        (f"Плановая прибыль {calc['profit_pct']:g}%", calc["profit"]),
-    ):
-        ws.cell(row=row_idx, column=1, value=label)
-        cell = ws.cell(row=row_idx, column=4, value=round(value, 2))
-        cell.number_format = _NUM_FMT
-        row_idx += 1
-
-    _bold_row(ws, row_idx, "Полная себестоимость без НДС", calc["full_cost_without_vat"], _TOTAL_FILL)
-    row_idx += 1
-
-    for label, value in (
-        (f"НДС {calc['vat_pct']:g}%", calc["vat"]),
-        (f"Другие налоги {calc['other_tax_pct']:g}%", calc["other_tax"]),
-    ):
-        ws.cell(row=row_idx, column=1, value=label)
-        cell = ws.cell(row=row_idx, column=4, value=round(value, 2))
-        cell.number_format = _NUM_FMT
-        row_idx += 1
-
-    _bold_row(ws, row_idx, "ИТОГО по смете для Заказчика с учётом налогов",
-              calc["total_for_customer"], _GRAND_FILL)
-    row_idx += 1
-
+    # Строки без номера под итогом себестоимости — справочные.
     for custom in calc["custom_rows_after"]:
-        ws.cell(row=row_idx, column=1, value=str(custom.get("label") or ""))
-        cell = ws.cell(row=row_idx, column=4,
-                       value=round(_to_f(custom.get("without_vat")) * 1.22, 2))
-        cell.number_format = _NUM_FMT
+        row_idx = _custom_row(ws, row_idx, custom)
+
+    ws.cell(row=row_idx, column=_COL_NAME, value="Непредвиденные расходы")
+    _input_cell(ws, row_idx, calc["contingency_pct"], _PCT_FMT)
+    _money(ws, row_idx, _COL_WITH_VAT, calc["contingency_with_vat"])
+    _money(ws, row_idx, _COL_WITHOUT_VAT, calc["contingency_without_vat"])
+    row_idx += 1
+
+    # Ниже — строки, у которых сумма одна на обе колонки (как на экране, где
+    # ячейка растянута): прибыль и полная себестоимость считаются без НДС, НДС и
+    # налоги — сами налоги, итог для заказчика уже с ними.
+    ws.cell(row=row_idx, column=_COL_NAME, value="Плановая прибыль (без НДС)")
+    _input_cell(ws, row_idx, calc["profit_pct"], _PCT_FMT)
+    _merged_money(ws, row_idx, calc["profit"])
+    row_idx += 1
+
+    _total_row(ws, row_idx,
+               "Полная себестоимость с учётом прибыли и непредвиденных (без НДС)",
+               _TOTAL_FILL, calc["full_cost_without_vat"], None)
+    row_idx += 1
+
+    for label, pct, value in (
+        ("НДС от полной себестоимости", calc["vat_pct"], calc["vat"]),
+        ("Др. налоги от полной себестоимости", calc["other_tax_pct"], calc["other_tax"]),
+    ):
+        ws.cell(row=row_idx, column=_COL_NAME, value=label)
+        _input_cell(ws, row_idx, pct, _PCT_FMT)
+        _merged_money(ws, row_idx, value)
         row_idx += 1
 
-    for i, w in enumerate([42, 18, 18, 20], 1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+    _total_row(ws, row_idx, "ИТОГО по смете для Заказчика с учётом налогов",
+               _GRAND_FILL, calc["total_for_customer"], None)
+    row_idx += 1
 
-    # ── Правая таблица: разделы со своими налогами (колонки F-L) ──────────
+    # ── Правая таблица: разделы со своими налогами (колонки G-M) ──────────
     # Налогов у раздела два: работы и материалы облагаются независимо
     # (работы — самозанятый, материалы — подрядчик с НДС, и наоборот).
     #
-    # Второй налог добавлен колонкой в конец, а не рядом с материалами: колонки
-    # F-K остаются там же, где были, и формулы, написанные людьми поверх прежних
-    # выгрузок, не съезжают на соседний столбец.
-    OFF = 6
+    # Второй налог добавлен колонкой в конец, а не рядом с материалами: порядок
+    # столбцов раздела не меняется, и формулы, написанные людьми поверх прежних
+    # выгрузок, не съезжают на соседний столбец. Сама таблица сдвинута на один
+    # столбец вправо — в бланке слева стало пять колонок вместо четырёх.
+    OFF = 7
     right_headers = [
         "Раздел", "Налог работ, %", "Работы (с/с)", "Работы с НДС",
         "Материалы (с/с)", "Материалы с НДС", "Налог матер., %",
@@ -224,11 +260,51 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
             cell.number_format = _NUM_FMT
 
 
-def _bold_row(ws, row: int, label: str, value: float, fill: PatternFill) -> None:
-    for col in range(1, 5):
+def _money(ws, row: int, col: int, value, *, bold: bool = False):
+    """Денежная ячейка бланка."""
+    cell = ws.cell(row=row, column=col, value=round(_to_f(value), 2))
+    cell.number_format = _NUM_FMT
+    if bold:
+        cell.font = _BOLD
+    return cell
+
+
+def _merged_money(ws, row: int, value, *, bold: bool = False):
+    """Одна сумма на обе денежные колонки — как растянутая ячейка на экране."""
+    cell = _money(ws, row, _COL_WITH_VAT, value, bold=bold)
+    ws.merge_cells(start_row=row, start_column=_COL_WITH_VAT,
+                   end_row=row, end_column=_COL_WITHOUT_VAT)
+    return cell
+
+
+def _input_cell(ws, row: int, value, fmt: str):
+    """Колонка «% / Кол-во»: число человека остаётся числом, подпись — формат."""
+    cell = ws.cell(row=row, column=_COL_INPUT, value=round(_to_f(value), 4))
+    cell.number_format = fmt
+    return cell
+
+
+def _custom_row(ws, row: int, custom: dict) -> int:
+    """Строка, добавленная человеком: хранится без НДС, показывается в обеих колонках."""
+    ws.cell(row=row, column=_COL_NAME, value=str(custom.get("label") or ""))
+    qty_pct = str(custom.get("qty_pct") or "")
+    if qty_pct:
+        ws.cell(row=row, column=_COL_INPUT, value=qty_pct)
+    without_vat = _to_f(custom.get("without_vat"))
+    _money(ws, row, _COL_WITH_VAT, without_vat * 1.22)
+    _money(ws, row, _COL_WITHOUT_VAT, without_vat)
+    return row + 1
+
+
+def _total_row(ws, row: int, label: str, fill: PatternFill,
+               with_vat: float, without_vat) -> None:
+    """Итоговая строка. `without_vat=None` — сумма одна на обе колонки."""
+    for col in range(1, _LEFT_COLS + 1):
         ws.cell(row=row, column=col).fill = fill
-    lc = ws.cell(row=row, column=1, value=label)
+    lc = ws.cell(row=row, column=_COL_NAME, value=label)
     lc.font = _BOLD
-    vc = ws.cell(row=row, column=4, value=round(value, 2))
-    vc.font = _BOLD
-    vc.number_format = _NUM_FMT
+    if without_vat is None:
+        _merged_money(ws, row, with_vat, bold=True)
+    else:
+        _money(ws, row, _COL_WITH_VAT, with_vat, bold=True)
+        _money(ws, row, _COL_WITHOUT_VAT, without_vat, bold=True)
