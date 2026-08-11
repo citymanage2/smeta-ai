@@ -18,6 +18,9 @@ export interface RetrainStats {
   negative_pairs: number;
   last_job_status: string | null;
   model_loaded: boolean;
+  // false — запуск обучения закрыт предохранителем на сервере: обученной модели
+  // негде храниться, а прайс после неё пересчитывается. Разметка пар работает.
+  retraining_enabled: boolean;
 }
 
 export interface TrainJobStatus {

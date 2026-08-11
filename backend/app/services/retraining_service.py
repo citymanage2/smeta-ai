@@ -15,6 +15,7 @@ from fastapi import UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.training_job import TrainingJob
 from app.models.training_pair import TrainingPair
 from app.services import price_service
@@ -146,6 +147,9 @@ async def get_stats(db: AsyncSession) -> dict:
         "negative_pairs": negative,
         "last_job_status": last_job_status,
         "model_loaded": model_loaded,
+        # Открыто ли дообучение. Пары собирать можно всегда — они копятся и не
+        # пропадают; запускать обучение нельзя, пока модели негде храниться.
+        "retraining_enabled": settings.RETRAINING_ENABLED,
     }
 
 
@@ -230,6 +234,22 @@ async def run_training_job(job_id: str, db: AsyncSession) -> None:
     job = result.scalar_one_or_none()
     if not job:
         logger.error("Training job not found", job_id=job_id)
+        return
+
+    # Второй рубеж после проверки в роутере: задание могло встать в очередь,
+    # когда дообучение было открыто, и дождаться выполнения уже после того, как
+    # его закрыли. Обучение пересчитывает эмбеддинги всего прайса моделью,
+    # которая не переживёт перезапуск, — после него поиск цен сравнивал бы
+    # векторы разных моделей и молча ошибался.
+    if not settings.RETRAINING_ENABLED:
+        job.status = "failed"
+        job.error = (
+            "Дообучение закрыто: обученная модель не переживает перезапуск "
+            "сервиса, а эмбеддинги прайса пересчитываются под неё."
+        )
+        job.finished_at = datetime.now(timezone.utc)
+        await db.commit()
+        logger.warning("Training job rejected: retraining disabled", job_id=job_id)
         return
 
     job.status = "running"

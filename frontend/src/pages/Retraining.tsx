@@ -186,7 +186,13 @@ const RetrainingPage: React.FC = () => {
     }
   };
 
-  const canTrain = (stats?.positive_pairs ?? 0) >= MIN_POSITIVE_TO_TRAIN;
+  // Обучение закрыто предохранителем на сервере: обученная модель живёт во
+  // временной папке и пропадает при перезапуске, а эмбеддинги прайса к тому
+  // моменту уже пересчитаны под неё — поиск цен начал бы ошибаться незаметно.
+  // Пары размечать при этом можно: они копятся и не пропадут.
+  const trainingAllowed = stats?.retraining_enabled ?? false;
+  const canTrain =
+    trainingAllowed && (stats?.positive_pairs ?? 0) >= MIN_POSITIVE_TO_TRAIN;
   const isTraining = jobStatus?.status === 'pending' || jobStatus?.status === 'running';
 
   return (
@@ -215,6 +221,28 @@ const RetrainingPage: React.FC = () => {
             {trainLoading ? 'Запуск...' : isTraining ? 'Обучение...' : 'Обучить модель →'}
           </button>
         </div>
+
+        {/* Предохранитель: объясняем закрытую кнопку, иначе она читается как поломка. */}
+        {!statsLoading && !trainingAllowed && (
+          <div
+            style={{
+              backgroundColor: '#fffbeb',
+              border: '1px solid #fde047',
+              borderRadius: '12px',
+              padding: '16px 20px',
+              marginBottom: '20px',
+              fontSize: '13px',
+              color: '#854d0e',
+              lineHeight: 1.6,
+            }}
+          >
+            <strong>Обучение временно закрыто.</strong> Обученная модель сохраняется
+            во временную папку и пропадает при перезапуске сервиса, а цены прайса
+            к тому моменту уже пересчитаны под неё — поиск цен начал бы ошибаться,
+            никак этого не показывая. Размечать пары можно: они копятся и не
+            пропадут, обучение запустим, когда модель будет храниться постоянно.
+          </div>
+        )}
 
         {/* Stats panel */}
         <div
@@ -255,7 +283,7 @@ const RetrainingPage: React.FC = () => {
                   {stats.negative_pairs}
                 </div>
               </div>
-              {!canTrain && (
+              {!canTrain && trainingAllowed && (
                 <div style={{ fontSize: '13px', color: '#64748b', fontStyle: 'italic' }}>
                   Нужно {MIN_POSITIVE_TO_TRAIN - (stats.positive_pairs)} ещё верных пар для обучения
                 </div>

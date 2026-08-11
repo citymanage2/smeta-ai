@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Up
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.services import retraining_service
 from app.utils.auth import get_admin_user
@@ -44,6 +45,8 @@ class StatsResponse(BaseModel):
     negative_pairs: int
     last_job_status: Optional[str]
     model_loaded: bool
+    # False — обучение закрыто предохранителем (см. `settings.RETRAINING_ENABLED`).
+    retraining_enabled: bool = False
 
 
 class TrainResponse(BaseModel):
@@ -131,6 +134,17 @@ async def start_training(
     _admin=Depends(get_admin_user),
 ):
     """Запускает фоновую задачу дообучения модели."""
+    if not settings.RETRAINING_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Дообучение временно закрыто. Обученная модель хранится во "
+                "временной папке и пропадает при перезапуске сервиса, а цены "
+                "прайса к тому моменту уже пересчитаны ею — поиск цен начал бы "
+                "ошибаться незаметно. Собранные пары сохраняются и не пропадут."
+            ),
+        )
+
     stats = await retraining_service.get_stats(db)
     if stats["positive_pairs"] < 10:
         raise HTTPException(
