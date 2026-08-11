@@ -2,9 +2,9 @@
 
 Контракт (spec: specs/2026-07-28-balance-restored-notification.md):
 - AC7: события с id > since_id, по возрастанию, лимит; без авторизации 401;
-- AC8: менеджер видит все возобновлённые задачи, ПМ — только свои и общие;
-  событие без единой видимой задачи ПМ не показывается, но курсор всё равно
-  сдвигается (иначе фронт перезапрашивает его вечно).
+- AC8: возобновлённые задачи видят все сотрудники (задачи общие); событие, от
+  которого не осталось ни одной задачи (удалены), ПМ не показывается, но курсор
+  всё равно сдвигается (иначе фронт перезапрашивает его вечно).
 
 План: plans/2026-07-28-balance-restored-notification.md, Фаза 3.
 """
@@ -137,26 +137,28 @@ async def test_manager_sees_all_tasks(async_client, notif_fixture):
 
 
 @pytest.mark.asyncio
-async def test_pm_sees_only_own_and_shared(async_client, notif_fixture):
+async def test_pm_sees_all_tasks_too(async_client, notif_fixture):
+    """Задачи общие — ПМ видит в событии и задачу коллеги."""
     r = await async_client.get(
         "/notifications/system", headers=_auth(notif_fixture["pm1"], "project_manager", "n_pm1")
     )
     event = r.json()["events"][0]
     names = {t["name"] for t in event["tasks"]}
-    assert names == {"Смета ПМ1", "Общая смета"}, "чужая задача не должна утекать"
-    assert event["resumed_count"] == 2
+    assert names == {"Смета ПМ1", "Смета ПМ2", "Общая смета"}
+    assert event["resumed_count"] == 3
 
 
 @pytest.mark.asyncio
 async def test_event_without_visible_tasks_hidden_but_cursor_moves(
     async_client, db_session, notif_fixture
 ):
-    """ПМ, которому не видна ни одна задача события, уведомления не получает —
-    но курсор двигается, иначе фронт запрашивал бы это событие бесконечно."""
+    """ПМ, которому не видна ни одна задача события (их удалили), уведомления не
+    получает — но курсор двигается, иначе фронт запрашивал бы событие бесконечно."""
     for model in (SystemEvent,):
         await db_session.execute(model.__table__.delete())
     lonely = SystemEvent(
-        kind=KIND_BALANCE_RESTORED, payload={"resumed_task_ids": [notif_fixture["t_pm2"]]}
+        kind=KIND_BALANCE_RESTORED,
+        payload={"resumed_task_ids": ["e1000000-0000-0000-0000-0000000000ff"]},
     )
     db_session.add(lonely)
     await db_session.commit()

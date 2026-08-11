@@ -298,10 +298,11 @@ class TestStart:
         assert "воркер упал" in run.error
 
     @pytest.mark.asyncio
-    async def test_foreign_document_forbidden(self, async_client, analog_env):
+    async def test_colleague_starts_run_on_shared_document(self, async_client, analog_env):
+        """Документы общие: поиск аналогов запускает и не владелец."""
         r = await _start(async_client, analog_env, user="other")
 
-        assert r.status_code in (403, 404)
+        assert r.status_code == 200
 
 
 # ---------------------------------------------------------------------------

@@ -245,13 +245,13 @@ async def test_coefficient_rejects_nonsense(async_client, est_env):
 
 
 @pytest.mark.asyncio
-async def test_foreign_document_coefficient_forbidden(async_client, est_env):
-    """Чужую смету коэффициентом не поправить."""
+async def test_colleague_applies_coefficient(async_client, est_env):
+    """Сметы общие: коэффициент ставит и не владелец."""
     resp = await async_client.put(
         f"/documents/{est_env['card_id']}/estimate/coefficient",
         json={"work": 1.05, "material": 1.0, "scope": "all"},
         headers=_auth(est_env["pm2"], "project_manager"))
-    assert resp.status_code == 404
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio

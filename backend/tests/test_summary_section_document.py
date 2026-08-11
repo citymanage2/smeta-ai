@@ -380,11 +380,12 @@ async def test_section_history_is_separate_from_estimate(async_client, summary_e
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_foreign_project_section_not_accessible(async_client, summary_env):
-    """Менеджер не открывает разделы чужого проекта."""
+async def test_colleague_opens_section_of_other_project(async_client, summary_env):
+    """Проекты общие: раздел сводной открывает любой сотрудник."""
     resp = await async_client.get(
         _url(summary_env), headers=_auth(summary_env["pm2"], "project_manager"))
-    assert resp.status_code == 404
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["can_write"] is True
 
 
 @pytest.mark.asyncio
@@ -712,10 +713,10 @@ async def test_resolve_takes_estimate_and_keeps_old_snapshot_in_history(
 
 
 @pytest.mark.asyncio
-async def test_resolve_requires_write_permission(async_client, summary_env):
-    """Чужой проект расхождением не разрулить."""
+async def test_colleague_resolves_divergence(async_client, summary_env):
+    """Расхождение разруливает любой сотрудник — работа общая."""
     resp = await async_client.post(
         _url(summary_env, "/divergence/resolve"), json={"prefer": "estimate"},
         headers=_auth(summary_env["pm2"], "project_manager"))
 
-    assert resp.status_code == 404
+    assert resp.status_code == 200, resp.text

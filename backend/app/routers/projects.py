@@ -16,6 +16,7 @@ from app.models.result import TaskResult
 from app.models.summary_estimate import SummaryEstimate
 from app.models.user import User
 from app.utils.auth import get_current_user, get_admin_user, current_user_id
+from app.utils.owner_names import owner_names as _owner_names
 from app.utils.permissions import (
     visibility_filter,
     can_access,
@@ -127,6 +128,7 @@ class TrashProjectItem(BaseModel):
     description: Optional[str]
     created_at: str
     deleted_at: str
+    owner_name: Optional[str] = None
 
 
 class TrashProjectsResponse(BaseModel):
@@ -147,17 +149,6 @@ def _project_to_response(p: Project, owner_name: Optional[str] = None) -> Projec
         overhead_pct=float(p.overhead_pct if p.overhead_pct is not None else 3),
         transport_pct=float(p.transport_pct if p.transport_pct is not None else 3),
     )
-
-
-async def _owner_names(owner_ids: list[int], db: AsyncSession) -> dict[int, str]:
-    """{user_id: отображаемое имя (full_name или username)} для набора владельцев."""
-    ids = [i for i in set(owner_ids) if i is not None]
-    if not ids:
-        return {}
-    rows = (
-        await db.execute(select(User.id, User.full_name, User.username).where(User.id.in_(ids)))
-    ).all()
-    return {r.id: (r.full_name or r.username or f"#{r.id}") for r in rows}
 
 
 async def _get_project_or_404(
@@ -371,7 +362,7 @@ async def list_trash_projects(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Список удалённых проектов (корзина). ПМ видит только свои."""
+    """Список удалённых проектов (корзина). Общая: видно, чей проект удалён."""
     vis = visibility_filter(Project, current_user)
     vis_clause = [vis] if vis is not None else []
     count_result = await db.execute(
@@ -380,11 +371,15 @@ async def list_trash_projects(
     total = count_result.scalar() or 0
 
     data_result = await db.execute(
-        select(Project.id, Project.name, Project.description, Project.created_at, Project.deleted_at)
+        select(
+            Project.id, Project.name, Project.description, Project.created_at,
+            Project.deleted_at, Project.owner_id,
+        )
         .where(Project.deleted_at.is_not(None), *vis_clause)
         .order_by(Project.deleted_at.desc())
     )
     rows = data_result.all()
+    names = await _owner_names([row.owner_id for row in rows], db)
 
     items = [
         TrashProjectItem(
@@ -393,6 +388,7 @@ async def list_trash_projects(
             description=row.description,
             created_at=row.created_at.isoformat(),
             deleted_at=row.deleted_at.isoformat(),
+            owner_name=names.get(row.owner_id),
         )
         for row in rows
     ]

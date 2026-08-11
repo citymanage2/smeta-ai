@@ -462,19 +462,19 @@ async def test_revert_restores_previous_rows(async_client, doc_env):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_pm_cannot_write_foreign_document(async_client, doc_env):
-    """Менеджер проектов правит только свои документы (чужое — как несуществующее)."""
+async def test_pm_writes_document_of_colleague(async_client, doc_env):
+    """Документы общие: менеджер проектов правит документ коллеги."""
     hdr = _auth(doc_env["pm2"], "project_manager", "pm2")
     draft = await async_client.put(
         f"/documents/{doc_env['card_id']}/list/draft",
         json={"version_id": doc_env["version_id"], "rows": _rows(1)}, headers=hdr)
-    assert draft.status_code == 404
+    assert draft.status_code == 200, draft.text
 
     apply = await async_client.post(
         f"/documents/{doc_env['card_id']}/list/apply",
         json={"version_id": doc_env["version_id"], "rev": 0, "rows": _rows(1)},
         headers=hdr)
-    assert apply.status_code == 404
+    assert apply.status_code == 200, apply.text
 
 
 @pytest.mark.asyncio
@@ -488,14 +488,21 @@ async def test_head_of_sales_can_write_foreign_document(async_client, doc_env):
 
 
 @pytest.mark.asyncio
-async def test_readonly_query_param_cannot_grant_write(async_client, doc_env):
-    """Режим доступа определяется сервером, а не параметром в адресе."""
-    hdr = _auth(doc_env["pm2"], "project_manager", "pm2")
+async def test_readonly_query_param_cannot_grant_write(async_client, doc_env, db_session):
+    """Режим доступа определяется сервером, а не параметром в адресе.
+
+    Документы общие, поэтому проверяем на запрете, который остался: пока задача
+    считается, править нельзя — и `read_only=0` в адресе этого не отменяет.
+    """
+    task = await db_session.get(Task, doc_env["task_id"])
+    task.status = "processing"
+    await db_session.commit()
+
     r = await async_client.post(
         f"/documents/{doc_env['card_id']}/list/apply?read_only=0",
         json={"version_id": doc_env["version_id"], "rev": 0, "rows": _rows(1)},
-        headers=hdr)
-    assert r.status_code == 404
+        headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
+    assert r.status_code == 409
 
 
 # ---------------------------------------------------------------------------
@@ -691,11 +698,11 @@ async def test_locate_by_task_404_for_task_without_card(
 
 
 @pytest.mark.asyncio
-async def test_locate_by_task_denies_foreign_task(async_client, doc_env):
+async def test_locate_by_task_works_for_colleague(async_client, doc_env):
     r = await async_client.get(
         f"/documents/by-task/{doc_env['task_id']}",
         headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
-    assert r.status_code == 404
+    assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------------------
@@ -722,12 +729,17 @@ async def test_heartbeat_reports_other_editor(async_client, doc_env):
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_denied_for_foreign_document(async_client, doc_env):
-    """Чужой документ не отдаёт даже присутствие — он для пользователя не существует."""
+async def test_heartbeat_works_for_colleague(async_client, doc_env):
+    """Документы общие: вторым редактором может стать любой сотрудник."""
+    first = await async_client.post(
+        f"/documents/{doc_env['card_id']}/list/heartbeat", headers=_pm1(doc_env))
+    assert first.status_code == 200
+
     r = await async_client.post(
         f"/documents/{doc_env['card_id']}/list/heartbeat",
         headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
-    assert r.status_code == 404
+    assert r.status_code == 200
+    assert r.json()["lock"]["user_name"] == "Иванов Иван"
 
 
 @pytest.mark.asyncio

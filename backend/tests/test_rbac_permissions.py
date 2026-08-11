@@ -40,61 +40,49 @@ def test_can_reassign_only_managers():
     assert not perm.can_reassign("project_manager")
 
 
-# --- visibility_filter ---
+# --- visibility_filter: списки без фильтра по владельцу ---
 
-def test_visibility_filter_manager_is_none():
-    assert perm.visibility_filter(Project, _user("admin", 2)) is None
-    assert perm.visibility_filter(Task, _user("head_of_sales", 3)) is None
-
-
-def test_visibility_filter_pm_scopes_to_owner():
-    cond = perm.visibility_filter(Project, _user("project_manager", 5))
-    # SQLAlchemy binary expression: owner_id == 5
-    compiled = str(cond.compile(compile_kwargs={"literal_binds": True}))
-    assert "owner_id" in compiled and "5" in compiled
+@pytest.mark.parametrize("role", ["admin", "head_of_sales", "project_manager", "user", None])
+def test_visibility_filter_is_none_for_every_role(role):
+    """Проекты и задачи общие: список не сужается ни для кого."""
+    assert perm.visibility_filter(Project, _user(role, 2)) is None
+    assert perm.visibility_filter(Task, _user(role, 3)) is None
 
 
-def test_visibility_filter_pm_without_uid_sees_only_shared():
-    # legacy shared-токен: uid None → видит только общие (is_shared).
-    cond = perm.visibility_filter(Task, {"role": "project_manager", "sub": "project_manager"})
-    compiled = str(cond.compile(compile_kwargs={"literal_binds": True})).lower()
-    assert "is_shared" in compiled
+def test_visibility_filter_none_without_uid():
+    # legacy shared-токен без owner_id — тоже видит всё.
+    assert perm.visibility_filter(Task, {"role": "project_manager", "sub": "project_manager"}) is None
 
 
-def test_visibility_filter_pm_includes_shared():
-    cond = perm.visibility_filter(Project, _user("project_manager", 5))
-    compiled = str(cond.compile(compile_kwargs={"literal_binds": True})).lower()
-    assert "owner_id" in compiled and "is_shared" in compiled
+# --- can_access / can_edit: доступ к чужому ресурсу ---
+
+@pytest.mark.parametrize("role", ["admin", "head_of_sales", "project_manager", "user", None])
+def test_any_role_accesses_any_resource(role):
+    u = _user(role, 2)
+    assert perm.can_access(999, u)      # чужой владелец
+    assert perm.can_access(None, u)     # без владельца
+    assert perm.can_access(2, u)        # свой
+
+
+def test_pm_accesses_foreign_resource():
+    """Раньше было главное ограничение: ПМ видел только своё. Теперь — всё."""
+    pm = _user("project_manager", 7)
+    assert perm.can_access(8, pm)
+    assert perm.can_edit(8, pm)
+
+
+def test_pm_without_uid_accesses_everything():
+    u = {"role": "project_manager", "sub": "project_manager"}
+    assert perm.can_access(7, u)
+    assert perm.can_access(None, u)
 
 
 def test_can_access_shared_visible_to_everyone():
-    # общий ресурс доступен любому ПМ, даже чужой owner_id
+    # общие (is_shared) ресурсы по-прежнему доступны — флаг ничего не сужает
     pm = _user("project_manager", 7)
     assert perm.can_access(999, pm, is_shared=True)
     assert perm.can_access(None, pm, is_shared=True)
-    # без флага — чужой недоступен
-    assert not perm.can_access(999, pm, is_shared=False)
-
-
-# --- can_access / can_edit ---
-
-@pytest.mark.parametrize("role", ["admin", "head_of_sales"])
-def test_manager_can_access_any(role):
-    assert perm.can_access(999, _user(role, 2))
-    assert perm.can_access(None, _user(role, 2))
-
-
-def test_pm_accesses_only_own():
-    u = _user("project_manager", 7)
-    assert perm.can_access(7, u)
-    assert not perm.can_access(8, u)
-    assert not perm.can_access(None, u)
-
-
-def test_pm_without_uid_accesses_nothing():
-    u = {"role": "project_manager", "sub": "project_manager"}
-    assert not perm.can_access(7, u)
-    assert not perm.can_access(None, u)
+    assert perm.can_access(999, pm, is_shared=False)
 
 
 def test_can_edit_is_can_access():

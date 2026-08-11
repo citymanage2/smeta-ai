@@ -143,13 +143,13 @@ const Trash: React.FC = () => {
   }
 
   async function handleClearTaskTrash() {
-    if (!window.confirm(`Удалить все ${tasksTotal} задач из корзины навсегда? Это действие нельзя отменить.`)) return;
+    // Корзина общая, а очистка — только своё: чужие удалённые задачи останутся.
+    if (!window.confirm('Удалить свои задачи из корзины навсегда? Задачи коллег останутся. Это действие нельзя отменить.')) return;
     setClearingTasks(true);
     setTasksError('');
     try {
       await clearMyTrash();
-      setTasks([]);
-      setTasksTotal(0);
+      await loadTasks();
     } catch {
       setTasksError('Не удалось очистить корзину');
     } finally {
@@ -313,7 +313,7 @@ const Trash: React.FC = () => {
                   }}
                 >
                   <Eraser size={14} />
-                  {clearingTasks ? 'Очистка...' : 'Очистить'}
+                  {clearingTasks ? 'Очистка...' : 'Очистить свои'}
                 </button>
               )}
             </div>
@@ -377,6 +377,7 @@ const Trash: React.FC = () => {
                         </div>
                         <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
                           {typeLabel} · {statusLabel} · удалено {formatDate(task.deleted_at)}
+                          {task.owner_name ? ` · ${task.owner_name}` : ''}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -506,6 +507,7 @@ const Trash: React.FC = () => {
                             ? `${project.description} · `
                             : ''}
                           удалено {formatDate(project.deleted_at)}
+                          {project.owner_name ? ` · ${project.owner_name}` : ''}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>

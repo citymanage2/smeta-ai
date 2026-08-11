@@ -1,8 +1,9 @@
-"""Интеграционные тесты изоляции по владельцу и матрицы прав (HTTP-уровень).
+"""Интеграционные тесты общего доступа и матрицы прав (HTTP-уровень).
 
-Проверяет: списки проектов/задач фильтруются по владельцу, IDOR (чужой ресурс
-по id → 404), архив, переназначение владельца, управление аккаунтами (admin_users),
-вход именованного админа, backfill legacy-данных.
+Проверяет: проекты и задачи общие (списки не фильтруются по владельцу, чужой
+ресурс по id открывается и правится), архив, переназначение владельца — только
+менеджеру, управление аккаунтами (admin_users), вход именованного админа,
+backfill legacy-данных, личная корзина.
 """
 from datetime import datetime, timezone
 
@@ -58,14 +59,30 @@ async def rbac_users(db_session):
     await db_session.commit()
 
 
-# --- Списки: изоляция + архив ---
+# --- Списки: общий доступ + архив ---
 
 @pytest.mark.asyncio
-async def test_pm_sees_only_own_active_projects(async_client, rbac_users):
+async def test_pm_sees_all_active_projects(async_client, rbac_users):
     r = await async_client.get("/projects", headers=_auth(rbac_users["pm1"], "project_manager", "pm1"))
     assert r.status_code == 200
     names = {p["name"] for p in r.json()}
-    assert names == {"PM1 active"}  # не видит архив и чужое
+    assert names == {"PM1 active", "PM2 active"}  # видит и проект коллеги, но не архив
+
+
+@pytest.mark.asyncio
+async def test_pm_sees_foreign_task_in_unassigned(async_client, rbac_users, db_session):
+    """Задача коллеги видна в списке «Без проекта» — не только проекты общие."""
+    foreign = Task(
+        owner_id=rbac_users["pm2"], user_role="project_manager", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    tid = str(foreign.id)
+
+    r = await async_client.get("/projects/unassigned", headers=_auth(rbac_users["pm1"], "project_manager", "pm1"))
+    assert r.status_code == 200
+    assert any(t["id"] == tid for t in r.json())
 
 
 @pytest.mark.asyncio
@@ -111,12 +128,12 @@ async def test_manager_sees_all_active_projects(async_client, rbac_users):
     assert names == {"PM1 active", "PM2 active"}
 
 
-# --- IDOR: чужой проект по id ---
+# --- Чужой проект по id: открывается и правится ---
 
 @pytest.mark.asyncio
-async def test_pm_cannot_get_foreign_project(async_client, rbac_users):
+async def test_pm_opens_foreign_project(async_client, rbac_users):
     r = await async_client.get(f"/projects/{rbac_users['p_pm2']}", headers=_auth(rbac_users["pm1"], "project_manager", "pm1"))
-    assert r.status_code == 404
+    assert r.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -132,13 +149,17 @@ async def test_manager_can_get_foreign_project(async_client, rbac_users):
 
 
 @pytest.mark.asyncio
-async def test_pm_cannot_update_foreign_project(async_client, rbac_users):
+async def test_pm_updates_foreign_project(async_client, rbac_users, db_session):
     r = await async_client.patch(
         f"/projects/{rbac_users['p_pm2']}",
-        json={"name": "hacked"},
+        json={"name": "PM2 переименован коллегой"},
         headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
     )
-    assert r.status_code == 404
+    assert r.status_code == 200
+    proj = (await db_session.execute(select(Project).where(Project.id == rbac_users["p_pm2"]))).scalar_one()
+    await db_session.refresh(proj)
+    assert proj.name == "PM2 переименован коллегой"
+    assert proj.owner_id == rbac_users["pm2"]  # владелец правкой не меняется
 
 
 # --- Владелец при создании ---
@@ -172,13 +193,13 @@ async def test_pm_archives_own_project(async_client, rbac_users):
 
 
 @pytest.mark.asyncio
-async def test_pm_cannot_archive_foreign(async_client, rbac_users):
+async def test_pm_archives_foreign_project(async_client, rbac_users):
     r = await async_client.patch(
         f"/projects/{rbac_users['p_pm2']}/archive",
         json={"archived": True},
         headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
     )
-    assert r.status_code == 404
+    assert r.status_code == 200
 
 
 # --- Переназначение владельца ---
@@ -370,11 +391,11 @@ async def test_named_admin_login(async_client, rbac_users):
     assert body["role"] == "admin" and body["username"] == "admin" and body["access_token"]
 
 
-# --- IDOR Path B: смета из чужого источника (security-review Finding 1) ---
+# --- Смета из чужого источника: разрешена (работа общая) ---
 
 @pytest.mark.asyncio
-async def test_pm_cannot_estimate_from_foreign_source(async_client, rbac_users, db_session):
-    # Источник-перечень принадлежит pm2.
+async def test_pm_estimates_from_foreign_source(async_client, rbac_users, db_session):
+    # Источник-перечень принадлежит pm2, смету строит pm1 — коллега подхватывает работу.
     src = Task(
         owner_id=rbac_users["pm2"], user_role="project_manager",
         task_type="LIST_FROM_GRAND", status="completed",
@@ -382,13 +403,12 @@ async def test_pm_cannot_estimate_from_foreign_source(async_client, rbac_users, 
     )
     db_session.add(src)
     await db_session.commit()
-    # pm1 пытается построить смету из источника pm2 → 404 (не раскрываем существование).
     r = await async_client.post(
         "/tasks",
         data={"task_type": "ESTIMATE_FROM_LIST", "source_task_id": str(src.id)},
         headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
     )
-    assert r.status_code == 404
+    assert r.status_code in (200, 201)
 
 
 @pytest.mark.asyncio
@@ -437,7 +457,7 @@ async def test_archive_loose_task_hides_from_active(async_client, rbac_users, db
 
 
 @pytest.mark.asyncio
-async def test_pm_cannot_archive_foreign_task(async_client, rbac_users, db_session):
+async def test_pm_archives_foreign_task(async_client, rbac_users, db_session):
     task = Task(
         owner_id=rbac_users["pm2"], user_role="project_manager", task_type="LIST_FROM_GRAND",
         status="completed", input_files=[], input_file_data=[], chat_history=[],
@@ -448,7 +468,33 @@ async def test_pm_cannot_archive_foreign_task(async_client, rbac_users, db_sessi
         f"/tasks/{task.id}/archive", json={"archived": True},
         headers=_auth(rbac_users["pm1"], "project_manager", "pm1"),
     )
-    assert r.status_code == 404
+    assert r.status_code == 200 and r.json()["is_archived"] is True
+
+
+@pytest.mark.asyncio
+async def test_trash_shows_foreign_task_and_allows_restore(async_client, rbac_users, db_session):
+    """Корзина общая: задачу, удалённую по ошибке, вернёт любой сотрудник."""
+    now = datetime.now(timezone.utc)
+    foreign = Task(
+        owner_id=rbac_users["pm2"], user_role="project_manager", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[],
+        deleted_at=now, name="Удалённая задача коллеги",
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    tid = str(foreign.id)
+    hdr = _auth(rbac_users["pm1"], "project_manager", "pm1")
+
+    listing = await async_client.get("/tasks/trash", headers=hdr)
+    assert listing.status_code == 200
+    item = next((t for t in listing.json()["items"] if t["id"] == tid), None)
+    assert item is not None, "чужая удалённая задача должна быть видна"
+    assert item["owner_name"] == "ПМ Два", "в общей корзине видно, чья задача"
+
+    r = await async_client.post(f"/tasks/{tid}/restore", headers=hdr)
+    assert r.status_code == 204
+    await db_session.refresh(foreign)
+    assert foreign.deleted_at is None
 
 
 @pytest.mark.asyncio

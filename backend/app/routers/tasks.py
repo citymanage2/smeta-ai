@@ -30,6 +30,7 @@ from app.models.task_input_file import TaskInputFile
 from app.models.history import TaskHistory
 from app.models.project import Project
 from app.utils.auth import get_current_user, get_download_user, current_user_id
+from app.utils.owner_names import owner_names as _owner_names
 from app.utils.permissions import visibility_filter, can_access
 from app.config import settings
 from app.services.task_processor import process_task
@@ -2187,6 +2188,7 @@ class TrashTaskItem(BaseModel):
     name: Optional[str]
     created_at: str
     deleted_at: str
+    owner_name: Optional[str] = None
 
 
 class TrashTasksResponse(BaseModel):
@@ -2201,18 +2203,22 @@ async def list_my_trash(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Список удалённых задач текущего пользователя.
+    """Список удалённых задач — общий, как и сами задачи.
 
-    Это «моя корзина» — всегда только свои задачи (по owner_id), в т.ч. для
-    менеджера: чтобы «очистить корзину» не затрагивало чужие удалённые задачи.
+    Корзина показывает всё удалённое вместе с владельцем: задачу, которую коллега
+    удалил по ошибке, должно быть кому вернуть. Массовая «очистка» при этом
+    остаётся личной (см. clear_my_trash) — одной кнопкой чужое не стирается.
     """
-    conditions = [Task.deleted_at.is_not(None), Task.owner_id == current_user_id(current_user)]
+    conditions = [Task.deleted_at.is_not(None)]
 
     count_result = await db.execute(select(func.count(Task.id)).where(*conditions))
     total = count_result.scalar() or 0
 
     data_query = (
-        select(Task.id, Task.task_type, Task.status, Task.name, Task.created_at, Task.deleted_at)
+        select(
+            Task.id, Task.task_type, Task.status, Task.name, Task.created_at,
+            Task.deleted_at, Task.owner_id,
+        )
         .where(*conditions)
         # Task.id как уникальный tie-breaker: при равных deleted_at
         # offset-пагинация не даёт дублей/пропусков между страницами.
@@ -2222,6 +2228,7 @@ async def list_my_trash(
     )
     result = await db.execute(data_query)
     rows = result.all()
+    names = await _owner_names([row.owner_id for row in rows], db)
 
     items = [
         TrashTaskItem(
@@ -2231,6 +2238,7 @@ async def list_my_trash(
             name=row.name,
             created_at=row.created_at.isoformat(),
             deleted_at=row.deleted_at.isoformat(),
+            owner_name=names.get(row.owner_id),
         )
         for row in rows
     ]
@@ -2242,9 +2250,10 @@ async def clear_my_trash(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Удалить все задачи из корзины текущего пользователя навсегда.
+    """Удалить все свои задачи из корзины навсегда.
 
-    Только свои задачи (по owner_id) — менеджер не стирает чужие удалённые.
+    Список корзины общий, а массовая очистка — нет: она сносит только свои
+    задачи (по owner_id), чтобы одним нажатием нельзя было стереть чужую работу.
     """
     conditions = [Task.deleted_at.is_not(None), Task.owner_id == current_user_id(current_user)]
     await db.execute(delete(Task).where(*conditions))

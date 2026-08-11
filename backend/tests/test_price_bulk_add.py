@@ -438,13 +438,14 @@ class TestBulkAdd:
         assert version.rev == rev_before
 
     @pytest.mark.asyncio
-    async def test_foreign_document_forbidden(self, async_client, price_env):
-        """Менеджер не работает с чужой сметой — в том числе через прайс."""
+    async def test_colleague_adds_from_shared_document(self, async_client, price_env):
+        """Сметы общие: цены в прайс заводит и не владелец сметы."""
         r = await _post(async_client, price_env, [
             {"kind": "work", "name": "Кладка", "unit": "м3", "price": 1000},
         ], user="other")
 
-        assert r.status_code in (403, 404)
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] + r.json()["updated"] == 1
 
     @pytest.mark.asyncio
     async def test_flat_document_rejected(self, async_client, db_session, price_env):

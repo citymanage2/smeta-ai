@@ -326,6 +326,7 @@ export interface TrashTaskItem {
   name: string | null;
   created_at: string;
   deleted_at: string;
+  owner_name?: string | null;
 }
 
 export interface TrashTasksResponse {

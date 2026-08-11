@@ -65,6 +65,7 @@ export interface TrashProjectItem {
   description?: string;
   created_at: string;
   deleted_at: string;
+  owner_name?: string | null;
 }
 
 export interface TrashProjectsResponse {

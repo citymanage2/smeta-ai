@@ -195,11 +195,12 @@ async def test_export_without_rows_is_rejected(async_client, export_env):
 
 
 @pytest.mark.asyncio
-async def test_export_of_foreign_document_forbidden(async_client, export_env):
+async def test_colleague_exports_document(async_client, export_env):
+    """Документы общие: выгружает файл и не владелец."""
     resp = await _export(async_client, export_env, {
         "columns": ESTIMATE_COLUMNS, "rows": EXPORT_ROWS, "header": {},
     }, user="pm2")
-    assert resp.status_code == 404
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
