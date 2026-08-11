@@ -73,6 +73,10 @@ def _parse_list_worksheet(ws) -> list[dict]:
         "кол": "quantity",
         "кол-во": "quantity",
         "примечание": "notes",
+        # Перечень могли скачать и загрузить обратно задачей сметы. Номер
+        # позиции исходной сметы нужно прочитать, иначе он потеряется ровно
+        # на том пути, где человек работает файлами, а не кнопкой «Далее».
+        "№ в исходной смете": "source_no",
     }
 
     rows_iter = ws.iter_rows(values_only=True)
@@ -125,13 +129,20 @@ def _parse_list_worksheet(ws) -> list[dict]:
         if "notes" in header_map and header_map["notes"] < len(row):
             notes = str(row[header_map["notes"]] or "").strip()
 
-        items.append({
+        source_no = ""
+        if "source_no" in header_map and header_map["source_no"] < len(row):
+            source_no = str(row[header_map["source_no"]] or "").strip()
+
+        item = {
             "type": item_type,
             "name": str(name_val).strip(),
             "unit": unit,
             "quantity": quantity,
             "notes": notes,
-        })
+        }
+        if source_no:
+            item["source_no"] = source_no
+        items.append(item)
 
     return items
 

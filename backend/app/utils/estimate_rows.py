@@ -33,7 +33,11 @@ from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
 # `sheet` — лист исходного файла, если он был разбит на несколько. Он же
 # вкладка в редакторе и лист в скачиваемом файле, поэтому терять его при
 # переводе позиция↔строка нельзя: смета собралась бы в один лист.
-PASSTHROUGH_FIELDS = ("price_list_name", "sources", "notes", "sheet")
+#
+# `source_no` — номер позиции в исходной смете заказчика. Едет от перечня до
+# сметы, версий оптимизации и разделов сводной: сверка со сметой заказчика
+# нужна на каждой стадии, а не только на первой.
+PASSTHROUGH_FIELDS = ("price_list_name", "sources", "notes", "sheet", "source_no")
 
 _LABEL_TO_TYPE = {
     "работа": "work", "работы": "work", "work": "work",

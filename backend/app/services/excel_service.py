@@ -7,6 +7,11 @@ import structlog
 from app.config import settings
 from app.utils.price_coercion import coerce_price, coerce_qty
 from app.utils.sheet_names import group_by_sheet, safe_sheet_title
+from app.utils.source_numbers import (
+    SOURCE_NO_HEADER,
+    has_source_numbers,
+    source_no_value as _source_no_value,
+)
 
 logger = structlog.get_logger()
 
@@ -52,22 +57,9 @@ _P_QTY_FMT = "0.00"
 
 # Номер позиции исходной сметы — им менеджер сверяет перечень со сметой
 # заказчика построчно. Колонка необязательная: у перечня из проекта и у
-# PDF-скана исходного номера нет, и пустой столбец им ни к чему.
-SOURCE_NO_HEADER = "№ в исходной смете"
+# PDF-скана исходного номера нет, и пустой столбец им ни к чему. Заголовок и
+# правила показа общие с генератором сметы — живут в `utils.source_numbers`.
 _P_SOURCE_NO_WIDTH = 12.0
-
-
-def has_source_numbers(items: list) -> bool:
-    """True, если хоть одна позиция знает свой номер в исходной смете."""
-    return any(str((it or {}).get("source_no") or "").strip() for it in items or [])
-
-
-def _source_no_value(item: dict):
-    """Номер для ячейки: «12» числом, «1.1» и «2а» — текстом, как в смете."""
-    number = str(item.get("source_no") or "").strip()
-    if not number:
-        return None
-    return int(number) if number.isdigit() else number
 
 
 def _write_perechen_sheet(ws, items: list, with_sections: bool = False,

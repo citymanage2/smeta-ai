@@ -15,10 +15,31 @@ from __future__ import annotations
 
 import re
 
+# Заголовок колонки — один на все стадии: перечень, полноту, смету. По нему же
+# колонка узнаётся при обратном разборе файла, поэтому менять его нельзя.
+SOURCE_NO_HEADER = "№ в исходной смете"
+
 # Наименование, короче которого совпадение по началу — совпадение случайное.
 _MIN_PREFIX_LEN = 15
 
 _SPACES = re.compile(r"\s+")
+
+
+def has_source_numbers(items: list) -> bool:
+    """True, если хоть одна позиция знает свой номер в исходной смете.
+
+    По этому признаку генераторы файлов решают, показывать колонку или нет:
+    пустой столбец в смете по файлу без нумерации не нужен никому.
+    """
+    return any(str((it or {}).get("source_no") or "").strip() for it in items or [])
+
+
+def source_no_value(item: dict):
+    """Номер для ячейки: «12» числом, «1.1» и «2а» — текстом, как в смете."""
+    number = str((item or {}).get("source_no") or "").strip()
+    if not number:
+        return None
+    return int(number) if number.isdigit() else number
 
 
 def _key(name) -> str:

@@ -8,6 +8,7 @@ from openpyxl.styles import Font, PatternFill
 from app.constants import TASK_TYPE_LABELS, ESTIMATION_STATUS_LABELS
 from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
 from app.utils.sheet_names import group_by_sheet, safe_sheet_title
+from app.utils.source_numbers import SOURCE_NO_HEADER, has_source_numbers, source_no_value
 
 _HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -167,6 +168,11 @@ _EST_HEADERS = [
 ]
 _EST_COL_WIDTHS = [5, 50, 10, 10, 14, 18, 14, 18, 12, 60]
 
+# Номер позиции в смете заказчика — им сверяют строку с исходником. Колонка
+# необязательная: смета, посчитанная по файлу без нумерации, выглядит как
+# раньше. Заголовок и правило «только если номер есть» — общие с перечнем.
+_EST_SOURCE_NO_WIDTH = 12
+
 _HEADER_FILL_EST = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
 _WORK_ROW_FILL = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
 _TOTAL_FILL_EST = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -195,16 +201,25 @@ def _estimate_sheet_groups(items: list) -> list:
     ]
 
 
-def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict]) -> tuple:
-    """Позиции одного листа. Возвращает (сумма работ, сумма материалов, след. строка)."""
+def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict],
+                          with_source_no: bool = False) -> tuple:
+    """Позиции одного листа. Возвращает (сумма работ, сумма материалов, след. строка).
+
+    `with_source_no` добавляет первой колонку «№ в исходной смете». Решение
+    принимается один раз на весь файл: у листов одной сметы набор колонок обязан
+    совпадать, иначе блок итогов встанет в разные колонки на разных листах.
+    """
     from openpyxl.utils import get_column_letter
 
-    for col, header in enumerate(_EST_HEADERS, 1):
+    headers = ([SOURCE_NO_HEADER] if with_source_no else []) + _EST_HEADERS
+    widths = ([_EST_SOURCE_NO_WIDTH] if with_source_no else []) + _EST_COL_WIDTHS
+
+    for col, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=header)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = _HEADER_FILL_EST
 
-    for i, width in enumerate(_EST_COL_WIDTHS, 1):
+    for i, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     total_works = 0.0
@@ -243,7 +258,7 @@ def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict]) -> tuple
 
         row_fill = _WORK_ROW_FILL if is_work else None
 
-        values = [
+        values = ([source_no_value(item)] if with_source_no else []) + [
             idx,
             item.get("name", ""),
             item.get("unit", ""),
@@ -257,31 +272,39 @@ def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict]) -> tuple
             item.get("price_list_name", "") or "",
             item.get("notes", "") or "",
         ]
+        off = 1 if with_source_no else 0
+        money_cols = {5 + off, 6 + off, 7 + off, 8 + off}
         for col, val in enumerate(values, 1):
             cell = ws.cell(row=row_num, column=col, value=val)
             cell.font = Font(bold=is_work)
             if row_fill:
                 cell.fill = row_fill
-            if col in (5, 6, 7, 8) and isinstance(val, (int, float)):
+            if col in money_cols and isinstance(val, (int, float)):
                 cell.number_format = "#,##0.00"
-            if col == 4 and isinstance(val, (int, float)):
+            if col == 4 + off and isinstance(val, (int, float)):
                 cell.number_format = "#,##0.##"
         row_num += 1
 
     return total_works, total_materials, row_num
 
 
-def _write_totals_block(ws, row_num: int, rows: list) -> int:
-    """Блок итогов: подпись слева, число в последней колонке."""
+def _write_totals_block(ws, row_num: int, rows: list, col_count: int = len(_EST_HEADERS)) -> int:
+    """Блок итогов: подпись слева, число в последней колонке.
+
+    `col_count` — ширина таблицы этого файла. Подпись всегда начинается с первой
+    колонки, поэтому `extract_total_cost` находит строку «ИТОГО» независимо от
+    того, добавлена ли колонка «№ в исходной смете».
+    """
     for label, value in rows:
         is_grand = label.startswith("ИТОГО") or label.startswith("ВСЕГО")
         fill = _GRAND_TOTAL_FILL if is_grand else _TOTAL_FILL_EST
         label_cell = ws.cell(row=row_num, column=1, value=label)
         label_cell.font = Font(bold=True)
         label_cell.fill = fill
-        # Merge label across cols 1-9
-        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=9)
-        val_cell = ws.cell(row=row_num, column=10, value=value)
+        # Подпись занимает все колонки, кроме последней — в ней число
+        ws.merge_cells(start_row=row_num, start_column=1,
+                       end_row=row_num, end_column=col_count - 1)
+        val_cell = ws.cell(row=row_num, column=col_count, value=value)
         val_cell.font = Font(bold=True)
         val_cell.fill = fill
         val_cell.number_format = "#,##0.00"
@@ -326,11 +349,18 @@ def generate_estimate_xlsx(
     groups = _estimate_sheet_groups(items)
     per_sheet: list = []
 
+    # Колонка «№ в исходной смете» — общая на весь файл: иначе блок итогов встал
+    # бы в разные колонки на разных листах, а сумму читают из последней.
+    with_source_no = has_source_numbers(items)
+    col_count = len(_EST_HEADERS) + (1 if with_source_no else 0)
+
     for index, (title, group) in enumerate(groups):
         ws = wb.active if index == 0 else wb.create_sheet()
         ws.title = title
 
-        works, materials, row_num = _write_estimate_sheet(ws, group, coefficient)
+        works, materials, row_num = _write_estimate_sheet(
+            ws, group, coefficient, with_source_no=with_source_no,
+        )
         overhead = round(works * overhead_rate / 100, 2)
         transport = round(materials * transport_rate / 100, 2)
         sheet_total = round(works + overhead + materials + transport, 2)
@@ -342,7 +372,7 @@ def generate_estimate_xlsx(
             ("Сумма по материалам:", materials),
             (f"Транспортные расходы {_pct_label(transport_rate)}%:", transport),
             ("ИТОГО ПО СМЕТЕ:" if len(groups) == 1 else f"ИТОГО ПО ЛИСТУ «{title}»:", sheet_total),
-        ])
+        ], col_count)
         per_sheet.append((title, sheet_total))
 
     grand_total = round(sum(total for _, total in per_sheet), 2)
@@ -354,19 +384,21 @@ def generate_estimate_xlsx(
         ws_total = wb.create_sheet(SUMMARY_SHEET_TITLE)
         from openpyxl.utils import get_column_letter
 
-        for i, width in enumerate(_EST_COL_WIDTHS, 1):
+        widths = ([_EST_SOURCE_NO_WIDTH] if with_source_no else []) + _EST_COL_WIDTHS
+        for i, width in enumerate(widths, 1):
             ws_total.column_dimensions[get_column_letter(i)].width = width
         header = ws_total.cell(row=1, column=1, value="Лист")
         header.font = Font(bold=True, color="FFFFFF")
         header.fill = _HEADER_FILL_EST
-        ws_total.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
-        header_total = ws_total.cell(row=1, column=10, value="Итого, руб.")
+        ws_total.merge_cells(start_row=1, start_column=1, end_row=1, end_column=col_count - 1)
+        header_total = ws_total.cell(row=1, column=col_count, value="Итого, руб.")
         header_total.font = Font(bold=True, color="FFFFFF")
         header_total.fill = _HEADER_FILL_EST
 
         _write_totals_block(
             ws_total, 2,
             [(title, total) for title, total in per_sheet] + [("ВСЕГО ПО СМЕТЕ:", grand_total)],
+            col_count,
         )
 
     buf = io.BytesIO()

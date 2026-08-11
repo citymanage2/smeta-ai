@@ -30,10 +30,20 @@ import {
  * а не одной.
  */
 
-const COLUMN_DEFS: Array<{
+interface ColumnDef {
   key: string; name: string; min: number; max: number;
   numeric: boolean; editable: boolean; computed?: boolean;
-}> = [
+}
+
+// Номер позиции в смете заказчика. Колонка необязательная и только для чтения:
+// он приезжает с перечня, а выдумывать его в смете нечем — там уже нет
+// исходного файла, по которому его можно проверить.
+const SOURCE_NO_DEF: ColumnDef = {
+  key: 'source_no', name: '№ в исходной смете', min: 90, max: 120,
+  numeric: false, editable: false,
+};
+
+const COLUMN_DEFS: ColumnDef[] = [
   { key: 'type', name: 'Тип', min: 70, max: 90, numeric: false, editable: true },
   { key: 'name', name: 'Наименование', min: 200, max: 500, numeric: false, editable: true },
   { key: 'unit', name: 'Ед. изм.', min: 70, max: 100, numeric: false, editable: true },
@@ -52,7 +62,7 @@ const STORED_FIELDS = [
   'cost', 'selected', 'abc_group', 'optimization_note', 'optimization_confidence',
   'is_excluded', 'work_row_id', 'qty_per_work_unit', 'qty_overridden',
   'qty_manual_backup', 'norm_reference',
-  'price_list_name', 'sources', 'notes',
+  'price_list_name', 'sources', 'notes', 'source_no',
 ];
 
 const TYPE_TO_LABEL: Record<string, string> = {
@@ -152,7 +162,15 @@ export const estimateAdapter: EditorAdapter = {
   },
 
   columns(gridRows: GridRow[]): EditorColumn[] {
-    return COLUMN_DEFS.map((def) => ({
+    // Колонка номера показывается, только если он известен хоть одной строке:
+    // у сметы по файлу без нумерации пустой столбец лишний. Правило то же, по
+    // которому колонку добавляет генератор файла.
+    const hasSourceNo = gridRows.some(
+      (row) => String(row.source_no ?? '').trim() !== '',
+    );
+    const defs = hasSourceNo ? [SOURCE_NO_DEF, ...COLUMN_DEFS] : COLUMN_DEFS;
+
+    return defs.map((def) => ({
       key: def.key,
       name: def.name,
       width: estimateWidth(def.name, gridRows, def.key, def.min, def.max),

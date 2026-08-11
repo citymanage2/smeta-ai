@@ -27,6 +27,9 @@ class EstimateRowSchema(BaseModel):
     qty_overridden: Optional[bool] = None
     qty_manual_backup: Optional[float] = None
     norm_reference: Optional[str] = None
+    # Номер позиции в исходной смете заказчика. Строкой, а не числом: в ЛСР
+    # встречаются «1.1» и «2а». У смет, посчитанных до появления колонки, пусто.
+    source_no: Optional[str] = None
 
 
 class OptimizationProposalSchema(BaseModel):

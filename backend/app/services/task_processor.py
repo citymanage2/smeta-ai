@@ -2294,6 +2294,10 @@ class TaskProcessor:
             # листа нет, и без разметки они ушли бы на первую вкладку — прочь от
             # работы, к которой относятся.
             _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
+            # Номер позиции исходной сметы возвращается тем же способом, что и на
+            # перечне: сопоставлением с позициями этого же чанка по наименованию.
+            # Дописанный ИИ материал номера не получает — в смете его не было.
+            attach_source_numbers(chunk_items, chunks[i])
             all_items.extend(chunk_items)
             summary = data.get("changes_summary", "")
             if summary:
@@ -3139,6 +3143,9 @@ class TaskProcessor:
                     # Позиция собирается заново из перечисленных полей, и без
                     # этой строки она уехала бы с своего раздела в «Прочее».
                     "sheet": item.get("sheet"),
+                    # Номер в исходной смете — по той же причине: не перечислишь
+                    # здесь, и колонка опустеет на самой нужной стадии.
+                    "source_no": item.get("source_no"),
                     "work_price": None,
                     "material_price": None,
                     "price_list_name": None,
@@ -3204,6 +3211,7 @@ class TaskProcessor:
                     "unit": item.get("unit") or cr.get("unit") or "",
                     "quantity": item.get("quantity"),
                     "sheet": item.get("sheet"),
+                    "source_no": item.get("source_no"),
                     "work_price": _wp,
                     "material_price": _mp,
                     "price_list_name": "Интернет",
@@ -3217,6 +3225,7 @@ class TaskProcessor:
                     "unit": item.get("unit", ""),
                     "quantity": item.get("quantity"),
                     "sheet": item.get("sheet"),
+                    "source_no": item.get("source_no"),
                     "work_price": None,
                     "material_price": None,
                     "price_list_name": None,
