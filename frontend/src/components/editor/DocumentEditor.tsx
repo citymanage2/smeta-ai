@@ -13,6 +13,10 @@ import {
 import { rowsOfSheet, sheetsOf, useDocumentEditorStore } from '../../stores/documentEditor';
 import { LumaSpin } from '../ui/LumaSpin';
 import { EditorColumn, GridRow } from './adapters/types';
+import {
+  CHILD_KEY, applySelectionChange, buildCollapsedRows,
+  groupInfoOf, isGroupRow, isMixedField, selectionForGrid, spreadEdit,
+} from './collapse';
 import { formatMoney } from '../../utils/formatNumber';
 import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clipboard';
 import EditorToolbar from './EditorToolbar';
@@ -32,7 +36,7 @@ import { applyAnalogToRow } from './actions/analogsApply';
 import { moveRow, removeRowsCascade } from './rowOps';
 import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
-import { columnsFromEditor, rowsFromEditor } from './exportBuilder';
+import { collapseExportRows, columnsFromEditor, rowsFromEditor } from './exportBuilder';
 import './DocumentEditor.css';
 
 const HEARTBEAT_MS = 20_000;
@@ -56,8 +60,12 @@ interface Props {
   initialTab?: 'all' | 'works' | 'materials';
   /** Вкладка листа из ссылки. */
   initialSheet?: string;
+  /** Свёрнутый режим из ссылки: коллега должен увидеть ту же таблицу. */
+  initialCollapsed?: boolean;
   /** Открытая версия и вкладки — чтобы страница положила их в адрес. */
-  onStateChange?: (state: { versionId: string | null; tab: string; sheet: string | null }) => void;
+  onStateChange?: (state: {
+    versionId: string | null; tab: string; sheet: string | null; collapsed: boolean;
+  }) => void;
   onClose?: () => void;
   onApplied?: () => void;
 }
@@ -108,7 +116,8 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 
 export const DocumentEditor: React.FC<Props> = ({
   cardId, kind, fileSlot, fileIndex, title, fullHeight = false,
-  initialVersionId, initialTab, initialSheet, onStateChange, onClose, onApplied,
+  initialVersionId, initialTab, initialSheet, initialCollapsed = false,
+  onStateChange, onClose, onApplied,
 }) => {
   const {
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
@@ -118,6 +127,11 @@ export const DocumentEditor: React.FC<Props> = ({
   } = useDocumentEditorStore();
 
   const [expanded, setExpanded] = useState(fullHeight);
+  // Свёртка одинаковых позиций — взгляд на таблицу, а не изменение документа:
+  // в `rows` всегда лежат настоящие строки, поэтому итоги, «Применить» и
+  // история работают одинаково в обоих режимах.
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -157,8 +171,8 @@ export const DocumentEditor: React.FC<Props> = ({
   // Открытая версия и вкладки — наружу, чтобы страница положила их в адрес и
   // ссылка открывала ровно то состояние, из которого её скопировали.
   useEffect(() => {
-    onStateChange?.({ versionId, tab, sheet });
-  }, [versionId, tab, sheet, onStateChange]);
+    onStateChange?.({ versionId, tab, sheet, collapsed });
+  }, [versionId, tab, sheet, collapsed, onStateChange]);
 
   // Присутствие: раз в 20 секунд отмечаемся и узнаём, не открыл ли документ кто-то ещё.
   useEffect(() => {
@@ -185,7 +199,10 @@ export const DocumentEditor: React.FC<Props> = ({
   // поэтому «Применить» записывает документ целиком.
 
   const sheets = useMemo(() => sheetsOf(adapter, rows), [adapter, rows]);
-  const showSheetTabs = sheets.length > 1;
+  // В свёрнутом режиме вкладок листов нет: одинаковые позиции собираются по
+  // всему документу, и фильтр по одному листу показал бы часть группы, а общий
+  // объём назвал бы полным (решение пользователя 13.08.2026).
+  const showSheetTabs = sheets.length > 1 && !collapsed;
 
   // Вкладка из ссылки применяется, когда документ уже загружен: до этого
   // списка листов ещё нет, и проверить имя не по чему.
@@ -200,9 +217,36 @@ export const DocumentEditor: React.FC<Props> = ({
   }, [sheets, setSheet]);
 
   // Строки открытой вкладки — основа и для показа, и для колонок, и для итога.
+  // Свёрнутый режим смотрит на весь документ: группа собирается через листы.
   const sheetRows = useMemo(
-    () => rowsOfSheet(adapter, rows, sheet), [adapter, rows, sheet],
+    () => (collapsed ? rows : rowsOfSheet(adapter, rows, sheet)),
+    [adapter, rows, sheet, collapsed],
   );
+
+  // --- Свёртка одинаковых позиций -------------------------------------------
+
+  const collapseFields = useMemo(
+    () => adapter.collapseFields?.(columns) ?? null, [adapter, columns],
+  );
+
+  const handleToggleCollapsed = useCallback(() => {
+    setCollapsed((previous) => !previous);
+    // Выделение снимаем: в другом режиме отмеченными оказались бы не те строки,
+    // а дальше по ним идут удаление, коэффициент и работа с прайсом. Курсор
+    // тоже сбрасываем — он мог стоять на строке, которой больше не видно.
+    setSelected(new Set());
+    setExpandedGroups(new Set());
+    anchorRef.current = null;
+  }, [setSelected]);
+
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   // --- Фильтрация -----------------------------------------------------------
 
@@ -234,8 +278,21 @@ export const DocumentEditor: React.FC<Props> = ({
     if (query) {
       result = result.filter((row) => adapter.searchText(row).toLowerCase().includes(query));
     }
+    // Свёртка идёт последней — по уже отобранным строкам. Тип и наименование
+    // входят в ключ группы, поэтому вкладка и поиск отбирают группу целиком, а
+    // не половину её позиций: общий объём остаётся честным.
+    if (collapsed && collapseFields) {
+      result = buildCollapsedRows(result, collapseFields, adapter.rowKind, expandedGroups);
+    }
     return result;
-  }, [sheetRows, tab, deferredSearch, adapter]);
+  }, [sheetRows, tab, deferredSearch, adapter, collapsed, collapseFields, expandedGroups]);
+
+  // Сколько позиций свернулось: без этого числа непонятно, помог режим или в
+  // документе просто нет дублей.
+  const collapsedGroupCount = useMemo(
+    () => displayedRows.reduce((count, row) => count + (isGroupRow(row) ? 1 : 0), 0),
+    [displayedRows],
+  );
 
   // Ставки доп. расходов: у проекта — общие, у версии могут быть свои. Порядок
   // тот же, что на сервере, иначе итог на экране не сошёлся бы с файлом.
@@ -287,6 +344,9 @@ export const DocumentEditor: React.FC<Props> = ({
       frozen: true,
       resizable: false,
       renderCell: ({ row }) => (
+        // В свёрнутом режиме порядок не меняют: у свёрнутой строки своего места
+        // в документе нет, а её позиции стоят в разных разделах.
+        collapsed ? null : (
         <div
           className="de-drag-handle"
           draggable
@@ -301,29 +361,64 @@ export const DocumentEditor: React.FC<Props> = ({
         >
           ⋮⋮
         </div>
+        )
       ),
     };
+    const shared = new Set(collapseFields?.sharedKeys ?? []);
+    const nameKey = collapseFields?.nameKey;
+
     const data: Column<GridRow>[] = columns.map((column: EditorColumn) => ({
       key: column.key,
       name: column.name,
       width: column.width,
       resizable: true,
-      editable: editable && column.editable && !column.computed,
+      // У свёрнутой строки правятся только совместные поля: цена,
+      // наименование, единица. Объём — результат сложения, а не ввод.
+      editable: (row: GridRow) => editable && column.editable && !column.computed
+        && (!isGroupRow(row) || shared.has(column.key)),
       cellClass: column.numeric ? 'de-cell-numeric' : undefined,
       // Формат — только на показе: в строке остаётся число, поэтому в выгрузку и
       // в файл уходит число, а не текст с пробелами.
       renderCell: ({ row }) => {
+        // Значения позиций разошлись (например, разные цены). Показать первое
+        // значило бы выдать его за цену всей группы.
+        if (isGroupRow(row) && isMixedField(row, column.key)) {
+          return <span className="de-cell-mixed">разные</span>;
+        }
+
         const shown = adapter.displayValue?.(row, column.key);
-        if (shown !== null && shown !== undefined) return shown;
         const raw = row[column.key];
-        return raw === null || raw === undefined ? '' : String(raw);
+        const text = shown !== null && shown !== undefined
+          ? shown
+          : (raw === null || raw === undefined ? '' : String(raw));
+
+        if (column.key !== nameKey) return text;
+
+        // Наименование — место для раскрытия группы: по нему группу узнают.
+        const info = groupInfoOf(row);
+        if (info) {
+          return (
+            <button
+              type="button"
+              className="de-group-toggle"
+              onClick={() => toggleGroup(info.key)}
+              title={info.expanded ? 'Свернуть позиции' : 'Показать позиции группы'}
+            >
+              <span className="de-group-chevron">{info.expanded ? '▾' : '▸'}</span>
+              <span className="de-group-name">{text}</span>
+              <span className="de-group-count">{info.memberKeys.length}</span>
+            </button>
+          );
+        }
+        if (row[CHILD_KEY]) return <span className="de-group-child">{text}</span>;
+        return text;
       },
       renderEditCell: TextEditor,
     }));
     return editable
       ? [{ ...SelectColumn, frozen: true }, dragColumn, ...data]
       : [{ ...SelectColumn, frozen: true }, ...data];
-  }, [columns, canWrite, handleRowDrop, adapter]);
+  }, [columns, canWrite, handleRowDrop, adapter, collapsed, collapseFields, toggleGroup]);
 
   // Работа, материал и раздел различаются цветом: в смете на тысячу строк тип,
   // написанный словом в первой колонке, глазом не выделяется.
@@ -331,7 +426,10 @@ export const DocumentEditor: React.FC<Props> = ({
     const kind = adapter.rowKind(row);
     const byKind = kind ? `de-row-${kind}` : '';
     const byState = adapter.rowClass?.(row);
-    return [byKind, byState].filter(Boolean).join(' ') || undefined;
+    // Свёрнутая строка и её позиции: группа выделена, позиции сдвинуты — иначе
+    // на экране не видно, где кончается одна группа и начинается другая.
+    const byGroup = isGroupRow(row) ? 'de-row-group' : (row[CHILD_KEY] ? 'de-row-child' : '');
+    return [byKind, byState, byGroup].filter(Boolean).join(' ') || undefined;
   }, [adapter]);
 
   // --- Правка ячейки --------------------------------------------------------
@@ -347,12 +445,29 @@ export const DocumentEditor: React.FC<Props> = ({
       const columnKey = data.column.key;
       const changed = new Map<string, GridRow>();
       for (const index of data.indexes) {
-        const row = adapter.recalc(updated[index], columnKey, columns);
-        changed.set(row.__key, row);
+        const row = updated[index];
+        // Правка свёрнутой строки — это правка всех её позиций сразу: ради
+        // этого свёртку и делали. Каждая пересчитывается по своему объёму.
+        if (isGroupRow(row) && collapseFields) {
+          const spread = spreadEdit(
+            row, columnKey, rows, collapseFields,
+            (member, key) => adapter.recalc(member, key, columns),
+          );
+          for (const [key, member] of spread) changed.set(key, member);
+          continue;
+        }
+        // Позиция раскрытой группы правится как обычная строка. Признак
+        // «внутри группы» — только для отступа на экране, в строку документа
+        // ему попадать незачем.
+        const plain = { ...row };
+        delete plain[CHILD_KEY];
+        const recalculated = adapter.recalc(plain, columnKey, columns);
+        changed.set(recalculated.__key, recalculated);
       }
+      if (changed.size === 0) return;
       setRows(mergeIntoRows(changed));
     },
-    [adapter, columns, mergeIntoRows, setRows],
+    [adapter, columns, mergeIntoRows, setRows, collapseFields, rows],
   );
 
   // --- Буфер обмена ---------------------------------------------------------
@@ -395,6 +510,14 @@ export const DocumentEditor: React.FC<Props> = ({
       const anchor = anchorRef.current;
       if (!anchor) return;
 
+      // В свёрнутом режиме на экране строки-группы, а не строки документа:
+      // вставка легла бы мимо и разошлась бы по позициям непредсказуемо.
+      if (collapsed) {
+        event.preventDefault();
+        setNotice('Вставка недоступна в свёрнутом режиме — выключите «Свернуть дубли»');
+        return;
+      }
+
       const text = event.clipboardData.getData('text/plain');
       const matrix = parseTsv(text);
       if (matrix.length === 0) return;
@@ -423,7 +546,7 @@ export const DocumentEditor: React.FC<Props> = ({
       }
       setNotice(describePaste(outcome));
     },
-    [canWrite, displayedRows, columns, adapter, mergeIntoRows, setRows],
+    [canWrite, collapsed, displayedRows, columns, adapter, mergeIntoRows, setRows],
   );
 
   useEffect(() => {
@@ -543,6 +666,26 @@ export const DocumentEditor: React.FC<Props> = ({
     setRows(insertRowsAfter(rows, anchorRef.current?.rowKey ?? null, fresh));
     setNotice(`Вставлено позиций из прайса: ${fresh.length}`);
   }, [adapter, columns, rows, setRows, meta?.coefficient, sheet]);
+
+  // --- Выделение ------------------------------------------------------------
+  //
+  // В сторе лежат ключи настоящих строк: их ждут удаление, коэффициент, прайс и
+  // аналоги. Галочка свёрнутой строки — это галочка всех её позиций, поэтому
+  // наружу ключ группы не выходит никогда.
+
+  const gridSelection = useMemo(
+    () => (collapsed ? selectionForGrid(selectedKeys, displayedRows) : selectedKeys),
+    [collapsed, selectedKeys, displayedRows],
+  );
+
+  const handleSelectionChange = useCallback((keys: ReadonlySet<unknown>) => {
+    const next = new Set(keys as ReadonlySet<string>);
+    if (!collapsed) {
+      setSelected(next);
+      return;
+    }
+    setSelected(applySelectionChange(selectedKeys, gridSelection, next, displayedRows));
+  }, [collapsed, selectedKeys, gridSelection, displayedRows, setSelected]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedKeys.size === 0) return;
@@ -688,6 +831,10 @@ export const DocumentEditor: React.FC<Props> = ({
             canRedo={redoStack.length > 0}
             fullscreen={expanded}
             historyOpen={historyOpen}
+            collapsed={collapsed}
+            canCollapse={collapseFields !== null}
+            groupCount={collapsedGroupCount}
+            onToggleCollapsed={handleToggleCollapsed}
             onTabChange={setTab}
             onSearchChange={setSearch}
             onUndo={undo}
@@ -710,6 +857,11 @@ export const DocumentEditor: React.FC<Props> = ({
               columns={columnsFromEditor(columns)}
               rows={rowsFromEditor(rows, columnsFromEditor(columns), adapter.rowKind, adapter.sheetOf)}
               preselectedIds={selectedKeys}
+              // Свёртка в файле — по тем же правилам и тем же кодом, что на
+              // экране: две копии правил однажды разошлись бы в объёмах.
+              collapseRows={collapseFields
+                ? (exportRows) => collapseExportRows(exportRows, collapseFields)
+                : undefined}
               onExport={(payload) => exportDocument(
                 documentRef, payload, payload.file_name ?? 'export.xlsx',
               )}
@@ -873,8 +1025,8 @@ export const DocumentEditor: React.FC<Props> = ({
                   rowKeyGetter={(row) => row.__key}
                   rowClass={rowClass}
                   onRowsChange={handleGridRowsChange}
-                  selectedRows={selectedKeys}
-                  onSelectedRowsChange={(keys) => setSelected(new Set(keys as Set<string>))}
+                  selectedRows={gridSelection}
+                  onSelectedRowsChange={handleSelectionChange}
                   onSelectedCellChange={(args) => {
                     anchorRef.current = args.row
                       ? { rowKey: args.row.__key, columnKey: args.column.key }

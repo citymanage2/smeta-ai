@@ -35,6 +35,11 @@ interface Props {
   sections?: SectionOption[];
   /** Строки, отмеченные галочками в таблице до открытия окна. */
   preselectedIds?: Set<string>;
+  /**
+   * Свернуть одинаковые позиции в общий объём. Не передан — галочки нет:
+   * сворачивать документ не по чему (например, в файле нет наименования).
+   */
+  collapseRows?: (rows: ExportRow[]) => ExportRow[];
   onExport: (payload: ExportPayload) => Promise<void>;
   onClose: () => void;
 }
@@ -63,7 +68,7 @@ function chip(active: boolean, accent = '#2563eb'): React.CSSProperties {
 
 export const ExportBuilderModal: React.FC<Props> = ({
   documentTitle, projectName, objectName, columns, rows, sections,
-  preselectedIds, onExport, onClose,
+  preselectedIds, collapseRows, onExport, onClose,
 }) => {
   const hasKinds = useMemo(() => rows.some((row) => row._kind === 'work' || row._kind === 'material'), [rows]);
   const hasSelection = (preselectedIds?.size ?? 0) > 0;
@@ -77,6 +82,9 @@ export const ExportBuilderModal: React.FC<Props> = ({
   const [showProject, setShowProject] = useState(true);
   const [showDate, setShowDate] = useState(true);
   const [showTotal, setShowTotal] = useState(true);
+  // Одинаковые позиции — одной строкой с общим объёмом. По умолчанию выключено:
+  // обычная ведомость должна остаться построчной, как была.
+  const [collapse, setCollapse] = useState(false);
 
   const [previewRows, setPreviewRows] = useState<ExportRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -107,6 +115,9 @@ export const ExportBuilderModal: React.FC<Props> = ({
     if (sections && sectionIds.length > 0) {
       result = result.filter((row) => row._section && sectionIds.includes(row._section));
     }
+    // Свёртка идёт последней, по уже отобранным строкам: иначе в общий объём
+    // попали бы позиции, которые человек из выгрузки исключил.
+    if (collapse && collapseRows) result = collapseRows(result);
     return result.map((row) => ({ ...row }));
   };
 
@@ -238,6 +249,25 @@ export const ExportBuilderModal: React.FC<Props> = ({
                   ))}
                 </div>
               </div>
+
+              {collapseRows && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={labelStyle}>Одинаковые позиции</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#475569' }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Свернуть одинаковые позиции"
+                      checked={collapse}
+                      onChange={(e) => setCollapse(e.target.checked)}
+                    />
+                    Свернуть одинаковые позиции в общий объём
+                  </label>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+                    Одна работа или материал — одна строка с суммарным объёмом и
+                    стоимостью. Файл выйдет единым списком, без разбивки по листам.
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginBottom: 20 }}>
                 <div style={labelStyle}>Столбцы</div>

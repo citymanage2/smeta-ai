@@ -1,5 +1,5 @@
-import { GridRow } from './adapters/types';
-import { EditorColumn } from './adapters/types';
+import { CollapseFields, EditorColumn, GridRow, RowKind } from './adapters/types';
+import { buildCollapsedRows, groupInfoOf } from './collapse';
 
 /**
  * Данные для конструктора выгрузки-ведомости.
@@ -70,6 +70,38 @@ export function columnsFromEditor(columns: EditorColumn[]): ExportColumn[] {
     label: column.name,
     numeric: column.numeric,
   }));
+}
+
+/**
+ * Свернуть одинаковые позиции в строках выгрузки.
+ *
+ * Правила те же, что на экране, и код тот же: если бы файл сворачивался по
+ * своей копии правил, объём в ведомости однажды разошёлся бы с объёмом в
+ * таблице — и заметили бы это уже у поставщика.
+ *
+ * Лист исходного файла в свёрнутой ведомости не проставляется: группа
+ * собирается через листы, и раскладывать её обратно по вкладкам не по чему.
+ * Поэтому файл получается единым списком — им и пользуются, когда нужен общий
+ * объём материалов на объект.
+ */
+export function collapseExportRows(
+  rows: ExportRow[], fields: CollapseFields,
+): ExportRow[] {
+  const grid: GridRow[] = rows.map((row) => ({ ...row, __key: row._id }));
+  const collapsed = buildCollapsedRows(
+    grid, fields, (row) => (row._kind as RowKind) ?? null, new Set(),
+  );
+
+  return collapsed.map((row) => {
+    const info = groupInfoOf(row);
+    const exported: ExportRow = { _id: info ? info.key : row.__key };
+    for (const [key, value] of Object.entries(row)) {
+      // Служебные ключи свёртки и лист наружу не идут.
+      if (key.startsWith('__') || key === '_id') continue;
+      exported[key] = value;
+    }
+    return exported;
+  });
 }
 
 /** Строки таблицы редактора → строки выгрузки. */

@@ -12,7 +12,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import ExportBuilderModal from '../components/editor/ExportBuilderModal';
-import { ExportColumn, ExportRow } from '../components/editor/exportBuilder';
+import { ExportColumn, ExportRow, collapseExportRows } from '../components/editor/exportBuilder';
+import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
+import { CollapseFields } from '../components/editor/adapters/types';
 
 const COLUMNS: ExportColumn[] = [
   { key: 'num', label: '№', numeric: true },
@@ -193,5 +195,65 @@ describe('фильтр разделов', () => {
     goToPreview();
     const payload = await download();
     expect(payload.rows.map((r: ExportRow) => r.name)).toEqual(['Кирпич']);
+  });
+});
+
+
+// --- Свёртка одинаковых позиций -------------------------------------------
+//
+// План `plans/2026-08-13-svertka-odinakovyh-pozicij.md`. Правила свёртки в
+// файле — те же и тем же кодом, что на экране: две копии правил однажды
+// разошлись бы в объёмах, и заметили бы это уже у поставщика.
+
+const COLLAPSE_FIELDS = estimateAdapter.collapseFields!([]) as CollapseFields;
+const collapseRows = (rows: ExportRow[]) => collapseExportRows(rows, COLLAPSE_FIELDS);
+
+// Штукатурка дважды, из разных листов: 10 + 6 = 16 м2.
+const DUPLICATE_ROWS: ExportRow[] = [
+  ...ROWS,
+  { _id: 'r4', _kind: 'work', num: 4, name: 'штукатурка', unit: 'м2', qty: 6,
+    price_work: 525, cost_work: 3150, price_material: null, cost_material: null,
+    __sheet: 'Раздел 2' },
+];
+
+describe('свёртка одинаковых позиций в выгрузке', () => {
+  it('галочки нет, когда сворачивать не по чему', () => {
+    renderModal();
+    expect(screen.queryByLabelText('Свернуть одинаковые позиции')).toBeNull();
+  });
+
+  it('по умолчанию файл построчный — как был', async () => {
+    renderModal({ rows: DUPLICATE_ROWS, collapseRows });
+    goToPreview();
+    const payload = await download();
+
+    expect(payload.rows).toHaveLength(4);
+  });
+
+  it('с галочкой одинаковые позиции уходят одной строкой с общим объёмом', async () => {
+    renderModal({ rows: DUPLICATE_ROWS, collapseRows });
+    fireEvent.click(screen.getByLabelText('Свернуть одинаковые позиции'));
+    goToPreview();
+    const payload = await download();
+
+    expect(payload.rows).toHaveLength(3);
+    const plaster = payload.rows.find((row) => String(row.name).toLowerCase() === 'штукатурка')!;
+    expect(plaster.qty).toBe(16);
+    expect(plaster.cost_work).toBe(8400);
+    expect(plaster.price_work).toBe(525);
+    // Лист не проставляется: группа собрана через листы, раскладывать её
+    // обратно по вкладкам не по чему.
+    expect(plaster.__sheet).toBeUndefined();
+  });
+
+  it('свёртка идёт по отобранным строкам, а не по всему документу', async () => {
+    renderModal({ rows: DUPLICATE_ROWS, collapseRows });
+    fireEvent.click(screen.getByRole('button', { name: 'Ведомость материалов' }));
+    fireEvent.click(screen.getByLabelText('Свернуть одинаковые позиции'));
+    goToPreview();
+    const payload = await download();
+
+    // Работы отфильтрованы — в общий объём они не попали.
+    expect(payload.rows.map((row) => row.name)).toEqual(['Кирпич']);
   });
 });

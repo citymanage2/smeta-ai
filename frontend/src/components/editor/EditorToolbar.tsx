@@ -1,7 +1,7 @@
 import React from 'react';
 import {
-  Check, FileSpreadsheet, History, Loader2, Maximize2, Minimize2, Plus, Redo2, Search,
-  Trash2, Undo2, X,
+  Check, FileSpreadsheet, FoldVertical, History, Loader2, Maximize2, Minimize2, Plus,
+  Redo2, Search, Trash2, Undo2, X,
 } from 'lucide-react';
 import { DraftState, EditorTab } from '../../stores/documentEditor';
 
@@ -21,6 +21,13 @@ interface Props {
   canRedo: boolean;
   fullscreen: boolean;
   historyOpen: boolean;
+  /** Одинаковые позиции показаны одной строкой с общим объёмом. */
+  collapsed: boolean;
+  /** Есть ли по чему сворачивать: в файле может не быть наименования. */
+  canCollapse: boolean;
+  /** Сколько групп свернулось — иначе непонятно, есть ли в документе дубли. */
+  groupCount: number;
+  onToggleCollapsed: () => void;
   onTabChange: (tab: EditorTab) => void;
   onSearchChange: (value: string) => void;
   onUndo: () => void;
@@ -44,7 +51,8 @@ const DRAFT_LABEL: Record<DraftState, string> = {
 export const EditorToolbar: React.FC<Props> = ({
   totalCount, workCount, materialCount, showTabs, tab, search,
   selectedCount, canWrite, isDirty, applying, draftState, canUndo, canRedo,
-  fullscreen, historyOpen, onTabChange, onSearchChange, onUndo, onRedo,
+  fullscreen, historyOpen, collapsed, canCollapse, groupCount,
+  onToggleCollapsed, onTabChange, onSearchChange, onUndo, onRedo,
   onApply, onDiscard, onAddRow, onDeleteSelected, onToggleFullscreen, onToggleHistory,
   onExport,
 }) => (
@@ -115,6 +123,24 @@ export const EditorToolbar: React.FC<Props> = ({
             </button>
           </>
         )}
+
+        {/* Свёртка одинаковых позиций: общий объём одной строкой, правка
+            разъезжается по всем позициям сразу. Режим показа — документ от
+            неё не меняется. */}
+        <button
+          className={`de-btn${collapsed ? ' de-btn-active' : ''}`}
+          onClick={onToggleCollapsed}
+          disabled={!canCollapse}
+          title={canCollapse
+            ? (collapsed
+              ? 'Показать все позиции по отдельности'
+              : 'Собрать одинаковые работы и материалы в общий объём')
+            : 'В этом документе нет колонки с наименованием — сворачивать не по чему'}
+        >
+          <FoldVertical size={14} />
+          Свернуть дубли
+          {collapsed && groupCount > 0 && <span className="de-tab-count">{groupCount}</span>}
+        </button>
 
         <button className="de-btn" onClick={onExport} title="Собрать ведомость и скачать">
           <FileSpreadsheet size={14} />

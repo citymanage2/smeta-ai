@@ -197,7 +197,7 @@ describe('вкладки листов', () => {
     fireEvent.click(sheetTab(/Раздел 2/));
 
     await waitFor(() => expect(onStateChange).toHaveBeenLastCalledWith(
-      { versionId: 'v1', tab: 'all', sheet: 'Раздел 2' },
+      { versionId: 'v1', tab: 'all', sheet: 'Раздел 2', collapsed: false },
     ));
   });
 });

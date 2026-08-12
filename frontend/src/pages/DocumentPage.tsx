@@ -72,7 +72,7 @@ const DocumentPage: React.FC = () => {
   // коллеги ровно то, что видит отправитель. `replace`, чтобы переключение
   // вкладок не забивало историю браузера.
   const handleEditorState = useCallback(
-    (state: { versionId: string | null; tab: string; sheet: string | null }) => {
+    (state: { versionId: string | null; tab: string; sheet: string | null; collapsed: boolean }) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev)
         if (state.versionId) next.set('version', state.versionId)
@@ -81,6 +81,10 @@ const DocumentPage: React.FC = () => {
         else next.delete('tab')
         if (state.sheet) next.set('sheet', state.sheet)
         else next.delete('sheet')
+        // Свёртка одинаковых позиций — тоже часть того, что видит отправитель
+        // ссылки: в свёрнутом виде таблица читается иначе.
+        if (state.collapsed) next.set('collapsed', '1')
+        else next.delete('collapsed')
         return next
       }, { replace: true })
     },
@@ -150,6 +154,7 @@ const DocumentPage: React.FC = () => {
           initialVersionId={searchParams.get('version') ?? undefined}
           initialTab={(searchParams.get('tab') as EditorTab | null) ?? undefined}
           initialSheet={searchParams.get('sheet') ?? undefined}
+          initialCollapsed={searchParams.get('collapsed') === '1'}
           onStateChange={handleEditorState}
         />
       </div>

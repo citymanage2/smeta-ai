@@ -756,3 +756,83 @@
 .rdg-row.de-row-abc-c .rdg-cell:first-child {
   box-shadow: inset 3px 0 0 #94a3b8;
 }
+
+/* --- Свёртка одинаковых позиций ------------------------------------------
+   Одинаковые работы и материалы показываются одной строкой с общим объёмом
+   (план `plans/2026-08-13-svertka-odinakovyh-pozicij.md`). Режим показа:
+   строки документа не меняются, поэтому «Применить» и итоги работают так же. */
+
+.de-btn.de-btn-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+/* Свёрнутая строка — не строка документа, а сумма нескольких: она должна
+   читаться как заголовок группы, иначе её примут за обычную позицию. */
+.rdg-row.de-row-group .rdg-cell {
+  background: #f8fafc;
+  font-weight: 600;
+}
+
+.rdg-row.de-row-group .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #6366f1;
+}
+
+/* Позиция внутри раскрытой группы: сдвинута, чтобы было видно, где группа
+   кончается. */
+.rdg-row.de-row-child .rdg-cell {
+  background: #fcfdff;
+}
+
+.de-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.de-group-chevron {
+  color: #6366f1;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.de-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Сколько позиций свернулось в эту строку. */
+.de-group-count {
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #e0e7ff;
+  color: #4338ca;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.de-group-child {
+  padding-left: 18px;
+  color: #475569;
+}
+
+/* Значения позиций разошлись — например, у одной работы две разные цены.
+   Показать первую значило бы выдать её за цену всей группы. */
+.de-cell-mixed {
+  color: #b45309;
+  font-style: italic;
+  font-weight: 500;
+}

@@ -1,5 +1,6 @@
 import { formatDecimal, formatMoney } from '../../../utils/formatNumber';
 import {
+  CollapseFields,
   DocumentTotals,
   EditorAdapter,
   EditorColumn,
@@ -52,6 +53,8 @@ const COL_MAX_NAME = 500;
 const COL_MAX_PRICE = 110;
 
 const QTY_KEYWORDS = ['кол-во', 'количество', 'кол.', 'объем', 'объём', 'кол'];
+/** Единица измерения — вторая половина ключа при свёртке одинаковых позиций. */
+const UNIT_KEYWORDS = ['ед. изм', 'ед.изм', 'ед изм', 'единица'];
 const PRICE_WORK_KEYWORDS = ['цена работ', 'цена работы'];
 const PRICE_MAT_KEYWORDS = ['цена материал'];
 const COST_WORK_KEYWORDS = ['стоимость работ'];
@@ -250,5 +253,35 @@ export const genericAdapter: EditorAdapter = {
 
   withSheet(row: GridRow, sheet: string | null): GridRow {
     return { ...row, [SHEET_KEY]: sheet };
+  },
+
+  /**
+   * Свёртка одинаковых позиций. Колонки опознаются по названиям из файла
+   * заказчика — теми же ключевыми словами, по которым уже работает пересчёт
+   * «цена × объём».
+   *
+   * Нет колонки наименования — сворачивать не по чему: собрать строки в группы
+   * по номеру или по цене значило бы склеить разные позиции.
+   */
+  collapseFields(columns: EditorColumn[]): CollapseFields | null {
+    const keys = columns.map((column) => column.key);
+    if (!keys.includes(NAME_COL)) return null;
+
+    const unitKey = keys.find((key) => matches(key, UNIT_KEYWORDS)) ?? null;
+    const { qtyCol, pairs } = findRecalcConfig(keys);
+
+    return {
+      nameKey: NAME_COL,
+      unitKey,
+      sharedKeys: [
+        NAME_COL,
+        ...(unitKey ? [unitKey] : []),
+        ...pairs.map((pair) => pair.priceCol),
+      ],
+      sumKeys: [
+        ...(qtyCol ? [qtyCol] : []),
+        ...pairs.map((pair) => pair.costCol),
+      ],
+    };
   },
 };

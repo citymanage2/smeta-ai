@@ -3,6 +3,7 @@ import { calcEstimateTotals, rowCoefficient } from '../../../utils/estimateCalc'
 import { formatDecimal, formatMoney } from '../../../utils/formatNumber';
 import {
   AdapterContext,
+  CollapseFields,
   DocumentTotals,
   EditorAdapter,
   EditorColumn,
@@ -272,5 +273,16 @@ export const estimateAdapter: EditorAdapter = {
 
   withSheet(row: GridRow, sheet: string | null): GridRow {
     return { ...row, [SHEET_KEY]: sheet };
+  },
+
+  // Свёртка одинаковых позиций. Стоимости складываются по позициям, а не
+  // считаются как «общий объём × цена»: цены внутри группы могут отличаться.
+  collapseFields(): CollapseFields {
+    return {
+      nameKey: 'name',
+      unitKey: 'unit',
+      sharedKeys: ['name', 'unit', 'price_work', 'price_material'],
+      sumKeys: ['qty', 'cost_work', 'cost_material'],
+    };
   },
 };
