@@ -111,9 +111,9 @@ describe('вкладки версий видны всегда', () => {
     expect(tabs().getByText('После проверки')).toBeInTheDocument();
   });
 
-  it('в полноэкранном виде', async () => {
+  it('в развёрнутом виде', async () => {
     mockDoc();
-    render(<DocumentEditor cardId="card-1" kind="optimization" startFullscreen />);
+    render(<DocumentEditor cardId="card-1" kind="optimization" fullHeight />);
 
     await waitFor(() => expect(screen.getByTestId('editor-version-tabs')).toBeInTheDocument());
     expect(tabs().getByText('Исходная смета')).toBeInTheDocument();

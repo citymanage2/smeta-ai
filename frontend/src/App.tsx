@@ -16,6 +16,7 @@ const Projects = lazy(() => import('./pages/Projects'));
 const Archive = lazy(() => import('./pages/Archive'));
 const ProjectDetail = lazy(() => import('./pages/ProjectDetail'));
 const ProjectCardPage = lazy(() => import('./pages/ProjectCardPage'));
+const DocumentPage = lazy(() => import('./pages/DocumentPage'));
 const Calculator = lazy(() => import('./pages/Calculator'));
 const Trash = lazy(() => import('./pages/Trash'));
 const PriceCatalog = lazy(() => import('./pages/PriceCatalog'));
@@ -109,6 +110,18 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <ProjectCardPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Документ страницей, а не окном поверх экрана: у таблицы есть адрес,
+            и «Назад» закрывает её, а не уводит с экрана. */}
+        <Route
+          path="/projects/:projectId/cards/:cardId/document/:kind"
+          element={
+            <ProtectedRoute>
+              <ErrorBoundary>
+                <DocumentPage />
+              </ErrorBoundary>
             </ProtectedRoute>
           }
         />

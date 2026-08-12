@@ -15,10 +15,8 @@ import {
   getCardFilesMeta,
 } from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
-import DocumentEditor from '../editor/DocumentEditor'
 import { LumaSpin } from '../ui/LumaSpin'
 import { ProgressCounter } from './ProgressCounter'
-import { UNIFIED_EDITOR_TASK_TYPES } from '../../types'
 import { kindFromTaskType } from '../../api/documents'
 import UsageChips from '../card/UsageChips'
 import { stageUsage } from '../../utils/usageMetrics'
@@ -68,12 +66,18 @@ const FILE_SIZE_LIMIT = 50 * 1024 * 1024
 // ---------------------------------------------------------------------------
 // UI Atoms
 // ---------------------------------------------------------------------------
-interface EditorModalState {
-  taskId: string
-  title: string
+/**
+ * Какой документ открыть страницей редактора.
+ *
+ * Адресуется карточкой и типом документа, а не задачей: заголовок и имя файла
+ * страница собирает сама, поэтому здесь только то, чего ей неоткуда взять —
+ * тип задачи (из него тип документа) и слот файла.
+ */
+interface EditorTarget {
+  /** `input` — исходный файл заказчика (только просмотр). */
   fileSlot?: string
+  /** Номер входного файла, когда их несколько. */
   fileIndex?: number
-  readOnly?: boolean
   taskType?: string
 }
 
@@ -385,7 +389,7 @@ const TYPE_LABEL: Record<string, string> = {
 interface StageProps {
   card: WorkflowCard
   filesMeta: CardDetail | null
-  onOpenEditor: (state: EditorModalState) => void
+  onOpenEditor: (state: EditorTarget) => void
   onRestart: (taskId: string) => Promise<void>
   onResume: (taskId: string) => Promise<void>
 }
@@ -499,7 +503,7 @@ function InputFilesSection({
   stage: StageDetail
   taskId: string
   navigateToCard: () => void
-  onOpenEditor: (state: EditorModalState) => void
+  onOpenEditor: (state: EditorTarget) => void
   label?: string
   color?: string
 }) {
@@ -516,11 +520,8 @@ function InputFilesSection({
             onDownload={() => downloadInputFileById(taskId, f.index)}
             onOpenTask={navigateToCard}
             onOpenViewer={() => onOpenEditor({
-              taskId,
-              title: `${label} — ${f.name}`,
               fileSlot: 'input',
               fileIndex: f.index,
-              readOnly: true,
               taskType: stage.task_type,
             })}
           />
@@ -550,7 +551,7 @@ function ResultFilesSection({
   task?: TaskBrief | null
   taskId: string
   navigateToCard: () => void
-  onOpenEditor: (state: EditorModalState) => void
+  onOpenEditor: (state: EditorTarget) => void
   label: string
   color: string
   fallbackSlot?: string
@@ -571,8 +572,6 @@ function ResultFilesSection({
               onDownload={() => downloadSlotFileById(taskId, f.slot)}
               onOpenTask={navigateToCard}
               onOpenEditor={() => onOpenEditor({
-                taskId,
-                title: `${label} — ${f.file_name}`,
                 fileSlot: f.slot,
                 taskType: stage.task_type,
               })}
@@ -583,7 +582,7 @@ function ResultFilesSection({
         <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
           <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
           <DownloadBtn onClick={() => safeDownload(taskId, fallbackSlot)} title={`Скачать ${label.toLowerCase()}`} />
-          <ViewBtn onClick={() => onOpenEditor({ taskId, title: label, fileSlot: fallbackSlot, taskType: stage.task_type })} title="Открыть онлайн" />
+          <ViewBtn onClick={() => onOpenEditor({ fileSlot: fallbackSlot, taskType: stage.task_type })} title="Открыть онлайн" />
           <ArrowBtn onClick={navigateToCard} />
         </div>
       )}
@@ -735,11 +734,8 @@ function ListStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, sho
                   onDownload={() => downloadInputFileById(task.id, f.index)}
                   onOpenTask={navigateToCard}
                   onOpenViewer={() => onOpenEditor({
-                    taskId: task.id,
-                    title: `Исходный файл — ${f.name}`,
                     fileSlot: 'input',
                     fileIndex: f.index,
-                    readOnly: true,
                     taskType: task.task_type,
                   })}
                 />
@@ -762,8 +758,6 @@ function ListStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, sho
                   onDownload={() => downloadSlotFileById(task.id, f.slot)}
                   onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
-                    taskId: task.id,
-                    title: `Перечень — ${f.file_name}`,
                     fileSlot: 'result',
                     taskType: task.task_type,
                   })}
@@ -776,7 +770,7 @@ function ListStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, sho
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать перечень" />
-              <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Перечень', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
+              <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )
@@ -889,8 +883,6 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
                   onDownload={() => downloadSlotFileById(listTask.id, f.slot)}
                   onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
-                    taskId: listTask.id,
-                    title: `Перечень — ${f.file_name}`,
                     fileSlot: 'result',
                     taskType: listTask.task_type,
                   })}
@@ -901,7 +893,7 @@ function CompletenessStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
-              <ViewBtn onClick={() => onOpenEditor({ taskId: listTask.id, title: 'Перечень', fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
+              <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
@@ -990,8 +982,6 @@ function CompletenessStageBody({ card, filesMeta, onOpenEditor, onRestart, onRes
                   onDownload={() => downloadSlotFileById(task.id, f.slot)}
                   onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
-                    taskId: task.id,
-                    title: `Полнота — ${f.file_name}`,
                     fileSlot: 'result',
                     taskType: task.task_type,
                   })}
@@ -1002,7 +992,7 @@ function CompletenessStageBody({ card, filesMeta, onOpenEditor, onRestart, onRes
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать результат проверки" />
-              <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Полнота', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
+              <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
@@ -1101,8 +1091,6 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
                   onDownload={() => downloadSlotFileById(listTask.id, f.slot)}
                   onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
-                    taskId: listTask.id,
-                    title: `Перечень — ${f.file_name}`,
                     fileSlot: 'result',
                     taskType: listTask.task_type,
                   })}
@@ -1113,7 +1101,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(listTask.id, 'result')} title="Скачать перечень" />
-              <ViewBtn onClick={() => onOpenEditor({ taskId: listTask.id, title: 'Перечень', fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
+              <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'result', taskType: listTask.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
@@ -1137,8 +1125,6 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
                   onDownload={() => downloadSlotFileById(completenessTask.id, f.slot)}
                   onOpenTask={navigateToCard}
                   onOpenEditor={() => onOpenEditor({
-                    taskId: completenessTask.id,
-                    title: `Полнота — ${f.file_name}`,
                     fileSlot: 'result',
                     taskType: completenessTask.task_type,
                   })}
@@ -1149,7 +1135,7 @@ function EstimateStage({ card, filesMeta, onOpenEditor, onRestart, onResume }: S
             <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(completenessTask.id, 'result')} title="Скачать результат проверки" />
-              <ViewBtn onClick={() => onOpenEditor({ taskId: completenessTask.id, title: 'Полнота', fileSlot: 'result', taskType: completenessTask.task_type })} title="Открыть онлайн" />
+              <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'result', taskType: completenessTask.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
@@ -1237,8 +1223,6 @@ function EstimateStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume,
                 onDownload={() => downloadSlotFileById(task.id, f.slot)}
                 onOpenTask={navigateToCard}
                 onOpenEditor={() => onOpenEditor({
-                  taskId: task.id,
-                  title: `Смета — ${f.file_name}`,
                   fileSlot: f.slot,
                   taskType: task.task_type,
                 })}
@@ -1249,7 +1233,7 @@ function EstimateStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume,
           <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
             <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
             <DownloadBtn onClick={() => safeDownload(task.id, 'result')} title="Скачать смету" />
-            <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Смета из перечня', fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
+            <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'result', taskType: task.task_type })} title="Открыть онлайн" />
             <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
           </div>
         )
@@ -1535,14 +1519,14 @@ function OptimizationStageBody({
                 date={formatDate(mainFile.created_at)}
                 onDownload={() => downloadSlotFileById(task.id, mainFile.slot)}
                 onOpenTask={navigateToCard}
-                onOpenEditor={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы' })}
+                onOpenEditor={() => onOpenEditor({ fileSlot: 'optimized', taskType: task.task_type })}
               />
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
               <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 600, flex: 1 }}>● Готово</span>
               <DownloadBtn onClick={() => safeDownload(task.id, 'optimized')} title="Скачать оптимизацию" />
-              <ViewBtn onClick={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы', fileSlot: 'optimized', taskType: task.task_type })} title="Открыть онлайн" />
+              <ViewBtn onClick={() => onOpenEditor({ fileSlot: 'optimized', taskType: task.task_type })} title="Открыть онлайн" />
               <ArrowBtn onClick={navigateToCard} title="Открыть смету" />
             </div>
           )}
@@ -1569,7 +1553,7 @@ function OptimizationStageBody({
                     date={formatDate(f.created_at)}
                     onDownload={() => downloadSlotFileById(task.id, f.slot)}
                     onOpenTask={navigateToCard}
-                    onOpenEditor={() => onOpenEditor({ taskId: task.id, title: 'Оптимизация сметы' })}
+                    onOpenEditor={() => onOpenEditor({ fileSlot: 'optimized', taskType: task.task_type })}
                   />
                 </div>
               ))}
@@ -1585,7 +1569,7 @@ function OptimizationStageBody({
 // CardStageContent — диспетчер с загрузкой filesMeta
 // ---------------------------------------------------------------------------
 /**
- * Метаданные файлов стадий, модалка редактора и перезапуск/продолжение задачи.
+ * Метаданные файлов стадий, переход в редактор и перезапуск/продолжение задачи.
  *
  * Один загрузчик на оба вида стадий (диспетчер канбана и аккордеон списка
  * смет): запрос `getCardFilesMeta` и обновление после сохранения в редакторе
@@ -1595,9 +1579,9 @@ function useCardStageProps(card: WorkflowCard) {
   // Через селектор: хук работает и вне доски (список смет, карточка),
   // подписка на весь стор дёргала бы его на каждый цикл опроса карточек.
   const fetchCards = useKanbanStore(s => s.fetchCards)
+  const navigate = useNavigate()
   const [filesMeta, setFilesMeta] = useState<CardDetail | null>(null)
   const metaFetching = useRef(false)
-  const [editorModal, setEditorModal] = useState<EditorModalState | null>(null)
 
   const fetchMeta = useCallback(async () => {
     if (metaFetching.current) return
@@ -1639,26 +1623,25 @@ function useCardStageProps(card: WorkflowCard) {
     await fetchCards(card.project_id)
   }, [fetchMeta, fetchCards, card.project_id])
 
+  // Документ открывается страницей, а не окном поверх экрана: у таблицы есть
+  // адрес, её можно отправить коллеге, а «Назад» браузера её закрывает.
+  // Заголовок странице не передаём — она соберёт его сама из метаданных файлов,
+  // иначе он жил бы в адресной строке и расходился с содержимым по ссылке.
+  const openEditor = useCallback((target: EditorTarget) => {
+    const kind = target.taskType ? kindFromTaskType(target.taskType) : null
+    if (!kind) return
+    const query = new URLSearchParams()
+    if (target.fileSlot) query.set('slot', target.fileSlot)
+    if (target.fileIndex !== undefined) query.set('index', String(target.fileIndex))
+    const suffix = query.toString()
+    navigate(`/projects/${card.project_id}/cards/${card.id}/document/${kind}${suffix ? `?${suffix}` : ''}`)
+  }, [navigate, card.project_id, card.id])
+
   const stageProps: StageProps = {
-    card, filesMeta, onOpenEditor: setEditorModal, onRestart: handleRestart, onResume: handleResume,
+    card, filesMeta, onOpenEditor: openEditor, onRestart: handleRestart, onResume: handleResume,
   }
 
-  // Все четыре типа документа открываются одним редактором. Прежний путь
-  // через iframe удалён вместе с Фазой 6.
-  const editor = editorModal?.taskType && UNIFIED_EDITOR_TASK_TYPES.has(editorModal.taskType) ? (
-    <DocumentEditor
-      cardId={card.id}
-      kind={kindFromTaskType(editorModal.taskType)!}
-      fileSlot={editorModal.fileSlot === 'input' ? 'input' : undefined}
-      fileIndex={editorModal.fileSlot === 'input' ? editorModal.fileIndex : undefined}
-      title={editorModal.title}
-      startFullscreen
-      onClose={() => setEditorModal(null)}
-      onApplied={fetchMeta}
-    />
-  ) : null
-
-  return { stageProps, editor }
+  return { stageProps }
 }
 
 // ---------------------------------------------------------------------------
@@ -1751,7 +1734,7 @@ function StageSection({
  * места, где то же самое написано другими словами, быть не должно.
  */
 export function CardStagesAccordion({ card }: { card: WorkflowCard }) {
-  const { stageProps, editor } = useCardStageProps(card)
+  const { stageProps } = useCardStageProps(card)
   // Раскрытая стадия выбирается один раз при монтировании: карточки
   // опрашиваются каждые 5 секунд, и пересчёт схлопывал бы секцию под руками.
   const [initialStage] = useState(() => defaultStage(card))
@@ -1776,13 +1759,12 @@ export function CardStagesAccordion({ card }: { card: WorkflowCard }) {
           {body[stage]}
         </StageSection>
       ))}
-      {editor}
     </div>
   )
 }
 
 export function CardStageContent({ card }: { card: WorkflowCard }) {
-  const { stageProps, editor } = useCardStageProps(card)
+  const { stageProps } = useCardStageProps(card)
 
   return (
     <>
@@ -1803,7 +1785,6 @@ export function CardStageContent({ card }: { card: WorkflowCard }) {
           разойтись. Одна строка внизу закрывает все состояния сразу. */}
       <CurrentStageUsage card={card} />
 
-      {editor}
     </>
   )
 }

@@ -131,7 +131,7 @@ export const EditorToolbar: React.FC<Props> = ({
         <button
           className="de-icon-btn"
           onClick={onToggleFullscreen}
-          title={fullscreen ? 'Свернуть' : 'Открыть на весь экран'}
+          title={fullscreen ? 'Свернуть таблицу' : 'Растянуть таблицу на всю высоту окна'}
         >
           {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
         </button>

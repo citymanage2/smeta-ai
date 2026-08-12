@@ -1,7 +1,6 @@
 import React, {
   useCallback, useDeferredValue, useEffect, useMemo, useRef, useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 import DataGrid, {
   Column, RenderEditCellProps, RowsChangeData, SelectColumn,
 } from 'react-data-grid';
@@ -48,10 +47,10 @@ interface Props {
   fileIndex?: number;
   title?: string;
   /**
-   * Открыт как окно поверх экрана (из карточки) или встроен в страницу.
-   * В режиме окна «свернуть» означает «закрыть» — сворачивать некуда.
+   * Таблица сразу во всю высоту окна — так открывается страница документа.
+   * Режима «поверх экрана» у редактора нет: документ всегда живёт страницей.
    */
-  startFullscreen?: boolean;
+  fullHeight?: boolean;
   /** Версия и вкладка из ссылки: по ней коллега должен увидеть то же самое. */
   initialVersionId?: string;
   initialTab?: 'all' | 'works' | 'materials';
@@ -108,7 +107,7 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 // --- Компонент -------------------------------------------------------------
 
 export const DocumentEditor: React.FC<Props> = ({
-  cardId, kind, fileSlot, fileIndex, title, startFullscreen = false,
+  cardId, kind, fileSlot, fileIndex, title, fullHeight = false,
   initialVersionId, initialTab, initialSheet, onStateChange, onClose, onApplied,
 }) => {
   const {
@@ -118,7 +117,7 @@ export const DocumentEditor: React.FC<Props> = ({
     setTab, setSheet, setSearch, setSelected, heartbeat, reset, setCoefficient,
   } = useDocumentEditorStore();
 
-  const [fullscreen, setFullscreen] = useState(startFullscreen);
+  const [expanded, setExpanded] = useState(fullHeight);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -144,8 +143,6 @@ export const DocumentEditor: React.FC<Props> = ({
     [documentRef],
   );
 
-  // Открыт как окно поверх экрана: сворачивать некуда, «свернуть» = «закрыть».
-  const isOverlayMode = startFullscreen;
   // Раздел сводной: тот же формат строк, что смета, но доп. расходы и итог
   // считает бланк «Сводная» по своим ставкам.
   const isSummarySection = kind === 'summary-section';
@@ -594,17 +591,13 @@ export const DocumentEditor: React.FC<Props> = ({
 
   // --- Разметка -------------------------------------------------------------
 
-  const body = (
-    <div className={`de-root${fullscreen ? ' de-root-fullscreen' : ''}`} ref={containerRef}>
-      {(title || fullscreen) && (
+  return (
+    <div className="de-root" ref={containerRef}>
+      {title && (
         <div className="de-head">
-          <span className="de-title">{title ?? 'Документ'}</span>
-          {(onClose || fullscreen) && (
-            <button
-              className="de-icon-btn"
-              onClick={fullscreen && !isOverlayMode ? () => setFullscreen(false) : handleClose}
-              title={fullscreen && !isOverlayMode ? 'Свернуть' : 'Закрыть'}
-            >
+          <span className="de-title">{title}</span>
+          {onClose && (
+            <button className="de-icon-btn" onClick={handleClose} title="Закрыть">
               <X size={16} />
             </button>
           )}
@@ -693,7 +686,7 @@ export const DocumentEditor: React.FC<Props> = ({
             draftState={draftState}
             canUndo={undoStack.length > 0}
             canRedo={redoStack.length > 0}
-            fullscreen={fullscreen}
+            fullscreen={expanded}
             historyOpen={historyOpen}
             onTabChange={setTab}
             onSearchChange={setSearch}
@@ -703,7 +696,7 @@ export const DocumentEditor: React.FC<Props> = ({
             onDiscard={discardChanges}
             onAddRow={handleAddRow}
             onDeleteSelected={handleDeleteSelected}
-            onToggleFullscreen={() => (isOverlayMode ? handleClose() : setFullscreen((v) => !v))}
+            onToggleFullscreen={() => setExpanded((v) => !v)}
             onToggleHistory={() => setHistoryOpen((v) => !v)}
             onExport={() => setExportOpen(true)}
           />
@@ -888,7 +881,7 @@ export const DocumentEditor: React.FC<Props> = ({
                       : null;
                   }}
                   className="de-grid"
-                  style={{ blockSize: fullscreen ? 'calc(100vh - 320px)' : 560 }}
+                  style={{ blockSize: expanded ? 'calc(100vh - 320px)' : 560 }}
                   enableVirtualization
                 />
               )}
@@ -906,12 +899,6 @@ export const DocumentEditor: React.FC<Props> = ({
         </>
       )}
     </div>
-  );
-
-  if (!fullscreen) return body;
-  return createPortal(
-    <div className="de-overlay" role="dialog" aria-modal="true">{body}</div>,
-    document.body,
   );
 };
 
