@@ -110,8 +110,11 @@ const DocumentPage: React.FC = () => {
 
   return (
     <Layout>
-      {/* Таблице нужна вся ширина: в колонку 720 px смета не помещается. */}
-      <div style={{ maxWidth: 1600, margin: '0 auto', padding: '24px 16px' }}>
+      {/* Таблице нужна вся ширина: в колонку 720 px смета не помещается.
+          Сверху отступа своего нет — область прокрутки Layout уже отбивает
+          `MAIN_PADDING_TOP`, и второй отступ отжимал бы таблицу от шапки
+          на пустую полосу в полсотни пикселей. */}
+      <div style={{ maxWidth: 1600, margin: '0 auto', padding: '0 16px 24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
           <button
             onClick={goBack}
