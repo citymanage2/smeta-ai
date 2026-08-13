@@ -15,6 +15,7 @@ import {
   getCardFilesMeta,
 } from '../../api/workflowCards'
 import { TaskStatusBadge } from './TaskStatusBadge'
+import { StageErrorNote } from './StageErrorNote'
 import { LumaSpin } from '../ui/LumaSpin'
 import { ProgressCounter } from './ProgressCounter'
 import { kindFromTaskType } from '../../api/documents'
@@ -803,9 +804,12 @@ function ListStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume, sho
   return (
     <div>
       {label}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap', marginBottom: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'nowrap' }}>
         <TaskStatusBadge task={task} />
         <ArrowBtn onClick={navigateToCard} />
+      </div>
+      <div style={{ marginBottom: '8px' }}>
+        <StageErrorNote message={task.error_message} />
       </div>
       <FileList />
       <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={handleAddFiles} />
@@ -1021,6 +1025,7 @@ function CompletenessStageBody({ card, filesMeta, onOpenEditor, onRestart, onRes
             <TaskStatusBadge task={task} />
             <ArrowBtn onClick={navigateToCard} />
           </div>
+          <StageErrorNote message={task.error_message} />
           <ActionButton
             onClick={async () => { await startTask(card.id, { task_type: task.task_type ?? getCompletenessType() }) }}
             disabled={submitting}
@@ -1245,6 +1250,7 @@ function EstimateStageBody({ card, filesMeta, onOpenEditor, onRestart, onResume,
             <TaskStatusBadge task={task} />
             <ArrowBtn onClick={navigateToCard} />
           </div>
+          <StageErrorNote message={task.error_message} />
         </div>
       )}
 
@@ -1468,6 +1474,7 @@ function OptimizationStageBody({
         </div>
       )}
       <TaskStatusBadge task={task} />
+      {task !== null && <StageErrorNote message={task.error_message} />}
       {task !== null && task.status === 'paused' && (
         <PausedBlock taskId={task.id} onResume={onResume} />
       )}

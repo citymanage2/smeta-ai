@@ -109,6 +109,11 @@ def _build_card_response(
             created_at=task.created_at.isoformat(),
             input_files=files,
             progress_message=task.progress_message,
+            # Причина — только у упавших и отменённых: у успешной задачи в поле
+            # может лежать текст прошлой попытки, и он читался бы как новая беда.
+            error_message=(
+                task.error_message if task.status in ("failed", "cancelled") else None
+            ),
             progress_data=build_progress_summary(task.progress_data),
             eta=forecast.get(str(task.id)),
             cost=float(task.cost) if task.cost is not None else None,

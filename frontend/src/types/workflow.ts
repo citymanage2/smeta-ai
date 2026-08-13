@@ -55,6 +55,8 @@ export interface TaskBrief {
   created_at: string
   input_files: InputFileBrief[]
   progress_message: string | null
+  /** Причина падения — только у failed/cancelled (см. workflow_cards._task_brief). */
+  error_message?: string | null
   progress_data?: ProgressSummary | null
   /** Прогноз старта и готовности активной задачи (см. utils/eta). */
   eta?: TaskEta | null

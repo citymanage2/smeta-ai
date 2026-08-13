@@ -98,6 +98,29 @@ const ProjectCardPage: React.FC = () => {
     }
   }, [card, stageFromUrl])
 
+  // Версия и вкладки живут в адресе рядом с этапом: скопированная ссылка
+  // должна открыть у коллеги ровно то, что видит отправитель. `replace`, чтобы
+  // переключение вкладок не забивало историю браузера.
+  //
+  // Объявлен до ранних `return` ниже: смета приходит из стора асинхронно, и
+  // хук, спрятанный за «пока грузится», на следующем рендере становится лишним
+  // — React роняет страницу целиком, и вместо сметы человек видит белый экран.
+  const handleEditorState = useCallback(
+    (state: { versionId: string | null; tab: string; sheet: string | null }) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (state.versionId) next.set('version', state.versionId)
+        else next.delete('version')
+        if (state.tab && state.tab !== 'all') next.set('tab', state.tab)
+        else next.delete('tab')
+        if (state.sheet) next.set('sheet', state.sheet)
+        else next.delete('sheet')
+        return next
+      }, { replace: true })
+    },
+    [setSearchParams],
+  )
+
   if (initialLoad && !card) {
     return (
       <Layout>
@@ -127,25 +150,6 @@ const ProjectCardPage: React.FC = () => {
   const guard = computeGuard(card, stageForContent)
   const showSoft =
     guard.blockType === 'soft' && !stageTask(card, stageForContent) && !softDismissed
-
-  // Версия и вкладки живут в адресе рядом с этапом: скопированная ссылка
-  // должна открыть у коллеги ровно то, что видит отправитель. `replace`, чтобы
-  // переключение вкладок не забивало историю браузера.
-  const handleEditorState = useCallback(
-    (state: { versionId: string | null; tab: string; sheet: string | null }) => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev)
-        if (state.versionId) next.set('version', state.versionId)
-        else next.delete('version')
-        if (state.tab && state.tab !== 'all') next.set('tab', state.tab)
-        else next.delete('tab')
-        if (state.sheet) next.set('sheet', state.sheet)
-        else next.delete('sheet')
-        return next
-      }, { replace: true })
-    },
-    [setSearchParams],
-  )
 
   const handleSelect = (stage: KanbanStage) => {
     setSelectedStage(stage)

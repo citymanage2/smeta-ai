@@ -41,6 +41,10 @@ class TaskBrief(BaseModel):
     created_at: str
     input_files: list[InputFileBrief] = []
     progress_message: Optional[str] = None
+    # Причина падения задачи. Едет вместе со статусом: «Ошибка» без объяснения
+    # заставляет открывать смету ради одной строки, а иногда и не заставляет —
+    # человек просто жмёт «Повторить» и получает ту же ошибку.
+    error_message: Optional[str] = None
     # Сумма сформированной сметы в рублях (task.cost). Не путать с cost_usd
     # в usage — то стоимость запросов к ИИ, это деньги заказчика.
     cost: Optional[float] = None

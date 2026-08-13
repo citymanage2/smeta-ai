@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Play, RotateCw } from 'lucide-react';
 import { TaskStatusResponse, getTaskStatus, restartTask, resumeTask } from '../../api/tasks';
-import { formatApiDetail, formatTaskError } from '../../utils/formatError';
+import { formatApiDetail } from '../../utils/formatError';
+import { StageErrorNote } from '../kanban/StageErrorNote';
 import { describeEta } from '../../utils/eta';
 import { LumaSpin } from '../ui/LumaSpin';
 import './StageProcessingPanel.css';
@@ -145,9 +146,11 @@ export const StageProcessingPanel: React.FC<Props> = ({ taskId, onChanged }) => 
 
       {expanded && (
         <div className="spp-body">
-          {task.error_message && (
-            <div className="spp-error">{formatTaskError(task.error_message)}</div>
-          )}
+          {/* Причина — тем же блоком, что и в списке смет: понятный текст плюс
+              технический оригинал под «Подробности», иначе переслать
+              разработчику нечего. */}
+          <StageErrorNote message={task.error_message} />
+
 
           {log.length > 0 ? (
             <ol className="spp-log">
