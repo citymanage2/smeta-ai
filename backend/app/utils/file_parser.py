@@ -21,10 +21,15 @@ _QTY_KEYWORDS = ["колич", "объем", "объём", "кол-во", "ко�
 # Ключевое слово для колонки "всего с учётом коэффициентов" (итоговое кол-во)
 _QTY_TOTAL_KEYWORDS = ["всего с учет", "всего с коэф"]
 
-# Слова в строке-наименовании, указывающие на итоговую/служебную строку (пропускаем)
+# Слова в строке-наименовании, указывающие на итоговую/служебную строку (пропускаем).
+# Каждое — целое слово: без границы слева «сп» совпадало внутри «исп.» (сокращение
+# «исполнение»), и позиция ЛСР «Контроллер … Панель-2-ПРО (S3) исп.Л» выбрасывалась
+# ещё до отправки чанка в Claude — вместе со всем оборудованием ОПС и автоматики
+# (plans/2026-08-14-propusk-pozicij-iz-grand-smety.md).
 _TOTAL_KEYWORDS = re.compile(
-    r"итого|всего|в том числе|накладные|сметная прибыль|нр\b|сп\b|зп\b|"
-    r"поправочн|индекс|лимитир|непредвиден|ндс|налог|фот\b",
+    r"\bитого\b|\bвсего\b|\bв том числе\b|\bнакладн\S*\s+расход|\bсметн\S*\s+прибыл|"
+    r"\bнр\b|\bсп\b|\bзп\b|\bпоправочн|\bиндекс|\bлимитир|\bнепредвиден|"
+    r"\bндс\b|\bналог|\bфот\b",
     re.IGNORECASE,
 )
 
@@ -33,8 +38,9 @@ _LABOR_ROW = re.compile(r"^[3з]\s*[тТ][мМ]?\s*$", re.IGNORECASE)
 # Одиночные цифры 1-15 (строка с номерами колонок в заголовке Гранд-Сметы)
 _COLNUM_ROW = re.compile(r"^\d{1,2}$")
 # Составляющие затрат Гранд-Сметы: «1 ОТ», «2 ЭМ», «3 в т.ч. ОТм», «4 М» и аналогичные
-# (номер + аббревиатура или номер + «в т.ч.»)
-_COMPONENT_ROW = re.compile(r"^\d+\s+(ОТ|ЭМ|М|ОТм|в т\.ч\.)", re.IGNORECASE)
+# (номер + аббревиатура или номер + «в т.ч.»). Аббревиатура — целое слово: иначе
+# «12 Модуль управления» читалось бы как «12 М».
+_COMPONENT_ROW = re.compile(r"^\d+\s+(?:ОТм|ОТ|ЭМ|М)\b|^\d+\s+в т\.ч\.", re.IGNORECASE)
 # Нормативные коды расценок (ФЕР, ТЕР, ГЭСН и т.п.) — строки-наименования позиций
 _NORM_CODE = re.compile(r"^(фер|тер|гэсн|фсн|фснб|пр/|ерер|гэснр|фсем)", re.IGNORECASE)
 # Заголовки разделов/глав сметы.
@@ -47,7 +53,10 @@ _SECTION_HEADER = re.compile(r"^(раздел|подраздел|глава)\s",
 # Всё, что раскрыто внутри расценки (ОТ/ЭМ/М, ресурсы «Н» и «П,Н», ЗТ, Итого,
 # НР/СП, Всего по позиции), номера не имеет — это и отличает позицию от её
 # внутренностей.
-_POSITION_NO = re.compile(r"^\d+(?:[.,]\d+)*\s*[а-яa-z]?$", re.IGNORECASE)
+# Отделённая пробелом или переносом буква — не часть номера, а пометка типа
+# позиции («О» — оборудование): в ячейке ГРАНД-Сметы лежит «3\nО», а в перечень
+# должно уехать «3».
+_POSITION_NO = re.compile(r"^(\d+(?:[.,]\d+)*[а-яa-z]?)(?:\s+[а-яa-z]{1,3})?$", re.IGNORECASE)
 # Минимум пронумерованных строк, при котором нумерации на листе можно доверять
 _MIN_NUMBERED_ROWS = 2
 
@@ -174,6 +183,19 @@ def _is_total_row(name: str) -> bool:
     return bool(_TOTAL_KEYWORDS.search(name))
 
 
+def _position_number(row, num_col: Optional[int]) -> str:
+    """Номер позиции из «№ п/п» — или пусто, если номера в ячейке нет.
+
+    Пометка типа позиции («О» — оборудование) печатается под номером, и в ячейке
+    оказывается «3\\nО». Номер — только цифровая часть: по нему менеджер сверяет
+    перечень с исходной сметой.
+    """
+    if num_col is None or num_col >= len(row) or row[num_col] is None:
+        return ""
+    match = _POSITION_NO.match(str(row[num_col]).strip())
+    return match.group(1) if match else ""
+
+
 def _parse_quantity(value) -> Optional[float]:
     """Преобразуем значение ячейки в число или None."""
     if value is None:
@@ -187,8 +209,19 @@ def _parse_quantity(value) -> Optional[float]:
 
 
 def _is_trash_row(name: str) -> bool:
-    """True для мусорных строк Гранд-Сметы: нормо-часы, номера колонок, составляющие затрат."""
-    return bool(_LABOR_ROW.match(name) or _COLNUM_ROW.match(name) or _COMPONENT_ROW.match(name))
+    """True для строк, которые позицией сметы не бывают никогда.
+
+    Нормо-часы («ЗТ», «ЗТМ») и строка с номерами колонок («1», «2», …) — служебная
+    разметка листа. У строки номеров колонок есть и «номер», и «единица», и
+    «объём» — цифры соседних колонок, — поэтому её отбрасывание ничем смягчать
+    нельзя: иначе она уедет в перечень позицией с именем «3».
+    """
+    return bool(_LABOR_ROW.match(name) or _COLNUM_ROW.match(name))
+
+
+def _is_component_row(name: str) -> bool:
+    """True для составляющих затрат расценки: «1 ОТ», «2 ЭМ», «3 в т.ч. ОТм», «4 М»."""
+    return bool(_COMPONENT_ROW.match(name))
 
 
 def _parse_grand_sheet(ws) -> "list[dict]":
@@ -229,11 +262,6 @@ def _parse_grand_sheet(ws) -> "list[dict]":
                 )
             continue
 
-        if _is_total_row(name):
-            continue
-        if _is_trash_row(name):
-            continue
-
         # Заголовки разделов: нет единицы и количества, текст похож на раздел
         unit = cells[unit_col] if unit_col is not None and unit_col < len(cells) else ""
         unit = unit if unit != "None" else ""
@@ -249,11 +277,23 @@ def _parse_grand_sheet(ws) -> "list[dict]":
         if unit_lower in ("челч", "чч", "мчч", "машч"):
             continue
 
+        if _is_trash_row(name):
+            continue
+
+        row_no = _position_number(row, num_col)
+        numbered = bool(row_no)
+
+        # Пронумерованная позиция с единицей и объёмом итоговой строкой не бывает:
+        # у «Итого», «Всего по позиции», НР/СП и ФОТ номера нет. Поэтому наименование
+        # позиции может ссылаться на свод правил («по СП 484.1311500») или содержать
+        # «в том числе» — фильтр служебных строк её не касается.
+        if not (numbered and unit and qty is not None):
+            if _is_total_row(name) or _is_component_row(name):
+                continue
+
         # Заголовок раздела не имеет ни единицы измерения, ни объёма.
         # Строка с ними — позиция сметы, как бы она ни называлась.
         is_section = bool(_SECTION_HEADER.match(name)) and not unit and qty is None
-        row_no = str(row[num_col]).strip() if num_col is not None and num_col < len(row) and row[num_col] is not None else ""
-        numbered = bool(_POSITION_NO.match(row_no))
         rows.append(
             {
                 "name": name,
@@ -307,7 +347,7 @@ def _parse_grand_sheet_fallback(ws) -> "list[dict]":
         if not non_empty:
             continue
         name = non_empty[0]
-        if _is_total_row(name) or _is_trash_row(name):
+        if _is_total_row(name) or _is_trash_row(name) or _is_component_row(name):
             continue
         # Шапку не нашли — колонку «№ п/п» тем более: номера у таких строк нет.
         rows.append({"name": name, "unit": "", "quantity": None,

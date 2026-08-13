@@ -39,7 +39,7 @@ from app.utils.pdf_ocr_extractor import (
 )
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
-from app.utils.source_numbers import attach_source_numbers
+from app.utils.source_numbers import attach_source_numbers, lost_positions_warning
 from app.utils.unit_normalizer import normalize_items
 from app.utils.unit_compat import (
     STATUS_CONVERTED,
@@ -1840,6 +1840,25 @@ class TaskProcessor:
             slot=f"partial_{chunk_idx}",
         )
 
+    async def _warn_about_lost_positions(self, lost_numbers: list) -> None:
+        """Сказать вслух, какие позиции исходной сметы ИИ не вернул.
+
+        Неполный перечень — финансовый риск на тендере, а тихо он выглядит как
+        успешно выполненная задача. Восстанавливать позицию автоматически нельзя:
+        наименование пришлось бы брать из строки файла, и в перечне появилась бы
+        позиция, которой ИИ не давал ни типа, ни объёма.
+        """
+        warning = lost_positions_warning(lost_numbers)
+        if not warning:
+            return
+        await self.update_progress(warning)
+        logger.warning(
+            "AI did not return some source positions",
+            task_id=self.task_id,
+            lost=len(lost_numbers),
+            numbers=lost_numbers[:50],
+        )
+
     async def _handle_list_from_grand(self, task: Task) -> None:
         await self.update_progress("Анализ файла гранд-сметы...")
 
@@ -1870,6 +1889,9 @@ class TaskProcessor:
         start_chunk = progress_data.get("chunks_done", 0)
         accumulated_items: list = list(progress_data.get("items", []))
         partial_count: int = progress_data.get("partial_count", 0)
+        # Позиции ЛСР, которых ИИ не вернул: копятся по чанкам и переживают
+        # рестарт вместе с остальным прогрессом.
+        lost_numbers: list = list(progress_data.get("lost_source_no", []))
 
         # --- Парсим и разбиваем на чанки ---
         # openpyxl синхронный и на большом файле считается секундами. Прямо в
@@ -1916,6 +1938,7 @@ class TaskProcessor:
                             "total_chunks": total_chunks,
                             "items": accumulated_items,
                             "partial_count": partial_count,
+                            "lost_source_no": lost_numbers,
                         })
                         logger.info(
                             "Task cancelled by user, partial result saved",
@@ -1941,8 +1964,9 @@ class TaskProcessor:
                     # же получают позиции, которые ИИ собрал из этого чанка.
                     _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
                     # Номер позиции ЛСР через ИИ не гоняется: он сопоставляется
-                    # со строками этого же чанка по наименованию.
-                    attach_source_numbers(chunk_items, chunks[i])
+                    # со строками этого же чанка по наименованию. Строки без
+                    # пары — позиции, которых ИИ не вернул: о них предупреждаем.
+                    lost_numbers.extend(attach_source_numbers(chunk_items, chunks[i]))
                     accumulated_items.extend(chunk_items)
 
                     # Сохраняем прогресс после каждого успешного чанка
@@ -1951,6 +1975,7 @@ class TaskProcessor:
                         "total_chunks": total_chunks,
                         "items": accumulated_items,
                         "partial_count": partial_count,
+                        "lost_source_no": lost_numbers,
                     })
                     logger.info("Chunk processed", task_id=self.task_id, chunk=i + 1, total=total_chunks, items=len(chunk_items))
 
@@ -1974,6 +1999,7 @@ class TaskProcessor:
                             "total_chunks": total_chunks,
                             "items": accumulated_items,
                             "partial_count": partial_count,
+                            "lost_source_no": lost_numbers,
                         })
                         await self.update_progress(
                             f"Обработано {i} из {total_chunks} частей. Частичный результат сохранён."
@@ -2000,6 +2026,7 @@ class TaskProcessor:
             excel_data,
         )
         await self._create_initial_generic_version(excel_data, task.task_type, accumulated_items)
+        await self._warn_about_lost_positions(lost_numbers)
         logger.info("List from Grand task completed", task_id=self.task_id, items=len(accumulated_items), chunks=total_chunks)
 
     async def _handle_list_from_grand_pdf(self, task: Task, pdf_bytes: bytes) -> None:
@@ -2250,6 +2277,7 @@ class TaskProcessor:
         start_chunk = progress_data.get("chunks_done", 0)
         all_items: list = list(progress_data.get("items", []))
         changes_summary_parts: list = list(progress_data.get("summaries", []))
+        lost_numbers: list = list(progress_data.get("lost_source_no", []))
 
         chunks = _chunk_by_work_boundaries(items, max_chunk_size=25)
         total_chunks = len(chunks)
@@ -2297,7 +2325,9 @@ class TaskProcessor:
             # Номер позиции исходной сметы возвращается тем же способом, что и на
             # перечне: сопоставлением с позициями этого же чанка по наименованию.
             # Дописанный ИИ материал номера не получает — в смете его не было.
-            attach_source_numbers(chunk_items, chunks[i])
+            # Позиция перечня, которой ИИ не вернул, теряется так же тихо, как на
+            # перечне, — и точно так же не имеет права потеряться молча.
+            lost_numbers.extend(attach_source_numbers(chunk_items, chunks[i]))
             all_items.extend(chunk_items)
             summary = data.get("changes_summary", "")
             if summary:
@@ -2308,6 +2338,7 @@ class TaskProcessor:
                 "total_chunks": total_chunks,
                 "items": all_items,
                 "summaries": changes_summary_parts,
+                "lost_source_no": lost_numbers,
             })
 
         all_items = await self._apply_material_kits(all_items, changes_summary_parts, total_chunks)
@@ -2317,6 +2348,7 @@ class TaskProcessor:
         excel_data = await asyncio.to_thread(generate_list,all_items, changes_summary=changes_summary)
         await self.save_result(self._result_filename(task, "Проверка_полноты_ГЭСН.xlsx"), _XLSX_MIME, excel_data)
         await self._create_initial_generic_version(excel_data, task.task_type, all_items)
+        await self._warn_about_lost_positions(lost_numbers)
         logger.info(
             "Check completeness task completed",
             task_id=self.task_id,

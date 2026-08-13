@@ -22,6 +22,9 @@ SOURCE_NO_HEADER = "№ в исходной смете"
 # Наименование, короче которого совпадение по началу — совпадение случайное.
 _MIN_PREFIX_LEN = 15
 
+# Сколько номеров потерянных позиций показывать в предупреждении.
+_MAX_SHOWN_NUMBERS = 20
+
 _SPACES = re.compile(r"\s+")
 
 
@@ -79,11 +82,44 @@ def _by_prefix(entries: list, key: str):
     return found
 
 
-def attach_source_numbers(items: list, rows: list) -> None:
+def lost_positions_warning(numbers: list) -> str:
+    """Сообщение о позициях исходной сметы, которых ИИ не вернул. Пусто — если все.
+
+    Список номеров обрезается: строка статуса на сотню номеров нечитаема, а
+    масштаб потери виден по счёту.
+    """
+    numbers = [str(n).strip() for n in numbers or [] if str(n).strip()]
+    if not numbers:
+        return ""
+
+    shown = ", ".join(f"№{n}" for n in numbers[:_MAX_SHOWN_NUMBERS])
+    if len(numbers) > _MAX_SHOWN_NUMBERS:
+        shown += ", …"
+    return (
+        f"⚠ ИИ не вернул {len(numbers)} {_positions_word(len(numbers))} исходной сметы: "
+        f"{shown}. Проверьте их вручную — в перечне этих позиций нет."
+    )
+
+
+def _positions_word(count: int) -> str:
+    """«позицию» / «позиции» / «позиций» — по числу."""
+    tail, tens = count % 10, count % 100
+    if tail == 1 and tens != 11:
+        return "позицию"
+    if tail in (2, 3, 4) and tens not in (12, 13, 14):
+        return "позиции"
+    return "позиций"
+
+
+def attach_source_numbers(items: list, rows: list) -> list:
     """Проставить позициям `source_no` по строкам исходного файла. На месте.
 
     Позиции без пары поля не получают вовсе — колонка в перечне появляется,
     только если номер нашёлся хоть у кого-то.
+
+    Возвращает номера строк исходной сметы, которым пары среди позиций ИИ не
+    нашлось: это ровно те позиции, которые модель не вернула. Пустой список —
+    ничего не потеряно (или в файле нет нумерации, и сверять не с чем).
     """
     entries: list = []
     pool: dict = {}
@@ -98,7 +134,7 @@ def attach_source_numbers(items: list, rows: list) -> None:
         pool.setdefault(entry["key"], []).append(entry)
 
     if not entries:
-        return
+        return []
 
     for item in items or []:
         if not isinstance(item, dict):
@@ -111,3 +147,5 @@ def attach_source_numbers(items: list, rows: list) -> None:
             continue
         entry["used"] = True
         item["source_no"] = entry["no"]
+
+    return [entry["no"] for entry in entries if not entry["used"]]

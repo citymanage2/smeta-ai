@@ -87,10 +87,15 @@ export const StageProcessingPanel: React.FC<Props> = ({ taskId, onChanged }) => 
     return () => clearInterval(timer);
   }, [isActive]);
 
+  // Предупреждение обработчика («⚠ ИИ не вернул позиции…») — про неполный
+  // результат успешно завершённой задачи. Свёрнутая панель прячет его так же
+  // надёжно, как раньше прятался сам пропуск, поэтому разворачиваем.
+  const warning = (task?.progress_log ?? []).find((line) => line.startsWith('⚠')) ?? '';
+
   // Ошибку разворачиваем сразу: за ней и приходят.
   useEffect(() => {
-    if (isFailed || isPaused) setExpanded(true);
-  }, [isFailed, isPaused]);
+    if (isFailed || isPaused || warning) setExpanded(true);
+  }, [isFailed, isPaused, warning]);
 
   if (!task) return null;
 
