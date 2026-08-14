@@ -41,6 +41,8 @@ from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.source_numbers import attach_source_numbers, lost_positions_warning
 from app.utils.unit_normalizer import normalize_items
+from app.utils.item_contract import ensure_item_fields
+from app.utils.error_text import describe_exception
 from app.utils.unit_compat import (
     STATUS_CONVERTED,
     STATUS_INCOMPATIBLE,
@@ -1414,9 +1416,11 @@ class TaskProcessor:
         Ошибки чанка (кроме отмены/таймаута/баланса) поглощаются → [].
         Используется и основным проходом сметы, и добором после batch-режима.
         """
+        # Поля берём мягко: позиция родом из ответа ИИ, и отсутствующая единица
+        # не повод ронять этап — пустая единица для подбора цены допустима.
         unmatched_json = json.dumps(
-            [{"id": it["_id"], "type": it["type"], "name": it["name"],
-              "unit": it["unit"], "quantity": it.get("quantity")}
+            [{"id": it.get("_id"), "type": it.get("type", ""), "name": it.get("name", ""),
+              "unit": it.get("unit", ""), "quantity": it.get("quantity")}
              for it in chunk],
             ensure_ascii=False, indent=2,
         )
@@ -1570,9 +1574,10 @@ class TaskProcessor:
 
         requests = []
         for i, chunk in enumerate(chunks):
+            # Мягко — по той же причине, что и в `_fetch_price_chunk`.
             unmatched_json = json.dumps(
-                [{"id": it["_id"], "type": it["type"], "name": it["name"],
-                  "unit": it["unit"], "quantity": it.get("quantity")}
+                [{"id": it.get("_id"), "type": it.get("type", ""), "name": it.get("name", ""),
+                  "unit": it.get("unit", ""), "quantity": it.get("quantity")}
                  for it in chunk],
                 ensure_ascii=False, indent=2,
             )
@@ -1824,8 +1829,11 @@ class TaskProcessor:
                 await self.db.rollback()
             except Exception:
                 pass
-            await self.update_status("failed", error=str(e))
-            await self._report_stage_interrupted(f"Ошибка: {str(e)[:400]}")
+            # С типом исключения: «'unit'» в карточке сметы не объясняет ничего
+            # даже разработчику, «KeyError: 'unit'» — объясняет род ошибки.
+            described = describe_exception(e)
+            await self.update_status("failed", error=described)
+            await self._report_stage_interrupted(f"Ошибка: {described[:400]}")
         finally:
             stop_event.set()
             heartbeat_task.cancel()
@@ -1959,7 +1967,9 @@ class TaskProcessor:
                         system_prompt=SYSTEM_BASE,
                         use_web_search=False,
                     )
-                    chunk_items = data.get("items", [])
+                    # К контракту сразу: чего ИИ не вернул, того потребители
+                    # позиций не увидят как дырку (см. utils/item_contract).
+                    chunk_items = ensure_item_fields(data.get("items", []))
                     # Чанк целиком принадлежит одному листу исходного файла — его
                     # же получают позиции, которые ИИ собрал из этого чанка.
                     _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
@@ -2317,7 +2327,7 @@ class TaskProcessor:
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
-            chunk_items = data.get("items", [])
+            chunk_items = ensure_item_fields(data.get("items", []))
             # Проверка полноты дописывает недостающие материалы: у новых позиций
             # листа нет, и без разметки они ушли бы на первую вкладку — прочь от
             # работы, к которой относятся.
@@ -2449,7 +2459,7 @@ class TaskProcessor:
                     raise
                 continue
 
-            chunk_items = data.get("items", [])
+            chunk_items = ensure_item_fields(data.get("items", []))
             for item in chunk_items:
                 name_key = (item.get("name", "").strip().lower(), item.get("type", "").strip())
                 if name_key not in seen_names:
@@ -2631,7 +2641,7 @@ class TaskProcessor:
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
-            all_items.extend(data.get("items", []))
+            all_items.extend(ensure_item_fields(data.get("items", [])))
             summary = data.get("changes_summary", "")
             if summary:
                 changes_summary_parts.append(summary)
@@ -2674,7 +2684,10 @@ class TaskProcessor:
         _progress = task.progress_data or {}
         if _progress.get("_stage") == "pre_excel":
             await self.update_progress("Возобновление: данные Claude восстановлены из чекпоинта. Формирование Excel...")
-            _items_raw: list[dict] = _progress.get("items", [])
+            # Чекпоинт хранит позиции такими, какими они пришли из ответа ИИ —
+            # к контракту их приводим и здесь, иначе сборка сметы после
+            # возобновления спотыкается там же, где споткнулся расчёт цен.
+            _items_raw: list[dict] = ensure_item_fields(_progress.get("items", []))
             _matched_raw: dict = _progress.get("matched", {})
             _claude_raw: dict = _progress.get("claude_results", {})
             # JSON serializes int dict keys as strings — restore them
@@ -2751,7 +2764,13 @@ class TaskProcessor:
         # Позиции — свои: по Path B список приходит прямо из `progress_data`
         # задачи-перечня, а расчёт дописывает в строки причину, по которой цена
         # не подошла. Без копии эта пометка легла бы в чужую задачу.
-        items = [dict(item) if isinstance(item, dict) else item for item in items]
+        #
+        # И сразу к контракту: позиции пришли из ответа ИИ, а он поле «unit»
+        # иногда не возвращает вовсе. Без этой строки одна дырявая позиция
+        # роняла расчёт цен целиком — на середине, уже оплаченными чанками.
+        items = ensure_item_fields(
+            [dict(item) if isinstance(item, dict) else item for item in items]
+        )
 
         # ── Шаг 1: Поиск цен по прайсу ─────────────────────────────────────
         await self.update_progress(f"Поиск цен для {len(items)} позиций по корпоративному прайсу...")
