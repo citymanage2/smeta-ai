@@ -42,6 +42,7 @@ from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD, TASK_TYPE_TO_
 from app.models.workflow_card import WorkflowCard
 from app.utils.xlsx_cost_parser import extract_total_cost
 from app.utils.price_coercion import coerce_price, is_negative_qty
+from app.utils.error_text import describe_exception
 from app.utils.unit_compat import append_note, prices_for_unit
 
 logger = structlog.get_logger()
@@ -1741,7 +1742,9 @@ async def _run_optimization_background(
                 task = await db.get(Task, task_id)
                 if task:
                     task.status = "failed"
-                    task.error_message = str(e)
+                    # С типом исключения: str(KeyError('unit')) — это «'unit'»,
+                    # и ровно это стояло в журнале ошибок вместо причины.
+                    task.error_message = describe_exception(e)
                     await db.commit()
             except Exception:
                 pass

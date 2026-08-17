@@ -1,6 +1,7 @@
 import { toast } from 'sonner';
 import { NavigateFunction } from 'react-router-dom';
 import { playSuccess, playError } from './notificationSound';
+import { shortTaskError } from './formatError';
 
 export interface TaskInfo {
   taskId: string;
@@ -44,7 +45,8 @@ export function notify(
     });
   } else {
     playError();
-    const errorText = taskInfo.errorText ?? 'Неизвестная ошибка';
+    // Не сырой текст исключения: «'unit'» в уведомлении ничего не сообщает.
+    const errorText = shortTaskError(taskInfo.errorText);
     const label = `✗ Ошибка: ${errorText} · ${taskInfo.taskName}`;
     toast.error(label, {
       duration: 6000,

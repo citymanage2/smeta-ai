@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { FailedTaskGroup } from '../../api/dashboard';
 import { resumeTask } from '../../api/tasks';
 import { ChevronRight } from 'lucide-react';
+import { formatTaskError } from '../../utils/formatError';
+import StageErrorNote from '../kanban/StageErrorNote';
 
 const TASK_TYPE_LABELS: Record<string, string> = {
   LIST_FROM_GRAND: 'Перечень из Гранд-сметы',
@@ -33,8 +35,35 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [resuming, setResuming] = useState<Set<string>>(new Set());
 
-  const cutoff = Date.now() - parseInt(period) * 86_400_000;
-  const filtered = groups.filter((g) => new Date(g.last_failed_at).getTime() >= cutoff);
+  // Бэкенд группирует по техническому тексту — он же ключ диагностики. Человеку
+  // нужна причина: «KeyError: 'unit'» и голое «'unit'» — одна и та же беда, и в
+  // журнале это одна строка со счётчиком, а не два одинаковых заголовка.
+  const causes = useMemo(() => {
+    const cutoff = Date.now() - parseInt(period) * 86_400_000;
+    const filtered = groups.filter((g) => new Date(g.last_failed_at).getTime() >= cutoff);
+    const byCause = new Map<string, FailedTaskGroup>();
+    for (const g of filtered) {
+      const cause = formatTaskError(g.pattern);
+      const key = `${cause}::${g.task_type}`;
+      const merged = byCause.get(key);
+      if (!merged) {
+        byCause.set(key, { ...g, pattern: cause, tasks: [...g.tasks] });
+        continue;
+      }
+      merged.count += g.count;
+      merged.tasks.push(...g.tasks);
+      if (new Date(g.last_failed_at) > new Date(merged.last_failed_at)) {
+        merged.last_failed_at = g.last_failed_at;
+      }
+    }
+    const list = [...byCause.values()];
+    for (const g of list) {
+      g.tasks.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    }
+    return list.sort(
+      (a, b) => new Date(b.last_failed_at).getTime() - new Date(a.last_failed_at).getTime()
+    );
+  }, [groups, period]);
 
   function toggle(key: string) {
     setExpanded((prev) => {
@@ -67,7 +96,7 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <h2 style={{ fontSize: 15, fontWeight: 600, color: '#374151', margin: 0 }}>
           Журнал ошибок
-          {filtered.length > 0 && (
+          {causes.length > 0 && (
             <span
               style={{
                 marginLeft: 8,
@@ -79,7 +108,7 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
                 padding: '2px 8px',
               }}
             >
-              {filtered.reduce((s, g) => s + g.count, 0)}
+              {causes.reduce((s, g) => s + g.count, 0)}
             </span>
           )}
         </h2>
@@ -106,7 +135,7 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
         </div>
       </div>
 
-      {filtered.length === 0 ? (
+      {causes.length === 0 ? (
         <div
           style={{
             padding: '24px',
@@ -122,7 +151,7 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {filtered.map((group) => {
+          {causes.map((group) => {
             const key = `${group.pattern}::${group.task_type}`;
             const isOpen = expanded.has(key);
             return (
@@ -146,7 +175,22 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
                     color="#dc2626"
                     style={{ transform: isOpen ? 'rotate(90deg)' : undefined, transition: 'transform 0.15s', flexShrink: 0 }}
                   />
-                  <span style={{ fontSize: 13, color: '#dc2626', fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {/* Причина занимает до двух строк: одной строкой с многоточием
+                      от объяснения оставался бы обрубок «Внутренняя ошибка…». */}
+                  <span
+                    style={{
+                      fontSize: 13,
+                      color: '#dc2626',
+                      fontWeight: 600,
+                      flex: 1,
+                      minWidth: 0,
+                      lineHeight: 1.4,
+                      display: '-webkit-box',
+                      WebkitBoxOrient: 'vertical',
+                      WebkitLineClamp: 2,
+                      overflow: 'hidden',
+                    }}
+                  >
                     {group.pattern}
                   </span>
                   <span style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
@@ -188,21 +232,13 @@ const DashboardErrors: React.FC<Props> = ({ groups, onResume }) => {
                             <div style={{ color: '#64748b', marginBottom: 4 }}>
                               {formatDate(task.created_at)} · {TASK_TYPE_LABELS[task.task_type] ?? task.task_type}
                             </div>
-                            <div
-                              style={{
-                                fontFamily: 'monospace',
-                                fontSize: 11,
-                                backgroundColor: '#fef2f2',
-                                borderRadius: 4,
-                                padding: '6px 8px',
-                                color: '#7f1d1d',
-                                wordBreak: 'break-all',
-                                maxHeight: 80,
-                                overflow: 'auto',
-                              }}
-                            >
-                              {task.error_message ?? '—'}
-                            </div>
+                            {/* Тот же блок, что в карточке сметы и на доске:
+                                причина словами, технический оригинал — под
+                                «Подробности». */}
+                            {/* Пустая причина — не пустое место: задача в журнале
+                                есть, и человек должен знать, что причина не
+                                записана, а не смотреть на одну дату. */}
+                            <StageErrorNote message={task.error_message || formatTaskError(null)} />
                           </div>
                           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                             <button
