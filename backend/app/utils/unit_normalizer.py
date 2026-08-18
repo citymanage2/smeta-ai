@@ -43,9 +43,6 @@ _UNIT_ALIASES = {
     "тыс": "тыс", "%": "%",
 }
 
-_CANONICAL_UNITS = set(_UNIT_ALIASES.values())
-
-
 def _squeeze(unit: str) -> str:
     """Сжать написание до сравнимого вида: «кв. м» и «м.кв.» → «квм» и «мкв»."""
     text = unit.strip().lower().replace("ё", "е")
@@ -67,6 +64,71 @@ def canonical_unit(unit: Optional[str]) -> str:
     return _UNIT_ALIASES.get(squeezed, str(unit).strip())
 
 
+_DIGIT_RE = re.compile(r'\d')
+
+
+def _exact_unit(text: str) -> Optional[str]:
+    """Запись целиком — единица? «кв.м» → «м2», «т·км» → «т·км», «бухта» → None."""
+    raw = str(text).strip()
+    if not raw:
+        return None
+    alias = _UNIT_ALIASES.get(_squeeze(raw))
+    if alias:
+        return alias
+    if raw in _KNOWN_UNITS:
+        return raw
+    return None
+
+
+def base_unit(unit: Optional[str]) -> Optional[str]:
+    """Единица из записи с уточнением: «м3 грунта» → «м3», «т груза» → «т».
+
+    В гранд-смете единица расценки почти всегда с хвостом: «1000 м3 грунта»,
+    «100 м3 материала основания», «1000 м2 поверхности», «1 т груза». Хвост
+    говорит, *что* измеряют, а не *чем*, — но пока он не отброшен, запись не
+    единица ни для кого: кратность не переводится (объём остаётся 2,164 вместо
+    2164), а цена из прайса за «м3» к позиции не подходит.
+
+    Хвост принимается только буквенный. В «100 м2 в 2 слоя» цифра может
+    оказаться частью единицы, и угадать тут дороже, чем промолчать. Не
+    единица — None: «бухта» остаётся бухтой.
+    """
+    if not unit:
+        return None
+
+    raw = str(unit).strip()
+    whole = _exact_unit(raw)
+    if whole is not None:
+        return whole
+
+    parts = raw.split(None, 1)
+    if len(parts) != 2:
+        return None
+    head, tail = parts[0], parts[1].strip()
+    if not tail or _DIGIT_RE.search(tail) or not any(ch.isalpha() for ch in tail):
+        return None
+    return _exact_unit(head)
+
+
+def _split_multiplier(unit: str) -> "tuple[Optional[str], float]":
+    """«1000 м3 грунта» → («м3», 1000,0). Запись не разобрали — (None, 1,0)."""
+    text = str(unit).strip()
+    match = _PREFIX_SPACE_RE.match(text) or _PREFIX_NOSPACE_RE.match(text)
+    if not match:
+        return (base_unit(text), 1.0)
+
+    base = base_unit(match.group(2))
+    try:
+        prefix = float(match.group(1).replace(",", "."))
+    except ValueError:
+        prefix = 0.0
+    # Множитель применяем только к понятной единице: «2 слоя» — это не
+    # «2 × слой», а название единицы, и делить цену на 2 там нельзя.
+    if base is not None and prefix > 0:
+        return (base, prefix)
+    return (None, 1.0)
+
+
 def unit_price_factor(unit: Optional[str]) -> "tuple[str, float]":
     """Единица с множителем → (единица, во сколько раз цена больше базовой).
 
@@ -77,17 +139,9 @@ def unit_price_factor(unit: Optional[str]) -> "tuple[str, float]":
         return ("", 1.0)
 
     text = str(unit).strip()
-    match = _PREFIX_SPACE_RE.match(text) or _PREFIX_NOSPACE_RE.match(text)
-    if match:
-        base = canonical_unit(match.group(2))
-        try:
-            prefix = float(match.group(1).replace(",", "."))
-        except ValueError:
-            prefix = 0.0
-        # Множитель применяем только к понятной единице: «2 слоя» — это не
-        # «2 × слой», а название единицы, и делить цену на 2 там нельзя.
-        if prefix > 0 and base in _CANONICAL_UNITS:
-            return (base, prefix)
+    base, prefix = _split_multiplier(text)
+    if base is not None:
+        return (base, prefix)
 
     return (canonical_unit(text), 1.0)
 
@@ -98,7 +152,8 @@ def normalize_unit_quantity(
 ) -> tuple[str, float | None, bool]:
     """
     Возвращает (new_unit, new_quantity, was_changed).
-    Пример: ("100 м2", 0.1) → ("м2", 10.0, True)
+    Примеры: ("100 м2", 0.1) → ("м2", 10.0, True),
+             ("1000 м3 грунта", 2.164) → ("м3", 2164.0, True).
     """
     if not unit:
         return (unit or "", quantity, False)
@@ -110,25 +165,28 @@ def normalize_unit_quantity(
         return (unit, quantity, False)
 
     prefix_str = m.group(1).replace(',', '.')
-    base_unit = m.group(2).strip()
+    # Единица расценки идёт с уточнением («м3 грунта», «т груза») — оно
+    # отбрасывается, иначе кратность так и остаётся в подписи, а объём в
+    # тысячах кубов: см. base_unit.
+    base = base_unit(m.group(2))
 
-    if not base_unit or base_unit not in _KNOWN_UNITS:
+    if base is None:
         return (unit, quantity, False)
 
     prefix = float(prefix_str)
     if prefix <= 0:
         return (unit, quantity, False)
     if prefix == 1.0:
-        return (base_unit, quantity, True)
+        return (base, quantity, True)
 
     if quantity is None:
-        return (base_unit, None, True)
+        return (base, None, True)
     try:
         qty_float = float(quantity)
     except (TypeError, ValueError):
         return (unit, quantity, False)
     new_qty = round(qty_float * prefix, 6)
-    return (base_unit, new_qty, True)
+    return (base, new_qty, True)
 
 
 def normalize_items(items: list[dict]) -> list[dict]:
@@ -138,6 +196,9 @@ def normalize_items(items: list[dict]) -> list[dict]:
     """
     result = []
     for item in items:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
         new_item = dict(item)
         unit = item.get("unit") or ""
         qty = item.get("quantity")

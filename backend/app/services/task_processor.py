@@ -2277,7 +2277,12 @@ class TaskProcessor:
         if source_task.task_type.upper() != "LIST_FROM_GRAND":
             raise ValueError("Исходная задача должна быть типа LIST_FROM_GRAND")
 
-        items = (source_task.progress_data or {}).get("items", [])
+        # Позиции чужой задачи — к контракту и к понятной единице: перечни,
+        # посчитанные до разбора уточнений («1000 м3 грунта»), лежат в базе с
+        # объёмом в тысячах кубов, и нормы расхода посчитались бы по нему.
+        items = self._prepare_source_items(
+            (source_task.progress_data or {}).get("items", [])
+        )
         if not items:
             raise ValueError("В исходной задаче нет перечня позиций")
 
@@ -2597,7 +2602,12 @@ class TaskProcessor:
         if source_task.task_type.upper() != "LIST_FROM_PROJECT":
             raise ValueError("Исходная задача должна быть типа LIST_FROM_PROJECT")
 
-        items = (source_task.progress_data or {}).get("items", [])
+        # Позиции чужой задачи — к контракту и к понятной единице: перечни,
+        # посчитанные до разбора уточнений («1000 м3 грунта»), лежат в базе с
+        # объёмом в тысячах кубов, и нормы расхода посчитались бы по нему.
+        items = self._prepare_source_items(
+            (source_task.progress_data or {}).get("items", [])
+        )
         if not items:
             raise ValueError("В исходной задаче нет перечня позиций")
 
@@ -2667,6 +2677,30 @@ class TaskProcessor:
             items=len(all_items),
             chunks=total_chunks,
         )
+
+    @staticmethod
+    def _prepare_source_items(items: list) -> list:
+        """Чужие позиции — к контракту и к понятной единице, прежде чем считать.
+
+        Полнота и смета читают позиции чужой задачи прямо из её
+        `progress_data`, а дальше дописывают в строки свои пометки — причину,
+        по которой цена не подошла, расхождение объёма. Без копии эти пометки
+        легли бы в чужую задачу.
+
+        Контракт: позиции пришли из ответа ИИ, а он поле «unit» иногда не
+        возвращает вовсе. Без этого одна дырявая позиция роняла расчёт цен
+        целиком — на середине, уже оплаченными чанками.
+
+        Кратность: «1000 м3 грунта» с объёмом 2,164 — это 2164 м3, а не 2,164.
+        Пока единица не разобрана, цена за «м3» к позиции не подходит по
+        природе величины, и стоимость расходится в тысячу раз. Перечни,
+        посчитанные до того, как нормализатор научился отбрасывать уточнение
+        («м3 грунта», «т груза»), лежат в базе как есть — смета чинит их
+        при расчёте.
+        """
+        return normalize_items(ensure_item_fields(
+            [dict(item) if isinstance(item, dict) else item for item in items]
+        ))
 
     async def _handle_estimate_from_list(self, task: Task) -> None:
         """
@@ -2761,16 +2795,7 @@ class TaskProcessor:
             items = parse_list_sheet(excel_bytes)
             logger.info("Parsed list sheet", task_id=self.task_id, items=len(items))
 
-        # Позиции — свои: по Path B список приходит прямо из `progress_data`
-        # задачи-перечня, а расчёт дописывает в строки причину, по которой цена
-        # не подошла. Без копии эта пометка легла бы в чужую задачу.
-        #
-        # И сразу к контракту: позиции пришли из ответа ИИ, а он поле «unit»
-        # иногда не возвращает вовсе. Без этой строки одна дырявая позиция
-        # роняла расчёт цен целиком — на середине, уже оплаченными чанками.
-        items = ensure_item_fields(
-            [dict(item) if isinstance(item, dict) else item for item in items]
-        )
+        items = self._prepare_source_items(items)
 
         # ── Шаг 1: Поиск цен по прайсу ─────────────────────────────────────
         await self.update_progress(f"Поиск цен для {len(items)} позиций по корпоративному прайсу...")
