@@ -27,7 +27,13 @@ from app.services.estimate_parser import parse_estimate_excel
 from app.constants import ESTIMATE_TASK_TYPES, TERMINAL_TASK_STATUSES
 from app.services.material_kits import expand_completeness_items
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
-from app.utils.file_parser import parse_file, parse_xlsx_grand, chunk_rows, rows_to_text
+from app.utils.file_parser import (
+    parse_file,
+    parse_xlsx_grand,
+    chunk_rows,
+    rows_to_text,
+    split_chunk_in_half,
+)
 from app.utils.price_coercion import coerce_price, is_negative_qty
 from app.utils.sheet_names import group_by_sheet, sheet_of
 from app.utils.pdf_text_extractor import chunk_project_pdf
@@ -35,6 +41,7 @@ from app.utils.pdf_ocr_extractor import (
     chunk_pdf_pages,
     extract_single_page,
     get_pdf_page_count,
+    split_pdf_chunk,
     timed_out_page_numbers,
 )
 from app.utils.json_utils import extract_json
@@ -1867,6 +1874,101 @@ class TaskProcessor:
             numbers=lost_numbers[:50],
         )
 
+    async def _list_grand_rows(self, rows: list, label: str) -> tuple[list, list]:
+        """Строки чанка гранд-сметы → позиции перечня и номера потерянных позиций.
+
+        Ответ по перечню длиннее входа: каждая расценка разворачивается в блок
+        «работа + её материалы», поэтому плотный чанк упирается в лимит ответа
+        и приходит оборванным (`ResponseTruncatedError`). Повторять тот же
+        запрос бессмысленно и дорого — режем чанк пополам, как это давно делает
+        смета (`_fetch_price_chunk`). Раньше оборванный ответ ронял всю стадию.
+
+        Лист и номера позиций ЛСР считаются для той половины, которую реально
+        отправили: иначе половина позиций уехала бы на чужую вкладку, а номера
+        сопоставились бы со строками, которых в запросе не было.
+        """
+        chunk_text = rows_to_text(rows)
+        messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND}"}]
+
+        try:
+            data = await self._call_claude_json_with_retry(
+                messages,
+                system_prompt=SYSTEM_BASE,
+                use_web_search=False,
+            )
+        except ResponseTruncatedError:
+            halves = split_chunk_in_half(rows)
+            if halves is None:
+                # Дно: одна строка, а ответ по ней всё равно не поместился.
+                # Выдумывать позицию нельзя — объявляем её потерянной, и её
+                # номер попадёт в предупреждение по итогам стадии.
+                logger.warning(
+                    "Single row response truncated in list stage, skipping",
+                    task_id=self.task_id,
+                    chunk_label=label,
+                    name=(rows[0].get("name") if rows else None),
+                )
+                return [], attach_source_numbers([], rows)
+
+            logger.warning(
+                "List chunk response truncated, splitting in half",
+                task_id=self.task_id,
+                chunk_label=label,
+                size=len(rows),
+            )
+            left_items, left_lost = await self._list_grand_rows(halves[0], f"{label}a")
+            right_items, right_lost = await self._list_grand_rows(halves[1], f"{label}b")
+            return left_items + right_items, left_lost + right_lost
+
+        # К контракту сразу: чего ИИ не вернул, того потребители позиций не
+        # увидят как дырку (см. utils/item_contract).
+        items = ensure_item_fields(data.get("items", []))
+        # Чанк целиком принадлежит одному листу исходного файла — его же
+        # получают позиции, которые ИИ собрал из этого чанка.
+        _tag_sheet(items, _chunk_sheet(rows))
+        # Номер позиции ЛСР через ИИ не гоняется: он сопоставляется со строками
+        # этого же чанка по наименованию. Строки без пары — позиции, которых ИИ
+        # не вернул: о них предупреждаем.
+        return items, attach_source_numbers(items, rows)
+
+    async def _list_grand_pdf_chunk(self, chunk_text: str, label: str) -> list:
+        """Текстовый чанк PDF → позиции перечня. Оборванный ответ — делим по страницам."""
+        messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND_PDF}"}]
+
+        try:
+            data = await self._call_claude_json_with_retry(
+                messages,
+                system_prompt=SYSTEM_BASE,
+                use_web_search=False,
+            )
+        except ResponseTruncatedError:
+            halves = split_pdf_chunk(chunk_text)
+            if halves is None:
+                # Дно: одна страница, ответ по ней не помещается. Позиции этой
+                # страницы в перечень не попадут — говорим об этом вслух, тихая
+                # потеря страницы на тендере дороже лишнего сообщения.
+                logger.warning(
+                    "Single PDF page response truncated, skipping",
+                    task_id=self.task_id,
+                    chunk_label=label,
+                )
+                await self.update_progress(
+                    f"⚠ Часть {label}: ответ ИИ не поместился даже по одной странице — "
+                    f"позиции этой страницы в перечень не попали, проверьте её вручную."
+                )
+                return []
+
+            logger.warning(
+                "PDF list chunk response truncated, splitting in half",
+                task_id=self.task_id,
+                chunk_label=label,
+            )
+            left = await self._list_grand_pdf_chunk(halves[0], f"{label}a")
+            right = await self._list_grand_pdf_chunk(halves[1], f"{label}b")
+            return left + right
+
+        return data.get("items", [])
+
     async def _handle_list_from_grand(self, task: Task) -> None:
         await self.update_progress("Анализ файла гранд-сметы...")
 
@@ -1958,25 +2060,11 @@ class TaskProcessor:
 
                 await self.update_progress(f"Обрабатывается часть {i + 1} из {total_chunks}...")
 
-                chunk_text = rows_to_text(chunks[i])
-                messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND}"}]
-
                 try:
-                    data = await self._call_claude_json_with_retry(
-                        messages,
-                        system_prompt=SYSTEM_BASE,
-                        use_web_search=False,
+                    chunk_items, chunk_lost = await self._list_grand_rows(
+                        chunks[i], f"{i + 1}/{total_chunks}"
                     )
-                    # К контракту сразу: чего ИИ не вернул, того потребители
-                    # позиций не увидят как дырку (см. utils/item_contract).
-                    chunk_items = ensure_item_fields(data.get("items", []))
-                    # Чанк целиком принадлежит одному листу исходного файла — его
-                    # же получают позиции, которые ИИ собрал из этого чанка.
-                    _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
-                    # Номер позиции ЛСР через ИИ не гоняется: он сопоставляется
-                    # со строками этого же чанка по наименованию. Строки без
-                    # пары — позиции, которых ИИ не вернул: о них предупреждаем.
-                    lost_numbers.extend(attach_source_numbers(chunk_items, chunks[i]))
+                    lost_numbers.extend(chunk_lost)
                     accumulated_items.extend(chunk_items)
 
                     # Сохраняем прогресс после каждого успешного чанка
@@ -2159,16 +2247,10 @@ class TaskProcessor:
 
                 await self.update_progress(f"Обрабатывается часть {i + 1} из {total_chunks}...")
 
-                chunk_text = chunks[i]
-                messages = [{"role": "user", "content": f"{chunk_text}\n\n{PROMPT_LIST_FROM_GRAND_PDF}"}]
-
                 try:
-                    data = await self._call_claude_json_with_retry(
-                        messages,
-                        system_prompt=SYSTEM_BASE,
-                        use_web_search=False,
+                    chunk_items = await self._list_grand_pdf_chunk(
+                        chunks[i], f"{i + 1}/{total_chunks}"
                     )
-                    chunk_items = data.get("items", [])
                     accumulated_items.extend(chunk_items)
 
                     await self._save_progress_data({

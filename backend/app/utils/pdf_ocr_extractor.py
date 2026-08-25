@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import re
 import resource
 
 import structlog
@@ -180,6 +181,28 @@ def extract_single_page(pdf_bytes: bytes, page_idx: int) -> dict:
     return result
 
 
+# Чем страницы склеиваются в чанк — и по чему он делится обратно, если ответ
+# ИИ по нему не поместился в лимит. Пустая строка внутри распознанного текста —
+# обычное дело, поэтому граница страницы узнаётся по заголовку, а не по отступу.
+_PAGE_SEPARATOR = "\n\n"
+_PAGE_BOUNDARY = re.compile(r"\n\n(?=--- Страница )")
+
+
+def split_pdf_chunk(text: str):
+    """Разделить текстовый чанк надвое по границе страницы. `None` — одна страница.
+
+    Нужно, когда ответ ИИ по чанку не поместился в лимит. Режем только по
+    заголовку страницы: разрыв посреди страницы отдал бы модели половину
+    таблицы без шапки, и позиции из неё разобрать было бы нечем.
+    """
+    parts = _PAGE_BOUNDARY.split(text or "")
+    if len(parts) < 2:
+        return None
+
+    mid = len(parts) // 2
+    return _PAGE_SEPARATOR.join(parts[:mid]), _PAGE_SEPARATOR.join(parts[mid:])
+
+
 def chunk_pdf_pages(pages: list[dict], pages_per_chunk: int = 8) -> list[str]:
     """Группирует страницы в текстовые чанки для передачи в Claude.
 
@@ -206,7 +229,7 @@ def chunk_pdf_pages(pages: list[dict], pages_per_chunk: int = 8) -> list[str]:
 
         # Когда набрали pages_per_chunk страниц — закрываем чанк
         if len(current_parts) >= pages_per_chunk:
-            chunk_text = "\n\n".join(current_parts)
+            chunk_text = _PAGE_SEPARATOR.join(current_parts)
             if current_text_len > 50:
                 chunks.append(chunk_text)
             current_parts = []
@@ -214,6 +237,6 @@ def chunk_pdf_pages(pages: list[dict], pages_per_chunk: int = 8) -> list[str]:
 
     # Остаток страниц в последний чанк
     if current_parts and current_text_len > 50:
-        chunks.append("\n\n".join(current_parts))
+        chunks.append(_PAGE_SEPARATOR.join(current_parts))
 
     return chunks

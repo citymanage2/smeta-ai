@@ -452,6 +452,39 @@ def chunk_rows(rows: "list[dict]", chunk_size: int = 250) -> "list[list[dict]]":
     return chunks
 
 
+def split_chunk_in_half(rows: "list[dict]"):
+    """Разделить чанк надвое по границе работы. `None` — делить уже нечего.
+
+    Нужно, когда ответ ИИ по чанку не поместился в лимит: повторять тот же
+    запрос бессмысленно, порцию уменьшает вызывающий. Граница ищется так же,
+    как при исходном разбиении (`_chunk_one_sheet`) — по строке без единицы и
+    объёма, то есть по началу новой работы: разрыв внутри группы «работа + её
+    материалы» лишил бы материалы контекста, к чему они относятся.
+
+    Граница берётся ближайшая к середине и только внутри чанка — обе половины
+    всегда короче исходного, иначе деление не сходилось бы.
+    """
+    total = len(rows or [])
+    if total < 2:
+        return None
+
+    mid = total // 2
+    cut = mid
+    for shift in range(0, total):
+        for candidate in (mid - shift, mid + shift):
+            if candidate <= 0 or candidate >= total:
+                continue
+            row = rows[candidate]
+            if row.get("quantity") is None and row.get("unit") == "":
+                cut = candidate
+                break
+        else:
+            continue
+        break
+
+    return rows[:cut], rows[cut:]
+
+
 def rows_to_text(rows: list[dict]) -> str:
     """Компактное текстовое представление строк для отправки в Claude."""
     lines = []
