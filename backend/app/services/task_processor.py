@@ -84,6 +84,12 @@ CHUNK_STAGE_DEADLINE_S = _settings.CHUNK_STAGE_DEADLINE_S
 # выглядит как недоработка расчёта, а не как сознательно пропущенный вычет.
 NEGATIVE_QTY_NOTE = "Отрицательный объём — цена не определяется"
 
+# Примечание для позиции, по которой проверка полноты не состоялась: ответ ИИ
+# не поместился в лимит даже по ней одной. Позиция остаётся в перечне как есть —
+# терять её нельзя, она едет дальше в смету, — но человек должен видеть, что
+# материалы к ней по нормам никто не сверял.
+COMPLETENESS_SKIPPED_NOTE = "Полнота не проверена: ответ ИИ не поместился в лимит"
+
 # Причина «цену не взяли из-за единицы измерения» едет при самой позиции.
 # Позиция после отказа идёт к следующему источнику, и если тот цену найдёт,
 # причина не понадобится; если не найдёт — человек прочитает её в примечании.
@@ -561,6 +567,38 @@ def _chunk_by_work_boundaries(items: list, max_chunk_size: int = 200) -> list:
     for _, sheet_items in group_by_sheet(items):
         chunks.extend(_chunk_one_sheet_by_work(sheet_items, max_chunk_size))
     return chunks
+
+
+def _split_items_in_half(items: list):
+    """Разделить чанк позиций надвое по границе работы. `None` — делить нечего.
+
+    Нужно, когда ответ ИИ по чанку не поместился в лимит: повторять тот же
+    запрос бессмысленно, порцию уменьшает вызывающий. Граница ищется так же,
+    как при исходном разбиении (`_chunk_one_sheet_by_work`) — по позиции типа
+    «Работа»: материалы, оторванные от своей работы, проверять на полноту не по
+    чему.
+
+    Граница берётся ближайшая к середине и только внутри чанка — обе половины
+    всегда короче исходного, иначе деление не сходилось бы.
+    """
+    total = len(items or [])
+    if total < 2:
+        return None
+
+    mid = total // 2
+    cut = mid
+    for shift in range(0, total):
+        for candidate in (mid - shift, mid + shift):
+            if candidate <= 0 or candidate >= total:
+                continue
+            if str(items[candidate].get("type", "")).strip() == "Работа":
+                cut = candidate
+                break
+        else:
+            continue
+        break
+
+    return items[:cut], items[cut:]
 
 
 class TaskCancelledError(Exception):
@@ -2347,6 +2385,83 @@ class TaskProcessor:
         })
         return items
 
+    async def _check_completeness_chunk(
+        self, chunk: list, label: str
+    ) -> tuple[list, list, list]:
+        """Чанк позиций → проверенные позиции, номера потерянных, сводки правок.
+
+        Проверка полноты дописывает к работам недостающие материалы, поэтому
+        ответ длиннее входа и плотный чанк упирается в лимит — приходит
+        оборванным (`ResponseTruncatedError`). Повторять тот же запрос
+        бессмысленно и дорого: режем чанк пополам, как перечень и смета.
+
+        Лист и номера позиций исходной сметы считаются для той половины,
+        которую реально отправили: иначе дописанные материалы ушли бы на чужую
+        вкладку, а номера сопоставились бы с позициями, которых в запросе не
+        было.
+        """
+        # Номер позиции исходной сметы в промпт не уходит: ИИ переписывает
+        # чанк целиком, и часть номеров он вернул бы, а часть потерял. Пусть
+        # колонка живёт только в перечне, где она заполнена детерминированно.
+        chunk_json = json.dumps(
+            {"items": _without_source_no(chunk)}, ensure_ascii=False, indent=2
+        )
+        messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
+
+        try:
+            data = await self._interruptible_claude_json_with_retry(
+                messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0
+            )
+        except ResponseTruncatedError:
+            halves = _split_items_in_half(chunk)
+            if halves is None:
+                # Дно: одна позиция, а ответ по ней всё равно не поместился.
+                # Позицию возвращаем как есть — она уже в перечне и поедет в
+                # смету; потерять её нельзя. Но полноту по ней никто не сверял,
+                # и это должно быть видно в файле, а не только в логе.
+                logger.warning(
+                    "Single item response truncated in completeness stage, kept as is",
+                    task_id=self.task_id,
+                    chunk_label=label,
+                    name=(chunk[0].get("name") if chunk else None),
+                )
+                await self.update_progress(
+                    f"⚠ Часть {label}: ответ ИИ не поместился даже по одной позиции — "
+                    f"она оставлена как есть, полнота по ней не проверена."
+                )
+                kept = ensure_item_fields(chunk)
+                for item in kept:
+                    item["notes"] = append_note(item.get("notes"), COMPLETENESS_SKIPPED_NOTE)
+                return kept, [], []
+
+            logger.warning(
+                "Completeness chunk response truncated, splitting in half",
+                task_id=self.task_id,
+                chunk_label=label,
+                size=len(chunk),
+            )
+            left = await self._check_completeness_chunk(halves[0], f"{label}a")
+            right = await self._check_completeness_chunk(halves[1], f"{label}b")
+            return (
+                left[0] + right[0],
+                left[1] + right[1],
+                left[2] + right[2],
+            )
+
+        chunk_items = ensure_item_fields(data.get("items", []))
+        # Проверка полноты дописывает недостающие материалы: у новых позиций
+        # листа нет, и без разметки они ушли бы на первую вкладку — прочь от
+        # работы, к которой относятся.
+        _tag_sheet(chunk_items, _chunk_sheet(chunk))
+        # Номер позиции исходной сметы возвращается тем же способом, что и на
+        # перечне: сопоставлением с позициями этого же чанка по наименованию.
+        # Дописанный ИИ материал номера не получает — в смете его не было.
+        # Позиция перечня, которой ИИ не вернул, теряется так же тихо, как на
+        # перечне, — и точно так же не имеет права потеряться молча.
+        lost = attach_source_numbers(chunk_items, chunk)
+        summary = data.get("changes_summary", "")
+        return chunk_items, lost, ([summary] if summary else [])
+
     async def _handle_check_completeness(self, task: Task) -> None:
         source_task_id = (task.user_prompt or "").strip()
         if not source_task_id:
@@ -2393,16 +2508,10 @@ class TaskProcessor:
             else:
                 await self.update_progress("Проверяем полноту материалов по ГЭСН...")
 
-            # Номер позиции исходной сметы в промпт не уходит: ИИ переписывает
-            # чанк целиком, и часть номеров он вернул бы, а часть потерял. Пусть
-            # колонка живёт только в перечне, где она заполнена детерминированно.
-            chunk_json = json.dumps(
-                {"items": _without_source_no(chunks[i])}, ensure_ascii=False, indent=2
-            )
-            messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_COMPLETENESS}"}]
-
             try:
-                data = await self._interruptible_claude_json_with_retry(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+                chunk_items, chunk_lost, chunk_summaries = await self._check_completeness_chunk(
+                    chunks[i], f"{i + 1}/{total_chunks}"
+                )
             except TaskCancelledError:
                 if all_items:
                     await self._save_partial(all_items, i, total_chunks)
@@ -2414,21 +2523,9 @@ class TaskProcessor:
                     await self.update_progress(f"Ошибка на части {i + 1}. Обработано {i} из {total_chunks}. Частичный результат сохранён.")
                 raise
 
-            chunk_items = ensure_item_fields(data.get("items", []))
-            # Проверка полноты дописывает недостающие материалы: у новых позиций
-            # листа нет, и без разметки они ушли бы на первую вкладку — прочь от
-            # работы, к которой относятся.
-            _tag_sheet(chunk_items, _chunk_sheet(chunks[i]))
-            # Номер позиции исходной сметы возвращается тем же способом, что и на
-            # перечне: сопоставлением с позициями этого же чанка по наименованию.
-            # Дописанный ИИ материал номера не получает — в смете его не было.
-            # Позиция перечня, которой ИИ не вернул, теряется так же тихо, как на
-            # перечне, — и точно так же не имеет права потеряться молча.
-            lost_numbers.extend(attach_source_numbers(chunk_items, chunks[i]))
+            lost_numbers.extend(chunk_lost)
             all_items.extend(chunk_items)
-            summary = data.get("changes_summary", "")
-            if summary:
-                changes_summary_parts.append(summary)
+            changes_summary_parts.extend(chunk_summaries)
 
             await self._save_progress_data({
                 "chunks_done": i + 1,
