@@ -4,8 +4,38 @@ import { TaskEta } from '../utils/eta';
 export interface PulseStats {
   created_today: number;
   processing_now: number;
+  /** Ждут очереди. Отдельно от «в обработке»: разные поводы вмешаться. */
+  pending_now: number;
   completed_today: number;
   failed_today: number;
+}
+
+/** Карточка пульса — она же адрес списка задач под ней. */
+export type PulseBucket = 'created' | 'processing' | 'pending' | 'completed' | 'failed';
+
+export interface PulseTaskRow {
+  id: string;
+  task_type: string;
+  status: string;
+  name: string | null;
+  project_id: string | null;
+  project_name: string | null;
+  created_at: string;
+  /** Время фактической обработки. null — не стартовала или оборвалась. */
+  work_seconds: number | null;
+  work_running: boolean;
+  /** Токены и доллары за все прогоны задачи, вместе с допами. */
+  tokens: number;
+  cost_usd: number;
+}
+
+export interface PulseBucketDetail {
+  bucket: PulseBucket;
+  count: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_work_seconds: number;
+  tasks: PulseTaskRow[];
 }
 
 export interface ActiveTask {
@@ -106,5 +136,16 @@ export interface DashboardStats {
 
 export async function getDashboardStats(): Promise<DashboardStats> {
   const response = await apiClient.get<DashboardStats>('/dashboard/stats');
+  return response.data;
+}
+
+/**
+ * Задачи под одной карточкой пульса.
+ *
+ * Отдельным запросом по клику, а не полем в `/dashboard/stats`: дашборд
+ * поллится раз в 10 секунд, а сюда заходят изредка.
+ */
+export async function getPulseBucket(bucket: PulseBucket): Promise<PulseBucketDetail> {
+  const response = await apiClient.get<PulseBucketDetail>(`/dashboard/pulse/${bucket}`);
   return response.data;
 }

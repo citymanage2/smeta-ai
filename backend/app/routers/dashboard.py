@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import DateTime, case, func, select, text
+from sqlalchemy import DateTime, and_, case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -15,7 +15,7 @@ from app.models.price_list import PriceList
 from app.models.project import Project
 from app.models.task import Task
 from app.schemas.eta import TaskEta
-from app.services import eta_service
+from app.services import eta_service, usage_metrics
 from app.utils.permissions import get_manager_user
 
 logger = structlog.get_logger()
@@ -24,6 +24,36 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 CHECK_TYPES = {"CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"}
 
+# Карточки «Пульса»: что именно считает каждая. Порядок — порядок на экране.
+PULSE_BUCKETS: tuple[str, ...] = ("created", "processing", "pending", "completed", "failed")
+
+
+def _pulse_conditions(bucket: str, today_start: datetime) -> list:
+    """Условия одной карточки пульса — без базового `deleted_at IS NULL`.
+
+    Единственное место, где записано, что значит каждая карточка: и счётчик на
+    карточке, и список задач под ней строятся отсюда. Разъедься эти два места —
+    пользователь увидит «4 с ошибкой» и три строки в таблице, и перестанет
+    верить разделу целиком.
+
+    «Завершено/с ошибкой сегодня» считаются по факту завершения, а не по дате
+    создания: задача, запущенная вчера вечером и упавшая сегодня утром, — это
+    сегодняшняя ошибка. `coalesce` — ради задач, доживших до нас без
+    `finished_at` (поле появилось позже): у них статус переставил `updated_at`.
+    """
+    finished = func.coalesce(Task.finished_at, Task.updated_at)
+    if bucket == "created":
+        return [Task.created_at >= today_start]
+    if bucket == "processing":
+        return [Task.status == "processing"]
+    if bucket == "pending":
+        return [Task.status == "pending"]
+    if bucket == "completed":
+        return [Task.status == "completed", finished >= today_start]
+    if bucket == "failed":
+        return [Task.status == "failed", finished >= today_start]
+    raise HTTPException(status_code=404, detail=f"Неизвестная карточка пульса: {bucket}")
+
 
 # ── Response models ────────────────────────────────────────────────────────────
 
@@ -31,8 +61,39 @@ CHECK_TYPES = {"CHECK_LIST_COMPLETENESS", "CHECK_PROJECT_COMPLETENESS"}
 class PulseStats(BaseModel):
     created_today: int
     processing_now: int
+    # Ждут очереди. Отдельной цифрой, а не внутри «в обработке»: «работает» и
+    # «стоит в очереди» — разные поводы вмешаться.
+    pending_now: int
     completed_today: int
     failed_today: int
+
+
+class PulseTaskRow(BaseModel):
+    """Строка таблицы под карточкой пульса."""
+
+    id: str
+    task_type: str
+    status: str
+    name: Optional[str]
+    project_id: Optional[str]
+    project_name: Optional[str]
+    created_at: str
+    # Время фактической обработки (без ожидания в очереди). None — задача ещё не
+    # стартовала или оборвалась на рестарте: ноль был бы неправдой.
+    work_seconds: Optional[float]
+    work_running: bool
+    # Токены и деньги — за все прогоны задачи, вместе с допами (usage_metrics).
+    tokens: int
+    cost_usd: float
+
+
+class PulseBucketDetail(BaseModel):
+    bucket: str
+    count: int
+    total_tokens: int
+    total_cost_usd: float
+    total_work_seconds: float
+    tasks: list[PulseTaskRow]
 
 
 class ActiveTask(BaseModel):
@@ -149,34 +210,27 @@ async def get_dashboard_stats(
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # 1. Pulse — today's counters
-    today_row = (
+    # 1. Pulse — счётчики карточек. Один запрос, условия — из _pulse_conditions,
+    # чтобы цифра на карточке всегда совпадала со списком под ней.
+    pulse_row = (
         await db.execute(
             select(
-                func.count(Task.id).label("created_today"),
-                func.count(case((Task.status == "completed", Task.id))).label("completed_today"),
-                func.count(case((Task.status == "failed", Task.id))).label("failed_today"),
-            ).where(
-                Task.deleted_at.is_(None),
-                Task.created_at >= today_start,
-            )
+                *[
+                    func.count(
+                        case((and_(*_pulse_conditions(bucket, today_start)), Task.id))
+                    ).label(bucket)
+                    for bucket in PULSE_BUCKETS
+                ]
+            ).where(Task.deleted_at.is_(None))
         )
     ).one()
 
-    processing_now = (
-        await db.execute(
-            select(func.count(Task.id)).where(
-                Task.deleted_at.is_(None),
-                Task.status == "processing",
-            )
-        )
-    ).scalar_one()
-
     pulse = PulseStats(
-        created_today=today_row.created_today,
-        processing_now=processing_now,
-        completed_today=today_row.completed_today,
-        failed_today=today_row.failed_today,
+        created_today=pulse_row.created,
+        processing_now=pulse_row.processing,
+        pending_now=pulse_row.pending,
+        completed_today=pulse_row.completed,
+        failed_today=pulse_row.failed,
     )
 
     # 2. Active queue (pending + processing)
@@ -510,4 +564,88 @@ async def get_dashboard_stats(
         task_chart=task_chart,
         price_lists=price_list_infos,
         api_costs=api_costs,
+    )
+
+
+@router.get("/pulse/{bucket}", response_model=PulseBucketDetail)
+async def get_pulse_bucket(
+    bucket: str,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    _: dict = Depends(get_manager_user),
+) -> PulseBucketDetail:
+    """Задачи под одной карточкой пульса — со временем, токенами и деньгами.
+
+    Отдельным запросом, а не полем в `/dashboard/stats`: дашборд поллится раз в
+    10 секунд, а сюда заходят по клику. Тащить в каждом опросе все сегодняшние
+    задачи вместе с агрегатом по `api_call_log` — платить постоянно за то, что
+    смотрят изредка.
+    """
+    # Не кэшируем: пользователь открывает таблицу, чтобы увидеть текущее
+    # положение дел, а не картинку десятисекундной давности.
+    response.headers["Cache-Control"] = "no-store"
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Активные карточки читаются как очередь — старые сверху; остальные как
+    # лента событий — свежие сверху.
+    order = (
+        Task.created_at.asc()
+        if bucket in ("processing", "pending")
+        else Task.created_at.desc()
+    )
+
+    rows = (
+        await db.execute(
+            select(Task, Project.name.label("project_name"))
+            .outerjoin(Project, Task.project_id == Project.id)
+            .where(
+                Task.deleted_at.is_(None),
+                *_pulse_conditions(bucket, today_start),
+            )
+            .order_by(order)
+        )
+    ).all()
+
+    tasks = [t for t, _pname in rows]
+    # Единственная точка расчёта денег и таймингов — та же, что кормит карточки
+    # смет. Своя сумма по api_call_log рядом разошлась бы с ними на первой же
+    # правке формулы.
+    usage = await usage_metrics.usage_for_tasks(db, tasks, now=now)
+
+    task_rows: list[PulseTaskRow] = []
+    total_tokens = 0
+    total_cost = 0.0
+    total_work = 0.0
+    for task, project_name in rows:
+        u = usage.get(str(task.id))
+        tokens = (u.tokens + u.extra_tokens) if u else 0
+        cost = (u.cost_usd + u.extra_cost_usd) if u else 0.0
+        work_seconds = u.work_seconds if u else None
+        total_tokens += tokens
+        total_cost += cost
+        total_work += work_seconds or 0.0
+        task_rows.append(
+            PulseTaskRow(
+                id=str(task.id),
+                task_type=task.task_type,
+                status=task.status,
+                name=task.name,
+                project_id=str(task.project_id) if task.project_id else None,
+                project_name=project_name,
+                created_at=task.created_at.isoformat(),
+                work_seconds=work_seconds,
+                work_running=bool(u.work_running) if u else False,
+                tokens=tokens,
+                cost_usd=round(cost, 6),
+            )
+        )
+
+    return PulseBucketDetail(
+        bucket=bucket,
+        count=len(task_rows),
+        total_tokens=total_tokens,
+        total_cost_usd=round(total_cost, 6),
+        total_work_seconds=total_work,
+        tasks=task_rows,
     )
