@@ -168,3 +168,39 @@ class TestSyncEndpoint:
             "/api-balance/sync", headers={"Authorization": admin_token}
         )
         assert response.status_code == 200
+
+
+class TestSyncDiagnostics:
+    """Кнопка сверки обязана сказать, ЧЕМ ответил Anthropic.
+
+    Без текста ответа «не сработало» выглядит одинаково при неподходящем ключе,
+    закрытом на прокси пути и личной организации — а чинятся они по-разному.
+    """
+
+    @pytest.mark.asyncio
+    async def test_error_text_reaches_response(self, async_client, admin_token, monkeypatch):
+        from app.services import balance_service
+        from app.services.anthropic_admin import AdminApiError
+
+        async def boom(*args, **kwargs):
+            raise AdminApiError("Отчёт о тратах: HTTP 401 invalid x-api-key")
+
+        monkeypatch.setattr(balance_service, "sync_cost_days", boom)
+        response = await async_client.post(
+            "/api-balance/sync", headers={"Authorization": admin_token}
+        )
+        assert response.status_code == 200
+        assert "401" in response.json()["sync_error"]
+
+    @pytest.mark.asyncio
+    async def test_success_has_no_error(self, async_client, admin_token, monkeypatch):
+        from app.services import balance_service
+
+        async def ok(*args, **kwargs):
+            return 3
+
+        monkeypatch.setattr(balance_service, "sync_cost_days", ok)
+        response = await async_client.post(
+            "/api-balance/sync", headers={"Authorization": admin_token}
+        )
+        assert response.json()["sync_error"] is None

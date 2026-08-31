@@ -36,6 +36,12 @@ export interface ApiBalance {
   estimates_left: number | null;
   level: 'ok' | 'warn' | 'alarm' | 'unknown';
   marks: BalanceMark[];
+  /**
+   * Чем ответил Anthropic на последнюю сверку по кнопке. Приходит только с
+   * `/sync`: «не сработало» без текста ответа выглядит одинаково при
+   * неподходящем ключе, закрытом на прокси пути и личной организации.
+   */
+  sync_error?: string | null;
 }
 
 export async function fetchApiBalance(): Promise<ApiBalance> {

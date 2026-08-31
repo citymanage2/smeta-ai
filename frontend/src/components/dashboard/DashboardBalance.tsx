@@ -89,8 +89,11 @@ const DashboardBalance: React.FC<Props> = ({ onChanged }) => {
   const handleSync = async () => {
     setBusy(true);
     try {
-      setData(await syncApiBalance());
-      setError(null);
+      const next = await syncApiBalance();
+      setData(next);
+      // Ответ Anthropic показываем как есть: по нему видно, что чинить —
+      // ключ, доступ прокси к /v1/organizations или тип организации.
+      setError(next.sync_error ? `Сверка не прошла. ${next.sync_error}` : null);
       onChanged?.();
     } catch {
       setError('Сверка с Anthropic не удалась — показан расчёт по своему журналу');
@@ -155,7 +158,7 @@ const DashboardBalance: React.FC<Props> = ({ onChanged }) => {
             title={
               data.official_enabled
                 ? 'Запросить у Anthropic официальные траты за последние дни'
-                : 'Не задан админ-ключ ANTHROPIC_ADMIN_KEY — сверка недоступна'
+                : 'Не задан ключ Anthropic — сверять нечем'
             }
             style={btnStyle(busy || !data.official_enabled)}
           >
@@ -282,12 +285,19 @@ const DashboardBalance: React.FC<Props> = ({ onChanged }) => {
           Сегодня по своему журналу: <b style={{ color: '#64748b' }}>{formatUsd(data.live_usd)}</b>
         </span>
         {data.official_enabled ? (
-          <span>
-            Официально подтверждено Anthropic по {formatDate(data.official_through)} ·
-            сверка {formatDateTime(data.synced_at)}
-          </span>
+          data.synced_at ? (
+            <span>
+              Официально подтверждено Anthropic по {formatDate(data.official_through)} ·
+              сверка {formatDateTime(data.synced_at)}
+            </span>
+          ) : (
+            <span>
+              Сверки с Anthropic ещё не было — нажмите «Сверить траты», чтобы
+              проверить, подходит ли ключ
+            </span>
+          )
         ) : (
-          <span>Сверка с Anthropic не подключена — всё считается по своему журналу</span>
+          <span>Ключ Anthropic не задан — всё считается по своему журналу</span>
         )}
       </div>
 

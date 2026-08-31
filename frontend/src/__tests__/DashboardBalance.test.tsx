@@ -91,7 +91,7 @@ describe('DashboardBalance', () => {
     expect(await screen.findByText(/хватит меньше чем на сутки/)).toBeInTheDocument()
   })
 
-  it('без админ-ключа кнопка сверки выключена и это объяснено', async () => {
+  it('без ключа Anthropic сверять нечем — кнопка выключена', async () => {
     fetchApiBalance.mockResolvedValue(
       balance({ official_enabled: false, official_through: null, synced_at: null })
     )
@@ -99,7 +99,42 @@ describe('DashboardBalance', () => {
 
     const button = await screen.findByRole('button', { name: 'Сверить траты' })
     expect(button).toBeDisabled()
-    expect(screen.getByText(/Сверка с Anthropic не подключена/)).toBeInTheDocument()
+    expect(screen.getByText(/Ключ Anthropic не задан/)).toBeInTheDocument()
+  })
+
+  it('до первой сверки предлагает проверить ключ кнопкой', async () => {
+    fetchApiBalance.mockResolvedValue(
+      balance({ official_enabled: true, official_through: null, synced_at: null })
+    )
+    render(<DashboardBalance />)
+
+    expect(await screen.findByText(/Сверки с Anthropic ещё не было/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Сверить траты' })).toBeEnabled()
+  })
+
+  it('неудачная сверка показывает ответ Anthropic целиком', async () => {
+    // Без текста ответа «не сработало» одинаково выглядит при неподходящем
+    // ключе, закрытом на прокси пути и личной организации.
+    fetchApiBalance.mockResolvedValue(balance({ synced_at: null }))
+    syncApiBalance.mockResolvedValue(
+      balance({ synced_at: null, sync_error: 'Отчёт о тратах: HTTP 401 invalid x-api-key' })
+    )
+    render(<DashboardBalance />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Сверить траты' }))
+
+    expect(await screen.findByText(/HTTP 401 invalid x-api-key/)).toBeInTheDocument()
+  })
+
+  it('удачная сверка не оставляет сообщения об ошибке', async () => {
+    fetchApiBalance.mockResolvedValue(balance({ synced_at: null }))
+    syncApiBalance.mockResolvedValue(balance({ synced_at: '2026-09-01T10:00:00Z' }))
+    render(<DashboardBalance />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Сверить траты' }))
+
+    await waitFor(() => expect(syncApiBalance).toHaveBeenCalled())
+    expect(screen.queryByText(/Сверка не прошла/)).not.toBeInTheDocument()
   })
 
   it('внесённая отметка сразу пересчитывает остаток', async () => {

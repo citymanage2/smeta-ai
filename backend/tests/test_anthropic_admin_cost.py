@@ -157,3 +157,27 @@ class TestBaseUrl:
     def test_direct_when_not_configured(self):
         with patch.object(anthropic_admin.settings, "ANTHROPIC_BASE_URL", ""):
             assert anthropic_admin._base_url() == anthropic_admin.API_BASE
+
+
+class TestCredential:
+    """Чем авторизуемся: админский ключ, иначе рабочий ключ сервиса.
+
+    Отчёт принимает и обычный ключ, если он не привязан к workspace, — тогда
+    сверка заводится без единого действия в Console.
+    """
+
+    def test_admin_key_wins(self):
+        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", "sk-ant-admin01-x"), \
+             patch.object(anthropic_admin.settings, "ANTHROPIC_API_KEY", "sk-ant-work"):
+            assert anthropic_admin._credential() == "sk-ant-admin01-x"
+
+    def test_falls_back_to_working_key(self):
+        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", ""), \
+             patch.object(anthropic_admin.settings, "ANTHROPIC_API_KEY", "sk-ant-work"):
+            assert anthropic_admin._credential() == "sk-ant-work"
+            assert anthropic_admin.is_configured() is True
+
+    def test_no_keys_at_all(self):
+        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", ""), \
+             patch.object(anthropic_admin.settings, "ANTHROPIC_API_KEY", ""):
+            assert anthropic_admin.is_configured() is False

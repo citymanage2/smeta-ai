@@ -67,6 +67,11 @@ class BalanceResponse(BaseModel):
     estimates_left: Optional[int]
     level: str
     marks: list[BalanceMarkOut]
+    # Чем именно ответил Anthropic на последнюю ручную сверку. Заполняется
+    # только эндпоинтом /sync: без этого текста «сверка не сработала» выглядит
+    # одинаково при неподходящем ключе, закрытом на прокси пути и личной
+    # организации — а лечатся они по-разному.
+    sync_error: Optional[str] = None
 
 
 def _mark_out(row: ApiBalanceMark) -> BalanceMarkOut:
@@ -186,8 +191,12 @@ async def sync_now(
     """
     from app.services.anthropic_admin import AdminApiError
 
+    error: Optional[str] = None
     try:
         await balance_service.sync_cost_days(db)
     except AdminApiError as exc:
         logger.warning("Manual cost sync failed", error=str(exc))
-    return await get_balance(db=db, _=current_user)
+        error = str(exc)
+
+    body = await get_balance(db=db, _=current_user)
+    return body.model_copy(update={"sync_error": error})
