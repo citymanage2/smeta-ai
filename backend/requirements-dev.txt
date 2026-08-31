@@ -1,0 +1,19 @@
+# Зависимости для прогона тестов. В requirements.txt их нет намеренно: в образ
+# они не едут.
+#
+# Отдельный файл появился 01.09.2026 после того, как локальное окружение молча
+# разошлось с проектом: тестовые пакеты стояли только в системном Python, нигде
+# не записанные, и восстановить их состав можно было лишь угадыванием.
+#
+# ВАЖНО: Python 3.12 (как в Dockerfile). На 3.9 pip не увидит anthropic 1.x
+# вовсе — SDK требует >= 3.10 — и молча оставит последнюю 0.x, которая ждёт
+# httpx вместо httpx2. Тесты падают на TypeError в claude_service.
+#
+#   /opt/homebrew/bin/python3.12 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+#   .venv/bin/python -m pytest
+pytest==8.4.2
+pytest-asyncio==0.24.0
+# Асинхронный SQLite: на нём поднимается тестовая БД (tests/conftest.py).
+aiosqlite==0.20.0
+ruff==0.15.11

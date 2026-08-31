@@ -184,6 +184,26 @@ smeta-ai/
 
 **Инфраструктура:** Docker Compose (локально), Render.com (прод), Nginx (frontend).
 
+### Как гонять тесты бэкенда
+
+```
+backend/.venv/bin/python -m pytest        # весь набор, ~7 минут
+```
+
+Виртуальное окружение — **строго Python 3.12**, как в `backend/Dockerfile`.
+Системный Python 3.9 не годится: `anthropic` 1.x требует 3.10+, и pip на 3.9
+молча оставляет последнюю 0.x, которая ждёт `httpx` вместо `httpx2` — тесты
+падают на `TypeError` в `claude_service`. Создать окружение:
+
+```
+/opt/homebrew/bin/python3.12 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+```
+
+Гонять **весь набор целиком**: по одному файлу тесты падают на
+`NoReferencedTableError` — модель `workflow_cards` регистрируется в
+`Base.metadata` только при импорте своего роутера.
+
 ## Папка `.business/`
 
 Скрытая папка с бизнес-контекстом. Здесь живёт информация **зачем** мы делаем проект. Не попадает в git.
