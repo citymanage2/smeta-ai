@@ -36,7 +36,7 @@
 
 ## Фазы
 
-### [ ] Фаза 1 — действующий прайс моделей
+### [x] Фаза 1 — действующий прайс моделей
 
 `backend/app/services/claude_service.py`, `_COST_PER_TOKEN`.
 Anthropic отменил повышение до $3/$15: цена Sonnet 5 $2/$10 стала стандартной.
@@ -45,7 +45,7 @@ Anthropic отменил повышение до $3/$15: цена Sonnet 5 $2/$1
 Тест: `tests/test_api_cost_pricing.py` — точные числа по каждой категории и
 половинная цена для батча.
 
-### [ ] Фаза 2 — хранилище
+### [x] Фаза 2 — хранилище
 
 `backend/app/models/api_balance.py`:
 - `ApiBalanceTopup` — пополнение: `amount_usd` Numeric(12,2), `happened_on` Date,
@@ -55,7 +55,7 @@ Anthropic отменил повышение до $3/$15: цена Sonnet 5 $2/$1
 
 Миграция `backend/alembic/versions/047_api_balance.py`, обе таблицы с `IF NOT EXISTS`.
 
-### [ ] Фаза 3 — клиент Usage & Cost API
+### [x] Фаза 3 — клиент Usage & Cost API
 
 `backend/app/services/anthropic_admin.py`: `fetch_cost_days(start, end)` →
 `dict[date, Decimal]`. Raw HTTP через `httpx` (в SDK этих эндпоинтов нет),
@@ -64,7 +64,7 @@ Anthropic отменил повышение до $3/$15: цена Sonnet 5 $2/$1
 `next_page`. Центы → доллары. Ключ не задан → `None`, а не исключение.
 Тесты: разбор реального ответа (центы!), пагинация, пустой день, 401.
 
-### [ ] Фаза 4 — расчёт остатка
+### [x] Фаза 4 — расчёт остатка
 
 `backend/app/services/balance_service.py`:
 - `sync_cost_days(db)` — тянет последние 3 дня и upsert'ит; пишет `synced_at`.
@@ -74,13 +74,13 @@ Anthropic отменил повышение до $3/$15: цена Sonnet 5 $2/$1
 Тесты: границы источников не пересекаются; идемпотентность; поведение без ключа;
 остаток ушёл в минус (пополнение не внесли) — показывается как есть, не обнуляется.
 
-### [ ] Фаза 5 — HTTP
+### [x] Фаза 5 — HTTP
 
 `backend/app/routers/admin.py`: `GET /admin/api-balance`,
 `POST /admin/api-balance/topups`, `DELETE /admin/api-balance/topups/{id}`.
 Права — менеджер (как весь дашборд). Тесты: чужая роль получает 403.
 
-### [ ] Фаза 6 — фоновая синхронизация
+### [x] Фаза 6 — фоновая синхронизация
 
 `backend/app/worker.py`: job раз в час, `max_instances=1`. Отказ Anthropic ловится
 и логируется, последние известные данные остаются.

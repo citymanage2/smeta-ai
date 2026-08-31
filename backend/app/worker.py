@@ -666,6 +666,31 @@ async def _ensure_price_cache() -> None:
     await _warm_price_cache()
 
 
+async def _sync_api_cost_job() -> None:
+    """Сверить траты с официальным отчётом Anthropic (раз в час).
+
+    Час, а не минута: отчёт отдаёт дневные бакеты, и чаще их перечитывать нечего
+    (документация просит не полить чаще раза в минуту даже там, где это нужно).
+    Свежесть остатка обеспечивает не эта сверка, а собственный журнал вызовов —
+    здесь только уточнение уже закрытых дней.
+
+    Отказ Anthropic не роняет обработчик: остаток продолжает считаться по своему
+    журналу, а на странице «Система» видно время последней удачной сверки.
+    """
+    from app.services import balance_service
+    from app.services.anthropic_admin import AdminApiError, is_configured
+
+    if not is_configured():
+        return  # админ-ключ не задан — официальной сверки нет, и это норма
+    try:
+        async with AsyncSessionLocal() as db:
+            await balance_service.sync_cost_days(db)
+    except AdminApiError as exc:
+        logger.warning("Cost report sync failed", error=str(exc))
+    except Exception as exc:  # noqa: BLE001 — фоновой job не имеет права падать
+        logger.warning("Cost report sync crashed", error=str(exc))
+
+
 def _build_scheduler():
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from app.services.batch_poller import poll_batch_tasks
@@ -678,6 +703,7 @@ def _build_scheduler():
     scheduler.add_job(resume_paused_tasks, "interval", minutes=10, max_instances=1)
     scheduler.add_job(_ensure_price_cache, "interval", minutes=5, max_instances=1)
     scheduler.add_job(_cleanup_price_cache, "interval", hours=24, max_instances=1)
+    scheduler.add_job(_sync_api_cost_job, "interval", hours=1, max_instances=1)
     return scheduler
 
 
