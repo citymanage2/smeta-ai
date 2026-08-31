@@ -29,6 +29,10 @@ services:
       # Посредник для обхода геоблока Anthropic с РФ-IP (пусто → напрямую).
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       ANTHROPIC_PROXY_SECRET: ${ANTHROPIC_PROXY_SECRET:-}
+      # Админский ключ (sk-ant-admin01-...) — только для сверки трат с
+      # официальным отчётом Anthropic. Пусто → остаток считается по своему
+      # журналу вызовов, без сверки.
+      ANTHROPIC_ADMIN_KEY: ${ANTHROPIC_ADMIN_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-}
       USER_PASSWORD: ${USER_PASSWORD:-}
@@ -62,6 +66,10 @@ services:
       # Посредник для обхода геоблока Anthropic с РФ-IP (worker гоняет ИИ-обработку).
       ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       ANTHROPIC_PROXY_SECRET: ${ANTHROPIC_PROXY_SECRET:-}
+      # Админский ключ (sk-ant-admin01-...) — только для сверки трат с
+      # официальным отчётом Anthropic. Пусто → остаток считается по своему
+      # журналу вызовов, без сверки.
+      ANTHROPIC_ADMIN_KEY: ${ANTHROPIC_ADMIN_KEY:-}
       COHERE_API_KEY: ${COHERE_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-}
       USERS: ${USERS:-}
