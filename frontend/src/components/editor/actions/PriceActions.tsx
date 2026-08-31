@@ -4,6 +4,7 @@ import { Ruler, RotateCcw, Wand2 } from 'lucide-react';
 import { fixEmptyPrices, repriceEstimateItem } from '../../../api/tasks';
 import { DocumentRef, checkPriceUnits } from '../../../api/documents';
 import { GridRow } from '../adapters/types';
+import Hint from '../Hint';
 
 /**
  * Действия с ценами — только для сметы и версий оптимизации.
@@ -117,47 +118,58 @@ const PriceActions: React.FC<Props> = ({
     }
   }, [documentRef, versionId, rev, onNotice, onReload]);
 
-  const dirtyHint = isDirty ? 'Сначала примените правки' : undefined;
+  const dirtyHint = isDirty
+    ? 'Сначала примените правки: действие пишет смету на сервере, и непринятые правки ушли бы в конфликт'
+    : undefined;
 
   return (
     <div className="de-price-actions">
       {emptyCount > 0 && (
-        <button
-          className="de-btn"
-          onClick={handleFix}
-          disabled={busy || isDirty}
-          title={dirtyHint ?? 'Найти цены для позиций, у которых цены нет'}
+        <Hint
+          align="start"
+          text={dirtyHint
+            ?? `Найти цены для позиций, у которых цены нет (${emptyCount}). Ищет ИИ — документ обновится по готовности`}
         >
-          <Wand2 size={14} />
-          Исправить пустые цены ({emptyCount})
-        </button>
+          <button className="de-btn" onClick={handleFix} disabled={busy || isDirty}>
+            <Wand2 size={14} />
+            Исправить пустые цены ({emptyCount})
+          </button>
+        </Hint>
       )}
-      <button
-        className="de-btn"
-        onClick={handleReprice}
-        disabled={busy || isDirty || repriceIndex < 0}
-        title={
+      <Hint
+        align="start"
+        text={
           dirtyHint
           ?? (repriceIndex < 0
-            ? 'Выберите одну позицию (вычету цена не нужна)'
-            : 'Найти актуальную цену для выбранной позиции')
+            ? 'Пересчитать цену одной позиции: отметьте галочкой ровно одну строку (вычету цена не нужна)'
+            : 'Найти актуальную цену для отмеченной позиции и записать её в смету')
         }
       >
-        <RotateCcw size={14} />
-        Цена
-      </button>
-      <button
-        className="de-btn"
-        onClick={handleUnitsCheck}
-        disabled={busy || isDirty || !versionId}
-        title={
+        <button
+          className="de-btn"
+          onClick={handleReprice}
+          disabled={busy || isDirty || repriceIndex < 0}
+        >
+          <RotateCcw size={14} />
+          Цена
+        </button>
+      </Hint>
+      <Hint
+        align="start"
+        text={
           dirtyHint
-          ?? 'Сверить единицы измерения цен с прайсом и пометить подозрительные строки'
+          ?? 'Сверить единицы измерения цен с прайсом и пометить строки, где цена похожа на цену за другую единицу. Ничего не пересчитывает'
         }
       >
-        <Ruler size={14} />
-        Проверить цены
-      </button>
+        <button
+          className="de-btn"
+          onClick={handleUnitsCheck}
+          disabled={busy || isDirty || !versionId}
+        >
+          <Ruler size={14} />
+          Проверить цены
+        </button>
+      </Hint>
     </div>
   );
 };

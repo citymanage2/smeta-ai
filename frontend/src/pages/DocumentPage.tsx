@@ -119,7 +119,10 @@ const DocumentPage: React.FC = () => {
           `MAIN_PADDING_TOP`, и второй отступ отжимал бы таблицу от шапки
           на пустую полосу в полсотни пикселей. */}
       <div style={{ maxWidth: 1600, margin: '0 auto', padding: '0 16px 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+        {/* Шапка страницы и шапка редактора говорили одно и то же двумя
+            полосами: имя карточки сверху, «Смета — файл.xlsx» под ней. Теперь
+            это одна строка, а редактор своей шапки не рисует. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
           <button
             onClick={goBack}
             style={{
@@ -134,13 +137,26 @@ const DocumentPage: React.FC = () => {
             <ArrowLeft size={14} />
             Назад
           </button>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            flex: 1, minWidth: 0, display: 'flex', alignItems: 'baseline', gap: '10px',
+          }}>
             <h1 style={{
-              margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              margin: 0, fontSize: '17px', fontWeight: 700, color: '#0f172a',
+              whiteSpace: 'nowrap', flexShrink: 0,
             }}>
               {meta?.name ?? 'Документ'}
             </h1>
+            {title && (
+              <span
+                title={title}
+                style={{
+                  fontSize: '13px', color: '#64748b', minWidth: 0,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+              >
+                {title}
+              </span>
+            )}
           </div>
         </div>
 
@@ -150,6 +166,7 @@ const DocumentPage: React.FC = () => {
           fileSlot={isInput ? 'input' : undefined}
           fileIndex={isInput ? fileIndex : undefined}
           title={title}
+          showHead={false}
           fullHeight
           initialVersionId={searchParams.get('version') ?? undefined}
           initialTab={(searchParams.get('tab') as EditorTab | null) ?? undefined}

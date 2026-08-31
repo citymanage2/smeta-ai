@@ -4,6 +4,7 @@ import {
   Redo2, Search, Trash2, Undo2, X,
 } from 'lucide-react';
 import { DraftState, EditorTab } from '../../stores/documentEditor';
+import Hint from './Hint';
 
 interface Props {
   totalCount: number;
@@ -48,6 +49,13 @@ const DRAFT_LABEL: Record<DraftState, string> = {
   error: 'Черновик не сохранён',
 };
 
+/** Вкладки — тоже действие, и тоже объясняются при наведении. */
+const TAB_HINT: Record<EditorTab, string> = {
+  all: 'Показать все строки документа — и работы, и материалы',
+  works: 'Оставить в таблице только работы',
+  materials: 'Оставить в таблице только материалы',
+};
+
 export const EditorToolbar: React.FC<Props> = ({
   totalCount, workCount, materialCount, showTabs, tab, search,
   selectedCount, canWrite, isDirty, applying, draftState, canUndo, canRedo,
@@ -57,28 +65,29 @@ export const EditorToolbar: React.FC<Props> = ({
   onExport,
 }) => (
   <div className="de-toolbar">
-    {showTabs && (
-      <div className="de-tabs" role="tablist">
-        {([
-          { id: 'all' as const, label: 'Все', count: totalCount },
-          { id: 'works' as const, label: 'Работы', count: workCount },
-          { id: 'materials' as const, label: 'Материалы', count: materialCount },
-        ]).map(({ id, label, count }) => (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={tab === id}
-            className={`de-tab${tab === id ? ' de-tab-active' : ''}`}
-            onClick={() => onTabChange(id)}
-          >
-            {label}
-            {count > 0 && <span className="de-tab-count">{count}</span>}
-          </button>
-        ))}
-      </div>
-    )}
-
     <div className="de-toolbar-row">
+      {showTabs && (
+        <div className="de-tabs" role="tablist">
+          {([
+            { id: 'all' as const, label: 'Все', count: totalCount },
+            { id: 'works' as const, label: 'Работы', count: workCount },
+            { id: 'materials' as const, label: 'Материалы', count: materialCount },
+          ]).map(({ id, label, count }) => (
+            <Hint key={id} text={TAB_HINT[id]} align="start">
+              <button
+                role="tab"
+                aria-selected={tab === id}
+                className={`de-tab${tab === id ? ' de-tab-active' : ''}`}
+                onClick={() => onTabChange(id)}
+              >
+                {label}
+                {count > 0 && <span className="de-tab-count">{count}</span>}
+              </button>
+            </Hint>
+          ))}
+        </div>
+      )}
+
       <div className="de-search">
         <Search size={14} className="de-search-icon" />
         <input
@@ -101,66 +110,99 @@ export const EditorToolbar: React.FC<Props> = ({
 
         {canWrite && (
           <>
-            <button
-              className="de-icon-btn" onClick={onAddRow} title="Добавить строку"
+            <Hint text="Добавить пустую строку после выделенной, а без выделения — в конец таблицы">
+              <button className="de-icon-btn" onClick={onAddRow} aria-label="Добавить строку">
+                <Plus size={14} />
+              </button>
+            </Hint>
+            <Hint
+              text={selectedCount === 0
+                ? 'Удалить строки: сначала отметьте их галочками слева'
+                : `Удалить отмеченные строки (${selectedCount}) вместе с их материалами`}
             >
-              <Plus size={14} />
-            </button>
-            <button
-              className="de-icon-btn de-icon-btn-danger"
-              onClick={onDeleteSelected}
-              disabled={selectedCount === 0}
-              title="Удалить выбранные строки"
-            >
-              <Trash2 size={14} />
-            </button>
+              <button
+                className="de-icon-btn de-icon-btn-danger"
+                onClick={onDeleteSelected}
+                disabled={selectedCount === 0}
+                aria-label="Удалить выбранные строки"
+              >
+                <Trash2 size={14} />
+              </button>
+            </Hint>
             <span className="de-divider" />
-            <button className="de-icon-btn" onClick={onUndo} disabled={!canUndo} title="Отменить (Ctrl+Z)">
-              <Undo2 size={14} />
-            </button>
-            <button className="de-icon-btn" onClick={onRedo} disabled={!canRedo} title="Повторить (Ctrl+Y)">
-              <Redo2 size={14} />
-            </button>
+            <Hint
+              text={canUndo
+                ? 'Отменить последнюю правку в таблице (Ctrl+Z)'
+                : 'Отменять нечего: правок в таблице не было'}
+            >
+              <button className="de-icon-btn" onClick={onUndo} disabled={!canUndo} aria-label="Отменить (Ctrl+Z)">
+                <Undo2 size={14} />
+              </button>
+            </Hint>
+            <Hint
+              text={canRedo
+                ? 'Вернуть отменённую правку (Ctrl+Y)'
+                : 'Возвращать нечего: отменённых правок нет'}
+            >
+              <button className="de-icon-btn" onClick={onRedo} disabled={!canRedo} aria-label="Повторить (Ctrl+Y)">
+                <Redo2 size={14} />
+              </button>
+            </Hint>
           </>
         )}
 
         {/* Свёртка одинаковых позиций: общий объём одной строкой, правка
             разъезжается по всем позициям сразу. Режим показа — документ от
             неё не меняется. */}
-        <button
-          className={`de-btn${collapsed ? ' de-btn-active' : ''}`}
-          onClick={onToggleCollapsed}
-          disabled={!canCollapse}
-          title={canCollapse
+        <Hint
+          align="end"
+          text={canCollapse
             ? (collapsed
-              ? 'Показать все позиции по отдельности'
-              : 'Собрать одинаковые работы и материалы в общий объём')
+              ? 'Показать все позиции по отдельности, как они лежат в документе'
+              : 'Собрать одинаковые работы и материалы в одну строку с общим объёмом. Документ не меняется — это только вид таблицы')
             : 'В этом документе нет колонки с наименованием — сворачивать не по чему'}
         >
-          <FoldVertical size={14} />
-          Свернуть дубли
-          {collapsed && groupCount > 0 && <span className="de-tab-count">{groupCount}</span>}
-        </button>
+          <button
+            className={`de-btn${collapsed ? ' de-btn-active' : ''}`}
+            onClick={onToggleCollapsed}
+            disabled={!canCollapse}
+          >
+            <FoldVertical size={14} />
+            Свернуть дубли
+            {collapsed && groupCount > 0 && <span className="de-tab-count">{groupCount}</span>}
+          </button>
+        </Hint>
 
-        <button className="de-btn" onClick={onExport} title="Собрать ведомость и скачать">
-          <FileSpreadsheet size={14} />
-          Выгрузка
-        </button>
+        <Hint align="end" text="Собрать ведомость: выбрать колонки и строки и скачать файл Excel">
+          <button className="de-btn" onClick={onExport}>
+            <FileSpreadsheet size={14} />
+            Выгрузка
+          </button>
+        </Hint>
 
-        <button
-          className={`de-icon-btn${historyOpen ? ' de-icon-btn-active' : ''}`}
-          onClick={onToggleHistory}
-          title="История правок"
+        <Hint align="end" text="История правок: кто и что менял в документе, с возможностью откатить">
+          <button
+            className={`de-icon-btn${historyOpen ? ' de-icon-btn-active' : ''}`}
+            onClick={onToggleHistory}
+            aria-label="История правок"
+          >
+            <History size={14} />
+          </button>
+        </Hint>
+        <Hint
+          align="end"
+          text={fullscreen
+            ? 'Вернуть таблице обычную высоту'
+            : 'Растянуть таблицу на всю высоту окна — видно больше строк'}
         >
-          <History size={14} />
-        </button>
-        <button
-          className="de-icon-btn"
-          onClick={onToggleFullscreen}
-          title={fullscreen ? 'Свернуть таблицу' : 'Растянуть таблицу на всю высоту окна'}
-        >
-          {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        </button>
+          <button
+            className="de-icon-btn"
+            onClick={onToggleFullscreen}
+            aria-label={fullscreen ? 'Свернуть таблицу' : 'Растянуть таблицу на всю высоту окна'}
+          >
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        </Hint>
 
         {canWrite && (
           <>
@@ -170,20 +212,28 @@ export const EditorToolbar: React.FC<Props> = ({
               </span>
             )}
             {isDirty && (
-              <button className="de-btn-ghost" onClick={onDiscard} disabled={applying}>
-                Отменить правки
-              </button>
+              <Hint align="end" text="Вернуть таблицу к последнему применённому виду: непринятые правки пропадут">
+                <button className="de-btn-ghost" onClick={onDiscard} disabled={applying}>
+                  Отменить правки
+                </button>
+              </Hint>
             )}
-            <button
-              className="de-btn-primary"
-              onClick={onApply}
-              disabled={!isDirty || applying}
-              title={!isDirty ? 'Нет непринятых правок' : 'Записать правки в документ'}
+            <Hint
+              align="end"
+              text={!isDirty
+                ? 'Нет непринятых правок — применять нечего'
+                : 'Записать правки в документ: они попадут в файл и в смету задачи'}
             >
-              {applying
-                ? <><Loader2 size={14} className="de-spin" /> Применяю…</>
-                : <><Check size={14} /> Применить</>}
-            </button>
+              <button
+                className="de-btn-primary"
+                onClick={onApply}
+                disabled={!isDirty || applying}
+              >
+                {applying
+                  ? <><Loader2 size={14} className="de-spin" /> Применяю…</>
+                  : <><Check size={14} /> Применить</>}
+              </button>
+            </Hint>
           </>
         )}
       </div>

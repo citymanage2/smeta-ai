@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react';
 import { getCatalog, matchPreview } from '../../../api/catalog';
 import { LumaSpin } from '../../ui/LumaSpin';
 import { PricePosition } from './priceInsert';
+import Hint from '../Hint';
 
 /**
  * «Из прайса» — найти позиции в общем прайсе и вставить их в документ.
@@ -119,14 +120,15 @@ const AddFromPriceList: React.FC<Props> = ({ currentRowName, onInsert }) => {
 
   return (
     <>
-      <button
-        className="de-btn"
-        onClick={() => { setQuery(currentRowName ?? ''); setOpen(true); }}
-        title="Найти позицию в прайсе и вставить её после текущей строки"
-      >
-        <Search size={14} />
-        Из прайса
-      </button>
+      <Hint align="start" text="Найти позицию в общем прайсе и вставить её в документ после отмеченной строки">
+        <button
+          className="de-btn"
+          onClick={() => { setQuery(currentRowName ?? ''); setOpen(true); }}
+        >
+          <Search size={14} />
+          Из прайса
+        </button>
+      </Hint>
 
       {open && (
         <div style={overlayStyle} role="dialog" aria-modal="true">

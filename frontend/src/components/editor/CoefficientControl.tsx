@@ -3,6 +3,7 @@ import { Percent } from 'lucide-react';
 
 import { CoefficientPayload } from '../../api/documents';
 import { formatFactor, isActiveCoefficient, rowCoefficient } from '../../utils/estimateCalc';
+import Hint from './Hint';
 
 /**
  * Коэффициент к ценам — обратимая настройка документа.
@@ -91,20 +92,25 @@ export const CoefficientControl: React.FC<Props> = ({
   return (
     <div className="de-coefficient">
       <div className="de-coefficient-head">
-        <button
-          className="de-btn"
-          onClick={() => {
-            // Если строки отмечены галочками — по умолчанию применяем к ним.
-            // Иначе человек, отметивший десять позиций, молча поднял бы цену
-            // всей смете.
-            if (!open) setOnlySelected(selectedKeys.size > 0);
-            setOpen((v) => !v);
-          }}
-          disabled={disabled || busy}
+        <Hint
+          align="start"
+          text="Умножить цены работ и материалов на свой коэффициент — во всём документе или только в отмеченных строках. Исходные цены сохраняются, коэффициент можно снять"
         >
-          <Percent size={14} />
-          Коэффициент
-        </button>
+          <button
+            className={`de-btn${open ? ' de-btn-active' : ''}`}
+            onClick={() => {
+              // Если строки отмечены галочками — по умолчанию применяем к ним.
+              // Иначе человек, отметивший десять позиций, молча поднял бы цену
+              // всей смете.
+              if (!open) setOnlySelected(selectedKeys.size > 0);
+              setOpen((v) => !v);
+            }}
+            disabled={disabled || busy}
+          >
+            <Percent size={14} />
+            Коэффициент
+          </button>
+        </Hint>
 
         {active && (
           <span className="de-coefficient-state">
@@ -113,9 +119,11 @@ export const CoefficientControl: React.FC<Props> = ({
           </span>
         )}
         {active && (
-          <button className="de-btn de-btn-ghost" onClick={handleClear} disabled={busy}>
-            Снять коэффициент
-          </button>
+          <Hint align="start" text="Вернуть цены к исходным: коэффициент перестанет применяться и на экране, и в файле">
+            <button className="de-btn de-btn-ghost" onClick={handleClear} disabled={busy}>
+              Снять коэффициент
+            </button>
+          </Hint>
         )}
       </div>
 
@@ -149,9 +157,11 @@ export const CoefficientControl: React.FC<Props> = ({
             Только отмеченные строки ({selectedKeys.size})
           </label>
 
-          <button className="de-btn de-btn-primary" onClick={handleApply} disabled={busy}>
-            Применить коэффициент
-          </button>
+          <Hint align="start" text="Записать коэффициент в документ: цены на экране и в файле выйдут умноженными">
+            <button className="de-btn de-btn-primary" onClick={handleApply} disabled={busy}>
+              Применить коэффициент
+            </button>
+          </Hint>
           {error && <span className="de-coefficient-error">{error}</span>}
           <span className="de-coefficient-hint">
             Исходные цены сохраняются: коэффициент можно снять в любой момент.

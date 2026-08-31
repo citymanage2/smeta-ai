@@ -3,6 +3,7 @@ import { Sparkles } from 'lucide-react';
 
 import { AnalogRowIn, DocumentRef, startAnalogs } from '../../../api/documents';
 import { GridRow, RowKind, toNumber } from '../adapters/types';
+import Hint from '../Hint';
 
 /**
  * «Найти аналоги» — запуск фонового поиска более дешёвой замены.
@@ -102,21 +103,25 @@ const FindAnalogs: React.FC<Props> = ({
   }, [documentRef, positions, versionId, onStarted, onNotice]);
 
   return (
-    <button
-      className="de-btn"
-      onClick={handleClick}
-      disabled={busy || starting || positions.length === 0}
-      title={
+    <Hint
+      align="start"
+      text={
         busy
-          ? 'Поиск аналогов уже идёт'
+          ? 'Поиск аналогов уже идёт — дождитесь результата'
           : positions.length === 0
-            ? 'Отметьте позиции с ценой — ИИ поищет им замену подешевле'
-            : `Найти замену подешевле для отмеченных позиций (${positions.length})`
+            ? 'Поиск замены подешевле: отметьте галочками позиции с ценой, и ИИ поищет им аналоги в интернете'
+            : `Найти замену подешевле для отмеченных позиций (${positions.length}). Это предложения — в смету попадёт только то, что вы примете`
       }
     >
-      <Sparkles size={14} />
-      Найти аналоги{positions.length > 0 ? ` (${positions.length})` : ''}
-    </button>
+      <button
+        className="de-btn"
+        onClick={handleClick}
+        disabled={busy || starting || positions.length === 0}
+      >
+        <Sparkles size={14} />
+        Найти аналоги{positions.length > 0 ? ` (${positions.length})` : ''}
+      </button>
+    </Hint>
   );
 };
 

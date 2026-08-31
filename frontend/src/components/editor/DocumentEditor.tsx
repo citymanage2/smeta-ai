@@ -36,6 +36,7 @@ import { applyAnalogToRow } from './actions/analogsApply';
 import { moveRow, removeRowsCascade } from './rowOps';
 import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
+import Hint from './Hint';
 import { collapseExportRows, columnsFromEditor, rowsFromEditor } from './exportBuilder';
 import './DocumentEditor.css';
 
@@ -50,6 +51,14 @@ interface Props {
   fileSlot?: string;
   fileIndex?: number;
   title?: string;
+  /**
+   * Показывать ли собственную шапку с названием документа.
+   *
+   * На странице документа название уже стоит в шапке страницы, рядом с именем
+   * карточки, — вторая такая же полоса просто отжимала бы таблицу вниз.
+   * Название всё равно приходит пропом: по нему называется файл выгрузки.
+   */
+  showHead?: boolean;
   /**
    * Таблица сразу во всю высоту окна — так открывается страница документа.
    * Режима «поверх экрана» у редактора нет: документ всегда живёт страницей.
@@ -115,7 +124,7 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 // --- Компонент -------------------------------------------------------------
 
 export const DocumentEditor: React.FC<Props> = ({
-  cardId, kind, fileSlot, fileIndex, title, fullHeight = false,
+  cardId, kind, fileSlot, fileIndex, title, showHead = true, fullHeight = false,
   initialVersionId, initialTab, initialSheet, initialCollapsed = false,
   onStateChange, onClose, onApplied,
 }) => {
@@ -736,7 +745,7 @@ export const DocumentEditor: React.FC<Props> = ({
 
   return (
     <div className="de-root" ref={containerRef}>
-      {title && (
+      {title && showHead && (
         <div className="de-head">
           <span className="de-title">{title}</span>
           {onClose && (
@@ -869,82 +878,90 @@ export const DocumentEditor: React.FC<Props> = ({
             />
           )}
 
-          {/* Коэффициент к ценам — обратимая настройка документа. В разделе
-              сводной его нет: у сводной свой коэффициент в бланке, и второй,
-              на уровне раздела, дал бы в редакторе одно число, а в бланке
-              другое. */}
-          {canWrite && !isSummarySection && meta.row_format === 'estimate' && (
-            <CoefficientControl
-              coefficient={meta.coefficient}
-              selectedKeys={selectedKeys}
-              onApply={async (payload) => {
-                await setCoefficient(payload);
-                setNotice(payload ? 'Коэффициент применён' : 'Коэффициент снят');
-                onApplied?.();
-              }}
-            />
-          )}
+          {/* Действия над ценами — одной полосой, а не тремя.
+              Коэффициент, подбор цен и работа с прайсом раньше стояли каждый
+              своей строкой: шапка редактора занимала полэкрана, и таблица —
+              то, ради чего страницу открывают, — начиналась ниже сгиба. */}
+          <div className="de-actions-bar">
+            {/* Коэффициент к ценам — обратимая настройка документа. В разделе
+                сводной его нет: у сводной свой коэффициент в бланке, и второй,
+                на уровне раздела, дал бы в редакторе одно число, а в бланке
+                другое. */}
+            {canWrite && !isSummarySection && meta.row_format === 'estimate' && (
+              <CoefficientControl
+                coefficient={meta.coefficient}
+                selectedKeys={selectedKeys}
+                onApply={async (payload) => {
+                  await setCoefficient(payload);
+                  setNotice(payload ? 'Коэффициент применён' : 'Коэффициент снят');
+                  onApplied?.();
+                }}
+              />
+            )}
 
-          {/* Цены ищет ИИ — действие есть только в смете и оптимизации. Раздел
-              сводной формально того же формата, но он снимок: оба действия
-              пишут смету задачи и правку раздела бы не увидели, зато молча
-              изменили бы исходную смету. */}
-          {canWrite && (kind === 'estimate' || kind === 'optimization') && meta.task_id && (
-            <PriceActions
-              taskId={meta.task_id}
-              documentRef={documentRef}
-              versionId={versionId}
-              rev={meta.rev}
-              rows={rows}
-              selectedKeys={selectedKeys}
-              isDirty={isDirty}
-              onReload={() => load(documentRef)}
-              onNotice={setNotice}
-              onStarted={onApplied}
-            />
-          )}
-
-          {/* Работа с общим прайсом. Есть везде, где у строк есть цены и типы:
-              смета, оптимизация и разделы сводной. В перечне и полноте цен нет,
-              отправлять туда нечего. */}
-          {canWrite && meta.row_format === 'estimate' && (
-            <div className="de-price-actions">
-              <AddToPriceList
+            {/* Цены ищет ИИ — действие есть только в смете и оптимизации. Раздел
+                сводной формально того же формата, но он снимок: оба действия
+                пишут смету задачи и правку раздела бы не увидели, зато молча
+                изменили бы исходную смету. */}
+            {canWrite && (kind === 'estimate' || kind === 'optimization') && meta.task_id && (
+              <PriceActions
+                taskId={meta.task_id}
                 documentRef={documentRef}
+                versionId={versionId}
+                rev={meta.rev}
                 rows={rows}
                 selectedKeys={selectedKeys}
-                rowKind={adapter.rowKind}
+                isDirty={isDirty}
+                onReload={() => load(documentRef)}
                 onNotice={setNotice}
+                onStarted={onApplied}
               />
-              <AddFromPriceList
-                currentRowName={priceSearchSeed}
-                onInsert={handleInsertFromPriceList}
-              />
-              {/* Аналоги ищет ИИ в интернете — действие есть только там, где
-                  правка меняет саму смету. Раздел сводной — снимок: замена в
-                  нём исходную смету не изменит, и предложение вводило бы в
-                  заблуждение. */}
-              {supportsAnalogs && meta.task_id && (
-                <FindAnalogs
+            )}
+
+            {/* Работа с общим прайсом. Есть везде, где у строк есть цены и типы:
+                смета, оптимизация и разделы сводной. В перечне и полноте цен нет,
+                отправлять туда нечего. */}
+            {canWrite && meta.row_format === 'estimate' && (
+              <div className="de-price-actions">
+                <AddToPriceList
                   documentRef={documentRef}
                   rows={rows}
                   selectedKeys={selectedKeys}
                   rowKind={adapter.rowKind}
-                  busy={analogsRunning}
-                  versionId={versionId ?? undefined}
-                  onStarted={() => { setAnalogsOpen(true); refreshAnalogs(); }}
                   onNotice={setNotice}
                 />
-              )}
-              {/* Панель закрыли, а результаты остались — без этой кнопки
-                  вернуться к ним можно было бы только перезагрузкой страницы. */}
-              {supportsAnalogs && !analogsOpen && analogs?.status && (
-                <button className="de-btn" onClick={() => setAnalogsOpen(true)}>
-                  Показать найденные аналоги
-                </button>
-              )}
-            </div>
-          )}
+                <AddFromPriceList
+                  currentRowName={priceSearchSeed}
+                  onInsert={handleInsertFromPriceList}
+                />
+                {/* Аналоги ищет ИИ в интернете — действие есть только там, где
+                    правка меняет саму смету. Раздел сводной — снимок: замена в
+                    нём исходную смету не изменит, и предложение вводило бы в
+                    заблуждение. */}
+                {supportsAnalogs && meta.task_id && (
+                  <FindAnalogs
+                    documentRef={documentRef}
+                    rows={rows}
+                    selectedKeys={selectedKeys}
+                    rowKind={adapter.rowKind}
+                    busy={analogsRunning}
+                    versionId={versionId ?? undefined}
+                    onStarted={() => { setAnalogsOpen(true); refreshAnalogs(); }}
+                    onNotice={setNotice}
+                  />
+                )}
+                {/* Панель закрыли, а результаты остались — без этой кнопки
+                    вернуться к ним можно было бы только перезагрузкой страницы. */}
+                {supportsAnalogs && !analogsOpen && analogs?.status && (
+                  <Hint align="start" text="Вернуться к найденным аналогам: панель закрыли, но результаты поиска сохранились">
+                    <button className="de-btn" onClick={() => setAnalogsOpen(true)}>
+                      Показать найденные аналоги
+                    </button>
+                  </Hint>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Найденные аналоги: предложения, а не правки. В документ попадает
               только то, что человек принял кнопкой «Заменить». */}
@@ -981,22 +998,27 @@ export const DocumentEditor: React.FC<Props> = ({
                   <b>{fmtRub(totals.transport)} ₽</b>
                 </div>
               )}
-              <div className="de-totals-grand">
-                <span>
-                  {isSummarySection
-                    ? 'ИТОГО по разделу:'
-                    : showSheetTabs ? `ИТОГО по листу «${sheet}»:` : 'ИТОГО:'}
-                </span>
-                <b>{fmtRub(isSummarySection ? totals.sumWork + totals.sumMat : totals.grand)} ₽</b>
-              </div>
-              {/* Сумма контракта — по всему документу, а не по открытой
-                  вкладке: иначе её пришлось бы складывать в уме. */}
-              {documentTotals && (
-                <div className="de-totals-grand de-totals-document">
-                  <span>ВСЕГО по документу:</span>
-                  <b>{fmtRub(documentTotals.grand)} ₽</b>
+              {/* Оба итога — одной группой справа: перенесётся строка —
+                  перенесутся вместе, и черта между ними останется чертой между
+                  ними, а не повиснет в начале новой строки. */}
+              <div className="de-totals-right">
+                <div className="de-totals-grand">
+                  <span>
+                    {isSummarySection
+                      ? 'ИТОГО по разделу:'
+                      : showSheetTabs ? `ИТОГО по листу «${sheet}»:` : 'ИТОГО:'}
+                  </span>
+                  <b>{fmtRub(isSummarySection ? totals.sumWork + totals.sumMat : totals.grand)} ₽</b>
                 </div>
-              )}
+                {/* Сумма контракта — по всему документу, а не по открытой
+                    вкладке: иначе её пришлось бы складывать в уме. */}
+                {documentTotals && (
+                  <div className="de-totals-grand de-totals-document">
+                    <span>ВСЕГО по документу:</span>
+                    <b>{fmtRub(documentTotals.grand)} ₽</b>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

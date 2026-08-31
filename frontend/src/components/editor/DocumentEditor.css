@@ -12,14 +12,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
+  padding: 6px 14px;
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
   flex-shrink: 0;
 }
 
 .de-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #1e293b;
   overflow: hidden;
@@ -85,7 +85,7 @@
 .de-sheets {
   display: flex;
   gap: 3px;
-  padding: 7px 12px 0;
+  padding: 4px 12px 0;
   background: #f1f5f9;
   border-bottom: 1px solid #e2e8f0;
   overflow-x: auto;
@@ -96,7 +96,7 @@
   align-items: center;
   gap: 6px;
   max-width: 240px;
-  padding: 6px 14px;
+  padding: 4px 12px;
   font-size: 12.5px;
   font-weight: 500;
   color: #475569;
@@ -137,21 +137,26 @@
 
 .de-tabs {
   display: flex;
-  border-bottom: 1px solid #e2e8f0;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  flex-shrink: 0;
 }
 
 .de-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 18px;
-  font-size: 13px;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12px;
   font-weight: 500;
   color: #64748b;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -160,8 +165,9 @@
 
 .de-tab-active {
   color: #2563eb;
-  border-bottom-color: #2563eb;
+  background: #fff;
   font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .de-tab-count {
@@ -182,8 +188,8 @@
 .de-toolbar-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
+  gap: 10px;
+  padding: 5px 12px;
   flex-wrap: wrap;
 }
 
@@ -333,7 +339,7 @@
 
 /* ── Версии и сравнение ────────────────────────────────────────────── */
 .de-versions {
-  padding: 8px 16px 0;
+  padding: 5px 14px 0;
   background: #fff;
   flex-shrink: 0;
 }
@@ -350,47 +356,76 @@
   color: #0f172a;
 }
 
-/* ── Действия с ценами (только смета и оптимизация) ────────────────── */
-.de-price-actions {
+/* ── Полоса действий: коэффициент, цены, прайс ──────────────────────
+   Три группы кнопок стоят одной строкой, а не тремя. Группы разделяет
+   увеличенный отступ: линии между ними в строке высотой 40 px читались бы
+   как границы разных панелей. Полоса без кнопок (перечень, только просмотр)
+   исчезает целиком — пустой рамки на экране быть не должно. */
+.de-actions-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
+  gap: 4px 16px;
+  padding: 4px 12px;
   background: #fff;
   border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
   flex-wrap: wrap;
 }
 
-/* ── Итоги ─────────────────────────────────────────────────────────── */
+.de-actions-bar:empty { display: none; }
+
+.de-price-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Итоги ─────────────────────────────────────────────────────────
+   Слагаемые слева, итог справа — одной строкой. Раньше это была таблица в
+   две строки плюс два итога отдельными полосами: восемьдесят пикселей ради
+   шести чисел, на которые смотрят мельком. */
 .de-totals {
-  padding: 12px 16px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  padding: 6px 14px;
   background: #f8fafc;
   border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
 }
 
 .de-totals-grid {
-  display: grid;
-  grid-template-columns: auto auto auto auto;
-  gap: 4px 18px;
-  font-size: 12.5px;
-  color: #475569;
-  justify-content: start;
+  display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
+  font-size: 12px;
+  color: #64748b;
 }
+
+/* Подпись и число читаются парой: между парами отступ втрое больше, чем
+   внутри пары. */
+.de-totals-grid > span { margin-left: 16px; }
+.de-totals-grid > span:first-child { margin-left: 0; }
+.de-totals-grid > b { margin-left: 5px; }
 
 .de-totals-grid b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #1e293b; }
 
-.de-totals-grand {
+.de-totals-right {
   display: flex;
-  justify-content: space-between;
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 2px solid #cbd5e1;
-  font-size: 14px;
+  align-items: baseline;
+  margin-left: auto;
+}
+
+.de-totals-grand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
   font-weight: 700;
   color: #0f172a;
+  white-space: nowrap;
 }
 
 .de-totals-grand b {
@@ -399,12 +434,12 @@
 }
 
 /* Сумма по всему документу стоит рядом с итогом листа. Она главнее — это сумма
-   контракта, — но линией их не разделяем: два жирных разделителя подряд
-   читаются как две разные таблицы. */
+   контракта, — но линией их не разделяем: два разделителя подряд читаются как
+   две разные таблицы. Отделяем светлой чертой слева. */
 .de-totals-document {
-  margin-top: 4px;
-  padding-top: 0;
-  border-top: none;
+  margin-left: 16px;
+  padding-left: 16px;
+  border-left: 1px solid #cbd5e1;
 }
 
 /* ── Таблица ───────────────────────────────────────────────────────── */
@@ -573,15 +608,22 @@
 
 /* --- Коэффициент к ценам -------------------------------------------------- */
 
+/* Коэффициент стоит в общей полосе действий, поэтому своей строки и своей
+   рамки у него нет. Форма раскрывается выпадающим окном: раскройся она в
+   потоке — полоса разъехалась бы на три строки, и таблица снова уехала бы
+   вниз. */
 .de-coefficient {
-  padding: 8px 12px;
-  border-bottom: 1px solid #eef2f7;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .de-coefficient-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -595,15 +637,21 @@
 }
 
 .de-coefficient-form {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
   display: flex;
   align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
-  margin-top: 10px;
+  width: max-content;
+  max-width: 420px;
   padding: 10px 12px;
-  background: #f8fafc;
+  background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
 }
 
 .de-coefficient-form label {
@@ -836,3 +884,73 @@
   font-style: italic;
   font-weight: 500;
 }
+
+/* ── Подсказка при наведении ────────────────────────────────────────
+   Своя, а не системный `title`: тот ждёт секунду, а на выключенной кнопке не
+   показывается вовсе — хотя именно там подсказка нужнее всего, она объясняет,
+   почему кнопка недоступна. Обёртка ловит наведение сама, поэтому работает и
+   с `disabled`. */
+.de-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.de-hint::after {
+  content: attr(data-hint);
+  position: absolute;
+  top: calc(100% + 7px);
+  z-index: 80;
+  width: max-content;
+  max-width: 260px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+
+/* Стрелка к кнопке: без неё пузырь висит сам по себе и непонятно, что он
+   объясняет. */
+.de-hint::before {
+  content: '';
+  position: absolute;
+  top: calc(100% + 2px);
+  z-index: 81;
+  border: 5px solid transparent;
+  border-bottom-color: #0f172a;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+}
+
+/* Куда прижимать пузырь. У правого края окна подсказка по центру уезжала бы за
+   экран и обрезалась рамкой редактора. */
+.de-hint-center::after { left: 50%; transform: translateX(-50%); }
+.de-hint-start::after { left: 0; }
+.de-hint-end::after { right: 0; }
+.de-hint-center::before,
+.de-hint-start::before,
+.de-hint-end::before { left: 50%; transform: translateX(-50%); }
+
+.de-hint:hover::after,
+.de-hint:hover::before,
+.de-hint:focus-within::after,
+.de-hint:focus-within::before {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.25s;
+}
+
+/* Кнопка внутри обёртки ведёт себя как раньше: обёртка не должна ни менять
+   ширину кнопки, ни ломать `margin-left: auto` соседей. */
+.de-hint > button { flex-shrink: 0; }

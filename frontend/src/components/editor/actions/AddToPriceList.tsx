@@ -4,6 +4,7 @@ import { BookmarkPlus } from 'lucide-react';
 import { DocumentRef, addToPriceList } from '../../../api/documents';
 import { GridRow, RowKind } from '../adapters/types';
 import { PricePosition } from './priceInsert';
+import Hint from '../Hint';
 
 /**
  * «В прайс» — отправить выделенные позиции в общий прайс.
@@ -81,19 +82,23 @@ const AddToPriceList: React.FC<Props> = ({
   }, [documentRef, positions, onNotice]);
 
   return (
-    <button
-      className="de-btn"
-      onClick={handleClick}
-      disabled={busy || positions.length === 0}
-      title={
+    <Hint
+      align="start"
+      text={
         positions.length === 0
-          ? 'Отметьте галочками работы и материалы, которые нужно занести в прайс'
-          : `Занести в прайс отмеченные позиции (${positions.length})`
+          ? 'Занести позиции в общий прайс: сначала отметьте галочками работы и материалы с ценой'
+          : `Занести отмеченные позиции (${positions.length}) в общий прайс — они станут доступны во всех сметах`
       }
     >
-      <BookmarkPlus size={14} />
-      В прайс{positions.length > 0 ? ` (${positions.length})` : ''}
-    </button>
+      <button
+        className="de-btn"
+        onClick={handleClick}
+        disabled={busy || positions.length === 0}
+      >
+        <BookmarkPlus size={14} />
+        В прайс{positions.length > 0 ? ` (${positions.length})` : ''}
+      </button>
+    </Hint>
   );
 };
 
