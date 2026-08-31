@@ -2,7 +2,7 @@ import asyncio
 from decimal import Decimal
 from typing import Any, Callable, Optional
 
-import httpx
+import httpx2
 import anthropic
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -326,8 +326,12 @@ WEB_SEARCH_TOOL = {
 
 # Single shared client with generous timeouts.
 # read=300s covers large project documents that take a long time to process.
-_http_client = httpx.AsyncClient(
-    timeout=httpx.Timeout(
+#
+# Клиент обязан быть из httpx2, а не из httpx: с версии 1.0 SDK Anthropic
+# работает на httpx2 (поддерживаемый форк httpx) и отклоняет чужой клиент
+# TypeError'ом при создании — задача падает на первом же обращении к ИИ.
+_http_client = httpx2.AsyncClient(
+    timeout=httpx2.Timeout(
         connect=10.0,
         read=300.0,
         write=30.0,
@@ -360,8 +364,8 @@ class _ProxiedAsyncAnthropic(anthropic.AsyncAnthropic):
     трогаем: посредник проксирует только API Anthropic.
     """
 
-    def _prepare_url(self, url: str) -> httpx.URL:
-        parsed = httpx.URL(url)
+    def _prepare_url(self, url: str) -> httpx2.URL:
+        parsed = httpx2.URL(url)
         if not parsed.is_relative_url and parsed.host == _ANTHROPIC_HOST:
             url = parsed.raw_path.decode()  # path + query, без схемы и хоста
         return super()._prepare_url(url)
@@ -529,7 +533,7 @@ async def call_claude(
             else:
                 remaining = None
 
-            # Pass timeout directly to SDK (sets httpx total request timeout).
+            # Pass timeout directly to SDK (sets httpx2 total request timeout).
             # asyncio.wait_for обеспечивает отмену корутины по оставшемуся бюджету.
             attempt_start = asyncio.get_event_loop().time()
             async with _anthropic_semaphore:
@@ -637,7 +641,7 @@ async def call_claude(
             if attempt < len(delays):
                 await asyncio.sleep(wait)
 
-        except (anthropic.APIConnectionError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
+        except (anthropic.APIConnectionError, httpx2.RemoteProtocolError, httpx2.ReadTimeout) as e:
             last_error = e
             logger.warning(
                 "Claude connection/protocol error, retrying",

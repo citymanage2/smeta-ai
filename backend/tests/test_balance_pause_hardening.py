@@ -17,7 +17,7 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import anthropic
 import pytest
 
@@ -35,11 +35,11 @@ from app.services.task_processor import TaskProcessor  # noqa: E402
 def _api_status_error(status_code: int, message: str) -> anthropic.APIStatusError:
     """Сфабриковать APIStatusError с заданным статусом и текстом в body.error.message."""
     body = {"error": {"type": "invalid_request_error", "message": message}}
-    raw = httpx.Response(
+    raw = httpx2.Response(
         status_code=status_code,
         headers={},
         content=b"{}",
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
     )
     return anthropic.APIStatusError(message, response=raw, body=body)
 

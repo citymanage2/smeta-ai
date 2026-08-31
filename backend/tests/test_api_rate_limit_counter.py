@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import anthropic
-import httpx
+import httpx2
 import pytest
 from sqlalchemy import delete, select
 
@@ -33,10 +33,10 @@ async def _clean(db_session):
 def _rate_limit_error(retry_after: Optional[str] = "30") -> anthropic.RateLimitError:
     """Настоящий RateLimitError SDK — чтобы ловился именно тот except, что в коде."""
     headers = {"retry-after": retry_after} if retry_after is not None else {}
-    response = httpx.Response(
+    response = httpx2.Response(
         429,
         headers=headers,
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
         json={"error": {"type": "rate_limit_error", "message": "rate limit"}},
     )
     return anthropic.RateLimitError("rate limit", response=response, body=None)

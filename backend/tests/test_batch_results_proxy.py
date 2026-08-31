@@ -6,7 +6,7 @@ Anthropic отдаёт `results_url` АБСОЛЮТНЫМ (https://api.anthropic
 напрямую на api.anthropic.com и с РФ-сервера получал 403 forbidden
 («Request not allowed»), роняя batch-режим ESTIMATE_FROM_LIST целиком.
 
-Тест проверяет ФАКТИЧЕСКИ исходящие HTTP-запросы (httpx.MockTransport), а не
+Тест проверяет ФАКТИЧЕСКИ исходящие HTTP-запросы (httpx2.MockTransport), а не
 внутренности SDK — переживёт апгрейд anthropic и поймает регрессию, если запрос
 снова пойдёт мимо посредника.
 
@@ -14,7 +14,7 @@ Anthropic отдаёт `results_url` АБСОЛЮТНЫМ (https://api.anthropic
 """
 import json
 
-import httpx
+import httpx2
 import pytest
 
 import app.services.claude_service as cs
@@ -68,18 +68,18 @@ _JSONL = json.dumps({
 @pytest.fixture
 def transport(monkeypatch):
     """Клиент Anthropic поверх MockTransport; собирает URL всех исходящих запросов."""
-    seen: list[httpx.URL] = []
+    seen: list[httpx2.URL] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.url)
         if request.url.path.endswith("/results"):
-            return httpx.Response(200, text=_JSONL)
-        return httpx.Response(200, json=_batch_body())
+            return httpx2.Response(200, text=_JSONL)
+        return httpx2.Response(200, json=_batch_body())
 
     monkeypatch.setattr(cs.settings, "ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(cs.settings, "ANTHROPIC_BASE_URL", PROXY)
     monkeypatch.setattr(cs.settings, "ANTHROPIC_PROXY_SECRET", "shhh")
-    monkeypatch.setattr(cs, "_http_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(cs, "_http_client", httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
     monkeypatch.setattr(cs, "_client", None)  # ленивый singleton — пересоздать на моках
     return seen
 
@@ -114,18 +114,18 @@ async def test_batch_results_parsed_after_rewrite(transport):
 
 async def test_direct_mode_untouched(monkeypatch):
     """Без ANTHROPIC_BASE_URL (локальная разработка) всё идёт на api.anthropic.com."""
-    seen: list[httpx.URL] = []
+    seen: list[httpx2.URL] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.url)
         if request.url.path.endswith("/results"):
-            return httpx.Response(200, text=_JSONL)
-        return httpx.Response(200, json=_batch_body())
+            return httpx2.Response(200, text=_JSONL)
+        return httpx2.Response(200, json=_batch_body())
 
     monkeypatch.setattr(cs.settings, "ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(cs.settings, "ANTHROPIC_BASE_URL", "")
     monkeypatch.setattr(cs.settings, "ANTHROPIC_PROXY_SECRET", "")
-    monkeypatch.setattr(cs, "_http_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(cs, "_http_client", httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
     monkeypatch.setattr(cs, "_client", None)
 
     await cs.collect_claude_batch(BATCH_ID, task_id=None, db=None)
@@ -135,18 +135,18 @@ async def test_direct_mode_untouched(monkeypatch):
 
 async def test_proxy_with_path_prefix_keeps_prefix(monkeypatch):
     """Посредник на подпути (https://host/anthropic) — префикс не теряется."""
-    seen: list[httpx.URL] = []
+    seen: list[httpx2.URL] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.url)
         if request.url.path.endswith("/results"):
-            return httpx.Response(200, text=_JSONL)
-        return httpx.Response(200, json=_batch_body())
+            return httpx2.Response(200, text=_JSONL)
+        return httpx2.Response(200, json=_batch_body())
 
     monkeypatch.setattr(cs.settings, "ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(cs.settings, "ANTHROPIC_BASE_URL", f"{PROXY}/anthropic")
     monkeypatch.setattr(cs.settings, "ANTHROPIC_PROXY_SECRET", "shhh")
-    monkeypatch.setattr(cs, "_http_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(cs, "_http_client", httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
     monkeypatch.setattr(cs, "_client", None)
 
     await cs.collect_claude_batch(BATCH_ID, task_id=None, db=None)
@@ -157,19 +157,19 @@ async def test_proxy_with_path_prefix_keeps_prefix(monkeypatch):
 async def test_foreign_host_results_url_left_as_is(monkeypatch):
     """results_url на постороннем хосте не переписываем — переписывать некуда,
     посредник проксирует только API Anthropic."""
-    seen: list[httpx.URL] = []
+    seen: list[httpx2.URL] = []
     foreign = "https://storage.example.org/batches/xxx/results"
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.url)
         if request.url.path.endswith("/results"):
-            return httpx.Response(200, text=_JSONL)
-        return httpx.Response(200, json=_batch_body(results_url=foreign))
+            return httpx2.Response(200, text=_JSONL)
+        return httpx2.Response(200, json=_batch_body(results_url=foreign))
 
     monkeypatch.setattr(cs.settings, "ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(cs.settings, "ANTHROPIC_BASE_URL", PROXY)
     monkeypatch.setattr(cs.settings, "ANTHROPIC_PROXY_SECRET", "shhh")
-    monkeypatch.setattr(cs, "_http_client", httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(cs, "_http_client", httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
     monkeypatch.setattr(cs, "_client", None)
 
     await cs.collect_claude_batch(BATCH_ID, task_id=None, db=None)

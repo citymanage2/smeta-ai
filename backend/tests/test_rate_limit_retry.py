@@ -13,7 +13,7 @@ import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import pytest
 import anthropic
 
@@ -30,11 +30,11 @@ def _make_rate_limit_error(retry_after: Optional[float] = None) -> anthropic.Rat
     if retry_after is not None:
         headers["retry-after"] = str(retry_after)
 
-    raw_response = httpx.Response(
+    raw_response = httpx2.Response(
         status_code=429,
         headers=headers,
         content=b'{"error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}}',
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
     )
     return anthropic.RateLimitError(
         message="Rate limit exceeded",

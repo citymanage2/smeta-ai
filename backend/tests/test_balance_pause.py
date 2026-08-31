@@ -16,7 +16,7 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 import anthropic
 import pytest
 from sqlalchemy import select
@@ -39,11 +39,11 @@ def _make_credit_balance_error() -> anthropic.APIStatusError:
             "message": "Your credit balance is too low to access the Anthropic API.",
         }
     }
-    raw = httpx.Response(
+    raw = httpx2.Response(
         status_code=400,
         headers={"x-request-id": "test-req"},
         content=b'{"error": {"message": "Your credit balance is too low"}}',
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
     )
     return anthropic.APIStatusError("credit balance too low", response=raw, body=body)
 
@@ -71,11 +71,11 @@ async def test_credit_balance_4xx_raises_insufficient_balance(monkeypatch, patch
 async def test_non_balance_4xx_not_wrapped(monkeypatch, patch_claude_create):
     """Прочие 4xx (не про баланс) НЕ превращаются в InsufficientBalanceError."""
     body = {"error": {"type": "invalid_request_error", "message": "bad request"}}
-    raw = httpx.Response(
+    raw = httpx2.Response(
         status_code=400,
         headers={},
         content=b'{"error": {"message": "bad request"}}',
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
     )
 
     async def fake_create(**kwargs):

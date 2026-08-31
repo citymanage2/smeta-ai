@@ -160,14 +160,14 @@ async def test_api_health_counts_paused_tasks(
 
 async def test_api_ping_maps_balance_error(monkeypatch):
     import anthropic
-    import httpx
+    import httpx2
 
     from app.services import claude_service as cs
 
     body = {"error": {"type": "invalid_request_error", "message": "credit balance is too low"}}
-    raw = httpx.Response(
+    raw = httpx2.Response(
         status_code=400, headers={}, content=b"{}",
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
     )
     err = anthropic.APIStatusError("credit balance", response=raw, body=body)
 

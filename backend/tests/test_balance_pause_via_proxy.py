@@ -23,7 +23,7 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anthropic
-import httpx
+import httpx2
 import pytest
 
 sys.modules.setdefault("fitz", MagicMock())
@@ -37,11 +37,11 @@ from app.services.claude_service import (  # noqa: E402
 def _rate_limit_error(message: str) -> anthropic.RateLimitError:
     """429 с произвольным текстом в body.error.message."""
     body = {"error": {"type": "rate_limit_error", "message": message}}
-    raw = httpx.Response(
+    raw = httpx2.Response(
         status_code=429,
         headers={},
         content=b"{}",
-        request=httpx.Request("POST", "https://proxy.example/v1/messages"),
+        request=httpx2.Request("POST", "https://proxy.example/v1/messages"),
     )
     return anthropic.RateLimitError(message, response=raw, body=body)
 
@@ -49,11 +49,11 @@ def _rate_limit_error(message: str) -> anthropic.RateLimitError:
 def _server_error(status_code: int, message: str) -> anthropic.APIStatusError:
     """5xx с произвольным текстом в body.error.message."""
     body = {"error": {"type": "api_error", "message": message}}
-    raw = httpx.Response(
+    raw = httpx2.Response(
         status_code=status_code,
         headers={},
         content=b"{}",
-        request=httpx.Request("POST", "https://proxy.example/v1/messages"),
+        request=httpx2.Request("POST", "https://proxy.example/v1/messages"),
     )
     return anthropic.APIStatusError(message, response=raw, body=body)
 
