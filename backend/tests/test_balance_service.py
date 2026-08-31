@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.api_balance import ApiBalanceMark, ApiCostDay
 from app.models.api_call_log import ApiCallLog
@@ -296,3 +297,26 @@ class TestSync:
             AsyncMock(return_value=None),
         ):
             assert await balance_service.sync_cost_days(db_session, now=now) is None
+
+
+class TestSyncRace:
+    @pytest.mark.asyncio
+    async def test_concurrent_sync_does_not_crash(self, db_session):
+        """Часовой job и кнопка «Сверить» могут попасть в один день разом.
+
+        Проигравший обязан молча откатиться: данные уже записаны победителем.
+        """
+        now = _utc(datetime(2026, 9, 10, 12, 0))
+        yesterday = now.date() - timedelta(days=1)
+
+        async def fake_commit():
+            raise IntegrityError("insert", {}, Exception("duplicate key"))
+
+        with patch.object(
+            balance_service.anthropic_admin,
+            "fetch_cost_days",
+            AsyncMock(return_value={yesterday: Decimal("5.00")}),
+        ), patch.object(db_session, "commit", fake_commit):
+            written = await balance_service.sync_cost_days(db_session, now=now)
+
+        assert written == 0

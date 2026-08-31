@@ -63,8 +63,17 @@ def is_configured() -> bool:
 
 
 def _base_url() -> str:
-    """Тот же маршрут, что и у вызовов модели: с РФ-IP напрямую нельзя."""
-    return (settings.ANTHROPIC_BASE_URL or API_BASE).rstrip("/")
+    """Тот же маршрут, что и у вызовов модели: с РФ-IP напрямую нельзя.
+
+    Хвост `/v1` отрезаем: SDK Anthropic ожидает базу без него и сам дописывает
+    путь, поэтому в env лежит база без версии — но посредника могут настроить и
+    с ней. Не отрезав, мы бы стучались в `/v1/v1/organizations/...` и получали
+    404, неотличимый в UI от «отчёт недоступен».
+    """
+    base = (settings.ANTHROPIC_BASE_URL or API_BASE).rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return base
 
 
 async def _request(params: dict) -> dict:

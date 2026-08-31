@@ -137,3 +137,23 @@ class TestErrors:
                 await anthropic_admin.fetch_cost_days(
                     date(2026, 8, 30), date(2026, 8, 31)
                 )
+
+
+class TestBaseUrl:
+    """Маршрут запроса: посредник может быть настроен и с хвостом /v1."""
+
+    def test_v1_suffix_not_doubled(self):
+        with patch.object(
+            anthropic_admin.settings, "ANTHROPIC_BASE_URL", "https://proxy.example.com/v1"
+        ):
+            assert anthropic_admin._base_url() == "https://proxy.example.com"
+
+    def test_plain_proxy_kept(self):
+        with patch.object(
+            anthropic_admin.settings, "ANTHROPIC_BASE_URL", "https://proxy.example.com/"
+        ):
+            assert anthropic_admin._base_url() == "https://proxy.example.com"
+
+    def test_direct_when_not_configured(self):
+        with patch.object(anthropic_admin.settings, "ANTHROPIC_BASE_URL", ""):
+            assert anthropic_admin._base_url() == anthropic_admin.API_BASE

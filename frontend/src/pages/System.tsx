@@ -10,6 +10,7 @@ import DashboardProjects from '../components/dashboard/DashboardProjects';
 import DashboardChart from '../components/dashboard/DashboardChart';
 import DashboardPriceLists from '../components/dashboard/DashboardPriceLists';
 import DashboardCosts from '../components/dashboard/DashboardCosts';
+import DashboardBalance from '../components/dashboard/DashboardBalance';
 
 const System: React.FC = () => {
   // Дашборд-агрегаты доступны только менеджеру (бэкенд отдаёт 403 остальным),
@@ -115,6 +116,11 @@ const System: React.FC = () => {
 
             <Section>
               <DashboardPriceLists priceLists={data.price_lists} />
+            </Section>
+
+            {/* Остаток — над расходами: «сколько осталось» важнее, чем «сколько потрачено» */}
+            <Section>
+              <DashboardBalance onChanged={refreshAll} />
             </Section>
 
             <Section>

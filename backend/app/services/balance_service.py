@@ -36,6 +36,7 @@ from typing import Optional
 
 import structlog
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_balance import ApiBalanceMark, ApiCostDay
@@ -310,6 +311,16 @@ async def sync_cost_days(
             row.synced_at = now
         written += 1
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Тот же день вставляют одновременно часовой job воркера и кнопка
+        # «Сверить траты» из админки — разные процессы, общий первичный ключ.
+        # Проигравший откатывается молча: данные уже записаны победителем, и
+        # ронять из-за этого страницу не за что.
+        await db.rollback()
+        logger.info("Cost report sync raced with another sync", days=written)
+        return 0
+
     logger.info("Cost report synced", days=written, start=str(start), end=str(today))
     return written
