@@ -13,6 +13,7 @@ import asyncio
 import os
 import signal
 import socket
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
 
 import structlog
@@ -666,6 +667,18 @@ async def _ensure_price_cache() -> None:
     await _warm_price_cache()
 
 
+# Когда фоновой сверке трат снова можно пробовать. Отчёт отвечает 403 «Missing
+# permissions» на личной (не team) организации — это не сбой, а её постоянное
+# свойство, и долбиться в него каждый час значит писать в лог мусор на ровном
+# месте. После отказа по правам ждём сутки; кнопку «Сверить траты» это не
+# ограничивает — человек нажал, значит что-то изменил и хочет проверить.
+_cost_sync_paused_until: Optional[datetime] = None
+# Отказы, которые сами не пройдут: ключ не тот (401) или организации не положено
+# (403). Сетевые сбои и 5xx сюда не относятся — их ретраить через час правильно.
+_COST_SYNC_HARD_REFUSALS = ("HTTP 401", "HTTP 403")
+COST_SYNC_PAUSE = timedelta(hours=24)
+
+
 async def _sync_api_cost_job() -> None:
     """Сверить траты с официальным отчётом Anthropic (раз в час).
 
@@ -677,16 +690,31 @@ async def _sync_api_cost_job() -> None:
     Отказ Anthropic не роняет обработчик: остаток продолжает считаться по своему
     журналу, а на странице «Система» видно время последней удачной сверки.
     """
+    global _cost_sync_paused_until
+
     from app.services import balance_service
     from app.services.anthropic_admin import AdminApiError, is_configured
 
     if not is_configured():
-        return  # админ-ключ не задан — официальной сверки нет, и это норма
+        return  # ключа нет — официальной сверки нет, и это норма
+    now = datetime.now(timezone.utc)
+    if _cost_sync_paused_until and now < _cost_sync_paused_until:
+        return
     try:
         async with AsyncSessionLocal() as db:
             await balance_service.sync_cost_days(db)
+        _cost_sync_paused_until = None
     except AdminApiError as exc:
-        logger.warning("Cost report sync failed", error=str(exc))
+        message = str(exc)
+        if any(marker in message for marker in _COST_SYNC_HARD_REFUSALS):
+            _cost_sync_paused_until = now + COST_SYNC_PAUSE
+            logger.warning(
+                "Cost report sync refused, pausing for a day",
+                error=message,
+                retry_after=str(_cost_sync_paused_until),
+            )
+        else:
+            logger.warning("Cost report sync failed", error=message)
     except Exception as exc:  # noqa: BLE001 — фоновой job не имеет права падать
         logger.warning("Cost report sync crashed", error=str(exc))
 

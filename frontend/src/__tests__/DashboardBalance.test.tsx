@@ -102,13 +102,15 @@ describe('DashboardBalance', () => {
     expect(screen.getByText(/Ключ Anthropic не задан/)).toBeInTheDocument()
   })
 
-  it('до первой сверки предлагает проверить ключ кнопкой', async () => {
+  it('без официальных данных подпись нейтральна — блок не выглядит сломанным', async () => {
+    // Официальной сверки может не быть никогда: на личной организации Anthropic
+    // отвечает 403. Остаток при этом полностью рабочий.
     fetchApiBalance.mockResolvedValue(
       balance({ official_enabled: true, official_through: null, synced_at: null })
     )
     render(<DashboardBalance />)
 
-    expect(await screen.findByText(/Сверки с Anthropic ещё не было/)).toBeInTheDocument()
+    expect(await screen.findByText(/Официальная сверка с Anthropic: данных нет/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Сверить траты' })).toBeEnabled()
   })
 
