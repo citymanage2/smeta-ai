@@ -8,6 +8,9 @@ export interface CustomCostRow {
   without_vat: number   // canonical stored value; with_vat = without_vat × 1.22
 }
 
+/** В чём заданы цели оптимизации: себестоимость раздела или сумма с НДС. */
+export type TargetBasis = 'cost' | 'with_vat';
+
 export interface SummaryOverrides {
   coefficient: number;
   transport_pct: number;
@@ -30,6 +33,11 @@ export interface SummaryOverrides {
   profit_pct: number;
   vat_full_cost_pct: number;
   tax_pct: number;
+  // Цели оптимизации (план 2026-09-01). База — одна на весь бланк: цели заданы
+  // либо в себестоимости раздела ('cost'), либо в суммах после налога раздела
+  // ('with_vat'). Цель по объекту: null — цели нет (это не цель 0).
+  target_basis: TargetBasis;
+  target_total_for_customer: number | null;
   // row management
   hidden_fixed_rows: string[];       // keys of fixed rows removed by user
   custom_rows_before: CustomCostRow[]; // user-added rows above separator (numbered, in subtotal)
@@ -69,6 +77,8 @@ export const DEFAULT_OVERRIDES: SummaryOverrides = {
   profit_pct: 20.0,
   vat_full_cost_pct: 22.0,
   tax_pct: 2.0,
+  target_basis: 'cost',
+  target_total_for_customer: null,
   hidden_fixed_rows: [],
   custom_rows_before: [],
   custom_rows_after: [],
@@ -89,10 +99,17 @@ export interface SectionTab {
    * Остаётся запасным значением для сводных, сохранённых раньше.
    */
   tax_pct?: number;
+  /** Цель по работам раздела. null/undefined — цели нет (это не цель 0). */
+  target_works?: number | null;
+  /** Цель по материалам раздела. */
+  target_materials?: number | null;
 }
 
 /** Половина раздела, у которой своя ставка налога. */
 export type TaxSide = 'works' | 'materials';
+
+/** Та же половина раздела в разговоре о целях: работы или материалы. */
+export type SectionSide = TaxSide;
 
 export interface SectionCalcRow {
   card_id: string;
@@ -103,10 +120,36 @@ export interface SectionCalcRow {
   materials_raw: number;
   works_with_vat: number;
   materials_with_vat: number;
+  /** Цели раздела и отклонения факта от них. null — цели нет. */
+  target_works: number | null;
+  target_materials: number | null;
+  /** Факт, с которым сравнивается цель: зависит от базы целей. */
+  works_fact: number;
+  materials_fact: number;
+  works_deviation: number | null;
+  works_deviation_pct: number | null;
+  materials_deviation: number | null;
+  materials_deviation_pct: number | null;
 }
 
 export interface SummaryCalcResult {
   section_totals: SectionCalcRow[];
+
+  // Цели оптимизации. ИТОГО складывает только разделы с заданной целью,
+  // иначе факт всех разделов сравнивался бы с целью половины.
+  target_basis: TargetBasis;
+  has_section_targets: boolean;
+  targets_total_works: number | null;
+  targets_fact_works: number | null;
+  targets_deviation_works: number | null;
+  targets_deviation_works_pct: number | null;
+  targets_total_materials: number | null;
+  targets_fact_materials: number | null;
+  targets_deviation_materials: number | null;
+  targets_deviation_materials_pct: number | null;
+  target_total_for_customer: number | null;
+  total_deviation: number | null;
+  total_deviation_pct: number | null;
 
   // Rows 1–2
   works_with_vat: number;

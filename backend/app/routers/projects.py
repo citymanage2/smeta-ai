@@ -16,6 +16,7 @@ from app.models.result import TaskResult
 from app.models.summary_estimate import SummaryEstimate
 from app.models.user import User
 from app.utils.auth import get_current_user, get_admin_user, current_user_id
+from app.services.summary_service import target_total
 from app.utils.owner_names import owner_names as _owner_names
 from app.utils.permissions import (
     visibility_filter,
@@ -78,6 +79,7 @@ class ProjectCardResponse(BaseModel):
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
     summary_total: Optional[float] = None
+    summary_target_total: Optional[float] = None
     task_type_counts: dict[str, int] = {}
     total_tasks: int = 0
     is_archived: bool = False
@@ -113,6 +115,7 @@ class ProjectDetailResponse(BaseModel):
     total_cost: Optional[float]
     optimized_cost: Optional[float] = None
     summary_total: Optional[float] = None
+    summary_target_total: Optional[float] = None
     has_summary: bool = False
     task_type_counts: dict[str, int] = {}
     total_tasks: int = 0
@@ -247,6 +250,7 @@ async def list_projects(
             Project.created_at,
             Project.updated_at,
             Project.summary_total,
+            Project.summary_target_total,
             Project.is_archived,
             Project.owner_id,
             func.count(case((Task.estimation_status == "unestimated", 1), else_=None)).label("unestimated"),
@@ -280,6 +284,7 @@ async def list_projects(
             Project.created_at,
             Project.updated_at,
             Project.summary_total,
+            Project.summary_target_total,
             Project.is_archived,
             Project.owner_id,
         )
@@ -307,6 +312,10 @@ async def list_projects(
             other=row.other or 0,
             total_tasks=row.total_tasks or 0,
             summary_total=float(row.summary_total) if row.summary_total is not None else None,
+            summary_target_total=(
+                float(row.summary_target_total)
+                if row.summary_target_total is not None else None
+            ),
             total_cost=(
                 float(row.summary_total)
                 if row.summary_total is not None
@@ -417,7 +426,8 @@ async def get_project(
 
     # Read summary state directly from SummaryEstimate (source of truth)
     summary_res = await db.execute(
-        select(SummaryEstimate.id, SummaryEstimate.total_for_customer)
+        select(SummaryEstimate.id, SummaryEstimate.total_for_customer,
+               SummaryEstimate.overrides)
         .where(SummaryEstimate.project_id == project_id)
     )
     summary_row = summary_res.one_or_none()
@@ -427,6 +437,10 @@ async def get_project(
         agg["total_cost"] = summary_total
     else:
         summary_total = 0.0 if has_summary else None
+    # Цель по объекту — из самой сводной: на карточке показываем источник
+    # истины, а не витрину `projects.summary_target_total` (её читает список).
+    summary_target = target_total(summary_row.overrides) if has_summary else None
+    summary_target_total = float(summary_target) if summary_target is not None else None
 
     tasks_result = await db.execute(
         select(
@@ -463,6 +477,7 @@ async def get_project(
         owner_id=project.owner_id,
         owner_name=owner_names.get(project.owner_id),
         summary_total=summary_total,
+        summary_target_total=summary_target_total,
         has_summary=has_summary,
         task_type_counts=type_counts.get(project_id, {}),
         total_tasks=len(tasks),

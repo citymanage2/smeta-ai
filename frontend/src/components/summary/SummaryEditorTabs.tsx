@@ -40,6 +40,7 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
     setActiveTabIndex,
     refreshSections,
     updateSectionTaxPct,
+    updateSectionTarget,
     updateOverride,
     save,
   } = useSummaryEditorStore()
@@ -214,6 +215,7 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
             overrides={summaryOverrides}
             onUpdateOverride={updateOverride}
             onUpdateSectionTaxPct={updateSectionTaxPct}
+            onUpdateSectionTarget={updateSectionTarget}
           />
         ) : sections.length === 0 ? (
           <SummarySheet
@@ -221,6 +223,7 @@ const SummaryEditorTabs: React.FC<Props> = ({ projectId, projectName }) => {
             overrides={summaryOverrides}
             onUpdateOverride={updateOverride}
             onUpdateSectionTaxPct={updateSectionTaxPct}
+            onUpdateSectionTarget={updateSectionTarget}
           />
         ) : (
           (() => {

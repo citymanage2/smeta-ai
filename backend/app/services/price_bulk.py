@@ -28,6 +28,7 @@ from app.services.embedding_service import (
     generate_embedding,
     normalize_name,
 )
+from app.utils.price_change import price_changed, prices_changed
 from app.utils.price_min import ESTIMATE_CONTRACTOR, compute_min_price
 from app.utils.unit_normalizer import unit_price_factor
 
@@ -133,24 +134,28 @@ async def add_items(db: AsyncSession, items: list) -> dict:
             # Цены подрядчиков не трогаем — переписывается только цена из смет.
             merged = dict(found.prices or {})
             merged[ESTIMATE_CONTRACTOR] = item["price"]
+            new_unit = found.unit or item["unit"]
+            values = {
+                "prices": merged,
+                "min_price": compute_min_price(merged),
+                # Единицу существующей позиции не переписываем: цена
+                # подрядчика привязана именно к ней, и подмена «м2» на «м3»
+                # из чужой сметы молча исказила бы его прайс.
+                "unit": new_unit,
+            }
+            # Та же цена из другой сметы — не переоценка: дата осталась бы
+            # сегодняшней у позиции, которую никто не пересчитывал.
+            if prices_changed(found.prices, merged, found.unit, new_unit):
+                values["updated_at"] = now
             await db.execute(
-                update(PriceWork)
-                .where(PriceWork.id == found.id)
-                .values(
-                    prices=merged,
-                    min_price=compute_min_price(merged),
-                    # Единицу существующей позиции не переписываем: цена
-                    # подрядчика привязана именно к ней, и подмена «м2» на «м3»
-                    # из чужой сметы молча исказила бы его прайс.
-                    unit=found.unit or item["unit"],
-                    updated_at=now,
-                )
+                update(PriceWork).where(PriceWork.id == found.id).values(**values)
             )
             updated += 1
 
     if materials:
         rows = (await db.execute(
-            select(PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit)
+            select(PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit,
+                   PriceMaterial.price)
         )).all()
         existing = {normalize_name(row.name): row for row in rows}
 
@@ -167,15 +172,16 @@ async def add_items(db: AsyncSession, items: list) -> dict:
                 added += 1
                 continue
 
+            new_unit = found.unit or item["unit"]
+            values = {
+                "price": item["price"],
+                # Единица прежняя — см. выше: она задаёт, за что эта цена.
+                "unit": new_unit,
+            }
+            if price_changed(found.price, item["price"], found.unit, new_unit):
+                values["updated_at"] = now
             await db.execute(
-                update(PriceMaterial)
-                .where(PriceMaterial.id == found.id)
-                .values(
-                    price=item["price"],
-                    # Единица прежняя — см. выше: она задаёт, за что эта цена.
-                    unit=found.unit or item["unit"],
-                    updated_at=now,
-                )
+                update(PriceMaterial).where(PriceMaterial.id == found.id).values(**values)
             )
             updated += 1
 

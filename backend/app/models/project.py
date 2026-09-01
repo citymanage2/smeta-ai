@@ -47,6 +47,14 @@ class Project(Base):
     summary_total: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(14, 2), nullable=True, default=None
     )
+    # Цель по объекту — витрина для списка проектов (план 2026-09-01).
+    # Источник истины один: `summary_estimates.overrides.target_total_for_customer`.
+    # Копия здесь ровно затем же, зачем `summary_total`: список проектов —
+    # групповой запрос по колонкам, а JSON сводной в GROUP BY не положишь.
+    # Пишется там же, где `summary_total`, и только там.
+    summary_target_total: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2), nullable=True, default=None
+    )
     # Проценты доп. расходов проекта. Раньше 3% были захардкожены в трёх местах
     # фронтенда; теперь настраиваются здесь и подставляются во все документы
     # проекта. Значение по умолчанию — прежние 3%, поведение не меняется.

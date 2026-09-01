@@ -89,7 +89,7 @@ const COL_DEFS: Record<Tab, ColDef[]> = {
     { id: 'name', label: 'Наименование', defaultWidth: 320 },
     { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
     { id: 'price', label: 'Цена, руб', defaultWidth: 120 },
-    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'updated', label: 'Цена от', defaultWidth: 110 },
     { id: 'actions', label: '', defaultWidth: 90, noResize: true },
   ],
   works: [
@@ -98,7 +98,7 @@ const COL_DEFS: Record<Tab, ColDef[]> = {
     { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
     { id: 'contractors', label: 'Подрядчики', defaultWidth: 220 },
     { id: 'minprice', label: 'Мин. цена, руб', defaultWidth: 130 },
-    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'updated', label: 'Цена от', defaultWidth: 110 },
     { id: 'actions', label: '', defaultWidth: 90, noResize: true },
   ],
   materials: [
@@ -106,7 +106,7 @@ const COL_DEFS: Record<Tab, ColDef[]> = {
     { id: 'name', label: 'Наименование', defaultWidth: 380 },
     { id: 'unit', label: 'Ед. изм', defaultWidth: 80 },
     { id: 'price', label: 'Цена, руб', defaultWidth: 120 },
-    { id: 'updated', label: 'Обновлено', defaultWidth: 110 },
+    { id: 'updated', label: 'Цена от', defaultWidth: 110 },
     { id: 'actions', label: '', defaultWidth: 90, noResize: true },
   ],
   cache_works: [

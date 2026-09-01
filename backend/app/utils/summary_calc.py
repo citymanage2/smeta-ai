@@ -113,6 +113,38 @@ def _billable_qty(qty: Any) -> float:
     return value if value > 0 else 0.0
 
 
+TARGET_BASES = ("cost", "with_vat")
+
+
+def _target(value: Any) -> Optional[float]:
+    """Цель раздела или объекта: число, либо None — «цели нет».
+
+    Пустая ячейка и ноль — разные вещи. Ноль человек мог поставить осознанно
+    («этот раздел должен уйти в ноль»), и отклонение по нему считается. А вот
+    отрицательной цели не бывает: такую считаем незаданной, чтобы промах не
+    показывался зелёным из-за опечатки в знаке.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number < 0 else number
+
+
+def _deviation(fact: float, target: Optional[float]) -> tuple[Optional[float], Optional[float]]:
+    """Отклонение факта от цели: рубли и проценты.
+
+    Процент считается только при цели больше нуля: при цели 0 деление на ноль
+    дало бы бесконечность прямо в бланке.
+    """
+    if target is None:
+        return None, None
+    deviation = fact - target
+    return deviation, (deviation / target * 100 if target > 0 else None)
+
+
 def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
     """Итоги бланка «Сводная». Формулы — как в `calcSummary` на клиенте."""
     overrides = overrides or {}
@@ -122,6 +154,8 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
 
     coefficient = _ov("coefficient")
     hidden = set(overrides.get("hidden_fixed_rows") or [])
+    basis = overrides.get("target_basis")
+    basis = basis if basis in TARGET_BASES else "cost"
 
     # --- Разделы ---------------------------------------------------------
     section_totals: list[dict] = []
@@ -140,6 +174,21 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
         tax_pct_works = _section_tax(section, "works")
         tax_pct_materials = _section_tax(section, "materials")
 
+        works_with_vat_section = works_raw * (VAT - tax_pct_works / 100)
+        materials_with_vat_section = materials_raw * (VAT - tax_pct_materials / 100)
+
+        # Цели оптимизации: с чем сравнивать — решает база, заданная на весь
+        # бланк. «cost» — себестоимость раздела, «with_vat» — она же после
+        # собственного налога раздела.
+        target_works = _target(section.get("target_works"))
+        target_materials = _target(section.get("target_materials"))
+        works_fact = works_raw if basis == "cost" else works_with_vat_section
+        materials_fact = materials_raw if basis == "cost" else materials_with_vat_section
+        works_deviation, works_deviation_pct = _deviation(works_fact, target_works)
+        materials_deviation, materials_deviation_pct = _deviation(
+            materials_fact, target_materials
+        )
+
         section_totals.append({
             "card_id": section.get("card_id"),
             "card_name": section.get("card_name") or "",
@@ -147,8 +196,16 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
             "tax_pct_materials": tax_pct_materials,
             "works_raw": works_raw,
             "materials_raw": materials_raw,
-            "works_with_vat": works_raw * (VAT - tax_pct_works / 100),
-            "materials_with_vat": materials_raw * (VAT - tax_pct_materials / 100),
+            "works_with_vat": works_with_vat_section,
+            "materials_with_vat": materials_with_vat_section,
+            "target_works": target_works,
+            "target_materials": target_materials,
+            "works_fact": works_fact,
+            "materials_fact": materials_fact,
+            "works_deviation": works_deviation,
+            "works_deviation_pct": works_deviation_pct,
+            "materials_deviation": materials_deviation,
+            "materials_deviation_pct": materials_deviation_pct,
         })
 
     works_with_vat = sum(s["works_with_vat"] for s in section_totals)
@@ -196,8 +253,41 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
     vat = full_cost_without_vat * _ov("vat_full_cost_pct") / 100
     other_tax = full_cost_without_vat * _ov("tax_pct") / 100
 
+    # --- Цели оптимизации ---------------------------------------------------
+    # ИТОГО по целям складывает только разделы, у которых цель задана: иначе
+    # факт всех разделов сравнивался бы с целью половины и молча врал.
+    targets: dict[str, Any] = {}
+    for side in ("works", "materials"):
+        with_target = [s for s in section_totals if s[f"target_{side}"] is not None]
+        if not with_target:
+            targets[f"targets_total_{side}"] = None
+            targets[f"targets_fact_{side}"] = None
+            targets[f"targets_deviation_{side}"] = None
+            targets[f"targets_deviation_{side}_pct"] = None
+            continue
+        target_sum = sum(s[f"target_{side}"] for s in with_target)
+        fact_sum = sum(s[f"{side}_fact"] for s in with_target)
+        deviation, deviation_pct = _deviation(fact_sum, target_sum)
+        targets[f"targets_total_{side}"] = target_sum
+        targets[f"targets_fact_{side}"] = fact_sum
+        targets[f"targets_deviation_{side}"] = deviation
+        targets[f"targets_deviation_{side}_pct"] = deviation_pct
+
+    total_for_customer = full_cost_without_vat + vat + other_tax
+    target_total = _target(overrides.get("target_total_for_customer"))
+    total_deviation, total_deviation_pct = _deviation(total_for_customer, target_total)
+
     result = {
         "section_totals": section_totals,
+        "target_basis": basis,
+        "has_section_targets": any(
+            s["target_works"] is not None or s["target_materials"] is not None
+            for s in section_totals
+        ),
+        "target_total_for_customer": target_total,
+        "total_deviation": total_deviation,
+        "total_deviation_pct": total_deviation_pct,
+        **targets,
         # Ввод человека из колонки «% / Кол-во» бланка: в файл он едет отдельным
         # столбцом, а не приклеивается к названию строки.
         "coefficient": coefficient,
@@ -217,7 +307,7 @@ def calc_summary(sections: list, overrides: Optional[dict]) -> dict:
         "vat_pct": _ov("vat_full_cost_pct"),
         "other_tax": other_tax,
         "other_tax_pct": _ov("tax_pct"),
-        "total_for_customer": full_cost_without_vat + vat + other_tax,
+        "total_for_customer": total_for_customer,
         "hidden_fixed_rows": hidden,
         "custom_rows_before": list(overrides.get("custom_rows_before") or []),
         "custom_rows_after": list(overrides.get("custom_rows_after") or []),

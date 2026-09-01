@@ -21,6 +21,24 @@ from app.schemas.summary_estimate import (
 logger = structlog.get_logger()
 
 
+def target_total(overrides: Optional[dict]) -> Optional[Decimal]:
+    """Цель по объекту из настроек бланка — для витрины в `projects`.
+
+    Отрицательной цели не бывает: такую считаем незаданной, как и расчёт
+    бланка (`utils/summary_calc._target`).
+    """
+    if not overrides:
+        return None
+    raw = overrides.get("target_total_for_customer")
+    if raw is None or raw == "":
+        return None
+    try:
+        value = Decimal(str(raw))
+    except (ArithmeticError, ValueError):
+        return None
+    return None if value < 0 else value
+
+
 async def get_summary(project_id: str, db: AsyncSession) -> Optional[SummaryEstimate]:
     result = await db.execute(
         select(SummaryEstimate).where(SummaryEstimate.project_id == project_id)
@@ -75,6 +93,7 @@ async def create_summary(
     project = await db.get(Project, project_id)
     if project is not None:
         project.summary_total = Decimal("0")
+        project.summary_target_total = target_total(overrides)
 
     await db.commit()
     await db.refresh(summary)
@@ -179,9 +198,15 @@ async def update_summary(
         summary.overrides = data.overrides.model_dump(mode="json")
     if data.total_for_customer is not None:
         summary.total_for_customer = data.total_for_customer
+    if data.total_for_customer is not None or data.overrides is not None:
         project = await db.get(Project, summary.project_id)
         if project is not None:
-            project.summary_total = data.total_for_customer
+            if data.total_for_customer is not None:
+                project.summary_total = data.total_for_customer
+            if data.overrides is not None:
+                # Витрина для списка проектов: цель по объекту обновляется
+                # вместе с суммой, из тех же настроек, что ушли в сводную.
+                project.summary_target_total = target_total(summary.overrides)
     summary.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(summary)

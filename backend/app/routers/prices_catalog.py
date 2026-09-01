@@ -29,6 +29,7 @@ from app.services.embedding_service import (
 )
 from app.utils.auth import get_current_user
 from app.utils.permissions import get_manager_user
+from app.utils.price_change import price_changed, prices_changed
 from app.utils.price_min import compute_min_price
 
 logger = structlog.get_logger()
@@ -381,6 +382,11 @@ async def update_work(
 
     name_changed = body.name is not None and body.name != work.name
 
+    # Снимаем «до» перед присваиванием: дату двигает только переоценка, а
+    # переименование позиции — нет (см. `utils/price_change.py`).
+    prev_prices = dict(work.prices or {})
+    prev_unit = work.unit
+
     if body.name is not None:
         work.name = body.name
     if body.unit is not None:
@@ -392,7 +398,8 @@ async def update_work(
     if name_changed:
         work.embedding = await _generate_embedding_safe(work.name)
 
-    work.updated_at = datetime.now(timezone.utc)
+    if prices_changed(prev_prices, work.prices, prev_unit, work.unit):
+        work.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(work)
     await _reload_cache(db)
@@ -417,6 +424,10 @@ async def update_material(
 
     name_changed = body.name is not None and body.name != material.name
 
+    # Как и у работы: дата означает дату цены, а не дату правки записи.
+    prev_price = material.price
+    prev_unit = material.unit
+
     if body.name is not None:
         material.name = body.name
     if body.unit is not None:
@@ -427,7 +438,8 @@ async def update_material(
     if name_changed:
         material.embedding = await _generate_embedding_safe(material.name)
 
-    material.updated_at = datetime.now(timezone.utc)
+    if price_changed(prev_price, material.price, prev_unit, material.unit):
+        material.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(material)
     await _reload_cache(db)
@@ -553,7 +565,7 @@ async def export_catalog(
     header_fill = PatternFill("solid", fgColor="2563EB")
     header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    headers = ["Тип", "Наименование", "Ед. изм.", "Цена (мин.)", "Подрядчики / детали", "Дата обновления"]
+    headers = ["Тип", "Наименование", "Ед. изм.", "Цена (мин.)", "Подрядчики / детали", "Цена от"]
     col_widths = [12, 50, 12, 15, 40, 22]
     for col, (h, w) in enumerate(zip(headers, col_widths), 1):
         cell = ws.cell(row=1, column=col, value=h)

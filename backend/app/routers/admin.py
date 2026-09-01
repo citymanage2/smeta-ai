@@ -21,6 +21,7 @@ from app.models.price import PriceWork, PriceMaterial
 from app.models.price_list import PriceList
 from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
 from app.utils.auth import get_admin_user
+from app.utils.price_change import price_changed, prices_changed
 from app.utils.price_min import compute_min_price
 from app.services import price_service
 from app.services.embedding_service import (
@@ -609,9 +610,12 @@ async def _handle_price_upload(
             for row in res
         }
     else:
-        res = await db.execute(select(PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit))
+        res = await db.execute(
+            select(PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit,
+                   PriceMaterial.price)
+        )
         existing_by_norm = {
-            normalize_name(row.name): {"id": row.id, "unit": row.unit}
+            normalize_name(row.name): {"id": row.id, "unit": row.unit, "price": row.price}
             for row in res
         }
 
@@ -646,22 +650,31 @@ async def _handle_price_upload(
         key = normalize_name(item["name"])
         if key in existing_by_norm:
             existing = existing_by_norm[key]
+            new_unit = item.get("unit") or existing["unit"]
             if is_works:
                 merged = {**existing["prices"], **item.get("prices", {})}
                 values: dict = {
                     "prices": merged,
                     "min_price": compute_min_price(merged),
-                    "unit": item.get("unit") or existing["unit"],
+                    "unit": new_unit,
                     "embedding": emb,
-                    "updated_at": now,
                 }
+                repriced = prices_changed(
+                    existing["prices"], merged, existing["unit"], new_unit,
+                )
             else:
                 values = {
                     "price": item.get("price"),
-                    "unit": item.get("unit") or existing["unit"],
+                    "unit": new_unit,
                     "embedding": emb,
-                    "updated_at": now,
                 }
+                repriced = price_changed(
+                    existing["price"], item.get("price"), existing["unit"], new_unit,
+                )
+            # Прайс перезаливают целиком, а меняется в нём десяток позиций.
+            # Дата — это дата цены: у остальных она остаётся прежней.
+            if repriced:
+                values["updated_at"] = now
             update_ops.append((existing["id"], values))
         else:
             if is_works:
@@ -1033,19 +1046,53 @@ async def upload_prices(
         raise HTTPException(status_code=422, detail=f"Ошибка разбора файла: {e}")
 
     now = datetime.now(timezone.utc)
+
+    # Этот путь заменяет прайс целиком: таблица сносится и пишется заново. Дату
+    # цены поэтому надо унести ДО удаления и вернуть тем позициям, у которых
+    # цена не изменилась, — иначе правка одной строки в файле «обновляла» бы
+    # все несколько тысяч позиций, и колонка «Цена от» переставала бы что-либо
+    # значить. Дубли имён разрешаем в пользу самой ранней записи (`setdefault`
+    # по возрастанию id), чтобы результат не зависел от порядка выдачи БД.
+    prev_works: dict = {}
+    for row in (await db.execute(
+        select(PriceWork.name, PriceWork.unit, PriceWork.prices, PriceWork.updated_at)
+        .order_by(PriceWork.id)
+    )).all():
+        prev_works.setdefault(normalize_name(row.name), row)
+
+    prev_materials: dict = {}
+    for row in (await db.execute(
+        select(PriceMaterial.name, PriceMaterial.unit, PriceMaterial.price,
+               PriceMaterial.updated_at)
+        .order_by(PriceMaterial.id)
+    )).all():
+        prev_materials.setdefault(normalize_name(row.name), row)
+
     await db.execute(delete(PriceWork))
     await db.execute(delete(PriceMaterial))
     await db.commit()
 
     for item in works_data:
+        unit = item.get("unit", "")
+        prices = item.get("prices", {})
+        prev = prev_works.get(normalize_name(item["name"]))
+        priced_at = now
+        if prev is not None and not prices_changed(prev.prices, prices, prev.unit, unit):
+            priced_at = prev.updated_at or now
         db.add(PriceWork(
-            name=item["name"], unit=item.get("unit", ""),
-            prices=item.get("prices", {}), min_price=item.get("min_price"), updated_at=now,
+            name=item["name"], unit=unit,
+            prices=prices, min_price=item.get("min_price"), updated_at=priced_at,
         ))
     for item in materials_data:
+        unit = item.get("unit", "")
+        price = item.get("price")
+        prev = prev_materials.get(normalize_name(item["name"]))
+        priced_at = now
+        if prev is not None and not price_changed(prev.price, price, prev.unit, unit):
+            priced_at = prev.updated_at or now
         db.add(PriceMaterial(
-            name=item["name"], unit=item.get("unit", ""),
-            price=item.get("price"), updated_at=now,
+            name=item["name"], unit=unit,
+            price=price, updated_at=priced_at,
         ))
 
     await db.commit()

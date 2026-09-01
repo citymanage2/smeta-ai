@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -28,6 +28,12 @@ class SummaryOverrides(BaseModel):
     profit_pct: Decimal = Field(default=Decimal("20.0"))
     vat_full_cost_pct: Decimal = Field(default=Decimal("22.0"))
     tax_pct: Decimal = Field(default=Decimal("2.0"))
+    # Цели оптимизации (план 2026-09-01). База целей — одна на весь бланк:
+    # «cost» — цели заданы в себестоимости разделов, «with_vat» — в суммах после
+    # налога раздела. Цель по объекту сравнивается с «ИТОГО для Заказчика»;
+    # None — цели нет (это не то же самое, что цель 0).
+    target_basis: Literal["cost", "with_vat"] = Field(default="cost")
+    target_total_for_customer: Optional[Decimal] = Field(default=None)
     # row management
     hidden_fixed_rows: list[str] = Field(default_factory=list)
     custom_rows_before: list[dict] = Field(default_factory=list)

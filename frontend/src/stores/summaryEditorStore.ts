@@ -4,11 +4,13 @@ import {
   SummaryOverrides,
   SummaryCalcResult,
   SectionCalcRow,
+  TargetBasis,
   TaxSide,
   DEFAULT_OVERRIDES,
 } from '../types/summary';
 import { getSummary, updateSummary } from '../api/summaryEstimate';
 import { billableQty } from '../utils/negativeQty';
+import { targetDeviation, targetValue } from '../utils/targets';
 
 /**
  * Ставка налога половины раздела: у работ и материалов она своя.
@@ -33,6 +35,7 @@ export function calcSummary(
   overrides: SummaryOverrides,
 ): SummaryCalcResult {
   const coeff = overrides.coefficient ?? 1.0;
+  const basis: TargetBasis = overrides.target_basis === 'with_vat' ? 'with_vat' : 'cost';
   const toWithout = (v: number) => v / 1.22;
   const toWith = (v: number) => v * 1.22;
   const hidden = new Set(overrides.hidden_fixed_rows ?? []);
@@ -50,6 +53,17 @@ export function calcSummary(
     materials_raw *= coeff;
     const tax_pct_works = sectionTaxPct(sec, 'works');
     const tax_pct_materials = sectionTaxPct(sec, 'materials');
+    const works_with_vat = works_raw * (1.22 - tax_pct_works / 100);
+    const materials_with_vat = materials_raw * (1.22 - tax_pct_materials / 100);
+
+    // Цели оптимизации: с чем сравнивать — решает база целей, одна на бланк.
+    const target_works = targetValue(sec.target_works);
+    const target_materials = targetValue(sec.target_materials);
+    const works_fact = basis === 'cost' ? works_raw : works_with_vat;
+    const materials_fact = basis === 'cost' ? materials_raw : materials_with_vat;
+    const worksDev = targetDeviation(works_fact, target_works);
+    const materialsDev = targetDeviation(materials_fact, target_materials);
+
     return {
       card_id: sec.card_id,
       card_name: sec.card_name,
@@ -57,10 +71,32 @@ export function calcSummary(
       tax_pct_materials,
       works_raw,
       materials_raw,
-      works_with_vat: works_raw * (1.22 - tax_pct_works / 100),
-      materials_with_vat: materials_raw * (1.22 - tax_pct_materials / 100),
+      works_with_vat,
+      materials_with_vat,
+      target_works,
+      target_materials,
+      works_fact,
+      materials_fact,
+      works_deviation: worksDev.value,
+      works_deviation_pct: worksDev.pct,
+      materials_deviation: materialsDev.value,
+      materials_deviation_pct: materialsDev.pct,
     };
   });
+
+  // ── Цели: ИТОГО по разделам, у которых цель задана ────────────────────────
+  const sideTotals = (side: 'works' | 'materials') => {
+    const withTarget = section_totals.filter((s) => s[`target_${side}`] !== null);
+    if (withTarget.length === 0) {
+      return { total: null, fact: null, dev: null, pct: null };
+    }
+    const total = withTarget.reduce((sum, s) => sum + (s[`target_${side}`] as number), 0);
+    const fact = withTarget.reduce((sum, s) => sum + s[`${side}_fact`], 0);
+    const { value: dev, pct } = targetDeviation(fact, total);
+    return { total, fact, dev, pct };
+  };
+  const worksTargets = sideTotals('works');
+  const materialsTargets = sideTotals('materials');
 
   // ── Fixed row values ───────────────────────────────────────────────────────
   const works_with_vat = section_totals.reduce((s, r) => s + r.works_with_vat, 0);
@@ -132,8 +168,26 @@ export function calcSummary(
   const other_tax = full_cost_without_vat * other_tax_pct / 100;
   const total_for_customer = full_cost_without_vat + vat + other_tax;
 
+  const target_total_for_customer = targetValue(overrides.target_total_for_customer);
+  const totalDev = targetDeviation(total_for_customer, target_total_for_customer);
+
   return {
     section_totals,
+    target_basis: basis,
+    has_section_targets: section_totals.some(
+      (s) => s.target_works !== null || s.target_materials !== null,
+    ),
+    targets_total_works: worksTargets.total,
+    targets_fact_works: worksTargets.fact,
+    targets_deviation_works: worksTargets.dev,
+    targets_deviation_works_pct: worksTargets.pct,
+    targets_total_materials: materialsTargets.total,
+    targets_fact_materials: materialsTargets.fact,
+    targets_deviation_materials: materialsTargets.dev,
+    targets_deviation_materials_pct: materialsTargets.pct,
+    target_total_for_customer,
+    total_deviation: totalDev.value,
+    total_deviation_pct: totalDev.pct,
     works_with_vat,
     works_without_vat: toWithout(works_with_vat),
     materials_with_vat,
@@ -202,6 +256,8 @@ interface SummaryEditorState {
   /** Перечитать строки разделов, не трогая несохранённые настройки бланка. */
   refreshSections: () => Promise<void>;
   updateSectionTaxPct: (sectionIndex: number, side: TaxSide, taxPct: number) => void;
+  /** Цель раздела по работам или материалам; null — цель снята. */
+  updateSectionTarget: (sectionIndex: number, side: TaxSide, target: number | null) => void;
   updateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => void;
   setActiveTabIndex: (index: number) => void;
   save: () => Promise<void>;
@@ -243,6 +299,14 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       profit_pct: n('profit_pct', DEFAULT_OVERRIDES.profit_pct),
       vat_full_cost_pct: n('vat_full_cost_pct', DEFAULT_OVERRIDES.vat_full_cost_pct),
       tax_pct: n('tax_pct', DEFAULT_OVERRIDES.tax_pct),
+      target_basis: raw.target_basis === 'with_vat' ? 'with_vat' : 'cost',
+      target_total_for_customer: targetValue(
+        raw.target_total_for_customer === null
+          || raw.target_total_for_customer === undefined
+          || raw.target_total_for_customer === ''
+          ? null
+          : Number(raw.target_total_for_customer),
+      ),
       hidden_fixed_rows: Array.isArray(raw.hidden_fixed_rows) ? (raw.hidden_fixed_rows as string[]) : [],
       custom_rows_before: Array.isArray(raw.custom_rows_before) ? (raw.custom_rows_before as import('../types/summary').CustomCostRow[]) : [],
       custom_rows_after: Array.isArray(raw.custom_rows_after) ? (raw.custom_rows_after as import('../types/summary').CustomCostRow[]) : [],
@@ -281,6 +345,10 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
             tax_pct: mine.tax_pct,
             tax_pct_works: mine.tax_pct_works,
             tax_pct_materials: mine.tax_pct_materials,
+            // Цель — такая же несохранённая настройка бланка, как налог:
+            // перечитывание строк не имеет права её стереть.
+            target_works: mine.target_works,
+            target_materials: mine.target_materials,
           }
         : remote;
     });
@@ -312,6 +380,17 @@ export const useSummaryEditorStore = create<SummaryEditorState>((set, get) => ({
       };
     });
     set({ sections: newSections, isDirty: true });
+  },
+
+  updateSectionTarget: (sectionIndex: number, side: TaxSide, target: number | null) => {
+    const { sections } = get();
+    const key = side === 'works' ? 'target_works' : 'target_materials';
+    set({
+      sections: sections.map((sec, i) => (
+        i === sectionIndex ? { ...sec, [key]: targetValue(target) } : sec
+      )),
+      isDirty: true,
+    });
   },
 
   updateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => {

@@ -16,6 +16,9 @@ import ProjectSettingsPanel from '../components/ProjectSettingsPanel';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import UsageChips from '../components/card/UsageChips';
 import { projectUsage } from '../utils/usageMetrics';
+import {
+  deviationColor, fmtDeviationPct, fmtSignedMoney, targetDeviation, targetValue,
+} from '../utils/targets';
 import { useKanbanStore } from '../stores/kanban';
 
 function formatCost(cost: number): string {
@@ -276,6 +279,18 @@ const ProjectDetailPage: React.FC = () => {
     .filter(t => t.estimation_status === 'optimized' && t.cost)
     .reduce((sum, t) => sum + (t.cost as number), 0) || null;
 
+  // Цель по объекту из сводной: сравниваем с итогом для заказчика — тем же
+  // числом, что показано рядом. Формула одна на весь фронтенд (`utils/targets`).
+  // Итог сводной равен 0, пока её ни разу не открывали и не сохраняли. Считать
+  // от него отклонение нельзя: получилась бы «экономия» на всю цель — самый
+  // приятный и самый неверный сигнал из возможных. Тогда показываем саму цель.
+  const projectTarget = targetValue(project.summary_target_total);
+  const targetDeviationOfProject = projectTarget === null
+    ? null
+    : (project.summary_total
+      ? targetDeviation(project.summary_total, projectTarget)
+      : { value: null, pct: null });
+
   // Карточки уже лежат в сторе — их поллят список смет и канбан. Считаем итог
   // из них, а не отдельным запросом: цифры те же, что человек видит в строках.
   const projectSpend = projectUsage(cards.filter(c => c.project_id === projectId));
@@ -398,6 +413,26 @@ const ProjectDetailPage: React.FC = () => {
                     </div>
                   ) : (
                     <span style={{ fontSize: '12px', color: '#94a3b8' }}>Откройте сводную для сохранения итога</span>
+                  )}
+                  {/* Цель оптимизации по объекту. Её нет — нет и строки:
+                      проект без целей выглядит как раньше. */}
+                  {targetDeviationOfProject && (
+                    <div>
+                      <span style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>Цель: </span>
+                      <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>
+                        {formatCost(project.summary_target_total!)}
+                      </span>
+                      {targetDeviationOfProject.value !== null && (
+                        <span style={{
+                          marginLeft: 6, fontSize: '13px', fontWeight: 600,
+                          color: deviationColor(targetDeviationOfProject.value),
+                        }}>
+                          {fmtSignedMoney(targetDeviationOfProject.value)}
+                          {targetDeviationOfProject.pct !== null
+                            && ` · ${fmtDeviationPct(targetDeviationOfProject.pct)}`}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </>
               ) : (

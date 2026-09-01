@@ -208,7 +208,20 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
                _GRAND_FILL, calc["total_for_customer"], None)
     row_idx += 1
 
-    # ── Правая таблица: разделы со своими налогами (колонки G-M) ──────────
+    # Цель по объекту — только если она задана: без целей файл обязан выглядеть
+    # так же, как до появления этой функции.
+    if calc["target_total_for_customer"] is not None:
+        ws.cell(row=row_idx, column=_COL_NAME, value="Цель по объекту").font = _BOLD
+        _merged_money(ws, row_idx, calc["target_total_for_customer"], bold=True)
+        for col in range(1, _LEFT_COLS + 1):
+            ws.cell(row=row_idx, column=col).fill = _COEF_FILL
+        row_idx += 1
+
+        ws.cell(row=row_idx, column=_COL_NAME, value="Отклонение от цели по объекту")
+        _merged_money(ws, row_idx, calc["total_deviation"])
+        row_idx += 1
+
+    # ── Правая таблица: разделы со своими налогами (с колонки G) ──────────
     # Налогов у раздела два: работы и материалы облагаются независимо
     # (работы — самозанятый, материалы — подрядчик с НДС, и наоборот).
     #
@@ -221,17 +234,28 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
         "Раздел", "Налог работ, %", "Работы (с/с)", "Работы с НДС",
         "Материалы (с/с)", "Материалы с НДС", "Налог матер., %",
     ]
+    # Цели оптимизации — снова в конец таблицы, по той же причине, что и второй
+    # налог: порядок прежних столбцов не должен меняться. Колонок нет вовсе,
+    # пока не задана хоть одна цель раздела. Процента отклонения в файле нет:
+    # цель и отклонение стоят рядом, процент считается формулой.
+    with_targets = calc["has_section_targets"]
+    if with_targets:
+        right_headers += ["Цель работ", "Откл. работ", "Цель матер.", "Откл. матер."]
     for col, h in enumerate(right_headers, OFF):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = _BOLD_WHITE
         cell.fill = _HEADER_FILL
 
-    for i, w in enumerate([30, 14, 18, 18, 18, 18, 14], OFF):
+    widths = [30, 14, 18, 18, 18, 18, 14] + ([18, 18, 18, 18] if with_targets else [])
+    for i, w in enumerate(widths, OFF):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     # Колонки денег (смещение от OFF) — их суммируем и форматируем как рубли.
     MONEY_COLS = (2, 3, 4, 5)
     totals_right = dict.fromkeys(MONEY_COLS, 0.0)
+    # Колонки целей суммируются не построчно: в ИТОГО идут только разделы с
+    # заданной целью, а это уже посчитал `calc_summary`.
+    TARGET_COLS = (7, 8, 9, 10)
     for r_idx, section in enumerate(calc["section_totals"], 2):
         values = [
             section["card_name"], section["tax_pct_works"],
@@ -239,6 +263,11 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
             section["materials_raw"], section["materials_with_vat"],
             section["tax_pct_materials"],
         ]
+        if with_targets:
+            values += [
+                section["target_works"], section["works_deviation"],
+                section["target_materials"], section["materials_deviation"],
+            ]
         for offset, value in enumerate(values):
             cell = ws.cell(
                 row=r_idx, column=OFF + offset,
@@ -247,16 +276,28 @@ def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:
             if offset in MONEY_COLS:
                 totals_right[offset] += value
                 cell.number_format = _NUM_FMT
+            elif offset in TARGET_COLS and value is not None:
+                cell.number_format = _NUM_FMT
 
+    target_totals = {
+        7: calc["targets_total_works"], 8: calc["targets_deviation_works"],
+        9: calc["targets_total_materials"], 10: calc["targets_deviation_materials"],
+    }
     total_row = len(calc["section_totals"]) + 2
     for offset in range(len(right_headers)):
-        value = "ИТОГО" if offset == 0 else (
-            round(totals_right[offset], 2) if offset in MONEY_COLS else None
-        )
+        if offset == 0:
+            value = "ИТОГО"
+        elif offset in MONEY_COLS:
+            value = round(totals_right[offset], 2)
+        elif offset in TARGET_COLS:
+            total = target_totals[offset]
+            value = round(total, 2) if total is not None else None
+        else:
+            value = None
         cell = ws.cell(row=total_row, column=OFF + offset, value=value)
         cell.font = _BOLD
         cell.fill = _TOTAL_FILL
-        if offset in MONEY_COLS:
+        if offset in MONEY_COLS or (offset in TARGET_COLS and value is not None):
             cell.number_format = _NUM_FMT
 
 

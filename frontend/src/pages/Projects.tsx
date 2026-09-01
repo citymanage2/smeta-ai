@@ -8,6 +8,7 @@ import {
   listProjects, createProject, deleteProject,
   archiveProject, reassignProjectOwner,
 } from '../api/projects';
+import { deviationColor, fmtSignedMoney, targetDeviation, targetValue } from '../utils/targets';
 import { listAssignable, AssignableUser } from '../api/adminUsers';
 import { useAuthStore } from '../stores/auth';
 
@@ -385,6 +386,26 @@ const Projects: React.FC = () => {
                         <div style={{ fontSize: '18px', fontWeight: 700, color: p.summary_total != null ? '#7c3aed' : '#15803d', whiteSpace: 'nowrap' }}>
                           {formatCost(p.total_cost)}
                         </div>
+                        {/* Цель оптимизации по объекту — только если она задана. */}
+                        {(() => {
+                          const target = targetValue(p.summary_target_total)
+                          if (target === null) return null
+                          // Итог сводной ещё не сохранён — показываем цель без
+                          // отклонения: от нуля оно было бы ложной «экономией».
+                          const dev = p.summary_total
+                            ? targetDeviation(p.summary_total, target)
+                            : { value: null, pct: null }
+                          return (
+                            <div style={{ fontSize: '11px', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                              Цель {formatCost(target)}
+                              {dev.value !== null && (
+                                <span style={{ marginLeft: 4, fontWeight: 600, color: deviationColor(dev.value) }}>
+                                  {fmtSignedMoney(dev.value)}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </div>
                     )}
                   </div>

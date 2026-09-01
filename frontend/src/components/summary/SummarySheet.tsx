@@ -1,11 +1,14 @@
 import React from 'react'
-import { SummaryOverrides, SummaryCalcResult, CustomCostRow, FIXED_ROW_KEYS, TaxSide } from '../../types/summary'
+import { SummaryOverrides, SummaryCalcResult, CustomCostRow, FIXED_ROW_KEYS, TargetBasis, TaxSide } from '../../types/summary'
+import { deviationColor, fmtDeviationPct as fmtPct, fmtSignedMoney as fmtSigned } from '../../utils/targets'
 
 interface Props {
   calc: SummaryCalcResult
   overrides: SummaryOverrides
   onUpdateOverride: <K extends keyof SummaryOverrides>(key: K, value: SummaryOverrides[K]) => void
   onUpdateSectionTaxPct: (sectionIndex: number, side: TaxSide, taxPct: number) => void
+  /** Цель раздела; null — цель снята. */
+  onUpdateSectionTarget: (sectionIndex: number, side: TaxSide, target: number | null) => void
 }
 
 const fmt = (n: number) =>
@@ -13,6 +16,84 @@ const fmt = (n: number) =>
 
 const fmtVal = (n: number) =>
   Math.round(n).toLocaleString('ru-RU') + ' ₽'
+
+// ── Цели оптимизации ─────────────────────────────────────────────────────────
+
+function Deviation({ value, pct }: { value: number | null; pct: number | null }) {
+  if (value === null) return null
+  return (
+    <div style={{ fontSize: '11px', fontWeight: 600, color: deviationColor(value) }}>
+      {fmtSigned(value)}
+      {pct !== null && <span style={{ fontWeight: 400 }}> · {fmtPct(pct)}</span>}
+    </div>
+  )
+}
+
+/**
+ * Ячейка цели: пустая — «цели нет», и это не то же самое, что цель 0.
+ * Поэтому пустая строка при вводе снимает цель, а не превращается в ноль.
+ */
+function TargetInput({
+  value, onCommit,
+}: {
+  value: number | null
+  onCommit: (v: number | null) => void
+}) {
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState(value === null ? '' : String(value))
+  const inputRef = React.useRef<HTMLInputElement>(null)
+
+  React.useEffect(() => {
+    if (editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select() }
+  }, [editing])
+  React.useEffect(() => {
+    if (!editing) setDraft(value === null ? '' : String(value))
+  }, [value, editing])
+
+  const commit = () => {
+    const trimmed = draft.trim()
+    if (trimmed === '') onCommit(null)
+    else {
+      const parsed = parseFloat(trimmed.replace(',', '.'))
+      if (!isNaN(parsed) && parsed >= 0) onCommit(parsed)
+    }
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') { setDraft(value === null ? '' : String(value)); setEditing(false) }
+        }}
+        placeholder="нет цели"
+        style={{ width: '100px', padding: '2px 6px', fontSize: '13px', border: '1.5px solid #3b82f6', borderRadius: '4px', outline: 'none', textAlign: 'right' }}
+      />
+    )
+  }
+
+  return (
+    <span
+      onClick={() => setEditing(true)}
+      title={value === null ? 'Цель не задана — нажмите, чтобы задать' : 'Нажмите, чтобы изменить цель'}
+      style={{
+        cursor: 'pointer', padding: '2px 6px', borderRadius: '4px',
+        border: '1px dashed #cbd5e1', fontSize: '13px',
+        color: value === null ? '#94a3b8' : '#1e293b',
+        userSelect: 'none', display: 'inline-block', minWidth: '76px', textAlign: 'right',
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#93c5fd' }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#cbd5e1' }}
+    >
+      {value === null ? '—' : fmtVal(value)}
+    </span>
+  )
+}
 
 // ── NumberInput ──────────────────────────────────────────────────────────────
 
@@ -215,7 +296,9 @@ function AddRowButton({ onClick, label }: { onClick: () => void; label: string }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUpdateSectionTaxPct }) => {
+const SummarySheet: React.FC<Props> = ({
+  calc, overrides, onUpdateOverride, onUpdateSectionTaxPct, onUpdateSectionTarget,
+}) => {
   const [hoveredRow, setHoveredRow] = React.useState<string | null>(null)
 
   const hidden = new Set(overrides.hidden_fixed_rows ?? [])
@@ -593,6 +676,41 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
                 <td style={tdB({ width: 28 })} />
               </tr>
 
+              {/* Цель по объекту. Строка ввода стоит всегда — иначе цель некуда
+                  задать; строка отклонения появляется только вместе с целью. */}
+              <tr style={{ background: '#faf5ff' }}>
+                <td style={td({ textAlign: 'center' })} />
+                <td style={td({ fontWeight: 600, color: '#7c3aed' })}>
+                  Цель по объекту
+                  <span style={{ marginLeft: 6, fontSize: '11px', fontWeight: 400, color: '#9ca3af' }}>
+                    (итог для заказчика)
+                  </span>
+                </td>
+                <td style={tdR()} />
+                <td style={tdR()} colSpan={2}>
+                  <TargetInput
+                    value={calc.target_total_for_customer}
+                    onCommit={(v) => onUpdateOverride('target_total_for_customer', v)}
+                  />
+                </td>
+                <td style={td({ width: 28 })} />
+              </tr>
+
+              {calc.total_deviation !== null && (
+                <tr>
+                  <td style={td({ textAlign: 'center' })} />
+                  <td style={td()}>Отклонение от цели по объекту</td>
+                  <td style={tdR()} />
+                  <td style={tdR({ fontWeight: 600, color: deviationColor(calc.total_deviation) })} colSpan={2}>
+                    {fmtSigned(calc.total_deviation)}
+                    {calc.total_deviation_pct !== null && (
+                      <span style={{ fontWeight: 400 }}> · {fmtPct(calc.total_deviation_pct)}</span>
+                    )}
+                  </td>
+                  <td style={td({ width: 28 })} />
+                </tr>
+              )}
+
             </tbody>
           </table>
         </div>
@@ -608,6 +726,40 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
             Налог: 0% — подрядчик с НДС (добавляем 22%); 22% — самозанятый (НДС уже в цене).
             У работ и материалов раздела ставки независимы.
           </div>
+
+          {/* Цели оптимизации: база — одна на весь бланк. Переключение не
+              трогает сами цифры целей (их вводил человек), а меняет колонку,
+              с которой они сравниваются, — поэтому это написано прямо здесь. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+            marginBottom: '8px', fontSize: '12px', color: '#475569',
+          }}>
+            <span style={{ fontWeight: 600 }}>Цели заданы в:</span>
+            {([
+              ['cost', 'суммах из сметы (с/с)'],
+              ['with_vat', 'суммах с НДС'],
+            ] as [TargetBasis, string][]).map(([value, label]) => {
+              const active = calc.target_basis === value
+              return (
+                <button
+                  key={value}
+                  onClick={() => onUpdateOverride('target_basis', value)}
+                  style={{
+                    padding: '3px 10px', fontSize: '12px',
+                    fontWeight: active ? 600 : 400, borderRadius: '6px',
+                    border: active ? '1.5px solid #7c3aed' : '1px solid #e2e8f0',
+                    background: active ? '#f5f3ff' : '#fff',
+                    color: active ? '#7c3aed' : '#475569', cursor: 'pointer',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+            <span style={{ color: '#94a3b8' }}>
+              переключение меняет только то, с какой колонкой сравнивается цель
+            </span>
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <colgroup>
@@ -615,9 +767,11 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
                 <col style={{ width: '130px' }} />
                 <col style={{ width: '72px' }} />
                 <col style={{ width: '130px' }} />
+                <col style={{ width: '130px' }} />
                 <col style={{ width: '4px' }} />
                 <col style={{ width: '130px' }} />
                 <col style={{ width: '72px' }} />
+                <col style={{ width: '130px' }} />
                 <col style={{ width: '130px' }} />
               </colgroup>
               <thead>
@@ -626,10 +780,12 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
                   <th style={th({ textAlign: 'right' })}>Работы из сметы (с/с)</th>
                   <th style={th({ textAlign: 'center' })}>Налог %</th>
                   <th style={th({ textAlign: 'right' })}>Стоимость работ с НДС</th>
+                  <th style={th({ textAlign: 'right' })}>Цель работ / откл.</th>
                   <th style={{ ...thStyle, padding: 0, borderLeft: '2px solid #e2e8f0', background: '#e2e8f0' }} />
                   <th style={th({ textAlign: 'right', borderLeft: '2px solid #e2e8f0' })}>Материалы из сметы (с/с)</th>
                   <th style={th({ textAlign: 'center' })}>Налог %</th>
                   <th style={th({ textAlign: 'right' })}>Стоимость матер. с НДС</th>
+                  <th style={th({ textAlign: 'right' })}>Цель матер. / откл.</th>
                 </tr>
               </thead>
               <tbody>
@@ -641,12 +797,29 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
                       <NumberInput value={sec.tax_pct_works} onCommit={(v) => onUpdateSectionTaxPct(idx, 'works', v)} suffix="%" />
                     </td>
                     <td style={tdR({ color: sec.tax_pct_works > 0 ? '#059669' : undefined })}>{fmtVal(sec.works_with_vat)}</td>
+                    <td style={tdR()}>
+                      <TargetInput
+                        value={sec.target_works}
+                        onCommit={(v) => onUpdateSectionTarget(idx, 'works', v)}
+                      />
+                      <Deviation value={sec.works_deviation} pct={sec.works_deviation_pct} />
+                    </td>
                     <td style={{ padding: 0, borderLeft: '2px solid #e2e8f0', background: '#e2e8f0', borderBottom: '1px solid #f1f5f9' }} />
                     <td style={tdR({ borderLeft: '2px solid #e2e8f0' })}>{fmt(sec.materials_raw)}</td>
                     <td style={td({ textAlign: 'center' })}>
                       <NumberInput value={sec.tax_pct_materials} onCommit={(v) => onUpdateSectionTaxPct(idx, 'materials', v)} suffix="%" />
                     </td>
                     <td style={tdR({ color: sec.tax_pct_materials > 0 ? '#059669' : undefined })}>{fmtVal(sec.materials_with_vat)}</td>
+                    <td style={tdR()}>
+                      <TargetInput
+                        value={sec.target_materials}
+                        onCommit={(v) => onUpdateSectionTarget(idx, 'materials', v)}
+                      />
+                      <Deviation
+                        value={sec.materials_deviation}
+                        pct={sec.materials_deviation_pct}
+                      />
+                    </td>
                   </tr>
                 ))}
                 <tr style={{ background: '#f8fafc' }}>
@@ -654,10 +827,25 @@ const SummarySheet: React.FC<Props> = ({ calc, overrides, onUpdateOverride, onUp
                   <td style={tdBR()}>{fmtVal(calc.section_totals.reduce((s, r) => s + r.works_raw, 0))}</td>
                   <td style={tdB()} />
                   <td style={tdBR()}>{fmtVal(calc.works_with_vat)}</td>
+                  <td style={tdBR()}>
+                    {calc.targets_total_works === null ? '—' : fmtVal(calc.targets_total_works)}
+                    <Deviation
+                      value={calc.targets_deviation_works}
+                      pct={calc.targets_deviation_works_pct}
+                    />
+                  </td>
                   <td style={{ padding: 0, borderLeft: '2px solid #e2e8f0', background: '#e2e8f0' }} />
                   <td style={tdBR({ borderLeft: '2px solid #e2e8f0' })}>{fmtVal(calc.section_totals.reduce((s, r) => s + r.materials_raw, 0))}</td>
                   <td style={tdB()} />
                   <td style={tdBR()}>{fmtVal(calc.materials_with_vat)}</td>
+                  <td style={tdBR()}>
+                    {calc.targets_total_materials === null
+                      ? '—' : fmtVal(calc.targets_total_materials)}
+                    <Deviation
+                      value={calc.targets_deviation_materials}
+                      pct={calc.targets_deviation_materials_pct}
+                    />
+                  </td>
                 </tr>
               </tbody>
             </table>

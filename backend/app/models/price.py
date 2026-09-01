@@ -19,6 +19,10 @@ class PriceWork(Base):
     # {contractor_name: price}
     min_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     embedding: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Дата ЦЕНЫ, а не дата записи: отвечает на вопрос «когда эта цена стала
+    # такой». `onupdate` здесь намеренно НЕ стоит — он двигал бы дату на любой
+    # UPDATE, и переименование позиции выглядело бы как переоценка. Кто пишет
+    # цену, тот и ставит дату, спросив `utils/price_change.py`.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -34,6 +38,10 @@ class PriceMaterial(Base):
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     embedding: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Дата ЦЕНЫ, а не дата записи: отвечает на вопрос «когда эта цена стала
+    # такой». `onupdate` здесь намеренно НЕ стоит — он двигал бы дату на любой
+    # UPDATE, и переименование позиции выглядело бы как переоценка. Кто пишет
+    # цену, тот и ставит дату, спросив `utils/price_change.py`.
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
