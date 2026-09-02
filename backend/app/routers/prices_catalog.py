@@ -774,6 +774,16 @@ async def reference_apply(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Больше {reference_price.MAX_REFERENCE_ITEMS} позиций за раз не принимаем.",
         )
+    # Удаление необратимо, а список приходит с клиента. Больше кандидатов, чем
+    # их вообще может предложить предпросмотр (позиции × top-N), — это уже не
+    # подтверждение человека, а чистка прайса пачкой, и делать её надо руками
+    # в каталоге.
+    max_remove = reference_price.MAX_REFERENCE_ITEMS * reference_price.DUPLICATE_TOP_N
+    if len(body.remove) > max_remove:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Больше {max_remove} позиций на удаление за раз не принимаем.",
+        )
 
     items = []
     for item in body.items:

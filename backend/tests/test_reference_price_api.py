@@ -444,3 +444,20 @@ async def test_apply_asks_the_model_once_for_new_positions(
 
     assert r.json()["added"] == 3
     assert calls["n"] == 1
+
+
+async def test_absurd_removal_list_is_refused(async_client, admin_token):
+    """Удаление необратимо: список длиннее, чем предпросмотр вообще может
+    предложить, — это уже не подтверждение человека."""
+    too_many = reference_price.MAX_REFERENCE_ITEMS * reference_price.DUPLICATE_TOP_N + 1
+    r = await async_client.post(
+        "/prices/reference/apply",
+        json={
+            "items": [],
+            "remove": [
+                {"source": "price", "kind": "work", "id": i} for i in range(too_many)
+            ],
+        },
+        headers={"Authorization": admin_token},
+    )
+    assert r.status_code == 422
