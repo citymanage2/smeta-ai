@@ -34,7 +34,7 @@ from app.models.price_cache import PriceCacheMaterial, PriceCacheWork
 from app.services import price_service
 from app.services.embedding_service import (
     EmbeddingUnavailableError,
-    generate_embedding,
+    generate_embeddings_batch,
     normalize_name,
 )
 from app.services.price_bulk import SKIP_NO_NAME, SKIP_NO_PRICE, SKIP_NOT_PRICEABLE
@@ -458,18 +458,22 @@ _REMOVE_MODELS = {
 }
 
 
-async def _generate_embedding_safe(name: str) -> Optional[list]:
-    """Вектор для поиска по смыслу; None — если модель недоступна.
+async def _embeddings_safe(names: list[str]) -> list[Optional[list]]:
+    """Векторы для поиска по смыслу — одной прогонкой модели на все имена.
 
     Позиция без вектора всё равно найдётся точным совпадением названия, поэтому
-    отсутствие модели не повод отказывать в записи (так же в `price_bulk`).
+    недоступная модель не повод отказывать в записи (так же в `price_bulk`).
+    По вектору за раз здесь нельзя: эталон из сметы — это сотни новых позиций,
+    и поштучная генерация превратила бы запись в минуты ожидания.
     """
+    if not names:
+        return []
     try:
         return await asyncio.to_thread(
-            generate_embedding, normalize_name(name), "search_document",
+            generate_embeddings_batch, names, "search_document",
         )
     except EmbeddingUnavailableError:
-        return None
+        return [None] * len(names)
 
 
 def _mark_key(source: object, kind: object, item_id: object) -> tuple:
@@ -502,6 +506,16 @@ async def apply_reference(
     blocked = 0
     protected: set[tuple] = set()
 
+    # Векторы для новых позиций — одной прогонкой до записи. У существующих
+    # имя не меняется (эталон объявляет цену, а не переименовывает позицию),
+    # поэтому их вектор трогать незачем.
+    new_names = [
+        entry["name"] for entry in plan
+        if entry["action"] == ACTION_ADD
+    ]
+    embeddings = await _embeddings_safe(new_names)
+    embedding_by_name = dict(zip(new_names, embeddings))
+
     for entry in plan:
         if entry["action"] == ACTION_BLOCKED:
             blocked += 1
@@ -515,7 +529,7 @@ async def apply_reference(
             values = {
                 "name": item["name"],
                 "unit": item["unit"],
-                "embedding": await _generate_embedding_safe(item["name"]),
+                "embedding": embedding_by_name.get(entry["name"]),
                 "updated_at": now,
             }
             if is_work:

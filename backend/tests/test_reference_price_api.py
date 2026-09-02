@@ -409,3 +409,38 @@ async def test_plain_import_still_merges_contractor_prices(async_client, admin_t
     db_session.expire_all()
     work = (await db_session.execute(select(PriceWork))).scalar_one()
     assert work.prices == {"ООО Рога": 1200.0, "ИП Копыта": 1100.0}
+
+
+async def test_apply_asks_the_model_once_for_new_positions(
+    async_client, admin_token, monkeypatch,
+):
+    """Эталон из сметы — это сотни новых позиций сразу.
+
+    По вектору за позицию запись превращалась бы в минуты ожидания, поэтому
+    модель спрашивается один раз на весь файл.
+    """
+    calls = {"n": 0}
+
+    def fake_batch(texts, input_type="search_document"):
+        calls["n"] += 1
+        return [[0.1, 0.2] for _ in texts]
+
+    from app.services import reference_price as service
+
+    monkeypatch.setattr(service, "generate_embeddings_batch", fake_batch)
+
+    r = await async_client.post(
+        "/prices/reference/apply",
+        json={
+            "items": [
+                {"kind": "work", "name": "Работа один", "unit": "м2", "price": 100.0},
+                {"kind": "work", "name": "Работа два", "unit": "м2", "price": 200.0},
+                {"kind": "material", "name": "Материал", "unit": "шт", "price": 30.0},
+            ],
+            "remove": [],
+        },
+        headers={"Authorization": admin_token},
+    )
+
+    assert r.json()["added"] == 3
+    assert calls["n"] == 1
