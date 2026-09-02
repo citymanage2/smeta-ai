@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatApiDetail } from '../utils/formatError';
+import ReferenceImport from '../components/prices/ReferenceImport';
 import Layout from '../components/Layout';
 import { useAuthStore } from '../stores/auth';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
@@ -918,6 +919,10 @@ function ImportButton({ onDone }: ImportButtonProps) {
         {loading ? 'Импорт...' : '↑ Импорт'}
       </button>
       <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: 'none' }} onChange={handleFile} />
+      {/* Соседняя кнопка с обратным смыслом: «Импорт» добавляет цену к
+          имеющимся, «Эталон» — оставляет только её. Тип из селекта нужен
+          только простому прайсу: в файле сметы он написан своей колонкой. */}
+      <ReferenceImport kind={type === 'works' ? 'work' : 'material'} onDone={onDone} />
     </div>
   );
 }

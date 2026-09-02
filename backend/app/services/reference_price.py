@@ -18,21 +18,28 @@
 назначены за разное, и стереть первую ради второй значит молча исказить прайс
 подрядчика. Такие позиции показываются человеку, а не чинятся догадкой.
 """
+import asyncio
 import csv
 import io
+from datetime import datetime, timezone
 from typing import Optional
 
 import openpyxl
 import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.price import PriceMaterial, PriceWork
+from app.models.price_cache import PriceCacheMaterial, PriceCacheWork
 from app.services import price_service
-from app.services.embedding_service import normalize_name
+from app.services.embedding_service import (
+    EmbeddingUnavailableError,
+    generate_embedding,
+    normalize_name,
+)
 from app.services.price_bulk import SKIP_NO_NAME, SKIP_NO_PRICE, SKIP_NOT_PRICEABLE
-from app.utils.price_change import MONEY_EPS
-from app.utils.price_min import ESTIMATE_CONTRACTOR
+from app.utils.price_change import MONEY_EPS, price_changed, prices_changed
+from app.utils.price_min import ESTIMATE_CONTRACTOR, compute_min_price
 from app.utils.unit_compat import STATUS_INCOMPATIBLE, compare_units
 from app.utils.unit_normalizer import unit_price_factor
 
@@ -424,3 +431,153 @@ async def build_plan(db: AsyncSession, items: list[dict]) -> list[dict]:
         plan.append(entry)
 
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Применение
+# ---------------------------------------------------------------------------
+
+# Что откуда удаляется. Прайс и кеш веб-поиска — разные таблицы, но для расчёта
+# сметы это два одинаково живых источника цены.
+_REMOVE_MODELS = {
+    ("price", KIND_WORK): PriceWork,
+    ("price", KIND_MATERIAL): PriceMaterial,
+    ("cache", KIND_WORK): PriceCacheWork,
+    ("cache", KIND_MATERIAL): PriceCacheMaterial,
+}
+
+
+async def _generate_embedding_safe(name: str) -> Optional[list]:
+    """Вектор для поиска по смыслу; None — если модель недоступна.
+
+    Позиция без вектора всё равно найдётся точным совпадением названия, поэтому
+    отсутствие модели не повод отказывать в записи (так же в `price_bulk`).
+    """
+    try:
+        return await asyncio.to_thread(
+            generate_embedding, normalize_name(name), "search_document",
+        )
+    except EmbeddingUnavailableError:
+        return None
+
+
+def _mark_key(source: object, kind: object, item_id: object) -> tuple:
+    """Ключ позиции для сверки «это не та строка, куда мы только что писали».
+    Идентификаторы приезжают из JSON то числом, то строкой — сравниваем текстом."""
+    return (str(source), str(kind), str(item_id))
+
+
+async def apply_reference(
+    db: AsyncSession,
+    items: list[dict],
+    remove: list[dict],
+) -> dict:
+    """Записать эталонные цены и удалить отмеченное человеком.
+
+    План строится заново, а не принимается с фронта: между предпросмотром и
+    применением прайс мог измениться, а решение «вытеснять или нет» зависит от
+    единицы измерения той позиции, что лежит в базе **сейчас**.
+
+    Удаление идёт последним и никогда не трогает строки, в которые эта же
+    операция записала цену: иначе отметка, поставленная по недосмотру, стёрла
+    бы собственный результат операции.
+    """
+    plan = await build_plan(db, items)
+    by_name = {(item["kind"], normalize_name(item["name"])): item for item in items}
+    now = datetime.now(timezone.utc)
+
+    added = 0
+    updated = 0
+    blocked = 0
+    protected: set[tuple] = set()
+
+    for entry in plan:
+        if entry["action"] == ACTION_BLOCKED:
+            blocked += 1
+            continue
+
+        item = by_name[(entry["kind"], normalize_name(entry["name"]))]
+        is_work = entry["kind"] == KIND_WORK
+        model = PriceWork if is_work else PriceMaterial
+
+        if entry["match"] is None:
+            values = {
+                "name": item["name"],
+                "unit": item["unit"],
+                "embedding": await _generate_embedding_safe(item["name"]),
+                "updated_at": now,
+            }
+            if is_work:
+                prices = {ESTIMATE_CONTRACTOR: item["price"]}
+                row = PriceWork(prices=prices, min_price=compute_min_price(prices), **values)
+            else:
+                row = PriceMaterial(price=item["price"], **values)
+            db.add(row)
+            await db.flush()
+            protected.add(_mark_key("price", entry["kind"], row.id))
+            added += 1
+            continue
+
+        found = await db.get(model, entry["match"]["id"])
+        if found is None:  # позицию удалили между предпросмотром и применением
+            continue
+
+        # Единица из файла главнее: эталон объявляет, за что назначена цена.
+        # Пустую единицу файла за объявление не считаем — она ничего не говорит.
+        new_unit = item["unit"] or found.unit
+
+        if is_work:
+            prices = {ESTIMATE_CONTRACTOR: item["price"]}
+            repriced = prices_changed(found.prices, prices, found.unit, new_unit)
+            found.prices = prices
+            found.min_price = compute_min_price(prices)
+        else:
+            repriced = price_changed(found.price, item["price"], found.unit, new_unit)
+            found.price = item["price"]
+
+        found.unit = new_unit
+        if repriced:
+            found.updated_at = now
+
+        protected.add(_mark_key("price", entry["kind"], found.id))
+        updated += 1
+
+    removed = 0
+    for mark in remove:
+        source = str(mark.get("source") or "")
+        kind = str(mark.get("kind") or "")
+        item_id = mark.get("id")
+        model = _REMOVE_MODELS.get((source, kind))
+        if model is None or item_id is None:
+            continue
+        if _mark_key(source, kind, item_id) in protected:
+            continue
+        # Идентификатор приезжает из JSON как придётся, а типы колонок разные:
+        # у прайса целое, у кеша строка UUID. Несовпадение типа в PostgreSQL —
+        # ошибка запроса, а не «ничего не нашлось».
+        if source == "price":
+            try:
+                item_id = int(item_id)
+            except (TypeError, ValueError):
+                continue
+        else:
+            item_id = str(item_id)
+        result = await db.execute(delete(model).where(model.id == item_id))
+        removed += result.rowcount or 0
+
+    await db.commit()
+
+    # Расчёт сметы читает прайс из памяти: без перезагрузки эталонная цена
+    # заработала бы только после перезапуска сервера.
+    await price_service.load_cache(db)
+
+    logger.info(
+        "reference_price_applied",
+        added=added, updated=updated, blocked=blocked, removed=removed,
+    )
+    return {
+        "added": added,
+        "updated": updated,
+        "blocked": blocked,
+        "removed": removed,
+    }

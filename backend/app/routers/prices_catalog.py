@@ -8,12 +8,12 @@ CRUD-роутер для Каталога расценок.
 import asyncio
 import io
 from datetime import datetime, timezone
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 from urllib.parse import quote
 
 import openpyxl
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.price import PriceWork, PriceMaterial
-from app.services import price_service
+from app.services import price_service, reference_price
 from app.services.embedding_service import (
     normalize_name,
     generate_embedding,
@@ -623,3 +623,178 @@ async def export_catalog(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Эталонный прайс: цены из файла становятся единственно верными
+#
+# План `plans/2026-09-02-etalonnyy-prays-iz-smety.md`. Два шага вместо одного —
+# требование безопасности, а не удобство: обычная загрузка прайса **сливает**
+# цены, а здесь они стираются, и стёртая цена подрядчика не возвращается.
+# Поэтому сначала человек видит, что именно исчезнет, и только потом — жмёт.
+# ---------------------------------------------------------------------------
+
+MAX_REFERENCE_FILE_BYTES = 20 * 1024 * 1024
+
+
+class ReferenceItem(BaseModel):
+    kind: Literal["work", "material"]
+    name: str
+    unit: Optional[str] = None
+    price: float
+
+
+class ReferenceMatch(BaseModel):
+    id: int
+    name: str
+    unit: Optional[str]
+
+
+class ReferenceRemovedPrice(BaseModel):
+    contractor: Optional[str]
+    price: float
+
+
+class ReferencePlanEntry(BaseModel):
+    kind: Literal["work", "material"]
+    name: str
+    unit: Optional[str]
+    price: float
+    action: Literal["add", "reprice", "blocked"]
+    match: Optional[ReferenceMatch]
+    removed: list[ReferenceRemovedPrice]
+    reason: Optional[str]
+
+
+class ReferenceDuplicate(BaseModel):
+    source: Literal["price", "cache"]
+    kind: Literal["work", "material"]
+    id: str
+    name: str
+    unit: Optional[str]
+    price: Optional[float]
+    score: float
+    for_name: str
+
+
+class ReferenceDuplicates(BaseModel):
+    vectors_ready: bool
+    candidates: list[ReferenceDuplicate]
+
+
+class ReferencePreviewResponse(BaseModel):
+    items: list[ReferenceItem]
+    plan: list[ReferencePlanEntry]
+    skipped: dict[str, int]
+    summary: dict[str, int]
+    duplicates: ReferenceDuplicates
+
+
+class ReferenceRemoveMark(BaseModel):
+    source: Literal["price", "cache"]
+    kind: Literal["work", "material"]
+    # У позиции прайса идентификатор целый, у записи кеша — UUID-строка.
+    # Принимаем оба написания: фронт возвращает то, что ему прислали.
+    id: Union[int, str]
+
+
+class ReferenceApplyBody(BaseModel):
+    items: list[ReferenceItem]
+    remove: list[ReferenceRemoveMark] = []
+
+
+class ReferenceApplyResponse(BaseModel):
+    added: int
+    updated: int
+    blocked: int
+    removed: int
+    message: str
+
+
+def _reference_summary(plan: list[dict], skipped: dict) -> dict:
+    return {
+        "add": sum(1 for e in plan if e["action"] == reference_price.ACTION_ADD),
+        "reprice": sum(1 for e in plan if e["action"] == reference_price.ACTION_REPRICE),
+        "blocked": sum(1 for e in plan if e["action"] == reference_price.ACTION_BLOCKED),
+        "skipped": sum(skipped.values()),
+    }
+
+
+@router.post("/reference/preview", response_model=ReferencePreviewResponse)
+async def reference_preview(
+    file: UploadFile = File(...),
+    kind: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_manager_user),
+):
+    """Что произойдёт с прайсом, если объявить этот файл эталоном. Ничего не меняет."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
+    if len(data) > MAX_REFERENCE_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Файл превышает 20 МБ")
+
+    selected = kind if kind in ("work", "material") else None
+    try:
+        items, skipped = reference_price.parse_reference_file(
+            data, file.filename or "", selected,
+        )
+    except reference_price.ReferenceFileError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e),
+        ) from e
+
+    plan = await reference_price.build_plan(db, items)
+    duplicates = await reference_price.find_duplicates(items)
+
+    return ReferencePreviewResponse(
+        items=[ReferenceItem(**item) for item in items],
+        plan=[ReferencePlanEntry(**entry) for entry in plan],
+        skipped=skipped,
+        summary=_reference_summary(plan, skipped),
+        duplicates=ReferenceDuplicates(
+            vectors_ready=duplicates["vectors_ready"],
+            candidates=[
+                ReferenceDuplicate(**{**c, "id": str(c["id"])})
+                for c in duplicates["candidates"]
+            ],
+        ),
+    )
+
+
+@router.post("/reference/apply", response_model=ReferenceApplyResponse)
+async def reference_apply(
+    body: ReferenceApplyBody,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_manager_user),
+):
+    """Записать эталонные цены и удалить то, что человек отметил галочками."""
+    if len(body.items) > reference_price.MAX_REFERENCE_ITEMS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Больше {reference_price.MAX_REFERENCE_ITEMS} позиций за раз не принимаем.",
+        )
+
+    items = []
+    for item in body.items:
+        name = item.name.strip()
+        if not name or item.price <= 0:
+            # Отсев тот же, что при разборе файла: позиция без имени или без
+            # внятной цены в прайсе не нужна.
+            continue
+        items.append({
+            "kind": item.kind, "name": name,
+            "unit": (item.unit or "").strip(), "price": item.price,
+        })
+
+    result = await reference_price.apply_reference(
+        db, items, [mark.model_dump() for mark in body.remove],
+    )
+
+    parts = [f"добавлено {result['added']}", f"обновлено {result['updated']}"]
+    if result["blocked"]:
+        parts.append(f"пропущено по ед. изм. {result['blocked']}")
+    if result["removed"]:
+        parts.append(f"удалено дублей {result['removed']}")
+
+    return ReferenceApplyResponse(**result, message="Прайс обновлён: " + ", ".join(parts) + ".")

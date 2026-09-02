@@ -105,3 +105,85 @@ export async function matchPreview(name: string, kind: 'work' | 'material'): Pro
   const res = await apiClient.post<MatchPreview>('/prices/match-preview', { name, kind });
   return res.data;
 }
+
+// ---------------------------------------------------------------------------
+// Эталонный прайс: цены из файла становятся единственно верными
+//
+// План `plans/2026-09-02-etalonnyy-prays-iz-smety.md`. Два вызова вместо одного:
+// сначала «покажи, что исчезнет», потом «применяй». Между ними человек ставит
+// галочки на дублях — сам сервер ничего не удаляет по догадке.
+// ---------------------------------------------------------------------------
+
+export interface ReferenceItem {
+  kind: 'work' | 'material';
+  name: string;
+  unit: string | null;
+  price: number;
+}
+
+export interface ReferenceRemovedPrice {
+  contractor: string | null;
+  price: number;
+}
+
+export interface ReferencePlanEntry {
+  kind: 'work' | 'material';
+  name: string;
+  unit: string | null;
+  price: number;
+  action: 'add' | 'reprice' | 'blocked';
+  match: { id: number; name: string; unit: string | null } | null;
+  removed: ReferenceRemovedPrice[];
+  reason: string | null;
+}
+
+export interface ReferenceDuplicate {
+  source: 'price' | 'cache';
+  kind: 'work' | 'material';
+  id: string;
+  name: string;
+  unit: string | null;
+  price: number | null;
+  score: number;
+  for_name: string;
+}
+
+export interface ReferencePreview {
+  items: ReferenceItem[];
+  plan: ReferencePlanEntry[];
+  skipped: Record<string, number>;
+  summary: Record<string, number>;
+  duplicates: { vectors_ready: boolean; candidates: ReferenceDuplicate[] };
+}
+
+export interface ReferenceApplyResult {
+  added: number;
+  updated: number;
+  blocked: number;
+  removed: number;
+  message: string;
+}
+
+export async function referencePreview(
+  file: File,
+  kind?: 'work' | 'material',
+): Promise<ReferencePreview> {
+  const form = new FormData();
+  form.append('file', file);
+  if (kind) form.append('kind', kind);
+  const res = await apiClient.post<ReferencePreview>('/prices/reference/preview', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data;
+}
+
+export async function referenceApply(
+  items: ReferenceItem[],
+  remove: { source: 'price' | 'cache'; kind: 'work' | 'material'; id: string }[],
+): Promise<ReferenceApplyResult> {
+  const res = await apiClient.post<ReferenceApplyResult>('/prices/reference/apply', {
+    items,
+    remove,
+  });
+  return res.data;
+}

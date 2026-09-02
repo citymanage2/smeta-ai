@@ -1,7 +1,7 @@
 # Plan: эталонный прайс из сметы
 **Spec:** specs/2026-09-02-etalonnyy-prays-iz-smety.md
 **Research:** thoughts/research/2026-09-02-etalonnyy-prays-iz-smety.md
-**Status:** planning
+**Status:** in_progress
 
 ## Challenge Log
 
@@ -41,19 +41,19 @@
 
 | # | Проблема | Решение | Статус |
 |---|---|---|---|
-| 1 | Работы и материалы в одном файле, а импорт требует выбрать тип заранее | Разбор по колонке «Тип» нашего формата сметы; простой прайс-формат — по селекту | pending |
-| 2 | Несводимые единицы (мешок ↔ кг): вытеснение исказит чужую цену | `unit_compat.compare_units`; `incompatible` → не вытесняем, причина в сводку | pending |
-| 3 | «100 м2» в файле — цена не за м2 | `unit_normalizer.unit_price_factor`, как в `price_bulk` | pending |
-| 4 | Дата «Цена от» не должна ехать у нетронутых позиций | `price_change.prices_changed` / `price_changed` перед проставлением даты | pending |
-| 5 | Нет векторов — поиск дублей молча пуст | Флаг `vectors_ready` в ответе + текст, как в `match-preview` | pending |
-| 6 | Кеш веб-поиска перебивает расчёт раньше ИИ | Записи кеша попадают в список дублей помеченными, удаляются по галочке | pending |
-| 7 | Большой файл вешает запрос | Потолок позиций (`MAX_REFERENCE_ITEMS`), отказ с понятным текстом | pending |
-| 8 | Расчёт не увидит новые цены | `price_service.load_cache(db)` после применения | pending |
+| 1 | Работы и материалы в одном файле, а импорт требует выбрать тип заранее | Разбор по колонке «Тип» нашего формата сметы; простой прайс-формат — по селекту | done |
+| 2 | Несводимые единицы (мешок ↔ кг): вытеснение исказит чужую цену | `unit_compat.compare_units`; `incompatible` → не вытесняем, причина в сводку | done |
+| 3 | «100 м2» в файле — цена не за м2 | `unit_normalizer.unit_price_factor`, как в `price_bulk` | done |
+| 4 | Дата «Цена от» не должна ехать у нетронутых позиций | `price_change.prices_changed` / `price_changed` перед проставлением даты | done |
+| 5 | Нет векторов — поиск дублей молча пуст | Флаг `vectors_ready` в ответе + текст, как в `match-preview` | done |
+| 6 | Кеш веб-поиска перебивает расчёт раньше ИИ | Записи кеша попадают в список дублей помеченными, удаляются по галочке | done |
+| 7 | Большой файл вешает запрос | Потолок позиций (`MAX_REFERENCE_ITEMS`), отказ с понятным текстом | done |
+| 8 | Расчёт не увидит новые цены | `price_service.load_cache(db)` после применения | done |
 
 ## Phases
 
 ### Phase 1: разбор файла и правила вытеснения (сервис, без HTTP)
-- **Status:** pending
+- **Status:** completed
 - **Files:** `backend/app/services/reference_price.py` (новый),
   `backend/tests/test_reference_price_parse.py` (новый)
 - **Changes:** разбор двух форматов в единый список позиций
@@ -69,7 +69,7 @@
 - **Impact:** ничего не импортирует из роутеров; чистые функции + чтение прайса.
 
 ### Phase 2: поиск кандидатов-дублей
-- **Status:** pending
+- **Status:** completed
 - **Files:** `backend/app/services/reference_price.py`,
   `backend/tests/test_reference_price_duplicates.py` (новый)
 - **Changes:** для каждой позиции файла — top-N по прайсу и по кешу через
@@ -83,11 +83,13 @@
 - **Impact:** только чтение; `price_service` не меняется.
 
 ### Phase 3: HTTP-контракт (preview / apply)
-- **Status:** pending
-- **Files:** `backend/app/routers/admin.py`,
+- **Status:** completed
+- **Files:** `backend/app/routers/prices_catalog.py` (не `admin.py` — прайс это
+  управляющее действие менеджерских ролей, `get_manager_user`, и весь каталог
+  живёт там же),
   `backend/tests/test_reference_price_api.py` (новый)
-- **Changes:** `POST /admin/price-lists/reference/preview` (файл + тип для
-  простого формата) и `POST /admin/price-lists/reference/apply` (позиции JSON +
+- **Changes:** `POST /prices/reference/preview` (файл + тип для
+  простого формата) и `POST /prices/reference/apply` (позиции JSON +
   id отмеченных дублей). Применение: работам — `prices = {«Из смет»: цена}`,
   `min_price` через `compute_min_price`; материалам — `price`; дата — только
   при переоценке; удаление отмеченных из прайса и кеша; в конце
@@ -101,7 +103,7 @@
   проверить, что merge всё ещё сохраняет цены подрядчиков.
 
 ### Phase 4: интерфейс каталога
-- **Status:** pending
+- **Status:** completed
 - **Files:** `frontend/src/pages/PriceCatalog.tsx`, `frontend/src/api/prices.ts`
   (или где лежат вызовы каталога), тест во `frontend/src/__tests__/`
 - **Changes:** у загрузки файла — переключатель режима «дополнить прайс» /
@@ -115,7 +117,7 @@
   умолчанию прежний.
 
 ### Phase 5: документация правила
-- **Status:** pending
+- **Status:** completed
 - **Files:** `CLAUDE.md`
 - **Changes:** новое правило в «Правила, которые легко нарушить»: эталонный
   прайс — единственный путь, который **стирает** чужие цены; дубли удаляет
@@ -134,3 +136,8 @@
 
 | Дата | Фаза | Изменения |
 |---|---|---|
+| 2026-09-02 | 1 | `services/reference_price.py`: разбор файла (формат сметы и простой прайс), нормализация единиц, план вытеснения. 14 тестов |
+| 2026-09-02 | 2 | `price_service.find_duplicate_candidates` (id + источник) и `reference_price.find_duplicates`. Порог показа ниже порога подбора. 6 тестов |
+| 2026-09-02 | 3 | `POST /prices/reference/preview` и `/apply` в `prices_catalog.py`, права менеджера, применение с защитой только что записанных строк. 17 тестов |
+| 2026-09-02 | 4 | `components/prices/ReferenceImport.tsx` + вызовы в `api/catalog.ts`, кнопка «↑ Эталон» рядом с «↑ Импорт». 4 теста |
+| 2026-09-02 | 5 | Правило №18 в `CLAUDE.md` |
