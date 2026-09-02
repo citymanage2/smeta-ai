@@ -83,15 +83,15 @@ async def test_no_vectors_gives_empty_list(monkeypatch):
 
 async def test_matched_position_itself_is_not_a_duplicate(monkeypatch):
     """Позиция, которую и так переоценим, — не дубль: удалять её нельзя."""
-    async def fake_candidates(name, kind, n=5):
-        return [
+    async def fake_candidates(names, kind, n=5):
+        return [[
             {"source": "price", "id": 1, "name": "Кладка стен", "unit": "м3",
              "price": 1200.0, "score": 0.99},
             {"source": "price", "id": 2, "name": "Кладка кирпичных стен", "unit": "м3",
              "price": 1300.0, "score": 0.90},
-        ]
+        ]] * len(names)
 
-    monkeypatch.setattr(price_service, "find_duplicate_candidates", fake_candidates)
+    monkeypatch.setattr(price_service, "find_duplicate_candidates_batch", fake_candidates)
     monkeypatch.setattr(price_service, "duplicate_vectors_ready", lambda kind: True)
 
     result = await reference_price.find_duplicates([
@@ -105,13 +105,13 @@ async def test_matched_position_itself_is_not_a_duplicate(monkeypatch):
 
 async def test_weak_candidate_is_not_shown(monkeypatch):
     """Совсем непохожее в список не попадает: человеку нужен выбор, а не свалка."""
-    async def fake_candidates(name, kind, n=5):
-        return [
+    async def fake_candidates(names, kind, n=5):
+        return [[
             {"source": "price", "id": 3, "name": "Покраска потолка", "unit": "м2",
              "price": 300.0, "score": 0.41},
-        ]
+        ]] * len(names)
 
-    monkeypatch.setattr(price_service, "find_duplicate_candidates", fake_candidates)
+    monkeypatch.setattr(price_service, "find_duplicate_candidates_batch", fake_candidates)
     monkeypatch.setattr(price_service, "duplicate_vectors_ready", lambda kind: True)
 
     result = await reference_price.find_duplicates([
@@ -125,13 +125,13 @@ async def test_candidate_below_matching_threshold_is_still_shown(monkeypatch):
     """Порог показа ниже порога подбора цены: скрыть дубль дороже, чем показать лишнее."""
     below = price_service.SIMILARITY_THRESHOLD - 0.05
 
-    async def fake_candidates(name, kind, n=5):
-        return [
+    async def fake_candidates(names, kind, n=5):
+        return [[
             {"source": "cache", "id": "c-9", "name": "Кладка стен кирпичных",
              "unit": "м3", "price": 1400.0, "score": below},
-        ]
+        ]] * len(names)
 
-    monkeypatch.setattr(price_service, "find_duplicate_candidates", fake_candidates)
+    monkeypatch.setattr(price_service, "find_duplicate_candidates_batch", fake_candidates)
     monkeypatch.setattr(price_service, "duplicate_vectors_ready", lambda kind: True)
 
     result = await reference_price.find_duplicates([
@@ -143,13 +143,13 @@ async def test_candidate_below_matching_threshold_is_still_shown(monkeypatch):
 
 async def test_same_candidate_shown_once(monkeypatch):
     """Один и тот же дубль на две позиции файла — одна строка, а не две галочки."""
-    async def fake_candidates(name, kind, n=5):
-        return [
+    async def fake_candidates(names, kind, n=5):
+        return [[
             {"source": "price", "id": 5, "name": "Кладка стен кирпичных", "unit": "м3",
              "price": 1300.0, "score": 0.93},
-        ]
+        ]] * len(names)
 
-    monkeypatch.setattr(price_service, "find_duplicate_candidates", fake_candidates)
+    monkeypatch.setattr(price_service, "find_duplicate_candidates_batch", fake_candidates)
     monkeypatch.setattr(price_service, "duplicate_vectors_ready", lambda kind: True)
 
     result = await reference_price.find_duplicates([
@@ -158,3 +158,44 @@ async def test_same_candidate_shown_once(monkeypatch):
     ])
 
     assert len(result["candidates"]) == 1
+
+
+async def test_batch_search_asks_the_model_once(monkeypatch):
+    """Файл на сотни позиций — одна прогонка модели, а не сотня.
+
+    Модель локальная и денег не стоит, но по вызову на позицию превращает
+    предпросмотр в минуты ожидания на ровном месте.
+    """
+    calls = {"n": 0}
+
+    def fake_batch(texts, input_type="search_document"):
+        calls["n"] += 1
+        return [[1.0, 0.0] for _ in texts]
+
+    from app.services import embedding_service
+
+    monkeypatch.setattr(embedding_service, "generate_embeddings_batch", fake_batch)
+    _install_price_vectors(
+        monkeypatch,
+        [{"id": 1, "name": "Кладка стен из кирпича", "unit": "м3", "min_price": 1200.0}],
+        [_vec(1.0, 0.0)],
+    )
+    monkeypatch.setattr(price_service, "_cache_works_embeddings", None)
+
+    found = await price_service.find_duplicate_candidates_batch(
+        ["Кладка стен", "Кладка перегородок", "Штукатурка"], "work", n=3,
+    )
+
+    assert calls["n"] == 1
+    assert len(found) == 3
+    assert found[0][0]["id"] == 1
+
+
+async def test_batch_without_vectors_gives_empty_row_per_name(monkeypatch):
+    """Без векторов ответ по форме тот же — иначе вызывающий код разъедется."""
+    monkeypatch.setattr(price_service, "_works_embeddings", None)
+    monkeypatch.setattr(price_service, "_cache_works_embeddings", None)
+
+    assert await price_service.find_duplicate_candidates_batch(
+        ["Кладка стен", "Штукатурка"], "work",
+    ) == [[], []]

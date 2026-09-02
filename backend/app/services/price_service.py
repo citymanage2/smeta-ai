@@ -479,6 +479,67 @@ async def find_duplicate_candidates(name: str, kind: str, n: int = 5) -> list[di
         return []
 
 
+async def find_duplicate_candidates_batch(
+    names: list[str], kind: str, n: int = 5,
+) -> list[list[dict]]:
+    """То же, что `find_duplicate_candidates`, но на список имён сразу.
+
+    Модель локальная и денег не стоит, но прогонка на каждую позицию превращает
+    предпросмотр файла на 500 строк в минуты ожидания. Здесь она вызывается
+    один раз на весь файл, а дальше — матричное умножение.
+
+    Порядок ответа совпадает с порядком имён; без векторов возвращается пустой
+    список на каждое имя, а не короткий список — иначе вызывающий код разъедется.
+    """
+    if not names:
+        return []
+    if not duplicate_vectors_ready(kind):
+        return [[] for _ in names]
+
+    try:
+        from app.services.embedding_service import generate_embeddings_batch
+
+        vectors = await asyncio.to_thread(generate_embeddings_batch, names, "search_query")
+    except Exception as e:
+        logger.error("find_duplicate_candidates_batch failed", error=str(e), kind=kind)
+        return [[] for _ in names]
+
+    results: list[list[dict]] = []
+    for vector in vectors:
+        query_arr = np.array(vector, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
+            results.append([])
+            continue
+
+        if kind == "work":
+            found = _duplicate_rows(
+                _works_embeddings, _works_row_norms, _works_index_map, _works_cache,
+                query_arr, query_norm, n, "price", "min_price",
+            )
+            found += _duplicate_rows(
+                _cache_works_embeddings, _cache_works_row_norms,
+                _cache_works_index_map, _cache_works_cache,
+                query_arr, query_norm, n, "cache", "price",
+            )
+        else:
+            found = _duplicate_rows(
+                _materials_embeddings, _materials_row_norms,
+                _materials_index_map, _materials_cache,
+                query_arr, query_norm, n, "price", "price",
+            )
+            found += _duplicate_rows(
+                _cache_materials_embeddings, _cache_materials_row_norms,
+                _cache_materials_index_map, _cache_materials_cache,
+                query_arr, query_norm, n, "cache", "price",
+            )
+
+        found.sort(key=lambda r: r["score"], reverse=True)
+        results.append(found[:n])
+
+    return results
+
+
 async def find_top_n_works_combined(name: str, n: int = 3) -> list[dict]:
     """Поиск top-N по прайсу работ + кешу работ, дедупликация по тексту."""
     if not _numpy_available:

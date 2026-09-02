@@ -338,14 +338,25 @@ async def find_duplicates(items: list[dict]) -> dict:
     vectors_ready = all(price_service.duplicate_vectors_ready(kind) for kind in kinds)
     threshold = duplicate_threshold()
 
+    # Имена ищутся пачкой на каждый тип: модель прогоняется один раз на файл,
+    # а не по разу на позицию (см. `find_duplicate_candidates_batch`).
+    by_kind: dict[str, list[int]] = {}
+    for index, item in enumerate(items):
+        by_kind.setdefault(item["kind"], []).append(index)
+
+    found_per_item: list[list[dict]] = [[] for _ in items]
+    for kind, indexes in by_kind.items():
+        rows = await price_service.find_duplicate_candidates_batch(
+            [items[i]["name"] for i in indexes], kind, n=DUPLICATE_TOP_N,
+        )
+        for index, row in zip(indexes, rows):
+            found_per_item[index] = row
+
     seen: set = set()
     candidates: list[dict] = []
 
-    for item in items:
+    for item, found in zip(items, found_per_item):
         own_key = normalize_name(item["name"])
-        found = await price_service.find_duplicate_candidates(
-            item["name"], item["kind"], n=DUPLICATE_TOP_N,
-        )
         for candidate in found:
             score = float(candidate.get("score") or 0.0)
             if score < threshold:
