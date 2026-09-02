@@ -527,6 +527,8 @@ const AdminPage: React.FC = () => {
   const [worksMsg, setWorksMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [matsMsg, setMatsMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [worksEmbeddingLoading, setWorksEmbeddingLoading] = useState(false);
+  const [cacheEmbeddingLoading, setCacheEmbeddingLoading] = useState(false);
+  const [cacheEmbeddingMsg, setCacheEmbeddingMsg] = useState('');
   const [matsEmbeddingLoading, setMatsEmbeddingLoading] = useState(false);
 
   const [downloadingFile, setDownloadingFile] = useState<number | null>(null);
@@ -753,6 +755,23 @@ const AdminPage: React.FC = () => {
       } : prev);
     } finally {
       setMatsEmbeddingLoading(false);
+    }
+  };
+
+  const handleCacheGenerateEmbeddings = async () => {
+    setCacheEmbeddingLoading(true);
+    setCacheEmbeddingMsg('');
+    try {
+      const result = await generateEmbeddings('cache');
+      setCacheEmbeddingMsg(
+        result.status === 'ready'
+          ? `Готово: пересобрано ${result.updated ?? 0} записей кеша.`
+          : `Не удалось: ${result.error ?? 'модель недоступна'}`,
+      );
+    } catch {
+      setCacheEmbeddingMsg('Не удалось пересобрать векторы кеша.');
+    } finally {
+      setCacheEmbeddingLoading(false);
     }
   };
 
@@ -1369,6 +1388,42 @@ const AdminPage: React.FC = () => {
               onUpload={handleMatsUpload}
               onGenerateEmbeddings={handleMatsGenerateEmbeddings}
             />
+
+            {/* Кеш веб-поиска: при расчёте сметы он подставляет цену сразу
+                после прайса, поэтому его векторы должны быть посчитаны по тем
+                же правилам. Пересобирать его нужно после любой правки
+                нормализации имён — иначе позиция будет искаться по старому
+                написанию. */}
+            <div style={{
+              gridColumn: '1 / -1', border: '1px solid #e2e8f0', borderRadius: 10,
+              padding: '14px 16px', background: '#fff',
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#1e293b', marginBottom: 6 }}>
+                Кеш веб-поиска
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
+                Цены, найденные ИИ в интернете. В расчёте идут сразу после прайса, поэтому
+                векторы им нужны такие же. Пересоберите после изменения правил разбора
+                наименований.
+              </div>
+              <button
+                onClick={handleCacheGenerateEmbeddings}
+                disabled={cacheEmbeddingLoading}
+                style={{
+                  padding: '7px 14px', borderRadius: 6, fontSize: 13, fontWeight: 500,
+                  border: '1px solid #e2e8f0', background: '#fff', color: '#374151',
+                  cursor: cacheEmbeddingLoading ? 'default' : 'pointer',
+                  opacity: cacheEmbeddingLoading ? 0.7 : 1,
+                }}
+              >
+                {cacheEmbeddingLoading ? 'Пересобираю...' : 'Пересобрать векторы кеша'}
+              </button>
+              {cacheEmbeddingMsg && (
+                <span style={{ marginLeft: 10, fontSize: 12, color: '#64748b' }}>
+                  {cacheEmbeddingMsg}
+                </span>
+              )}
+            </div>
           </div>
         )}
 

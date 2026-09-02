@@ -96,7 +96,11 @@ export async function downloadInputFile(taskId: string, fileIndex: number, fileN
   window.URL.revokeObjectURL(url);
 }
 
-export async function generateEmbeddings(type: 'works' | 'materials'): Promise<GenerateEmbeddingsResponse> {
+// 'cache' — векторы кеша веб-поиска: при расчёте сметы он подставляет цену
+// наравне с прайсом, значит и пересобирать его нужно вместе с ним.
+export async function generateEmbeddings(
+  type: 'works' | 'materials' | 'cache',
+): Promise<GenerateEmbeddingsResponse> {
   const response = await apiClient.post<GenerateEmbeddingsResponse>(
     `/admin/price-lists/${type}/generate-embeddings`,
   );
