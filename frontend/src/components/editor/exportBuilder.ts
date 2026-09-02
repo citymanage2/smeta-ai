@@ -1,5 +1,6 @@
 import { CollapseFields, EditorColumn, GridRow, RowKind } from './adapters/types';
 import { buildCollapsedRows, groupInfoOf } from './collapse';
+import { isDeductionRow } from './deductions';
 
 /**
  * Данные для конструктора выгрузки-ведомости.
@@ -102,6 +103,17 @@ export function collapseExportRows(
     }
     return exported;
   });
+}
+
+/**
+ * Убрать из выгрузки строки-вычеты (объём < 0).
+ *
+ * Правило и код те же, что на экране (`deductions.ts`): своя копия правила
+ * однажды разошлась бы с таблицей, и человек получил бы файл, не совпадающий с
+ * тем, что он видел. Стоимости у вычетов нет, поэтому итог файла не меняется.
+ */
+export function dropDeductionExportRows(rows: ExportRow[], qtyKey: string): ExportRow[] {
+  return rows.filter((row) => !isDeductionRow(row, qtyKey));
 }
 
 /** Строки таблицы редактора → строки выгрузки. */

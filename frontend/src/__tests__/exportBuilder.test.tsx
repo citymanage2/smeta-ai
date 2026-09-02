@@ -12,7 +12,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import ExportBuilderModal from '../components/editor/ExportBuilderModal';
-import { ExportColumn, ExportRow, collapseExportRows } from '../components/editor/exportBuilder';
+import {
+  ExportColumn, ExportRow, collapseExportRows, dropDeductionExportRows,
+} from '../components/editor/exportBuilder';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 import { CollapseFields } from '../components/editor/adapters/types';
 
@@ -255,5 +257,55 @@ describe('свёртка одинаковых позиций в выгрузке
 
     // Работы отфильтрованы — в общий объём они не попали.
     expect(payload.rows.map((row) => row.name)).toEqual(['Кирпич']);
+  });
+});
+
+// --- Строки с минусом ------------------------------------------------------
+//
+// Строка-вычет уточняет объём соседней позиции: стоимости у неё нет ни на
+// экране, ни в файле. Правило и код те же, что в таблице (`deductions.ts`).
+
+const dropDeductions = (rows: ExportRow[]) => dropDeductionExportRows(rows, 'qty');
+
+// К кладке идёт вычет −1,5 м3: в свёрнутый объём он попадать не должен.
+const MINUS_ROWS: ExportRow[] = [
+  ...ROWS,
+  { _id: 'r5', _kind: 'work', num: 5, name: 'Кладка стен', unit: 'м3', qty: -1.5,
+    price_work: 1050, cost_work: null, price_material: null, cost_material: null },
+];
+
+describe('строки с минусом в выгрузке', () => {
+  it('галочки нет, когда колонки объёма в документе нет', () => {
+    renderModal();
+    expect(screen.queryByLabelText('Убрать строки с отрицательным объёмом')).toBeNull();
+  });
+
+  it('по умолчанию строки с минусом остаются в файле — как было', async () => {
+    renderModal({ rows: MINUS_ROWS, dropDeductions });
+    goToPreview();
+    const payload = await download();
+
+    expect(payload.rows).toHaveLength(4);
+  });
+
+  it('с галочкой строки с минусом в файл не идут', async () => {
+    renderModal({ rows: MINUS_ROWS, dropDeductions });
+    fireEvent.click(screen.getByLabelText('Убрать строки с отрицательным объёмом'));
+    goToPreview();
+    const payload = await download();
+
+    expect(payload.rows.map((row) => row._id)).toEqual(['r1', 'r2', 'r3']);
+  });
+
+  it('вычет не попадает в общий объём свёрнутой строки', async () => {
+    renderModal({ rows: MINUS_ROWS, dropDeductions, collapseRows });
+    fireEvent.click(screen.getByLabelText('Убрать строки с отрицательным объёмом'));
+    fireEvent.click(screen.getByLabelText('Свернуть одинаковые позиции'));
+    goToPreview();
+    const payload = await download();
+
+    const masonry = payload.rows.find((row) => row.name === 'Кладка стен')!;
+    // 4 м3, а не 2,5: вычет убран до свёртки.
+    expect(masonry.qty).toBe(4);
   });
 });

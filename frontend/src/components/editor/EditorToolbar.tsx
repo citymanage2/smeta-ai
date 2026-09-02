@@ -1,7 +1,7 @@
 import React from 'react';
 import {
-  Check, FileSpreadsheet, FoldVertical, History, Loader2, Maximize2, Minimize2, Plus,
-  Redo2, Search, Trash2, Undo2, X,
+  Check, FileSpreadsheet, FoldVertical, History, Loader2, Maximize2, Minimize2,
+  MinusCircle, Plus, Redo2, Search, Trash2, Undo2, X,
 } from 'lucide-react';
 import { DraftState, EditorTab } from '../../stores/documentEditor';
 import Hint from './Hint';
@@ -29,6 +29,13 @@ interface Props {
   /** Сколько групп свернулось — иначе непонятно, есть ли в документе дубли. */
   groupCount: number;
   onToggleCollapsed: () => void;
+  /** Строки-вычеты (объём < 0) спрятаны с экрана. */
+  hideMinus: boolean;
+  /** Сколько таких строк в документе: нечего прятать — кнопка недоступна. */
+  minusCount: number;
+  /** Есть ли колонка объёма: без неё вычеты не по чему опознать. */
+  canHideMinus: boolean;
+  onToggleHideMinus: () => void;
   onTabChange: (tab: EditorTab) => void;
   onSearchChange: (value: string) => void;
   onUndo: () => void;
@@ -60,7 +67,8 @@ export const EditorToolbar: React.FC<Props> = ({
   totalCount, workCount, materialCount, showTabs, tab, search,
   selectedCount, canWrite, isDirty, applying, draftState, canUndo, canRedo,
   fullscreen, historyOpen, collapsed, canCollapse, groupCount,
-  onToggleCollapsed, onTabChange, onSearchChange, onUndo, onRedo,
+  onToggleCollapsed, hideMinus, minusCount, canHideMinus, onToggleHideMinus,
+  onTabChange, onSearchChange, onUndo, onRedo,
   onApply, onDiscard, onAddRow, onDeleteSelected, onToggleFullscreen, onToggleHistory,
   onExport,
 }) => (
@@ -170,6 +178,33 @@ export const EditorToolbar: React.FC<Props> = ({
             <FoldVertical size={14} />
             Свернуть дубли
             {collapsed && groupCount > 0 && <span className="de-tab-count">{groupCount}</span>}
+          </button>
+        </Hint>
+
+        {/* Строки-вычеты: объём со знаком минус корректирует объём соседней
+            позиции, стоимости у неё нет. Тоже режим показа — документ не
+            меняется. */}
+        <Hint
+          align="end"
+          text={hideMinus
+            ? 'Вернуть в таблицу строки с отрицательным объёмом'
+            : !canHideMinus
+              ? 'В этом документе нет колонки с объёмом — минусы не по чему искать'
+              : minusCount === 0
+                ? 'В документе нет строк с отрицательным объёмом — прятать нечего'
+                : 'Спрятать строки с отрицательным объёмом: они уточняют объём соседних позиций и в стоимость не идут. Документ не меняется — это только вид таблицы'}
+        >
+          <button
+            className={`de-btn${hideMinus ? ' de-btn-active' : ''}`}
+            onClick={onToggleHideMinus}
+            // Включённый режим выключается всегда: строки могли кончиться
+            // после правки, и кнопка не имеет права запереть человека в
+            // таблице, где часть строк не видно.
+            disabled={!canHideMinus || (minusCount === 0 && !hideMinus)}
+          >
+            <MinusCircle size={14} />
+            Убрать минусы
+            {minusCount > 0 && <span className="de-tab-count">{minusCount}</span>}
           </button>
         </Hint>
 

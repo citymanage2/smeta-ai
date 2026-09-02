@@ -40,6 +40,11 @@ interface Props {
    * сворачивать документ не по чему (например, в файле нет наименования).
    */
   collapseRows?: (rows: ExportRow[]) => ExportRow[];
+  /**
+   * Убрать строки-вычеты (объём < 0). Не передан — галочки нет: в документе
+   * может не быть колонки объёма, и минусы не по чему искать.
+   */
+  dropDeductions?: (rows: ExportRow[]) => ExportRow[];
   onExport: (payload: ExportPayload) => Promise<void>;
   onClose: () => void;
 }
@@ -68,7 +73,7 @@ function chip(active: boolean, accent = '#2563eb'): React.CSSProperties {
 
 export const ExportBuilderModal: React.FC<Props> = ({
   documentTitle, projectName, objectName, columns, rows, sections,
-  preselectedIds, collapseRows, onExport, onClose,
+  preselectedIds, collapseRows, dropDeductions, onExport, onClose,
 }) => {
   const hasKinds = useMemo(() => rows.some((row) => row._kind === 'work' || row._kind === 'material'), [rows]);
   const hasSelection = (preselectedIds?.size ?? 0) > 0;
@@ -85,6 +90,9 @@ export const ExportBuilderModal: React.FC<Props> = ({
   // Одинаковые позиции — одной строкой с общим объёмом. По умолчанию выключено:
   // обычная ведомость должна остаться построчной, как была.
   const [collapse, setCollapse] = useState(false);
+  // Строки-вычеты в файле. По умолчанию выключено: ведомость должна остаться
+  // такой же, какой была до появления галочки.
+  const [dropMinus, setDropMinus] = useState(false);
 
   const [previewRows, setPreviewRows] = useState<ExportRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -115,6 +123,9 @@ export const ExportBuilderModal: React.FC<Props> = ({
     if (sections && sectionIds.length > 0) {
       result = result.filter((row) => row._section && sectionIds.includes(row._section));
     }
+    // Вычеты убираются до свёртки — как и на экране: иначе спрятанная строка
+    // всё равно попала бы в общий объём группы.
+    if (dropMinus && dropDeductions) result = dropDeductions(result);
     // Свёртка идёт последней, по уже отобранным строкам: иначе в общий объём
     // попали бы позиции, которые человек из выгрузки исключил.
     if (collapse && collapseRows) result = collapseRows(result);
@@ -249,6 +260,25 @@ export const ExportBuilderModal: React.FC<Props> = ({
                   ))}
                 </div>
               </div>
+
+              {dropDeductions && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={labelStyle}>Строки с минусом</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#475569' }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Убрать строки с отрицательным объёмом"
+                      checked={dropMinus}
+                      onChange={(e) => setDropMinus(e.target.checked)}
+                    />
+                    Убрать строки с отрицательным объёмом
+                  </label>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+                    Такие строки уточняют объём соседней позиции и в стоимость не
+                    идут — итог файла от этого не изменится.
+                  </div>
+                </div>
+              )}
 
               {collapseRows && (
                 <div style={{ marginBottom: 20 }}>

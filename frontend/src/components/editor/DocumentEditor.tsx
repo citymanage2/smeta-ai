@@ -17,6 +17,7 @@ import {
   CHILD_KEY, applySelectionChange, buildCollapsedRows,
   groupInfoOf, isGroupRow, isMixedField, selectionForGrid, spreadEdit,
 } from './collapse';
+import { countDeductions, hideDeductionRows } from './deductions';
 import { formatMoney } from '../../utils/formatNumber';
 import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clipboard';
 import EditorToolbar from './EditorToolbar';
@@ -37,7 +38,9 @@ import { moveRow, removeRowsCascade } from './rowOps';
 import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
 import Hint from './Hint';
-import { collapseExportRows, columnsFromEditor, rowsFromEditor } from './exportBuilder';
+import {
+  collapseExportRows, columnsFromEditor, dropDeductionExportRows, rowsFromEditor,
+} from './exportBuilder';
 import { measureGridHeight } from './gridHeight';
 import './DocumentEditor.css';
 
@@ -72,9 +75,12 @@ interface Props {
   initialSheet?: string;
   /** Свёрнутый режим из ссылки: коллега должен увидеть ту же таблицу. */
   initialCollapsed?: boolean;
+  /** Скрытые строки-вычеты из ссылки — по той же причине. */
+  initialHideMinus?: boolean;
   /** Открытая версия и вкладки — чтобы страница положила их в адрес. */
   onStateChange?: (state: {
     versionId: string | null; tab: string; sheet: string | null; collapsed: boolean;
+    hideMinus: boolean;
   }) => void;
   onClose?: () => void;
   onApplied?: () => void;
@@ -127,7 +133,7 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 export const DocumentEditor: React.FC<Props> = ({
   cardId, kind, fileSlot, fileIndex, title, showHead = true, fullHeight = false,
   initialVersionId, initialTab, initialSheet, initialCollapsed = false,
-  onStateChange, onClose, onApplied,
+  initialHideMinus = false, onStateChange, onClose, onApplied,
 }) => {
   const {
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
@@ -144,6 +150,9 @@ export const DocumentEditor: React.FC<Props> = ({
   // в `rows` всегда лежат настоящие строки, поэтому итоги, «Применить» и
   // история работают одинаково в обоих режимах.
   const [collapsed, setCollapsed] = useState(initialCollapsed);
+  // Строки-вычеты (объём < 0) спрятаны. Тоже уровень показа: строки остаются в
+  // документе, меняется только то, что видно на экране.
+  const [hideMinus, setHideMinus] = useState(initialHideMinus);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -185,8 +194,8 @@ export const DocumentEditor: React.FC<Props> = ({
   // Открытая версия и вкладки — наружу, чтобы страница положила их в адрес и
   // ссылка открывала ровно то состояние, из которого её скопировали.
   useEffect(() => {
-    onStateChange?.({ versionId, tab, sheet, collapsed });
-  }, [versionId, tab, sheet, collapsed, onStateChange]);
+    onStateChange?.({ versionId, tab, sheet, collapsed, hideMinus });
+  }, [versionId, tab, sheet, collapsed, hideMinus, onStateChange]);
 
   // Присутствие: раз в 20 секунд отмечаемся и узнаём, не открыл ли документ кто-то ещё.
   useEffect(() => {
@@ -299,6 +308,28 @@ export const DocumentEditor: React.FC<Props> = ({
     anchorRef.current = null;
   }, [setSelected]);
 
+  // --- Строки-вычеты --------------------------------------------------------
+  //
+  // Объём со знаком минус корректирует объём соседней позиции: стоимости у
+  // такой строки нет ни на экране, ни в файле, а место в таблице она занимает.
+
+  const qtyKey = useMemo(
+    () => adapter.qtyKey?.(columns) ?? null, [adapter, columns],
+  );
+
+  const minusCount = useMemo(
+    () => (qtyKey ? countDeductions(sheetRows, qtyKey) : 0),
+    [sheetRows, qtyKey],
+  );
+
+  const handleToggleHideMinus = useCallback(() => {
+    setHideMinus((previous) => !previous);
+    // Та же причина, что у свёртки: отмеченная строка, которую человек больше
+    // не видит, иначе уехала бы в удаление, коэффициент или прайс.
+    setSelected(new Set());
+    anchorRef.current = null;
+  }, [setSelected]);
+
   const toggleGroup = useCallback((key: string) => {
     setExpandedGroups((previous) => {
       const next = new Set(previous);
@@ -338,6 +369,10 @@ export const DocumentEditor: React.FC<Props> = ({
     if (query) {
       result = result.filter((row) => adapter.searchText(row).toLowerCase().includes(query));
     }
+    // Вычеты убираются до свёртки: спрятанная строка не должна попадать в
+    // общий объём группы — человек считал бы объём по строкам, которых не
+    // видит.
+    if (hideMinus && qtyKey) result = hideDeductionRows(result, qtyKey);
     // Свёртка идёт последней — по уже отобранным строкам. Тип и наименование
     // входят в ключ группы, поэтому вкладка и поиск отбирают группу целиком, а
     // не половину её позиций: общий объём остаётся честным.
@@ -345,7 +380,10 @@ export const DocumentEditor: React.FC<Props> = ({
       result = buildCollapsedRows(result, collapseFields, adapter.rowKind, expandedGroups);
     }
     return result;
-  }, [sheetRows, tab, deferredSearch, adapter, collapsed, collapseFields, expandedGroups]);
+  }, [
+    sheetRows, tab, deferredSearch, adapter, collapsed, collapseFields, expandedGroups,
+    hideMinus, qtyKey,
+  ]);
 
   // Сколько позиций свернулось: без этого числа непонятно, помог режим или в
   // документе просто нет дублей.
@@ -895,6 +933,10 @@ export const DocumentEditor: React.FC<Props> = ({
             canCollapse={collapseFields !== null}
             groupCount={collapsedGroupCount}
             onToggleCollapsed={handleToggleCollapsed}
+            hideMinus={hideMinus}
+            minusCount={minusCount}
+            canHideMinus={qtyKey !== null}
+            onToggleHideMinus={handleToggleHideMinus}
             onTabChange={setTab}
             onSearchChange={setSearch}
             onUndo={undo}
@@ -921,6 +963,10 @@ export const DocumentEditor: React.FC<Props> = ({
               // экране: две копии правил однажды разошлись бы в объёмах.
               collapseRows={collapseFields
                 ? (exportRows) => collapseExportRows(exportRows, collapseFields)
+                : undefined}
+              // Строки-вычеты убираются из файла тем же кодом, что на экране.
+              dropDeductions={qtyKey
+                ? (exportRows) => dropDeductionExportRows(exportRows, qtyKey)
                 : undefined}
               onExport={(payload) => exportDocument(
                 documentRef, payload, payload.file_name ?? 'export.xlsx',

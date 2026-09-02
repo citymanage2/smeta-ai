@@ -285,4 +285,9 @@ export const estimateAdapter: EditorAdapter = {
       sumKeys: ['qty', 'cost_work', 'cost_material'],
     };
   },
+
+  // Колонка объёма у сметы всегда одна и та же — по ней узнаются вычеты.
+  qtyKey(): string {
+    return 'qty';
+  },
 };

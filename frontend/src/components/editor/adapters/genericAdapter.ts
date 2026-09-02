@@ -284,4 +284,14 @@ export const genericAdapter: EditorAdapter = {
       ],
     };
   },
+
+  /**
+   * Колонка объёма — та же, по которой уже работает пересчёт «цена × объём».
+   * Искать её вторым набором слов значило бы завести правило, которое однажды
+   * разойдётся с пересчётом: фильтр смотрел бы в один столбец, стоимость — в
+   * другой.
+   */
+  qtyKey(columns: EditorColumn[]): string | null {
+    return findRecalcConfig(columns.map((column) => column.key)).qtyCol;
+  },
 };

@@ -83,7 +83,7 @@ describe('состояние документа в ссылке', () => {
 
     await waitFor(() => expect(onStateChange).toHaveBeenCalled());
     expect(onStateChange).toHaveBeenLastCalledWith(
-      { versionId: 'v1', tab: 'all', sheet: null, collapsed: false });
+      { versionId: 'v1', tab: 'all', sheet: null, collapsed: false, hideMinus: false });
   });
 
   it('смена вкладки уходит наружу — ссылка её сохранит', async () => {
@@ -97,7 +97,7 @@ describe('состояние документа в ссылке', () => {
 
     await waitFor(() =>
       expect(onStateChange).toHaveBeenLastCalledWith(
-        { versionId: 'v1', tab: 'works', sheet: null, collapsed: false }));
+        { versionId: 'v1', tab: 'works', sheet: null, collapsed: false, hideMinus: false }));
   });
 
   it('ссылка с версией открывает именно её, а не активную', async () => {
