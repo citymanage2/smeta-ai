@@ -17,8 +17,21 @@ DIM = 768
 # normalize_name
 # ---------------------------------------------------------------------------
 
-def test_normalize_m_defi_100():
-    assert normalize_name("M defi 100") == "м100"
+def test_normalize_grade_does_not_swallow_words():
+    """Слова между буквой и числом остаются на месте.
+
+    До 02.09.2026 здесь проверялось обратное: «M defi 100» → «м100». Ради
+    этого правило марок съедало любые слова между первой буквой и первым
+    числом — и вместе с ними половину названий: «Пленка гидроизоляционная
+    Изоспан A 1,6х50 м» и «Пленка пароизоляционная Изоспан B 1,6х50 м»
+    сжимались в одно «п1,6х50 м», то есть в один вектор и один ключ прайса.
+    Кейс «M defi 100» ни к одной реальной позиции не привязан, а расплатой за
+    него была цена гидроизоляции у пароизоляции.
+    """
+    # Три слова остаются тремя. Сравнивать посимвольно тут нельзя: латинские
+    # буквы, визуально совпадающие с кириллическими, заменяются на кириллицу.
+    assert len(normalize_name("M defi 100").split()) == 3
+    assert normalize_name("M defi 100") != "м100"
 
 def test_normalize_m_dash_50():
     assert normalize_name("М-50") == "м50"
@@ -32,8 +45,9 @@ def test_normalize_empty_string():
 def test_normalize_m100_lowercase():
     assert normalize_name("М100") == "м100"
 
-def test_normalize_m_defi_100_equals_m100():
-    assert normalize_name("M defi 100") == normalize_name("М100")
+def test_normalize_grade_written_differently_is_one_key():
+    """Марка, записанная по-разному, — по-прежнему одна позиция."""
+    assert normalize_name("М-100") == normalize_name("М100") == normalize_name("M 100")
 
 def test_normalize_m100_not_equals_m50():
     assert normalize_name("М100") != normalize_name("М50")

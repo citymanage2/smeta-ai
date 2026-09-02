@@ -759,10 +759,15 @@ async def generate_price_embeddings(
     Generate (or regenerate) embedding vectors for all rows of a price list.
     Returns HTTP 200 in both success and failure cases — check 'status' field.
     """
-    if pl_type not in ("works", "materials"):
-        raise HTTPException(status_code=400, detail="Тип должен быть 'works' или 'materials'")
+    if pl_type not in ("works", "materials", "cache"):
+        raise HTTPException(
+            status_code=400, detail="Тип должен быть 'works', 'materials' или 'cache'",
+        )
 
-    # Find the price list record
+    # Запись о загруженном файле — не обязательна. Прайс наполняется ещё и
+    # каталогом, и кнопкой «В прайс» из редактора; у такого прайса записи в
+    # `price_lists` нет, а пересобирать векторы ему нужно так же (например
+    # после правки правил нормализации имени).
     res = await db.execute(
         select(PriceList)
         .where(PriceList.type == pl_type)
@@ -770,19 +775,26 @@ async def generate_price_embeddings(
         .limit(1)
     )
     price_list = res.scalar_one_or_none()
-    if not price_list:
-        raise HTTPException(status_code=404, detail="Прайс-лист не найден")
 
     # Load all rows
     if pl_type == "works":
         rows_res = await db.execute(select(PriceWork))
-    else:
+        rows = list(rows_res.scalars().all())
+    elif pl_type == "materials":
         rows_res = await db.execute(select(PriceMaterial))
-    rows = rows_res.scalars().all()
+        rows = list(rows_res.scalars().all())
+    else:
+        # Кеш веб-поиска при расчёте сметы идёт сразу после прайса и
+        # подставляет цену наравне с ним, поэтому и вектор у него должен быть
+        # посчитан по тем же правилам.
+        cache_works = (await db.execute(select(PriceCacheWork))).scalars().all()
+        cache_materials = (await db.execute(select(PriceCacheMaterial))).scalars().all()
+        rows = list(cache_works) + list(cache_materials)
 
     if not rows:
-        price_list.embedding_status = "ready"
-        await db.commit()
+        if price_list:
+            price_list.embedding_status = "ready"
+            await db.commit()
         return GenerateEmbeddingsResponse(status="ready", updated=0)
 
     try:
@@ -790,14 +802,16 @@ async def generate_price_embeddings(
         embeddings = generate_embeddings_batch(normalized, input_type="search_document")
         for row, emb in zip(rows, embeddings):
             row.embedding = emb
-        price_list.embedding_status = "ready"
+        if price_list:
+            price_list.embedding_status = "ready"
         await db.commit()
         await price_service.load_cache(db)
         logger.info("Embeddings regenerated via endpoint", type=pl_type, count=len(rows))
         return GenerateEmbeddingsResponse(status="ready", updated=len(rows))
     except EmbeddingUnavailableError as e:
-        price_list.embedding_status = "failed"
-        await db.commit()
+        if price_list:
+            price_list.embedding_status = "failed"
+            await db.commit()
         logger.warning("Embeddings generation failed via endpoint", type=pl_type, error=str(e))
         return GenerateEmbeddingsResponse(status="failed", error=str(e))
 
