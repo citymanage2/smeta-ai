@@ -34,6 +34,8 @@ const preview = {
     },
   ],
   skipped: {},
+  notes: {},
+  conflicts: [],
   summary: { add: 0, reprice: 1, blocked: 0, skipped: 0 },
   duplicates: {
     vectors_ready: true,
@@ -94,6 +96,20 @@ describe('ReferenceImport', () => {
     await waitFor(() => expect(catalogApi.referenceApply).toHaveBeenCalled());
     const [, remove] = vi.mocked(catalogApi.referenceApply).mock.calls[0];
     expect(remove).toEqual([{ source: 'price', kind: 'work', id: '7' }]);
+  });
+
+  it('называет позиции, у которых в файле цены разошлись', async () => {
+    vi.mocked(catalogApi.referencePreview).mockResolvedValue({
+      ...preview,
+      notes: { 'в файле разные цены у одной позиции — взята последняя': 1 },
+      conflicts: [{
+        kind: 'work' as const, name: 'Демонтаж кабеля', unit: 'м',
+        prices: [30, 60, 100], taken: 100,
+      }],
+    });
+    await openPreview();
+    expect(screen.getByText('Демонтаж кабеля')).toBeTruthy();
+    expect(screen.getByText(/30,00 \/ 60,00 \/ 100,00/)).toBeTruthy();
   });
 
   it('говорит, когда поиск по смыслу отключён', async () => {

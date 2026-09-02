@@ -148,10 +148,20 @@ export interface ReferenceDuplicate {
   for_name: string;
 }
 
+export interface ReferenceConflict {
+  kind: 'work' | 'material';
+  name: string;
+  unit: string | null;
+  prices: number[];
+  taken: number;
+}
+
 export interface ReferencePreview {
   items: ReferenceItem[];
   plan: ReferencePlanEntry[];
   skipped: Record<string, number>;
+  notes: Record<string, number>;
+  conflicts: ReferenceConflict[];
   summary: Record<string, number>;
   duplicates: { vectors_ready: boolean; candidates: ReferenceDuplicate[] };
 }

@@ -35,7 +35,6 @@ from app.services import price_service
 from app.services.embedding_service import (
     EmbeddingUnavailableError,
     generate_embeddings_batch,
-    normalize_name,
 )
 from app.services.price_bulk import SKIP_NO_NAME, SKIP_NO_PRICE, SKIP_NOT_PRICEABLE
 from app.utils.price_change import MONEY_EPS, price_changed, prices_changed
@@ -45,16 +44,22 @@ from app.utils.unit_normalizer import unit_price_factor
 
 logger = structlog.get_logger()
 
-# Потолок на один файл — тот же по смыслу, что `price_bulk.MAX_ITEMS`: эталон
-# это десятки позиций, а не выгрузка чужой базы целиком. Файл сверх потолка
-# отклоняется целиком: молча взять первые 500 строк хуже, чем не взять ничего.
-MAX_REFERENCE_ITEMS = 500
+# Потолок на один файл. Реальная сводная смета на объект — это полторы тысячи
+# позиций, разложенных по десятку листов-разделов, и отклонять её незачем: цены
+# там ровно те, ради которых функция и делалась. Файл сверх потолка отклоняется
+# целиком — молча взять первые N строк хуже, чем не взять ничего.
+MAX_REFERENCE_ITEMS = 3000
 
 ACTION_ADD = "add"          # позиции в прайсе нет — стирать нечего
 ACTION_REPRICE = "reprice"  # позиция есть — цена из файла вытеснит остальные
 ACTION_BLOCKED = "blocked"  # вытеснять нельзя, решает человек
 
 BLOCK_UNIT_MISMATCH = "ед. изм. несводима"
+
+# Предупреждения разбора: не ошибки, но человек обязан их увидеть до записи.
+NOTE_BOTH_PRICES = "в строке две цены — взята цена материала"
+NOTE_PRICE_CONFLICT = "в файле разные цены у одной позиции — взята последняя"
+NOTE_SPLIT_BY_SECTION = "одноимённые позиции разведены по разделам файла"
 
 # Сколько кандидатов-дублей показывать на одну позицию файла.
 DUPLICATE_TOP_N = 5
@@ -82,8 +87,31 @@ class ReferenceFileError(Exception):
 # Разбор файла
 # ---------------------------------------------------------------------------
 
-def _rows_from_bytes(data: bytes, filename: str) -> list[list]:
-    """Строки файла. Из книги берётся первый лист, где есть слово «наименование»."""
+def match_key(name: str) -> str:
+    """Ключ «та же самая позиция» для эталона.
+
+    Намеренно **не** `embedding_service.normalize_name`. Та сжимает «буква +
+    слова + число» до марки материала, и «Планка карнизная фальц 0,5 Satin
+    Matt RAL 6005» превращается в «п0,5 s6005» — вместе с ендовой, капельником
+    и коньковой планкой, у которых цены отличаются вчетверо. Для подбора цены
+    это отдельная беда (позиции реально путаются), но эталон обязан записать
+    столько позиций, сколько их в файле: он объявляет цены, а не сливает
+    номенклатуру.
+
+    Здесь только то, что заведомо не меняет смысла названия: регистр, «ё» и
+    лишние пробелы.
+    """
+    return " ".join(str(name or "").replace("ё", "е").replace("Ё", "Е").lower().split())
+
+
+def _sheets_from_bytes(data: bytes, filename: str) -> "list[tuple[str, list[list]]]":
+    """Листы файла как таблицы строк.
+
+    Из книги берутся **все** листы, а не первый подходящий: сводная смета
+    разложена по разделам — «Кровля», «АР», «ЭОМ» и ещё десяток (правило №14
+    CLAUDE.md). Какой лист про цены, а какой служебный, решает уже разбор
+    колонок: у листа-раздела есть цена за единицу, у «Сводной» — только суммы.
+    """
     lower = filename.lower()
 
     if lower.endswith(".xlsx") or lower.endswith(".xls"):
@@ -91,13 +119,10 @@ def _rows_from_bytes(data: bytes, filename: str) -> list[list]:
             wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
         except Exception as e:  # noqa: BLE001 — наружу уходит человеческий текст
             raise ReferenceFileError(f"Не удалось прочитать книгу Excel: {e}") from e
-        for sheet_name in wb.sheetnames:
-            rows = [list(row) for row in wb[sheet_name].iter_rows(values_only=True)]
-            if _header_index(rows) is not None:
-                return rows
-        raise ReferenceFileError(
-            "В файле не найден заголовок с колонкой «Наименование»."
-        )
+        return [
+            (name, [list(row) for row in wb[name].iter_rows(values_only=True)])
+            for name in wb.sheetnames
+        ]
 
     if lower.endswith(".csv") or lower.endswith(".txt"):
         text = data.decode("utf-8-sig", errors="replace")
@@ -105,13 +130,17 @@ def _rows_from_bytes(data: bytes, filename: str) -> list[list]:
             delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|").delimiter
         except csv.Error:
             delimiter = ","
-        return [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+        return [("", [list(row) for row in csv.reader(io.StringIO(text), delimiter=delimiter)])]
 
     raise ReferenceFileError("Принимаются файлы Excel, CSV и TXT.")
 
 
 def _header_index(rows: list[list]) -> Optional[int]:
-    """Номер строки заголовка — первой, где встречается «наименование»."""
+    """Номер строки заголовка — первой, где встречается «наименование».
+
+    В реальной сводной шапка живёт на восьмой строке, над ней — название
+    объекта и пустые строки, поэтому фиксированный номер строки не годится.
+    """
     for i, row in enumerate(rows):
         for cell in row:
             if isinstance(cell, str) and "наименование" in cell.lower():
@@ -122,19 +151,21 @@ def _header_index(rows: list[list]) -> Optional[int]:
 def _columns(headers: list[str]) -> dict:
     """Заголовки → номера нужных колонок.
 
-    «Цена работы» и «Цена материала» ищутся до общей «Цены»: в файле сметы есть
-    и то и другое, и общая колонка забрала бы первую попавшуюся. «Стоимость»
-    берётся только как последняя надежда простого прайса — в смете так
-    называется сумма за всю позицию, а не цена за единицу.
+    Цены разбираются **до** единицы и до общей «Цены»: настоящий заголовок
+    выглядит как «Цена за ед. изм. Работы» — в нём есть и «ед.», и «цена», и
+    любая другая ветка забрала бы колонку себе.
+
+    Колонка «Стоимость» ценой не считается вовсе. В смете это сумма за всю
+    позицию: взять её ценой за единицу значит завысить прайс во столько раз,
+    сколько было объёма.
     """
     columns: dict = {
         "name": None, "unit": None, "type": None,
         "price_work": None, "price_material": None, "price": None,
     }
-    fallback_price = None
 
     for i, raw in enumerate(headers):
-        lower = str(raw or "").strip().lower()
+        lower = str(raw or "").replace("\n", " ").strip().lower()
         if not lower:
             continue
         if "наименование" in lower or "название" in lower or lower == "name":
@@ -142,25 +173,18 @@ def _columns(headers: list[str]) -> dict:
                 columns["name"] = i
         elif lower == "тип":
             columns["type"] = i
-        # Цены разбираются до единицы: заголовок «Цена работы (за ед.)» тоже
-        # содержит «ед.», и проверка единицы забрала бы колонку цены себе.
-        elif "цена работы" in lower or "цена работ" in lower:
-            columns["price_work"] = i
-        elif "цена материала" in lower or "цена матер" in lower:
-            columns["price_material"] = i
-        elif "цена" in lower:
+        elif "цена" in lower and "работ" in lower:
+            if columns["price_work"] is None:
+                columns["price_work"] = i
+        elif "цена" in lower and "материал" in lower:
+            if columns["price_material"] is None:
+                columns["price_material"] = i
+        elif "цена" in lower or lower == "price":
             if columns["price"] is None:
                 columns["price"] = i
         elif ("ед" in lower and ("изм" in lower or "." in lower)) or lower in ("ед", "unit"):
             if columns["unit"] is None:
                 columns["unit"] = i
-        elif "стоимость" in lower or lower == "price":
-            if fallback_price is None:
-                fallback_price = i
-
-    if columns["price"] is None and columns["price_work"] is None \
-            and columns["price_material"] is None:
-        columns["price"] = fallback_price
 
     return columns
 
@@ -194,72 +218,103 @@ def _kind_from_type(value: object) -> Optional[str]:
     return None
 
 
-def parse_reference_file(
-    data: bytes,
-    filename: str,
-    kind: Optional[str],
-) -> "tuple[list[dict], dict[str, int]]":
-    """Файл → (позиции, причины пропуска).
+def _is_column_numbers_row(row: list, columns: dict) -> bool:
+    """Строка «1, 2, 3 …» под шапкой — разметка листа, а не позиция.
 
-    Поддерживаются два вида файла:
-
-    - **смета нашего формата** — есть колонки «Цена работы (за ед.)» и «Цена
-      материала (за ед.)»; тип строки читается из колонки «Тип», а при её
-      отсутствии — из того, в какой колонке стоит цена. Работы и материалы
-      приезжают одним файлом;
-    - **простой прайс** — «Наименование / Ед. изм. / Цена»; тип в файле не
-      написан, поэтому его называет человек (`kind`). Выдумывать тип по имени
-      позиции нельзя: ошибка отправит цену работы в прайс материалов.
+    У неё есть и «наименование», и «единица», и «цена» — цифры соседних
+    колонок, — поэтому отбрасывать её нужно целиком (то же правило, что в
+    `file_parser._is_trash_row`): иначе в прайс уедет позиция с именем «2» и
+    ценой 5.
     """
-    rows = _rows_from_bytes(data, filename)
+    seen = 0
+    for index in (columns["name"], columns["unit"], columns["price_work"],
+                  columns["price_material"], columns["price"]):
+        value = _cell(row, index)
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            number = float(str(value).strip().replace(",", "."))
+        except ValueError:
+            return False
+        if number != int(number) or not (1 <= number <= 99):
+            return False
+        seen += 1
+    return seen >= 2
+
+
+def _parse_sheet(
+    sheet: str,
+    rows: list[list],
+    kind: Optional[str],
+    prepared: dict,
+    skipped: dict,
+    notes: dict,
+    conflicts: dict,
+) -> int:
+    """Позиции одного листа — в общий `prepared`. Возвращает число принятых строк.
+
+    Лист без колонки цены за единицу пропускается целиком и молча: в книге
+    рядом с разделами лежат «Сводная» и «Целевые показатели», где в шапке тоже
+    есть «Наименование», а в строках — «Работы» и «Материалы» с суммами в
+    десятки миллионов. Попади они в прайс — там появилась бы позиция «Работы»
+    по 54 миллиона за штуку.
+    """
     header_idx = _header_index(rows)
     if header_idx is None:
-        raise ReferenceFileError("В файле не найден заголовок с колонкой «Наименование».")
+        return 0
 
     headers = [str(h).strip() if h is not None else "" for h in rows[header_idx]]
     columns = _columns(headers)
     if columns["name"] is None:
-        raise ReferenceFileError("В файле не найдена колонка «Наименование».")
+        return 0
 
     split_prices = columns["price_work"] is not None or columns["price_material"] is not None
     if not split_prices:
         if columns["price"] is None:
-            raise ReferenceFileError("В файле не найдена колонка с ценой.")
+            return 0
         if kind not in (KIND_WORK, KIND_MATERIAL):
             raise ReferenceFileError(
                 "В файле не написано, где работы, а где материалы — выберите тип."
             )
 
-    prepared: dict = {}
-    skipped: dict[str, int] = {}
+    def _count(store: dict, reason: str) -> None:
+        store[reason] = store.get(reason, 0) + 1
+
     accepted = 0
-
-    def _skip(reason: str) -> None:
-        skipped[reason] = skipped.get(reason, 0) + 1
-
     for row in rows[header_idx + 1:]:
         if not row or all(cell is None or str(cell).strip() == "" for cell in row):
+            continue
+        if _is_column_numbers_row(row, columns):
             continue
 
         name = str(_cell(row, columns["name"]) or "").strip()
 
         if split_prices:
-            row_kind = _kind_from_type(_cell(row, columns["type"])) if columns["type"] is not None else None
+            row_kind = (
+                _kind_from_type(_cell(row, columns["type"]))
+                if columns["type"] is not None else None
+            )
             work_price = _amount(_cell(row, columns["price_work"]))
             material_price = _amount(_cell(row, columns["price_material"]))
             if row_kind is None:
-                # Колонки «Тип» нет или в ней раздел — тип подсказывает та
-                # колонка, где стоит цена. Обе сразу — строка про две разные
-                # позиции сразу, разбирать её догадкой мы не беремся.
-                if work_price is not None and material_price is None:
+                if work_price is not None and material_price is not None:
+                    # Кабель с ценой монтажа: названия работы в такой строке
+                    # нет — в колонке написан кабель. Взять её работой значило
+                    # бы завести в прайсе работ позицию «Кабель витая пара».
+                    row_kind = KIND_MATERIAL
+                    _count(notes, NOTE_BOTH_PRICES)
+                elif work_price is not None:
                     row_kind = KIND_WORK
-                elif material_price is not None and work_price is None:
+                elif material_price is not None:
                     row_kind = KIND_MATERIAL
             if row_kind is None:
                 if not name:
-                    _skip(SKIP_NO_NAME)
-                else:
-                    _skip(SKIP_NOT_PRICEABLE)
+                    continue
+                # Тип написан в файле и это не работа и не материал (раздел) —
+                # причина точнее, чем «без цены»: у раздела её и не бывает.
+                declared = str(_cell(row, columns["type"]) or "").strip() \
+                    if columns["type"] is not None else ""
+                _count(skipped, SKIP_NOT_PRICEABLE if declared else SKIP_NO_PRICE)
                 continue
             price = work_price if row_kind == KIND_WORK else material_price
         else:
@@ -267,31 +322,139 @@ def parse_reference_file(
             price = _amount(_cell(row, columns["price"]))
 
         if not name:
-            _skip(SKIP_NO_NAME)
+            _count(skipped, SKIP_NO_NAME)
             continue
-        if str(name).lower() in ("итого", "всего", "total"):
+        if name.lower() in ("итого", "всего", "total"):
             continue
         if price is None:
-            _skip(SKIP_NO_PRICE)
+            _count(skipped, SKIP_NO_PRICE)
             continue
 
         # Цена за «100 м2» — это не цена за м2 (правило №3 плана).
         unit, factor = unit_price_factor(_cell(row, columns["unit"]))
-        accepted += 1
-        if accepted > MAX_REFERENCE_ITEMS:
-            raise ReferenceFileError(
-                f"В файле больше {MAX_REFERENCE_ITEMS} позиций — "
-                "эталонный прайс рассчитан на выборку, а не на выгрузку целиком."
-            )
-
-        prepared[(row_kind, normalize_name(name))] = {
+        item = {
             "kind": row_kind,
             "name": name,
             "unit": unit,
             "price": round(price / factor, 2),
+            "sheet": sheet,
         }
 
-    return list(prepared.values()), skipped
+        # Лист сводной — это система (ОПС, СОТ, ЛВС), и одноимённая работа в
+        # разных системах стоит по-разному не по ошибке (решение пользователя
+        # 02.09.2026). Поэтому внутри разбора позиции разведены по листам, а
+        # схлопывать их или нет — решается потом, по совпадению цены.
+        key = (row_kind, match_key(name), sheet)
+        previous = prepared.get(key)
+        if previous is not None and abs(previous["price"] - item["price"]) > MONEY_EPS:
+            # Файл сам себе противоречит. Побеждает последняя цена — но молчать
+            # об этом нельзя: эталон объявляет единственно верную цену, и какая
+            # из нескольких верна, решает человек, а не порядок строк.
+            if key not in conflicts:
+                _count(notes, NOTE_PRICE_CONFLICT)
+            conflicts.setdefault(key, [previous["price"]]).append(item["price"])
+        prepared[key] = item
+        accepted += 1
+
+    return accepted
+
+
+
+
+def _merge_across_sheets(prepared: dict, notes: dict) -> list[dict]:
+    """Одноимённые позиции из разных разделов — одна или несколько?
+
+    Решает цена. Совпала во всех разделах — это и правда одна позиция, и
+    уточнять нечего. Разошлась — разделы говорят о разных вещах («Демонтаж
+    кабеля» в пожарке и в видеонаблюдении), и в прайс они идут порознь, с
+    названием раздела в скобках. Иначе один кабель молча вытеснил бы другой.
+    """
+    groups: dict = {}
+    for (kind, name_key, sheet), item in prepared.items():
+        groups.setdefault((kind, name_key), []).append(item)
+
+    items: list[dict] = []
+    for group in groups.values():
+        prices = {round(item["price"], 2) for item in group}
+        if len(group) == 1 or len(prices) == 1:
+            items.append(group[0])
+            continue
+
+        notes[NOTE_SPLIT_BY_SECTION] = notes.get(NOTE_SPLIT_BY_SECTION, 0) + len(group)
+        for item in group:
+            named = dict(item)
+            if item["sheet"]:
+                named["name"] = f"{item['name']} ({item['sheet']})"
+            items.append(named)
+
+    return items
+
+
+def parse_reference_file(
+    data: bytes,
+    filename: str,
+    kind: Optional[str],
+) -> dict:
+    """Файл → {items, skipped, notes}.
+
+    Поддерживаются два вида файла:
+
+    - **смета с ценами за единицу** — есть колонки «Цена за ед. изм. Работы» и
+      «Цена за ед. изм. Материала» (или «Цена работы (за ед.)» нашего
+      экспорта); тип строки читается из колонки «Тип», а при её отсутствии — из
+      того, в какой колонке стоит цена. Работы и материалы приезжают одним
+      файлом, разложенным хоть по десятку листов-разделов;
+    - **простой прайс** — «Наименование / Ед. изм. / Цена»; тип в файле не
+      написан, поэтому его называет человек (`kind`). Выдумывать тип по имени
+      позиции нельзя: ошибка отправит цену работы в прайс материалов.
+
+    `notes` — счётчики того, что человек обязан увидеть до записи; `conflicts`
+    — поимённый список позиций, у которых в самом файле цены разошлись, со
+    всеми найденными ценами и той, что будет записана.
+    """
+    sheets = _sheets_from_bytes(data, filename)
+
+    prepared: dict = {}
+    skipped: dict[str, int] = {}
+    notes: dict[str, int] = {}
+    conflicts: dict = {}
+    accepted = 0
+
+    for sheet, rows in sheets:
+        accepted += _parse_sheet(sheet, rows, kind, prepared, skipped, notes, conflicts)
+        if accepted > MAX_REFERENCE_ITEMS:
+            raise ReferenceFileError(
+                f"В файле больше {MAX_REFERENCE_ITEMS} позиций с ценой — "
+                "столько за раз не принимаем."
+            )
+
+    if not prepared and not skipped:
+        raise ReferenceFileError(
+            "В файле не нашлось ни одной позиции с ценой за единицу. "
+            "Нужны колонки «Наименование» и «Цена» (или «Цена за ед. изм. Работы» "
+            "и «Цена за ед. изм. Материала»)."
+        )
+
+    conflict_list = [
+        {
+            "kind": key[0],
+            "name": prepared[key]["name"],
+            "unit": prepared[key]["unit"],
+            "prices": sorted(set(prices)),
+            "taken": prepared[key]["price"],
+        }
+        for key, prices in conflicts.items()
+        if key in prepared
+    ]
+
+    items = _merge_across_sheets(prepared, notes)
+
+    return {
+        "items": items,
+        "skipped": skipped,
+        "notes": notes,
+        "conflicts": conflict_list,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -356,12 +519,12 @@ async def find_duplicates(items: list[dict]) -> dict:
     candidates: list[dict] = []
 
     for item, found in zip(items, found_per_item):
-        own_key = normalize_name(item["name"])
+        own_key = match_key(item["name"])
         for candidate in found:
             score = float(candidate.get("score") or 0.0)
             if score < threshold:
                 continue
-            if normalize_name(str(candidate.get("name") or "")) == own_key:
+            if match_key(str(candidate.get("name") or "")) == own_key:
                 continue
             key = (candidate.get("source"), item["kind"], candidate.get("id"))
             if key in seen:
@@ -391,18 +554,27 @@ async def build_plan(db: AsyncSession, items: list[dict]) -> list[dict]:
     """
     work_rows = (await db.execute(
         select(PriceWork.id, PriceWork.name, PriceWork.unit, PriceWork.prices)
+        .order_by(PriceWork.id)
     )).all()
     material_rows = (await db.execute(
         select(PriceMaterial.id, PriceMaterial.name, PriceMaterial.unit, PriceMaterial.price)
+        .order_by(PriceMaterial.id)
     )).all()
 
-    works = {normalize_name(row.name): row for row in work_rows}
-    materials = {normalize_name(row.name): row for row in material_rows}
+    # Дубли имён в самом прайсе разрешаем в пользу самой ранней записи
+    # (строки читаются по возрастанию id) — как это делает загрузка прайса
+    # файлом: иначе результат зависел бы от порядка выдачи БД.
+    works: dict = {}
+    for row in work_rows:
+        works.setdefault(match_key(row.name), row)
+    materials: dict = {}
+    for row in material_rows:
+        materials.setdefault(match_key(row.name), row)
 
     plan: list[dict] = []
     for item in items:
         kind = item["kind"]
-        found = (works if kind == KIND_WORK else materials).get(normalize_name(item["name"]))
+        found = (works if kind == KIND_WORK else materials).get(match_key(item["name"]))
 
         entry = {
             "kind": kind,
@@ -498,7 +670,7 @@ async def apply_reference(
     бы собственный результат операции.
     """
     plan = await build_plan(db, items)
-    by_name = {(item["kind"], normalize_name(item["name"])): item for item in items}
+    by_name = {(item["kind"], match_key(item["name"])): item for item in items}
     now = datetime.now(timezone.utc)
 
     added = 0
@@ -521,7 +693,7 @@ async def apply_reference(
             blocked += 1
             continue
 
-        item = by_name[(entry["kind"], normalize_name(entry["name"]))]
+        item = by_name[(entry["kind"], match_key(entry["name"]))]
         is_work = entry["kind"] == KIND_WORK
         model = PriceWork if is_work else PriceMaterial
 

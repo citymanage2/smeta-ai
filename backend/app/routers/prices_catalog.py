@@ -677,6 +677,15 @@ class ReferenceDuplicate(BaseModel):
     for_name: str
 
 
+class ReferenceConflict(BaseModel):
+    """Позиция, у которой в самом файле цены разошлись."""
+    kind: Literal["work", "material"]
+    name: str
+    unit: Optional[str]
+    prices: list[float]
+    taken: float
+
+
 class ReferenceDuplicates(BaseModel):
     vectors_ready: bool
     candidates: list[ReferenceDuplicate]
@@ -686,6 +695,10 @@ class ReferencePreviewResponse(BaseModel):
     items: list[ReferenceItem]
     plan: list[ReferencePlanEntry]
     skipped: dict[str, int]
+    # Не ошибки, а то, что человек обязан увидеть до записи: строки с двумя
+    # ценами и позиции, у которых в самом файле цены разошлись.
+    notes: dict[str, int]
+    conflicts: list[ReferenceConflict]
     summary: dict[str, int]
     duplicates: ReferenceDuplicates
 
@@ -736,7 +749,7 @@ async def reference_preview(
 
     selected = kind if kind in ("work", "material") else None
     try:
-        items, skipped = reference_price.parse_reference_file(
+        parsed = reference_price.parse_reference_file(
             data, file.filename or "", selected,
         )
     except reference_price.ReferenceFileError as e:
@@ -744,6 +757,8 @@ async def reference_preview(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e),
         ) from e
 
+    items = parsed["items"]
+    skipped = parsed["skipped"]
     plan = await reference_price.build_plan(db, items)
     duplicates = await reference_price.find_duplicates(items)
 
@@ -751,6 +766,8 @@ async def reference_preview(
         items=[ReferenceItem(**item) for item in items],
         plan=[ReferencePlanEntry(**entry) for entry in plan],
         skipped=skipped,
+        notes=parsed["notes"],
+        conflicts=[ReferenceConflict(**c) for c in parsed["conflicts"]],
         summary=_reference_summary(plan, skipped),
         duplicates=ReferenceDuplicates(
             vectors_ready=duplicates["vectors_ready"],

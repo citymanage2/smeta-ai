@@ -75,7 +75,8 @@ def test_smeta_format_gives_works_and_materials():
         [2, "Материал", "Кирпич", "шт", 400, None, 25, None, 10000],
     ])
 
-    items, skipped = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    parsed = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    items, skipped = parsed["items"], parsed["skipped"]
 
     assert skipped == {}
     assert [(i["kind"], i["name"], i["unit"], i["price"]) for i in items] == [
@@ -91,7 +92,8 @@ def test_section_row_is_not_a_price():
         [2, "Работа", "Штукатурка", "м2", 10, 500, None, 5000, None],
     ])
 
-    items, skipped = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    parsed = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    items, skipped = parsed["items"], parsed["skipped"]
 
     assert [i["name"] for i in items] == ["Штукатурка"]
     assert skipped == {SKIP_NOT_PRICEABLE: 1}
@@ -103,7 +105,8 @@ def test_multiplier_unit_becomes_base_price():
         [1, "Работа", "Окраска", "100 м2", 1, 500, None, 500, None],
     ])
 
-    items, _ = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    parsed = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    items, skipped = parsed["items"], parsed["skipped"]
 
     assert items[0]["unit"] == "м2"
     assert items[0]["price"] == 5.0
@@ -117,7 +120,8 @@ def test_row_without_name_or_price_is_skipped_with_reason():
         [3, "Материал", "Кирпич", "шт", 1, None, 0, None, 0],
     ])
 
-    items, skipped = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    parsed = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    items, skipped = parsed["items"], parsed["skipped"]
 
     assert items == []
     assert skipped == {SKIP_NO_NAME: 1, SKIP_NO_PRICE: 2}
@@ -130,7 +134,8 @@ def test_simple_price_format_uses_selected_kind():
         ["Кирпич", "шт", 25],
     ])
 
-    items, skipped = reference_price.parse_reference_file(data, "прайс.xlsx", "material")
+    parsed = reference_price.parse_reference_file(data, "прайс.xlsx", "material")
+    items, skipped = parsed["items"], parsed["skipped"]
 
     assert skipped == {}
     assert [(i["kind"], i["name"], i["price"]) for i in items] == [
@@ -156,7 +161,8 @@ def test_same_name_twice_keeps_the_last_price():
         [2, "Работа", "кладка  стен", "м3", 1, 1200, None, 1200, None],
     ])
 
-    items, _ = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    parsed = reference_price.parse_reference_file(data, "смета.xlsx", None)
+    items, skipped = parsed["items"], parsed["skipped"]
 
     assert [(i["name"], i["price"]) for i in items] == [("кладка  стен", 1200.0)]
 

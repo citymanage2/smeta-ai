@@ -138,6 +138,11 @@ const ReferenceImport: React.FC<Props> = ({ kind, onDone }) => {
               {(preview.summary.blocked ?? 0) > 0 && (
                 <span style={{ color: '#b45309' }}><b>{preview.summary.blocked}</b> пропущено по ед. изм.</span>
               )}
+              {Object.entries(preview.notes ?? {}).map(([note, count]) => (
+                <span key={note} style={{ color: '#b45309' }}>
+                  <b>{count}</b> {note}
+                </span>
+              ))}
               {(preview.summary.skipped ?? 0) > 0 && (
                 <span style={{ color: '#64748b' }}>
                   <b>{preview.summary.skipped}</b> строк не взято
@@ -172,6 +177,39 @@ const ReferenceImport: React.FC<Props> = ({ kind, onDone }) => {
                             .map(r => (r.contractor ? `${r.contractor}: ${money(r.price)}` : money(r.price)))
                             .join(', ')}
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {preview.conflicts.length > 0 && (
+              <div style={st.block}>
+                <div style={st.blockTitle}>
+                  В файле разные цены у одной позиции — проверьте, какая верна
+                </div>
+                <div style={st.note}>
+                  Записана будет последняя из встреченных. Если верна другая — поправьте
+                  файл или позицию в каталоге после загрузки.
+                </div>
+                <table style={st.table}>
+                  <thead>
+                    <tr>
+                      <th style={st.th}>Позиция</th>
+                      <th style={st.th}>Цены в файле</th>
+                      <th style={st.th}>Будет записана</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.conflicts.map(conflict => (
+                      <tr key={`c:${conflict.kind}:${conflict.name}`}>
+                        <td style={st.td}>
+                          {conflict.name}
+                          <span style={st.muted}> · {conflict.unit || '—'}</span>
+                        </td>
+                        <td style={st.td}>{conflict.prices.map(money).join(' / ')}</td>
+                        <td style={{ ...st.td, fontWeight: 600 }}>{money(conflict.taken)}</td>
                       </tr>
                     ))}
                   </tbody>
