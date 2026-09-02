@@ -38,6 +38,7 @@ import CoefficientControl from './CoefficientControl';
 import ExportBuilderModal from './ExportBuilderModal';
 import Hint from './Hint';
 import { collapseExportRows, columnsFromEditor, rowsFromEditor } from './exportBuilder';
+import { measureGridHeight } from './gridHeight';
 import './DocumentEditor.css';
 
 const HEARTBEAT_MS = 20_000;
@@ -136,6 +137,9 @@ export const DocumentEditor: React.FC<Props> = ({
   } = useDocumentEditorStore();
 
   const [expanded, setExpanded] = useState(fullHeight);
+  // Высота таблицы «на весь экран» замеряется по факту (см. `gridHeight.ts`);
+  // null — замерить не удалось, тогда остаётся обычная высота.
+  const [fitHeight, setFitHeight] = useState<number | null>(null);
   // Свёртка одинаковых позиций — взгляд на таблицу, а не изменение документа:
   // в `rows` всегда лежат настоящие строки, поэтому итоги, «Применить» и
   // история работают одинаково в обоих режимах.
@@ -153,6 +157,7 @@ export const DocumentEditor: React.FC<Props> = ({
   // смене вкладки, поиске или удалении строк, и вставка попала бы не туда.
   const anchorRef = useRef<{ rowKey: string; columnKey: string } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const gridWrapRef = useRef<HTMLDivElement>(null);
 
   const documentRef = useMemo<DocumentRef>(
     () => ({ cardId, kind, fileSlot, fileIndex }), [cardId, kind, fileSlot, fileIndex],
@@ -200,6 +205,52 @@ export const DocumentEditor: React.FC<Props> = ({
   }, [isDirty]);
 
   const canWrite = !!meta?.can_write;
+
+  // --- Высота таблицы «на весь экран» ---------------------------------------
+  //
+  // Замер, а не константа: обвязка над таблицей меняется (вкладки версий,
+  // вкладки листов, баннеры, тулбар в две строки), а редактор открывается и
+  // страницей, и внутри карточки, где над ним ещё полстраницы. ResizeObserver
+  // висит на корне редактора: он ловит и смену обвязки, и свой же пересчёт —
+  // повторный замер даёт то же число и на этом успокаивается.
+  useEffect(() => {
+    if (!expanded) { setFitHeight(null); return; }
+    let frame = 0;
+    const recalc = () => {
+      frame = 0;
+      // Мерим саму таблицу, а не обёртку: обёртка тянется под соседнюю
+      // панель (история, оптимизация) и низ у неё бывает ниже таблицы.
+      const grid = gridWrapRef.current?.querySelector<HTMLElement>('.de-grid');
+      if (!grid) return;
+      const next = measureGridHeight(grid);
+      if (next === null) return;
+      setFitHeight((prev) => (prev !== null && Math.abs(prev - next) < 2 ? prev : next));
+    };
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(recalc);
+    };
+    schedule();
+    window.addEventListener('resize', schedule);
+    const root = containerRef.current;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    if (root && observer) observer.observe(root);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedule);
+      observer?.disconnect();
+    };
+  }, [expanded, loading, rows.length]);
+
+  // Растянуть таблицу мало — её надо ещё и подвести к верху экрана: внутри
+  // карточки над редактором стоит полстраницы, и «весь экран» без прокрутки
+  // остался бы обещанием.
+  const toggleExpanded = useCallback(() => {
+    // Прокрутка мгновенная: плавную ещё бы доигрывали, когда таблица уже
+    // мерит своё место, и она намерила бы высоту по дороге.
+    if (!expanded) containerRef.current?.scrollIntoView({ block: 'start' });
+    setExpanded(!expanded);
+  }, [expanded]);
 
   // --- Вкладки листов -------------------------------------------------------
   //
@@ -852,7 +903,7 @@ export const DocumentEditor: React.FC<Props> = ({
             onDiscard={discardChanges}
             onAddRow={handleAddRow}
             onDeleteSelected={handleDeleteSelected}
-            onToggleFullscreen={() => setExpanded((v) => !v)}
+            onToggleFullscreen={toggleExpanded}
             onToggleHistory={() => setHistoryOpen((v) => !v)}
             onExport={() => setExportOpen(true)}
           />
@@ -1033,6 +1084,7 @@ export const DocumentEditor: React.FC<Props> = ({
                 посчитать их в DOM нельзя. */}
             <div
               className="de-grid-wrap"
+              ref={gridWrapRef}
               onCopy={handleCopy}
               onPaste={handlePaste}
               data-testid="document-editor-grid"
@@ -1055,7 +1107,7 @@ export const DocumentEditor: React.FC<Props> = ({
                       : null;
                   }}
                   className="de-grid"
-                  style={{ blockSize: expanded ? 'calc(100vh - 320px)' : 560 }}
+                  style={{ blockSize: expanded ? (fitHeight ?? 560) : 560 }}
                   enableVirtualization
                 />
               )}
