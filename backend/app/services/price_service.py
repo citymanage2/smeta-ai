@@ -393,6 +393,92 @@ def _query_cache_materials(query_arr: "np.ndarray", query_norm: float, n: int) -
     return results
 
 
+def duplicate_vectors_ready(kind: str) -> bool:
+    """Есть ли вообще по чему искать «то же самое, названное иначе».
+
+    Без векторов остаётся только точное совпадение названия, и отсутствие
+    кандидатов означает «поиск отключён», а не «дублей нет» — разницу обязан
+    видеть человек (та же беда, ради которой сделан `/prices/match-preview`).
+    """
+    if not _numpy_available:
+        return False
+    if kind == "work":
+        return _works_embeddings is not None or _cache_works_embeddings is not None
+    return _materials_embeddings is not None or _cache_materials_embeddings is not None
+
+
+def _duplicate_rows(
+    embeddings, row_norms, index_map: list[int], rows: list[dict],
+    query_arr, query_norm: float, n: int, source: str, price_key: str,
+) -> list[dict]:
+    """Top-N строк одной матрицы с id и источником."""
+    if not _numpy_available or embeddings is None or row_norms is None:
+        return []
+    scores = np.dot(embeddings, query_arr) / (row_norms * query_norm)
+    results = []
+    for idx in np.argsort(scores)[::-1][:n].tolist():
+        item = rows[index_map[idx]]
+        results.append({
+            "source": source,
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "unit": item.get("unit"),
+            "price": item.get(price_key),
+            "score": float(scores[idx]),
+        })
+    return results
+
+
+async def find_duplicate_candidates(name: str, kind: str, n: int = 5) -> list[dict]:
+    """Кандидаты «та же позиция под другим названием» — из прайса и из кеша.
+
+    От `find_top_n_*` отличается двумя вещами, без которых список бесполезен:
+    возвращается **id** (по нему позицию потом удаляют) и **источник** — прайс
+    и кеш веб-поиска это разные таблицы, а цену в расчёт подставляют обе.
+    """
+    if not duplicate_vectors_ready(kind):
+        return []
+
+    try:
+        from app.services.embedding_service import normalize_name, generate_embedding
+
+        query_vec = await asyncio.to_thread(
+            generate_embedding, normalize_name(name), "search_query",
+        )
+        query_arr = np.array(query_vec, dtype=np.float32)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0:
+            return []
+
+        if kind == "work":
+            results = _duplicate_rows(
+                _works_embeddings, _works_row_norms, _works_index_map, _works_cache,
+                query_arr, query_norm, n, "price", "min_price",
+            )
+            results += _duplicate_rows(
+                _cache_works_embeddings, _cache_works_row_norms,
+                _cache_works_index_map, _cache_works_cache,
+                query_arr, query_norm, n, "cache", "price",
+            )
+        else:
+            results = _duplicate_rows(
+                _materials_embeddings, _materials_row_norms,
+                _materials_index_map, _materials_cache,
+                query_arr, query_norm, n, "price", "price",
+            )
+            results += _duplicate_rows(
+                _cache_materials_embeddings, _cache_materials_row_norms,
+                _cache_materials_index_map, _cache_materials_cache,
+                query_arr, query_norm, n, "cache", "price",
+            )
+
+        results.sort(key=lambda r: r["score"], reverse=True)
+        return results[:n]
+    except Exception as e:
+        logger.error("find_duplicate_candidates failed", error=str(e), kind=kind)
+        return []
+
+
 async def find_top_n_works_combined(name: str, n: int = 3) -> list[dict]:
     """Поиск top-N по прайсу работ + кешу работ, дедупликация по тексту."""
     if not _numpy_available:

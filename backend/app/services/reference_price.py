@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.price import PriceMaterial, PriceWork
+from app.services import price_service
 from app.services.embedding_service import normalize_name
 from app.services.price_bulk import SKIP_NO_NAME, SKIP_NO_PRICE, SKIP_NOT_PRICEABLE
 from app.utils.price_change import MONEY_EPS
@@ -47,6 +48,15 @@ ACTION_REPRICE = "reprice"  # позиция есть — цена из файл
 ACTION_BLOCKED = "blocked"  # вытеснять нельзя, решает человек
 
 BLOCK_UNIT_MISMATCH = "ед. изм. несводима"
+
+# Сколько кандидатов-дублей показывать на одну позицию файла.
+DUPLICATE_TOP_N = 5
+
+# Насколько порог показа дубля ниже порога, по которому цена подставляется в
+# смету. Порог подбора настроен так, чтобы **не взять** чужую цену; здесь цена
+# не подставляется, а показывается человеку — и скрытый дубль обходится дороже
+# лишней строки в списке, потому что молча продолжит подставляться в расчёт.
+DUPLICATE_MARGIN = 0.08
 
 KIND_WORK = "work"
 KIND_MATERIAL = "material"
@@ -278,6 +288,16 @@ def parse_reference_file(
 
 
 # ---------------------------------------------------------------------------
+# Дубли: то же самое под другим названием
+# ---------------------------------------------------------------------------
+
+def duplicate_threshold() -> float:
+    """Порог показа кандидата. Читается на каждый вызов: порог подбора живёт в
+    env и меняется без деплоя (`PRICE_SIMILARITY_THRESHOLD`)."""
+    return price_service.SIMILARITY_THRESHOLD - DUPLICATE_MARGIN
+
+
+# ---------------------------------------------------------------------------
 # План вытеснения
 # ---------------------------------------------------------------------------
 
@@ -297,6 +317,51 @@ def _removed_work_prices(prices: Optional[dict]) -> list[dict]:
         if amount > 0:
             removed.append({"contractor": str(contractor), "price": amount})
     return removed
+
+
+async def find_duplicates(items: list[dict]) -> dict:
+    """Позиции прайса и кеша, названные иначе, но, похоже, про то же самое.
+
+    Ничего не удаляет и не отмечает: решение за человеком. Позиция, которая и
+    так будет переоценена (точное совпадение названия), дублем не считается —
+    предложить её к удалению значило бы предложить стереть ту самую строку,
+    куда мы записываем эталонную цену.
+    """
+    kinds = {item["kind"] for item in items} or {KIND_WORK, KIND_MATERIAL}
+    vectors_ready = all(price_service.duplicate_vectors_ready(kind) for kind in kinds)
+    threshold = duplicate_threshold()
+
+    seen: set = set()
+    candidates: list[dict] = []
+
+    for item in items:
+        own_key = normalize_name(item["name"])
+        found = await price_service.find_duplicate_candidates(
+            item["name"], item["kind"], n=DUPLICATE_TOP_N,
+        )
+        for candidate in found:
+            score = float(candidate.get("score") or 0.0)
+            if score < threshold:
+                continue
+            if normalize_name(str(candidate.get("name") or "")) == own_key:
+                continue
+            key = (candidate.get("source"), item["kind"], candidate.get("id"))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append({
+                "source": candidate.get("source"),
+                "kind": item["kind"],
+                "id": candidate.get("id"),
+                "name": candidate.get("name"),
+                "unit": candidate.get("unit"),
+                "price": candidate.get("price"),
+                "score": round(score, 3),
+                "for_name": item["name"],
+            })
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    return {"vectors_ready": vectors_ready, "candidates": candidates}
 
 
 async def build_plan(db: AsyncSession, items: list[dict]) -> list[dict]:
