@@ -53,6 +53,9 @@ export function computeNodeState(card: WorkflowCard, stage: KanbanStage): NodeSt
   if (task) {
     if (task.status === 'completed') return 'done'
     if (task.status === 'failed' || task.status === 'cancelled') return 'error'
+    // Задача есть, но не запущена (ждёт кнопки) — узел такой же, как пустой:
+    // «Ожидает». Иначе этап крутил бы спиннер, не делая ничего.
+    if (task.status === 'not_started') return 'wait'
     return 'run' // pending | processing | paused
   }
   const guard = computeGuard(card, stage)

@@ -98,7 +98,10 @@ export const StageProcessingPanel: React.FC<Props> = ({ taskId, onChanged }) => 
     if (isFailed || isPaused || warning) setExpanded(true);
   }, [isFailed, isPaused, warning]);
 
-  if (!task) return null;
+  // Незапущенная задача обработку ещё не начинала: показывать нечего, а кнопка
+  // «Перезапустить» в этой панели читалась бы как второй способ запуска —
+  // мимо кнопки «Начать оптимизацию», ради которой запуск и разделён.
+  if (!task || task.status === 'not_started') return null;
 
   const elapsed = isActive ? formatElapsed(task.started_at) : null;
   const eta = describeEta(task.eta, task.status);

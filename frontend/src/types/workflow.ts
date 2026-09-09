@@ -2,7 +2,10 @@ import { TaskEta } from '../utils/eta'
 
 export type KanbanStage = 'list' | 'completeness' | 'estimate' | 'optimization'
 
-export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused'
+// `not_started` — задача создана, файл к ней прикреплён, но в очередь она не
+// поставлена и ждёт кнопки («Начать оптимизацию»). Это НЕ `pending`: у pending
+// тикает ожидание в очереди и строится прогноз, а тут ждут человека.
+export type TaskStatus = 'not_started' | 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused'
 
 export interface InputFileBrief {
   name: string

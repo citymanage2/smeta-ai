@@ -19,7 +19,7 @@ from fastapi import (
     Request,
     Response,
 )
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -45,7 +45,12 @@ from app.schemas.workflow_card import (
 from app.utils.auth import get_current_user, current_user_id
 from app.utils.permissions import can_access
 from app.utils.progress_summary import build_progress_summary
-from app.constants import ESTIMATE_TASK_TYPES, TASK_TYPE_TO_FIELD
+from app.constants import (
+    ESTIMATE_TASK_TYPES,
+    MANUAL_START_TASK_TYPES,
+    TASK_STATUS_NOT_STARTED,
+    TASK_TYPE_TO_FIELD,
+)
 
 logger = structlog.get_logger()
 
@@ -692,12 +697,16 @@ async def start_task(
 
     # --- Атомарная транзакция: создать Task + обновить карточку ---
     task_id = str(uuid.uuid4())
+    # Оптимизация не уходит в очередь в момент прикрепления сметы: её запускает
+    # человек кнопкой «Начать оптимизацию» (launch_task ниже). Остальные стадии
+    # конвейера как были — их создание и есть команда «считай».
+    manual_start = task_type in MANUAL_START_TASK_TYPES
     new_task = Task(
         id=task_id,
         user_role=user_role,
         owner_id=current_user_id(current_user),
         task_type=task_type,
-        status="pending",
+        status=TASK_STATUS_NOT_STARTED if manual_start else "pending",
         input_files=input_files_meta,
         input_file_data=input_files_meta,
         user_prompt=resolved_prompt,
@@ -733,9 +742,87 @@ async def start_task(
     logger.info("start-task atomic commit", card_id=card_id, task_id=task_id, task_type=task_type)
 
     # Ставим задачу в durable-очередь после commit — исполнит worker.
-    await _enqueue_task(db, task_id)
+    # Незапущенную (`not_started`) не ставим: job появится только по кнопке.
+    if not manual_start:
+        await _enqueue_task(db, task_id)
 
-    # Возвращаем обновлённую карточку
+    # Возвращаем обновлённую карточку. expire_all обязателен: сессия живёт с
+    # expire_on_commit=False, карточка уже в identity map со СТАРЫМИ (пустыми)
+    # связями, и повторный selectinload их не перечитает — ответ пришёл бы без
+    # только что созданной задачи, а этап на экране остался бы пустым до
+    # следующего опроса.
+    db.expire_all()
+    updated_card = await _load_card_with_tasks(card_id, db)
+    return _build_card_response(
+        updated_card,
+        await _card_forecast(db, [updated_card]),
+        await _cards_usage(db, [updated_card]),
+    )
+
+
+@router.post("/workflow-cards/{card_id}/launch-task", response_model=WorkflowCardResponse)
+async def launch_task(
+    card_id: str,
+    task_type: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Запустить незапущенную задачу этапа: `not_started` → `pending` + job.
+
+    Пара к `start-task`: там смета закрепляется за этапом, здесь человек даёт
+    команду считать. Разделены намеренно — оптимизация стоит денег и времени
+    в очереди, и решение о ней принимает человек, а не переход между стадиями.
+
+    Статус проверяется в самом UPDATE (`WHERE status = 'not_started'`): два
+    нажатия подряд по медленной сети иначе поставили бы два job на одну задачу,
+    и смета считалась бы дважды.
+    """
+    from app.models.job import Job
+
+    card = await _load_card_with_tasks(card_id, db)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Карточка не найдена")
+    await _check_card_access(card, db, current_user)
+
+    field_name = _TASK_TYPE_TO_FIELD.get(task_type)
+    if field_name is None:
+        raise HTTPException(status_code=400, detail=f"Неизвестный task_type: {task_type}")
+
+    task_id = getattr(card, field_name)
+    if not task_id:
+        raise HTTPException(status_code=404, detail="Задача этапа не создана")
+
+    owner_id = (
+        await db.execute(select(Task.owner_id).where(Task.id == task_id))
+    ).scalar_one_or_none()
+
+    # Смена статуса и постановка job — ОДНА транзакция (тот же приём, что в
+    # resume_poller._claim_and_enqueue). Двумя коммитами задача осиротела бы в
+    # `pending` без job, если процесс упадёт между ними: на экране «в очереди»,
+    # а в очереди её нет, и запустить второй раз уже нельзя — статус не тот.
+    claimed = await db.execute(
+        update(Task)
+        .where(Task.id == task_id, Task.status == TASK_STATUS_NOT_STARTED)
+        .values(status="pending", updated_at=datetime.now(timezone.utc))
+    )
+    if claimed.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Задача уже запущена")
+    db.add(
+        Job(
+            kind="task.process",
+            payload={"task_id": task_id},
+            owner_id=owner_id,
+            status="queued",
+        )
+    )
+    await db.commit()
+
+    logger.info("launch-task", card_id=card_id, task_id=task_id, task_type=task_type)
+
+    # Статус менялся Core-UPDATE'ом мимо identity map — без expire_all ответ
+    # вернул бы прежний `not_started`, и кнопка на экране осталась бы кнопкой.
+    db.expire_all()
     updated_card = await _load_card_with_tasks(card_id, db)
     return _build_card_response(
         updated_card,

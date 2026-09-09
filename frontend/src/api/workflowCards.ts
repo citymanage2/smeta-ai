@@ -147,3 +147,16 @@ export async function startTask(cardId: string, payload: StartTaskPayload): Prom
   const resp = await apiClient.post<WorkflowCard>(`/api/workflow-cards/${cardId}/start-task`, fd)
   return resp.data
 }
+
+/**
+ * Запустить незапущенную задачу этапа (`not_started` → очередь).
+ *
+ * Пара к `startTask`: та закрепляет смету за этапом, эта даёт команду считать.
+ * Разделены ради этапа «Оптимизация» — он больше не стартует сам.
+ */
+export async function launchTask(cardId: string, taskType: string): Promise<WorkflowCard> {
+  const fd = new FormData()
+  fd.append('task_type', taskType)
+  const resp = await apiClient.post<WorkflowCard>(`/api/workflow-cards/${cardId}/launch-task`, fd)
+  return resp.data
+}

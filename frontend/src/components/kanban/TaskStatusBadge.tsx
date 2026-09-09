@@ -10,6 +10,9 @@ export function TaskStatusBadge({ task }: Props) {
     return <span style={{ color: '#94a3b8', fontSize: '13px' }}>● Не запущено</span>
   }
   switch (task.status) {
+    case 'not_started':
+      // Смета к этапу прикреплена, но обработка не начиналась — ждём кнопки.
+      return <span style={{ color: '#94a3b8', fontSize: '13px' }}>● Не запущено</span>
     case 'completed':
       return <span style={{ color: '#15803d', fontSize: '13px' }}>● Готово</span>
     case 'processing':

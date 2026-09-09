@@ -1,6 +1,9 @@
 export type TaskType = string;
 
-export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused';
+// `not_started` — задача создана, файл к ней прикреплён, но в очередь она не
+// поставлена и ждёт кнопки («Начать оптимизацию»). Это НЕ `pending`: у pending
+// тикает ожидание в очереди и строится прогноз, а тут ждут человека.
+export type TaskStatus = 'not_started' | 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export type EstimationStatus = 'unestimated' | 'estimated' | 'optimized' | 'not_applicable' | 'optimizing';
 
@@ -150,6 +153,7 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
 };
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
+  not_started: 'Не запущено',
   pending: 'Ожидание',
   processing: 'Обработка',
   completed: 'Завершено',

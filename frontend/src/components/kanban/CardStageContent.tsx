@@ -1327,12 +1327,15 @@ function OptimizationStage({ card, filesMeta, onOpenEditor, onRestart, onResume 
     : 'Перечень'
 
   const canStart = task === null || task.status === 'failed' || task.status === 'cancelled'
+  // Задача создана, но не запущена — кнопка «Начать оптимизацию» стоит там же,
+  // где стояла форма запуска: под сметой, которую собираются оптимизировать.
+  const notStarted = task !== null && task.status === 'not_started'
   // Секция «Смета» показывается, только если смета уже готова на предыдущей стадии.
   const hasEstimateSection = !!(estimateTask && estimateTask.status === 'completed' && estimateMetaStage)
   // Блок запуска живёт внутри секции «Смета» — прямо под сметой, которую оптимизируем.
-  // Готового результата в этот момент быть не может (`canStart` и «завершено»
-  // исключают друг друга), поэтому в секцию уезжает всё тело стадии целиком.
-  const nested = canStart && hasEstimateSection
+  // Готового результата в этот момент быть не может (`canStart`/`notStarted` и
+  // «завершено» исключают друг друга), поэтому в секцию уезжает всё тело стадии.
+  const nested = (canStart || notStarted) && hasEstimateSection
 
   const body = (
     <OptimizationStageBody
@@ -1422,12 +1425,13 @@ function OptimizationStageBody({
   card, filesMeta, onOpenEditor, onRestart, onResume, nested = false,
 }: StageProps & { nested?: boolean }) {
   const navigate = useNavigate()
-  const { startTask, submittingCardIds } = useKanbanStore()
+  const { startTask, launchTask, submittingCardIds } = useKanbanStore()
   const submitting = submittingCardIds.has(card.id)
   const task = card.optimization_task
   const estimateTask = card.estimate_task
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
+  const [launchError, setLaunchError] = useState<string | null>(null)
   const [archiveExpanded, setArchiveExpanded] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -1461,7 +1465,22 @@ function OptimizationStageBody({
     if (fileRef.current) fileRef.current.value = ''
   }
 
+  // Запуск отделён от прикрепления сметы: оптимизация стоит денег и времени
+  // в очереди, поэтому её начинает человек, а не переход сметы на этап.
+  // Ошибку показываем текстом: 409 приходит, когда коллега нажал раньше, и
+  // молчащая кнопка читалась бы как «сломалось».
+  const handleLaunch = async () => {
+    setLaunchError(null)
+    try {
+      await launchTask(card.id, 'ESTIMATE_OPTIMIZATION')
+    } catch {
+      setLaunchError('Не удалось запустить. Обновите страницу — возможно, оптимизация уже идёт.')
+    }
+  }
+
   const canStart = task === null || task.status === 'failed' || task.status === 'cancelled'
+  const notStarted = task !== null && task.status === 'not_started'
+  const attachedName = task?.input_files?.[0]?.name ?? optimizationMeta?.input_files?.[0]?.name
 
   const launchBlock = (
     <div style={nested
@@ -1478,12 +1497,28 @@ function OptimizationStageBody({
       {task !== null && task.status === 'paused' && (
         <PausedBlock taskId={task.id} onResume={onResume} />
       )}
+      {notStarted && (
+        <div style={{ marginTop: '8px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '10px' }}>
+          <div style={{ fontSize: '12px', color: '#7c2d12', marginBottom: '2px' }}>
+            Смета прикреплена к этапу{attachedName ? `: ${attachedName}` : ''}
+          </div>
+          <div style={{ fontSize: '11px', color: '#9a3412' }}>
+            Оптимизация начнётся только по этой кнопке.
+          </div>
+          <ActionButton onClick={handleLaunch} disabled={submitting}>
+            {submitting ? 'Запускаю…' : 'Начать оптимизацию'}
+          </ActionButton>
+          {launchError && (
+            <div style={{ color: '#dc2626', fontSize: '11px', marginTop: '6px' }}>{launchError}</div>
+          )}
+        </div>
+      )}
       {canStart && (
         <div style={{ marginTop: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
           <div style={{ marginBottom: '8px' }}>
             <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '4px' }}>Использовать смету из предыдущей стадии:</div>
             <ActionButton onClick={handleUsePrevious} disabled={!estimateCompleted || submitting}>
-              {submitting ? 'Запускаю…' : 'Использовать смету'}
+              {submitting ? 'Прикрепляю…' : 'Использовать смету'}
             </ActionButton>
             {!estimateCompleted && (
               <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '4px' }}>
@@ -1500,7 +1535,7 @@ function OptimizationStageBody({
             {file && (
               <div style={{ marginTop: '6px' }}>
                 <ActionButton onClick={handleUpload} disabled={submitting}>
-                  {submitting ? 'Запускаю…' : 'Загрузить и оптимизировать'}
+                  {submitting ? 'Прикрепляю…' : 'Загрузить смету'}
                 </ActionButton>
               </div>
             )}

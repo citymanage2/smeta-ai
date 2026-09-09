@@ -11,6 +11,7 @@ import {
   updateWorkflowCard,
   deleteWorkflowCard,
   startTask as apiStartTask,
+  launchTask as apiLaunchTask,
 } from '../api/workflowCards'
 
 export interface PendingListTask {
@@ -30,6 +31,8 @@ interface KanbanStore {
   createCard: (projectId: string, name: string, stage?: string) => Promise<WorkflowCard>
   moveCard: (cardId: string, toStage: KanbanStage, bypassSoft?: boolean) => Promise<GuardResult>
   startTask: (cardId: string, payload: StartTaskPayload) => Promise<WorkflowCard>
+  /** Запустить уже прикреплённую, но не запущенную задачу этапа. */
+  launchTask: (cardId: string, taskType: string) => Promise<WorkflowCard>
   deleteCard: (cardId: string) => Promise<void>
   clearCards: () => void
   setPendingListTask: (cardId: string, info: PendingListTask) => void
@@ -137,6 +140,27 @@ export const useKanbanStore = create<KanbanStore>((set, get) => ({
     set((s) => ({ submittingCardIds: new Set([...s.submittingCardIds, cardId]) }))
     try {
       const updated = await apiStartTask(cardId, payload)
+      set((s) => ({
+        cards: s.cards.map((c) => (c.id === cardId ? updated : c)),
+      }))
+      return updated
+    } finally {
+      set((s) => {
+        const next = new Set(s.submittingCardIds)
+        next.delete(cardId)
+        return { submittingCardIds: next }
+      })
+    }
+  },
+
+  launchTask: async (cardId, taskType) => {
+    const { submittingCardIds } = get()
+    if (submittingCardIds.has(cardId)) {
+      throw new Error('Задача уже запускается')
+    }
+    set((s) => ({ submittingCardIds: new Set([...s.submittingCardIds, cardId]) }))
+    try {
+      const updated = await apiLaunchTask(cardId, taskType)
       set((s) => ({
         cards: s.cards.map((c) => (c.id === cardId ? updated : c)),
       }))

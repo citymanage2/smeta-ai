@@ -18,6 +18,7 @@ type StatusStyle = { bg: string; text: string; border: string };
 
 // If a TaskStatus variant is missing here, tsc will fail with TS2741.
 export const STATUS_COLORS_SHAPE: Record<TaskStatus, StatusStyle> = {
+  not_started: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
   pending:    { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
   processing: { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' },
   completed:  { bg: '#f0fdf4', text: '#15803d', border: '#86efac' },

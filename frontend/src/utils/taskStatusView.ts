@@ -14,6 +14,10 @@ import { EstimationStatus, TaskStatus } from '../types'
 
 /** Состояние текущей стадии по техническому статусу задачи. */
 export const STATE_STYLE: Record<TaskStatus, { label: string; color: string }> = {
+  // Не запущена — это разновидность ожидания, а не хода работы: узел этапа
+  // должен выглядеть так же, как до создания задачи, иначе человек читает
+  // «Идёт» там, где ничего не происходит и без него не произойдёт.
+  not_started: { label: 'Ожидает', color: '#94a3b8' },
   completed: { label: 'Готово', color: '#10b981' },
   processing: { label: 'Идёт', color: '#3b82f6' },
   pending: { label: 'В очереди', color: '#f59e0b' },
