@@ -950,6 +950,25 @@ class TaskProcessor:
         self.db.add(version)
         await self.db.commit()
 
+        # Снимок «что выдал ИИ» — теми же строками, что легли в версию.
+        # Повторный разбор файла здесь дал бы новые `row_id` (их выдаёт
+        # `parse_xlsx_to_generic_rows` на каждый разбор), и сверка не нашла бы
+        # ни одной общей строки. Правки уедут в эту же версию V0, поэтому без
+        # снимка первичный вывод модели пропадёт с первым «Применить».
+        from app.constants import TASK_TYPE_TO_STAGE
+        from app.services import ai_baseline
+
+        task_row = (await self.db.execute(
+            select(Task.manually_edited_at).where(Task.id == self.task_id)
+        )).scalar_one_or_none()
+        await ai_baseline.save_once(
+            self.db,
+            task_id=self.task_id,
+            document_kind=TASK_TYPE_TO_STAGE.get(task_type, ""),
+            rows=rows,
+            edited_at=task_row,
+        )
+
     @staticmethod
     def _json_safe(obj):
         """Recursively convert non-JSON-serializable types (datetime, date, Decimal) to primitives."""
@@ -3522,12 +3541,24 @@ class TaskProcessor:
         # `progress_data['items']` выше остаётся записью «что выдал ИИ».
         # Файл и `task.cost` уже записаны из тех же позиций, поэтому здесь
         # только строки — пересобирать xlsx второй раз незачем.
-        from app.services import estimate_store
+        from app.services import ai_baseline, estimate_store
         from app.utils.estimate_rows import items_to_rows
 
         if upd_task is not None:
-            await estimate_store.ensure_working_version(
+            working = await estimate_store.ensure_working_version(
                 self.db, upd_task, items_to_rows(final_items),
+            )
+            # Снимок «что выдал ИИ» — строками рабочей версии, а не свежим
+            # переводом позиций: `items_to_rows` выдаёт новый `row_id` позиции,
+            # у которой его не было, и снимок разошёлся бы с документом по
+            # идентификаторам. Задачу, которую уже правили руками, снимком не
+            # накрываем — там это будет не вывод модели.
+            await ai_baseline.save_once(
+                self.db,
+                task_id=self.task_id,
+                document_kind="estimate",
+                rows=getattr(working, "rows", None),
+                edited_at=upd_task.manually_edited_at,
             )
 
         logger.info(
