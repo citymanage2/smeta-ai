@@ -115,6 +115,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               Правки
             </button>
           )}
+          {/* Выученные цены — всем: подтверждать цену логично тому, кто её и
+              правил (решение пользователя 10.09.2026). */}
+          <button
+            onClick={() => navigate('/price-learning')}
+            style={headerBtnStyle}
+          >
+            Выученные цены
+          </button>
           {isAdmin && (
             <button
               onClick={() => navigate('/employees')}

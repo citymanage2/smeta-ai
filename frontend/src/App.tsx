@@ -24,6 +24,7 @@ const System = lazy(() => import('./pages/System'));
 const SummaryEditor = lazy(() => import('./pages/SummaryEditor'));
 const Retraining = lazy(() => import('./pages/Retraining'));
 const Corrections = lazy(() => import('./pages/Corrections'));
+const PriceLearning = lazy(() => import('./pages/PriceLearning'));
 const Employees = lazy(() => import('./pages/Employees'));
 
 const RouteFallback: React.FC = () => (
@@ -182,6 +183,14 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute requireManager>
               <Corrections />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/price-learning"
+          element={
+            <ProtectedRoute>
+              <PriceLearning />
             </ProtectedRoute>
           }
         />
