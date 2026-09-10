@@ -112,8 +112,9 @@ async def test_without_snapshot_says_so_and_breaks_nothing(async_client, env):
     assert data["has_baseline"] is False
     assert data["rows"] == []
     assert data["totals"]["ai_total"] is None
-    # Стоимость документа считается и без снимка: 4 × 3000 + 100 × 25 = 14 500.
-    assert data["totals"]["current_total"] == 14500.0
+    # Стоимость документа считается и без снимка, по формуле редактора:
+    # 12 000 работ × 1,03 + 2 500 материалов × 1,03 = 14 935.
+    assert data["totals"]["current_total"] == 14935.0
 
 
 @pytest.mark.asyncio
@@ -245,8 +246,8 @@ async def test_added_and_removed_rows_are_visible(async_client, db_session, env)
 
     assert statuses["e3"] == "added"
     assert statuses["e2"] == "removed"
-    assert data["counts"]["added"] == 1
-    assert data["counts"]["removed"] == 1
+    assert data["counts"]["rows_added"] == 1
+    assert data["counts"]["rows_removed"] == 1
 
 
 @pytest.mark.asyncio
@@ -276,11 +277,12 @@ async def test_totals_match_document_cost(async_client, db_session, env):
 
     data = (await _recon(async_client, env))["totals"]
 
-    # ИИ: 4 × 3000 + 100 × 25 = 14 500. Стало: 4 × 2500 + 100 × 25 = 12 500.
-    assert data["ai_total"] == 14500.0
-    assert data["current_total"] == 12500.0
-    assert data["delta"] == -2000.0
-    # −2000 от 14 500 — это −13,79%.
+    # Формула та же, что в редакторе: работы + 3% накладных + материалы + 3%
+    # транспортных. ИИ: 12 000 × 1,03 + 2 500 × 1,03 = 14 935.
+    # Стало: 10 000 × 1,03 + 2 500 × 1,03 = 12 875.
+    assert data["ai_total"] == 14935.0
+    assert data["current_total"] == 12875.0
+    assert data["delta"] == -2060.0
     assert data["delta_pct"] == -13.79
 
 
@@ -299,3 +301,72 @@ async def test_signals_are_written_for_the_same_task(async_client, db_session, e
     )).scalars().all()
 
     assert [s.field for s in signals if s.is_first_touch] == ["price_work"]
+
+
+@pytest.mark.asyncio
+async def test_rebuilt_rows_are_matched_by_name(async_client, db_session, env):
+    """Строки пересобрали с новыми id — сверка не должна сойти с ума.
+
+    Так делает миграция смет: `estimate_migration` строит строки из позиций без
+    `row_id`, и каждая получает новый uuid. Сравнение по идентификаторам
+    показало бы «ИИ выдал 2 позиции, обе удалены, человек добавил 2 своих».
+    """
+    await ai_baseline.save_once(
+        db_session, task_id=env["task_id"], document_kind="estimate",
+        rows=_estimate_rows(3000.0),
+    )
+
+    rebuilt = _estimate_rows(2500.0)
+    for index, row in enumerate(rebuilt):
+        row["id"] = f"new-{index}"
+        row["lineage_id"] = f"new-{index}"
+    version = await db_session.get(EstimateVersion, env["version_id"])
+    version.rows = rebuilt
+    await db_session.commit()
+
+    data = await _recon(async_client, env)
+
+    assert data["match_mode"] == "name_unit"
+    # Позиция узнана по имени и единице: одна изменённая строка, а не четыре
+    # «удалили/добавили».
+    assert data["counts"]["rows_added"] == 0
+    assert data["counts"]["rows_removed"] == 0
+    cell = next(
+        c for r in data["rows"] for c in r["cells"] if c["field_key"] == "price_work"
+    )
+    assert cell["ai_value"] == "3000.0"
+    assert cell["current_value"] == "2500.0"
+
+
+@pytest.mark.asyncio
+async def test_service_change_after_human_is_not_credited_to_human(
+    async_client, db_session, env
+):
+    """После правки человека ячейку изменил сервис — автором человек не остаётся.
+
+    Иначе панель показывала бы машинное число как «поставил человек»: он такого
+    не ставил, а по этой подписи потом учат прайс.
+    """
+    await ai_baseline.save_once(
+        db_session, task_id=env["task_id"], document_kind="estimate",
+        rows=_estimate_rows(3000.0),
+    )
+
+    await _apply(async_client, env, _estimate_rows(2500.0))
+
+    # Теперь значение меняет сам сервис — например, проверка единиц.
+    db_session.expire_all()
+    version = await db_session.get(EstimateVersion, env["version_id"])
+    version.rows = _estimate_rows(2700.0)
+    await db_session.commit()
+
+    data = await _recon(async_client, env)
+    cell = next(
+        c for r in data["rows"] if r["row_key"] == "e1"
+        for c in r["cells"] if c["field_key"] == "price_work"
+    )
+
+    assert cell["current_value"] == "2700.0"
+    assert cell["changed_by"] == "service"
+    # Шаг человека при этом не теряется: видно, что он ставил 2500.
+    assert cell["service_value"] == "3000.0"

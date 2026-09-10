@@ -22,6 +22,7 @@ import { formatMoney } from '../../utils/formatNumber';
 import { applyPaste, describePaste, extractRange, parseTsv, toTsv } from './clipboard';
 import EditorToolbar from './EditorToolbar';
 import EditorHistoryPanel from './EditorHistoryPanel';
+import ReconciliationPanel from './ReconciliationPanel';
 import {
   ConflictBanner, PresenceBanner, ReadonlyBanner, SummaryDivergenceBanner,
 } from './PresenceBanner';
@@ -155,6 +156,7 @@ export const DocumentEditor: React.FC<Props> = ({
   const [hideMinus, setHideMinus] = useState(initialHideMinus);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [reconOpen, setReconOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [analogs, setAnalogs] = useState<AnalogsState | null>(null);
@@ -929,6 +931,7 @@ export const DocumentEditor: React.FC<Props> = ({
             canRedo={redoStack.length > 0}
             fullscreen={expanded}
             historyOpen={historyOpen}
+            reconOpen={reconOpen}
             collapsed={collapsed}
             canCollapse={collapseFields !== null}
             groupCount={collapsedGroupCount}
@@ -946,7 +949,8 @@ export const DocumentEditor: React.FC<Props> = ({
             onAddRow={handleAddRow}
             onDeleteSelected={handleDeleteSelected}
             onToggleFullscreen={toggleExpanded}
-            onToggleHistory={() => setHistoryOpen((v) => !v)}
+            onToggleHistory={() => { setHistoryOpen((v) => !v); setReconOpen(false); }}
+            onToggleRecon={() => { setReconOpen((v) => !v); setHistoryOpen(false); }}
             onExport={() => setExportOpen(true)}
           />
 
@@ -1165,6 +1169,13 @@ export const DocumentEditor: React.FC<Props> = ({
                 canWrite={canWrite}
                 onClose={() => setHistoryOpen(false)}
                 onReverted={() => load(documentRef)}
+              />
+            )}
+
+            {reconOpen && (
+              <ReconciliationPanel
+                documentRef={documentRef}
+                onClose={() => setReconOpen(false)}
               />
             )}
           </div>

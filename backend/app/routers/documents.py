@@ -406,16 +406,23 @@ async def get_document_reconciliation(
     Доступ — как у самого документа: задачи в сервисе общие, и разбирать свои
     же расхождения вправе тот, кто эту смету и правил.
     """
-    from app.services import reconciliation
+    from app.services import estimate_store, reconciliation
 
     doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
     version = svc.pick_version(doc, version_id)
+    # Проценты доп. расходов берутся оттуда же, откуда их берёт редактор:
+    # итог сверки обязан сойтись с итогом сметы на экране (правило 4 CLAUDE.md).
+    overhead_pct, transport_pct, _ = await estimate_store.expense_settings(
+        db, doc.task, version if doc.kind != "summary-section" else None
+    )
     return await reconciliation.build(
         db,
         task_id=str(doc.task.id),
         document_kind=doc.kind,
         row_format=doc.row_format,
         current_rows=svc.read_rows(doc, version),
+        overhead_pct=overhead_pct,
+        transport_pct=transport_pct,
     )
 
 

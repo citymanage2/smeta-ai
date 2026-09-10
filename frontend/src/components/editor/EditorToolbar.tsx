@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Check, FileSpreadsheet, FoldVertical, History, Loader2, Maximize2, Minimize2,
-  MinusCircle, Plus, Redo2, Search, Trash2, Undo2, X,
+  MinusCircle, Plus, Redo2, Scale, Search, Trash2, Undo2, X,
 } from 'lucide-react';
 import { DraftState, EditorTab } from '../../stores/documentEditor';
 import Hint from './Hint';
@@ -22,6 +22,8 @@ interface Props {
   canRedo: boolean;
   fullscreen: boolean;
   historyOpen: boolean;
+  /** Открыта панель сверки с расчётом ИИ. */
+  reconOpen: boolean;
   /** Одинаковые позиции показаны одной строкой с общим объёмом. */
   collapsed: boolean;
   /** Есть ли по чему сворачивать: в файле может не быть наименования. */
@@ -46,6 +48,7 @@ interface Props {
   onDeleteSelected: () => void;
   onToggleFullscreen: () => void;
   onToggleHistory: () => void;
+  onToggleRecon: () => void;
   onExport: () => void;
 }
 
@@ -66,11 +69,11 @@ const TAB_HINT: Record<EditorTab, string> = {
 export const EditorToolbar: React.FC<Props> = ({
   totalCount, workCount, materialCount, showTabs, tab, search,
   selectedCount, canWrite, isDirty, applying, draftState, canUndo, canRedo,
-  fullscreen, historyOpen, collapsed, canCollapse, groupCount,
+  fullscreen, historyOpen, reconOpen, collapsed, canCollapse, groupCount,
   onToggleCollapsed, hideMinus, minusCount, canHideMinus, onToggleHideMinus,
   onTabChange, onSearchChange, onUndo, onRedo,
   onApply, onDiscard, onAddRow, onDeleteSelected, onToggleFullscreen, onToggleHistory,
-  onExport,
+  onToggleRecon, onExport,
 }) => (
   <div className="de-toolbar">
     <div className="de-toolbar-row">
@@ -212,6 +215,19 @@ export const EditorToolbar: React.FC<Props> = ({
           <button className="de-btn" onClick={onExport}>
             <FileSpreadsheet size={14} />
             Выгрузка
+          </button>
+        </Hint>
+
+        <Hint
+          align="end"
+          text="Сверка с расчётом ИИ: что посчитала система и что из этого поправили руками"
+        >
+          <button
+            className={`de-icon-btn${reconOpen ? ' de-icon-btn-active' : ''}`}
+            onClick={onToggleRecon}
+            aria-label="Сверка с расчётом ИИ"
+          >
+            <Scale size={14} />
           </button>
         </Hint>
 

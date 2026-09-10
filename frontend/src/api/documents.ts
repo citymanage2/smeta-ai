@@ -105,6 +105,67 @@ export interface HistoryEntry {
   changes: HistoryChange[];
 }
 
+/** Кто изменил ячейку после того, как её выдал ИИ. */
+export type ChangedBy = 'human' | 'service';
+
+export interface ReconciliationCell {
+  field: string;
+  field_key: string;
+  /** Что выдал ИИ — из снимка, сделанного до единой правки. */
+  ai_value: string | null;
+  /** Что стояло в ячейке перед первой ручной правкой. */
+  service_value: string | null;
+  current_value: string | null;
+  changed_by: ChangedBy;
+  delta: number | null;
+  delta_pct: number | null;
+  price_source: string | null;
+  user_name: string | null;
+}
+
+export interface ReconciliationRow {
+  row_key: string;
+  row_number: number | null;
+  row_name: string;
+  status: 'changed' | 'added' | 'removed';
+  changed_by?: ChangedBy;
+  cells: ReconciliationCell[];
+}
+
+/**
+ * Чем сопоставлены строки снимка и документа. 'name_unit' — идентификаторы
+ * разошлись (так бывает после миграции смет), сверяли по имени и единице.
+ */
+export type MatchMode = 'row_id' | 'name_unit' | 'none';
+
+export interface Reconciliation {
+  /** false — задача посчитана до появления снимков, сверять не с чем. */
+  has_baseline: boolean;
+  baseline_truncated: boolean;
+  /** Сколько строк выдал ИИ. */
+  ai_row_count: number;
+  /** Сколько из них реально сверено: у усечённого снимка это меньше. */
+  compared_row_count: number;
+  match_mode: MatchMode;
+  rows: ReconciliationRow[];
+  truncated: boolean;
+  totals: {
+    /** У перечня и полноты стоимости нет — там null, и это не ошибка. */
+    ai_total: number | null;
+    current_total: number | null;
+    delta: number | null;
+    delta_pct: number | null;
+  };
+  counts: {
+    rows_changed: number;
+    rows_added: number;
+    rows_removed: number;
+    /** Ячейки, а не строки: подписывать их одним словом с строками нельзя. */
+    cells_by_human: number;
+    cells_by_service: number;
+  };
+}
+
 function base(ref: DocumentRef): string {
   return `/documents/${ref.cardId}/${ref.kind}`;
 }
@@ -217,6 +278,24 @@ export async function exportDocument(
 export async function getDocumentHistory(ref: DocumentRef): Promise<HistoryEntry[]> {
   const res = await apiClient.get<HistoryEntry[]>(`${base(ref)}/history`, {
     params: slotParams(ref),
+  });
+  return res.data;
+}
+
+/**
+ * Сверка: что выдал ИИ, что из этого сделал сервис, что поправил человек.
+ *
+ * Снимка может не быть — задачи, посчитанные до появления функции, отдают
+ * `has_baseline: false`, и панель говорит об этом словами, а не пустотой.
+ */
+export async function getDocumentReconciliation(
+  ref: DocumentRef,
+): Promise<Reconciliation> {
+  const res = await apiClient.get<Reconciliation>(`${base(ref)}/reconciliation`, {
+    params: {
+      ...slotParams(ref),
+      ...(ref.versionId ? { version_id: ref.versionId } : {}),
+    },
   });
   return res.data;
 }
