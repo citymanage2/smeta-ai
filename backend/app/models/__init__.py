@@ -15,5 +15,6 @@ from app.models.document_lock import DocumentLock
 from app.models.correction_signal import CorrectionSignal
 from app.models.api_balance import ApiBalanceMark, ApiCostDay
 from app.models.ai_baseline import AiBaseline
+from app.models.price_decision import PriceDecision
 
-__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent", "WorkflowCard", "DocumentLock", "CorrectionSignal", "ApiBalanceMark", "ApiCostDay", "AiBaseline"]
+__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent", "WorkflowCard", "DocumentLock", "CorrectionSignal", "ApiBalanceMark", "ApiCostDay", "AiBaseline", "PriceDecision"]
