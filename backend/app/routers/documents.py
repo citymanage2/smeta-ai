@@ -392,6 +392,33 @@ async def get_document_history(
     return [HistoryEntryOut(**entry) for entry in await svc.list_history(db, doc)]
 
 
+@router.get("/{card_id}/{kind}/reconciliation")
+async def get_document_reconciliation(
+    card_id: str,
+    kind: str,
+    version_id: Optional[str] = Query(default=None),
+    file_slot: Optional[str] = FileSlotQuery,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Сверка: что выдал ИИ, что из этого сделал сервис, что поправил человек.
+
+    Доступ — как у самого документа: задачи в сервисе общие, и разбирать свои
+    же расхождения вправе тот, кто эту смету и правил.
+    """
+    from app.services import reconciliation
+
+    doc = await svc.resolve_document(db, card_id, kind, current_user, file_slot)
+    version = svc.pick_version(doc, version_id)
+    return await reconciliation.build(
+        db,
+        task_id=str(doc.task.id),
+        document_kind=doc.kind,
+        row_format=doc.row_format,
+        current_rows=svc.read_rows(doc, version),
+    )
+
+
 @router.post("/{card_id}/{kind}/history/{entry_id}/revert", response_model=ApplyResponse)
 async def revert_document(
     card_id: str,
