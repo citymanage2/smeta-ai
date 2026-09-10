@@ -30,6 +30,7 @@ from app.services.embedding_service import (
 )
 from app.utils.price_change import price_changed, prices_changed
 from app.utils.price_min import ESTIMATE_CONTRACTOR, compute_min_price
+from app.utils.unit_compat import convert_price
 from app.utils.unit_normalizer import unit_price_factor
 
 logger = structlog.get_logger()
@@ -41,6 +42,11 @@ MAX_ITEMS = 500
 SKIP_NO_NAME = "без наименования"
 SKIP_NO_PRICE = "без цены"
 SKIP_NOT_PRICEABLE = "не работа и не материал"
+# Единица позиции в прайсе и единица строки сметы несводимы: цена за мешок и
+# цена за килограмм назначены за разное, и записать одну вместо другой значит
+# молча испортить общий прайс (правило 8 CLAUDE.md). Такую позицию пропускаем и
+# называем причину — терять данные без объяснения нельзя.
+SKIP_UNIT_MISMATCH = "единица не сводится с прайсом"
 
 
 async def _generate_embedding_safe(name: str) -> Optional[list]:
@@ -101,6 +107,31 @@ def _prepare(items: list) -> "tuple[dict, dict, dict]":
     return works, materials, skipped
 
 
+def _price_for_existing_unit(
+    price: float, item_unit: Optional[str], price_unit: Optional[str]
+) -> "tuple[float, bool]":
+    """Цена, пересчитанная под единицу позиции прайса. True — писать нельзя.
+
+    Единица существующей позиции не переписывается (её задаёт цена подрядчика),
+    поэтому цена, назначенная за другую единицу, легла бы к чужой подписи: цена
+    за килограмм в позицию с единицей «т» — это промах в тысячу раз.
+
+    Правило то же, что при подборе цены в смету (правило 8 CLAUDE.md): единицы
+    совпали — берём как есть; сводимы — пересчитываем точным коэффициентом;
+    несводимы — не берём вовсе. Пустая единица с любой стороны даёт
+    `STATUS_UNKNOWN` и коэффициент 1: «единица не указана — берём как есть».
+
+    Направление пересчёта здесь обратное подбору цены в смету: там цена known за
+    единицу прайса и нужна за единицу позиции, а тут цена известна за единицу
+    строки сметы и нужна за единицу прайса. Отсюда порядок аргументов — цена за
+    килограмм в позиции с единицей «т» это ×1000, а не ×0,001.
+    """
+    converted, _status = convert_price(price, item_unit, price_unit)
+    if converted is None:
+        return price, True
+    return converted, False
+
+
 async def add_items(db: AsyncSession, items: list) -> dict:
     """Записать позиции в прайс. Возвращает сводку «добавлено / обновлено / пропущено»."""
     works, materials, skipped_reasons = _prepare(items)
@@ -131,9 +162,18 @@ async def add_items(db: AsyncSession, items: list) -> dict:
                 added += 1
                 continue
 
+            price, unit_skip = _price_for_existing_unit(
+                item["price"], item["unit"], found.unit
+            )
+            if unit_skip:
+                skipped_reasons[SKIP_UNIT_MISMATCH] = (
+                    skipped_reasons.get(SKIP_UNIT_MISMATCH, 0) + 1
+                )
+                continue
+
             # Цены подрядчиков не трогаем — переписывается только цена из смет.
             merged = dict(found.prices or {})
-            merged[ESTIMATE_CONTRACTOR] = item["price"]
+            merged[ESTIMATE_CONTRACTOR] = price
             new_unit = found.unit or item["unit"]
             values = {
                 "prices": merged,
@@ -172,13 +212,22 @@ async def add_items(db: AsyncSession, items: list) -> dict:
                 added += 1
                 continue
 
+            price, unit_skip = _price_for_existing_unit(
+                item["price"], item["unit"], found.unit
+            )
+            if unit_skip:
+                skipped_reasons[SKIP_UNIT_MISMATCH] = (
+                    skipped_reasons.get(SKIP_UNIT_MISMATCH, 0) + 1
+                )
+                continue
+
             new_unit = found.unit or item["unit"]
             values = {
-                "price": item["price"],
+                "price": price,
                 # Единица прежняя — см. выше: она задаёт, за что эта цена.
                 "unit": new_unit,
             }
-            if price_changed(found.price, item["price"], found.unit, new_unit):
+            if price_changed(found.price, price, found.unit, new_unit):
                 values["updated_at"] = now
             await db.execute(
                 update(PriceMaterial).where(PriceMaterial.id == found.id).values(**values)

@@ -280,6 +280,85 @@ class TestBulkAdd:
         assert work.prices["Подрядчик А"] == 800
 
     @pytest.mark.asyncio
+    async def test_incompatible_unit_is_not_written(
+        self, async_client, db_session, price_env
+    ):
+        """Цена за мешок не ложится в позицию, у которой цена за килограмм.
+
+        Единица существующей позиции не переписывается, поэтому чужая цена
+        встала бы под чужую подпись и молча испортила общий прайс (правило 8).
+        """
+        db_session.add(PriceWork(
+            name="Смесь", unit="кг", prices={"Подрядчик А": 40}, min_price=40,
+        ))
+        await db_session.commit()
+
+        r = await _post(async_client, price_env, [
+            {"kind": "work", "name": "Смесь", "unit": "мешок", "price": 900},
+        ])
+
+        work = (await db_session.execute(select(PriceWork))).scalar_one()
+        assert ESTIMATE_CONTRACTOR not in work.prices
+        assert work.prices == {"Подрядчик А": 40}
+        # Пропуск не молчаливый: человек видит, что позиция не записана.
+        assert r.json()["skipped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_convertible_unit_is_recalculated(
+        self, async_client, db_session, price_env
+    ):
+        """Цена за килограмм в позиции с тоннами — это ×1000, а не ÷1000."""
+        db_session.add(PriceWork(
+            name="Арматура", unit="т", prices={"Подрядчик А": 40000}, min_price=40000,
+        ))
+        await db_session.commit()
+
+        await _post(async_client, price_env, [
+            {"kind": "work", "name": "Арматура", "unit": "кг", "price": 30},
+        ])
+
+        work = (await db_session.execute(select(PriceWork))).scalar_one()
+        assert work.unit == "т"
+        assert work.prices[ESTIMATE_CONTRACTOR] == 30000.0
+
+    @pytest.mark.asyncio
+    async def test_convertible_unit_for_material(
+        self, async_client, db_session, price_env
+    ):
+        """То же для материала: 0,5 ₽ за литр в позиции с м3 — это 500 ₽/м3."""
+        db_session.add(PriceMaterial(name="Битум", unit="м3", price=450))
+        await db_session.commit()
+
+        await _post(async_client, price_env, [
+            {"kind": "material", "name": "Битум", "unit": "л", "price": 0.5},
+        ])
+
+        material = (await db_session.execute(select(PriceMaterial))).scalar_one()
+        assert material.unit == "м3"
+        assert material.price == 500.0
+
+    @pytest.mark.asyncio
+    async def test_prefixed_and_convertible_units_do_not_stack(
+        self, async_client, db_session, price_env
+    ):
+        """Кратность и сводимость — разные пересчёты, и они не множатся дважды.
+
+        «100 м2» делится на 100 при разборе, а м2↔м2 совпадают: цена 3000 за
+        «100 м2» это 30,00 за м2, и ни делить, ни умножать второй раз нельзя.
+        """
+        db_session.add(PriceWork(
+            name="Окраска", unit="м2", prices={"Подрядчик А": 45}, min_price=45,
+        ))
+        await db_session.commit()
+
+        await _post(async_client, price_env, [
+            {"kind": "work", "name": "Окраска", "unit": "100 м2", "price": 3000},
+        ])
+
+        work = (await db_session.execute(select(PriceWork))).scalar_one()
+        assert work.prices[ESTIMATE_CONTRACTOR] == 30.0
+
+    @pytest.mark.asyncio
     async def test_new_material_lands_with_price(
         self, async_client, db_session, price_env
     ):
