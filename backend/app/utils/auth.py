@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import bcrypt
 from jose import JWTError, jwt
@@ -53,6 +53,34 @@ def verify_token(token: str) -> dict:
             detail="Недействительный или истёкший токен",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def raw_token_from_request(request: Request) -> Optional[str]:
+    """Токен запроса: заголовок `Authorization: Bearer …` или `?token=`.
+
+    Тот же порядок, что у `get_download_user`: скачивания идут по ссылке, и
+    браузер не умеет приложить к ней заголовок. Нет токена — None.
+    """
+    header = request.headers.get("Authorization") or ""
+    scheme, _, credentials = header.partition(" ")
+    if scheme.lower() == "bearer" and credentials.strip():
+        return credentials.strip()
+    token = request.query_params.get("token")
+    return token or None
+
+
+def decode_token_or_none(token: Optional[str]) -> Optional[dict]:
+    """Payload токена или None, если токена нет или он недействителен.
+
+    Без логирования и исключения: вызывается зависимостью, которая
+    аутентификацию не решает, — невалидный токен отвергнет сама ручка.
+    """
+    if not token:
+        return None
+    try:
+        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except JWTError:
+        return None
 
 
 async def get_current_user(

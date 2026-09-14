@@ -1,6 +1,8 @@
 import { create } from 'zustand';
+import { isProductionRole } from '../utils/roles';
 
-// role приходит с бэкенда строкой: 'admin' | 'head_of_sales' | 'project_manager' | 'user' (legacy).
+// role приходит с бэкенда строкой: 'admin' | 'head_of_sales' | 'project_manager' |
+// 'supply_manager' | 'contractor_manager' | 'user' (legacy).
 // Тип оставлен строковым ради совместимости с новыми ролями.
 type Role = string;
 
@@ -13,6 +15,8 @@ interface AuthState {
   isAuthenticated: boolean;
   isAdmin: boolean;
   isManager: boolean;
+  // Отдел производства работ: видит только запросы КП своей роли.
+  isProduction: boolean;
 }
 
 // Initialize from localStorage on store creation
@@ -31,6 +35,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: !!storedToken,
   isAdmin: storedRole === 'admin',
   isManager: computeIsManager(storedRole),
+  isProduction: isProductionRole(storedRole),
 
   setAuth: (token: string, role: Role, username?: string | null) => {
     localStorage.setItem('token', token);
@@ -47,6 +52,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       isAuthenticated: true,
       isAdmin: role === 'admin',
       isManager: computeIsManager(role),
+      isProduction: isProductionRole(role),
     });
   },
 
@@ -61,6 +67,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       isAuthenticated: false,
       isAdmin: false,
       isManager: false,
+      isProduction: false,
     });
   },
 }));

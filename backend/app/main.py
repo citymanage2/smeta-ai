@@ -230,25 +230,38 @@ def create_app() -> FastAPI:
     from app.routers.price_suggestions import router as price_suggestions_router
     from app.routers.prompt_rules import router as prompt_rules_router
 
+    # Отдел производства работ (снабжение, подрядчики) по умолчанию не видит
+    # ничего: зависимость висит на КАЖДОМ роутере, кроме входа и запросов КП.
+    # Новый роутер подключайте через `include_sales` — тест
+    # tests/test_kp_roles_access.py перебирает все маршруты и упадёт, если
+    # маршрут вне белого списка открыт производству.
+    from fastapi import Depends
+    from app.utils.permissions import forbid_production_roles
+
+    def include_sales(router, **kwargs):
+        app.include_router(
+            router, dependencies=[Depends(forbid_production_roles)], **kwargs
+        )
+
     app.include_router(auth.router)
-    app.include_router(tasks.router)
-    app.include_router(results.router)
-    app.include_router(admin.router)
-    app.include_router(admin_users.router)
-    app.include_router(projects.router)
-    app.include_router(calculator_router)
-    app.include_router(dashboard_router)
-    app.include_router(api_balance_router)
-    app.include_router(estimate_versions_router)
-    app.include_router(prices_catalog_router)
-    app.include_router(workflow_cards_router, prefix="/api")
-    app.include_router(summary_router, prefix="/api")
-    app.include_router(retraining_router)
-    app.include_router(notifications_router)
-    app.include_router(documents_router)
-    app.include_router(corrections_router)
-    app.include_router(price_suggestions_router)
-    app.include_router(prompt_rules_router)
+    include_sales(tasks.router)
+    include_sales(results.router)
+    include_sales(admin.router)
+    include_sales(admin_users.router)
+    include_sales(projects.router)
+    include_sales(calculator_router)
+    include_sales(dashboard_router)
+    include_sales(api_balance_router)
+    include_sales(estimate_versions_router)
+    include_sales(prices_catalog_router)
+    include_sales(workflow_cards_router, prefix="/api")
+    include_sales(summary_router, prefix="/api")
+    include_sales(retraining_router)
+    include_sales(notifications_router)
+    include_sales(documents_router)
+    include_sales(corrections_router)
+    include_sales(price_suggestions_router)
+    include_sales(prompt_rules_router)
 
     # Global error handler
     @app.exception_handler(Exception)

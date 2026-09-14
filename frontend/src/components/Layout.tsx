@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth';
 import { useGlobalTaskPoller } from '../hooks/useGlobalTaskPoller';
 import { useSystemNotifications } from '../hooks/useSystemNotifications';
 import { ROLE_LABELS } from '../api/adminUsers';
+import { KP_INBOX_PATH } from '../utils/roles';
 import ProjectsSidebar from './ProjectsSidebar';
 import { MAIN_PADDING_TOP, MAIN_PADDING_X } from './layoutMetrics';
 
@@ -17,11 +18,18 @@ interface LayoutProps {
 // импорты из Layout продолжали работать.
 export { MAIN_PADDING_TOP, MAIN_PADDING_X };
 
-const Layout: React.FC<LayoutProps> = ({ children }) => {
-  const navigate = useNavigate();
-  const { role, logout, isAdmin, isManager, isAuthenticated } = useAuthStore();
+// Фоновые опросы продаж: статусы задач и системные события. Отделу
+// производства работ оба API закрыты — компонент для него не монтируется,
+// иначе вкладка каждые 30 секунд собирала бы 403.
+const SalesPollers: React.FC = () => {
   useGlobalTaskPoller();
   useSystemNotifications();
+  return null;
+};
+
+const Layout: React.FC<LayoutProps> = ({ children }) => {
+  const navigate = useNavigate();
+  const { role, logout, isAdmin, isManager, isAuthenticated, isProduction } = useAuthStore();
 
   const roleLabel = (role && ROLE_LABELS[role]) || 'Сотрудник';
 
@@ -70,7 +78,9 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               cursor: 'pointer',
               letterSpacing: '-0.5px',
             }}
-            onClick={() => navigate(isAdmin ? '/admin' : '/task/create')}
+            onClick={() =>
+              navigate(isProduction ? KP_INBOX_PATH : isAdmin ? '/admin' : '/task/create')
+            }
           >
             Smeta AI
           </span>
@@ -91,58 +101,67 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {isAdmin && (
-            <button
-              onClick={() => navigate('/admin')}
-              style={headerBtnStyle}
-            >
-              Администратор
+          {/* Отделу производства работ — только запросы КП своей роли. */}
+          {isProduction ? (
+            <button onClick={() => navigate(KP_INBOX_PATH)} style={headerBtnStyle}>
+              Мои задачи КП
             </button>
+          ) : (
+            <>
+              {isAdmin && (
+                <button
+                  onClick={() => navigate('/admin')}
+                  style={headerBtnStyle}
+                >
+                  Администратор
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  onClick={() => navigate('/retraining')}
+                  style={headerBtnStyle}
+                >
+                  Дообучение
+                </button>
+              )}
+              {isManager && (
+                <button
+                  onClick={() => navigate('/corrections')}
+                  style={headerBtnStyle}
+                >
+                  Правки
+                </button>
+              )}
+              {/* Выученные цены — всем: подтверждать цену логично тому, кто её и
+                  правил (решение пользователя 10.09.2026). */}
+              <button
+                onClick={() => navigate('/price-learning')}
+                style={headerBtnStyle}
+              >
+                Выученные цены
+              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => navigate('/employees')}
+                  style={headerBtnStyle}
+                >
+                  Сотрудники
+                </button>
+              )}
+              <button onClick={() => navigate('/task/create')} style={headerBtnStyle}>
+                Создать задачу
+              </button>
+              <button onClick={() => navigate('/projects')} style={headerBtnStyle}>
+                Проекты
+              </button>
+              <button onClick={() => navigate('/archive')} style={headerBtnStyle}>
+                Архив
+              </button>
+              <button onClick={() => navigate('/calculator')} style={headerBtnStyle}>
+                Калькулятор
+              </button>
+            </>
           )}
-          {isAdmin && (
-            <button
-              onClick={() => navigate('/retraining')}
-              style={headerBtnStyle}
-            >
-              Дообучение
-            </button>
-          )}
-          {isManager && (
-            <button
-              onClick={() => navigate('/corrections')}
-              style={headerBtnStyle}
-            >
-              Правки
-            </button>
-          )}
-          {/* Выученные цены — всем: подтверждать цену логично тому, кто её и
-              правил (решение пользователя 10.09.2026). */}
-          <button
-            onClick={() => navigate('/price-learning')}
-            style={headerBtnStyle}
-          >
-            Выученные цены
-          </button>
-          {isAdmin && (
-            <button
-              onClick={() => navigate('/employees')}
-              style={headerBtnStyle}
-            >
-              Сотрудники
-            </button>
-          )}
-          <button onClick={() => navigate('/task/create')} style={headerBtnStyle}>
-            Создать задачу
-          </button>
-          <button onClick={() => navigate('/projects')} style={headerBtnStyle}>
-            Проекты
-          </button>
-          <button onClick={() => navigate('/archive')} style={headerBtnStyle}>
-            Архив
-          </button>
-          <button onClick={() => navigate('/calculator')} style={headerBtnStyle}>
-            Калькулятор
-          </button>
           <button
             onClick={handleLogout}
             style={{
@@ -159,7 +178,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* ── Body: sidebar + content ── */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {isAuthenticated && (
+        {isAuthenticated && !isProduction && (
           <ProjectsSidebar open={sidebarOpen} onToggle={handleToggleSidebar} />
         )}
 
@@ -191,6 +210,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         </div>
       </div>
 
+      {!isProduction && <SalesPollers />}
       <Toaster position="bottom-right" richColors />
     </div>
   );

@@ -1,7 +1,13 @@
 import apiClient from './client';
 
 // Роли, назначаемые сотрудникам через админку (без legacy 'user').
-export type AssignableRole = 'admin' | 'head_of_sales' | 'project_manager';
+// supply_manager и contractor_manager — отдел производства работ (запрос КП).
+export type AssignableRole =
+  | 'admin'
+  | 'head_of_sales'
+  | 'project_manager'
+  | 'supply_manager'
+  | 'contractor_manager';
 
 export interface AdminUser {
   id: number;
@@ -55,13 +61,26 @@ export async function resetPassword(id: number, password: string): Promise<void>
   await apiClient.post(`/admin/users/${id}/reset-password`, { password });
 }
 
-// Человекочитаемые названия ролей.
-export const ROLE_LABELS: Record<string, string> = {
+// Человекочитаемые названия ролей — одно место на весь фронт. Record по
+// AssignableRole: забытая подпись новой роли — ошибка компиляции.
+const ASSIGNABLE_ROLE_LABELS: Record<AssignableRole, string> = {
   admin: 'Администратор',
   head_of_sales: 'Руководитель отдела продаж',
   project_manager: 'Проектный менеджер',
+  supply_manager: 'Менеджер снабжения',
+  contractor_manager: 'Менеджер по работе с подрядчиками',
+};
+
+export const ROLE_LABELS: Record<string, string> = {
+  ...ASSIGNABLE_ROLE_LABELS,
   user: 'Сотрудник',
 };
 
 // Роли, доступные для назначения в формах.
-export const ASSIGNABLE_ROLES: AssignableRole[] = ['admin', 'head_of_sales', 'project_manager'];
+export const ASSIGNABLE_ROLES: AssignableRole[] = [
+  'admin',
+  'head_of_sales',
+  'project_manager',
+  'supply_manager',
+  'contractor_manager',
+];

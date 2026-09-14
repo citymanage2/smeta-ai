@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import { useAuthStore } from './stores/auth';
+import { KP_INBOX_PATH, landingPathForRole } from './utils/roles';
 
 // Ленивая загрузка страниц по роутам: тяжёлые библиотеки (recharts на /system,
 // xlsx-редакторы на /tasks/:id/estimate) грузятся только при переходе на экран,
@@ -26,16 +27,18 @@ const Retraining = lazy(() => import('./pages/Retraining'));
 const Corrections = lazy(() => import('./pages/Corrections'));
 const PriceLearning = lazy(() => import('./pages/PriceLearning'));
 const Employees = lazy(() => import('./pages/Employees'));
+const KpInbox = lazy(() => import('./pages/KpInbox'));
 
 const RouteFallback: React.FC = () => (
   <div style={{ padding: 32, textAlign: 'center', color: '#64748b' }}>Загрузка…</div>
 );
 
 const App: React.FC = () => {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, role } = useAuthStore();
 
-  // Приземление после логина: «Входящий» (/system) для всех ролей.
-  const landingPath = '/system';
+  // Приземление после логина: продажам — «Входящий» (/system), отделу
+  // производства работ — «Мои задачи КП» (всё прочее ему закрыто).
+  const landingPath = landingPathForRole(role);
 
   return (
     <BrowserRouter>
@@ -199,6 +202,17 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute requireAdmin>
               <Employees />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* «Мои задачи КП» — единственный раздел отдела производства работ.
+            Остальные маршруты производству закрыты по умолчанию (ProtectedRoute). */}
+        <Route
+          path={KP_INBOX_PATH}
+          element={
+            <ProtectedRoute allowProduction>
+              <KpInbox />
             </ProtectedRoute>
           }
         />

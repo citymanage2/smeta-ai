@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.utils.auth import get_admin_user, hash_password
-from app.utils.permissions import ASSIGNABLE_ROLES, ROLE_ADMIN, get_manager_user
+from app.utils.permissions import (
+    ASSIGNABLE_ROLES,
+    PRODUCTION_ROLES,
+    ROLE_ADMIN,
+    get_manager_user,
+)
 
 logger = structlog.get_logger()
 
@@ -132,11 +137,19 @@ async def list_assignable_users(
     db: AsyncSession = Depends(get_db),
     _: dict = Depends(get_manager_user),
 ):
-    """Активные сотрудники для выпадашки переназначения владельца (менеджер/админ)."""
+    """Активные сотрудники для выпадашки переназначения владельца (менеджер/админ).
+
+    Отдел производства работ не предлагается: проекты и задачи ему закрыты, а
+    владелец — ключ очереди задач и подпись «чьё это».
+    """
     rows = (
         await db.execute(
             select(User)
-            .where(User.username.is_not(None), User.is_active.is_(True))
+            .where(
+                User.username.is_not(None),
+                User.is_active.is_(True),
+                User.role.not_in(PRODUCTION_ROLES),
+            )
             .order_by(User.full_name, User.username)
         )
     ).scalars().all()

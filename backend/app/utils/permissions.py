@@ -1,6 +1,6 @@
 """Матрица прав доступа (RBAC).
 
-Единая точка правил для трёх ролей. Проекты и задачи — общие: любой сотрудник
+Единая точка правил для ролей. Проекты и задачи — общие: любой сотрудник
 видит и правит работу коллег (решение пользователя 11.08.2026). Роль решает
 только «управляющие» действия: переназначение владельца, аккаунты, прайсы,
 админка. Владелец (`owner_id`) остаётся у ресурса как подпись «чьё это» и
@@ -9,30 +9,81 @@
 Архив (`is_archived`) ортогонален правам — он влияет только на раздел
 (активные/архив), а не на видимость/правку.
 
+Отдел производства работ (снабжение и работа с подрядчиками, запрос КП от
+14.09.2026) — исключение из «всё общее»: этим ролям по умолчанию закрыто всё API,
+кроме входа и запросов КП. Запрет — зависимость `forbid_production_roles` на
+каждом `include_router` в `main.py`, а не проверки в роутерах: половина ручек
+`can_access` не зовёт, и новый роутер без явного разрешения обязан оказаться
+закрытым (тест перебирает все маршруты, `tests/test_kp_roles_access.py`).
+
 Зависимость односторонняя: permissions → auth (без циклов).
 """
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.utils.auth import get_current_user
+from app.database import get_db
+from app.models.user import User
+from app.utils.auth import (
+    current_user_id,
+    decode_token_or_none,
+    get_current_user,
+    raw_token_from_request,
+)
 
 # --- Роли ---
 ROLE_ADMIN = "admin"
 ROLE_SALES_HEAD = "head_of_sales"
 ROLE_PM = "project_manager"
+# Отдел производства работ: снабжение (материалы) и подрядчики (работы).
+ROLE_SUPPLY = "supply_manager"
+ROLE_CONTRACTOR = "contractor_manager"
 
 # Менеджеры — управляющие действия (переназначение владельца, аккаунты, прайсы).
-# Данные проектов и задач видят и правят все роли одинаково.
+# Данные проектов и задач видят и правят все роли продаж одинаково.
 MANAGER_ROLES = frozenset({ROLE_ADMIN, ROLE_SALES_HEAD})
+# Роли отдела производства: закрыто всё, кроме запросов КП своей роли.
+PRODUCTION_ROLES = frozenset({ROLE_SUPPLY, ROLE_CONTRACTOR})
 # Роли, допустимые при создании/смене аккаунта (legacy 'user' — не создаём).
-ASSIGNABLE_ROLES = frozenset({ROLE_ADMIN, ROLE_SALES_HEAD, ROLE_PM})
+ASSIGNABLE_ROLES = frozenset({ROLE_ADMIN, ROLE_SALES_HEAD, ROLE_PM}) | PRODUCTION_ROLES
+_KNOWN_ROLES = ASSIGNABLE_ROLES
+
+# Кому адресован запрос КП по категории позиций.
+KP_CATEGORY_ROLE = {"material": ROLE_SUPPLY, "work": ROLE_CONTRACTOR}
+
+# Белый список производства: префиксы путей роутеров, на которые НЕ вешается
+# `forbid_production_roles`. Вход — чтобы войти; остальное — запросы КП.
+PRODUCTION_ALLOWED_PREFIXES = (
+    "/auth",
+    "/kp-requests",
+    "/kp-request-files",
+    "/kp-request-items",
+    "/kp-offers",
+)
+
+PRODUCTION_FORBIDDEN_DETAIL = "Раздел недоступен отделу производства работ"
 
 
 def normalize_role(role: Optional[str]) -> str:
-    """Каноническая роль. Legacy 'user' и неизвестное → project_manager (мин. права)."""
-    return role if role in {ROLE_ADMIN, ROLE_SALES_HEAD, ROLE_PM} else ROLE_PM
+    """Каноническая роль. Legacy 'user' и неизвестное → project_manager.
+
+    Роли производства перечислены явно: иначе они молча стали бы ПМ — а ПМ
+    видит и правит все проекты.
+    """
+    return role if role in _KNOWN_ROLES else ROLE_PM
+
+
+def is_production(role: Optional[str]) -> bool:
+    """Роль отдела производства работ (снабжение или подрядчики)."""
+    return role in PRODUCTION_ROLES
+
+
+def is_production_allowed_path(path: str) -> bool:
+    """Путь из белого списка производства (совпадение по сегменту, не по началу строки)."""
+    return any(path == p or path.startswith(p + "/") for p in PRODUCTION_ALLOWED_PREFIXES)
 
 
 def is_admin(role: Optional[str]) -> bool:
@@ -87,3 +138,32 @@ async def get_manager_user(current_user: dict = Depends(get_current_user)) -> di
             detail="Недостаточно прав. Требуется роль руководителя или администратора",
         )
     return current_user
+
+
+async def forbid_production_roles(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> None:
+    """Зависимость роутера: 403 сотруднику отдела производства работ.
+
+    Аутентификацию не решает: нет токена или он недействителен — пропускает,
+    ответит сама ручка (калькулятор без токена работает как прежде). Токен —
+    из заголовка или `?token=` (скачивания идут ссылкой).
+
+    Запрещает роль **из токена или из БД** — любая производственная. Токен
+    живёт сутками: повышение до производства закрывает доступ сразу, обратное
+    — после перелогина (безопасная сторона). Роль из БД читается колонкой, а не
+    объектом: объект из identity map сессии мог бы быть устаревшим.
+    """
+    payload = decode_token_or_none(raw_token_from_request(request))
+    if payload is None:
+        return
+    if is_production(payload.get("role")):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=PRODUCTION_FORBIDDEN_DETAIL)
+    uid = current_user_id(payload)
+    if uid is None:
+        return
+    db_role = (
+        await db.execute(select(User.role).where(User.id == uid))
+    ).scalar_one_or_none()
+    if is_production(db_role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=PRODUCTION_FORBIDDEN_DETAIL)

@@ -7,6 +7,7 @@ import {
   listUsers, createUser, updateUser, resetPassword,
   ROLE_LABELS, ASSIGNABLE_ROLES,
 } from '../api/adminUsers';
+import { isProductionRole } from '../utils/roles';
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', {
@@ -242,6 +243,12 @@ const EmployeesPage: React.FC = () => {
                   <option key={r} value={r}>{ROLE_LABELS[r]}</option>
                 ))}
               </select>
+              {isProductionRole(newRole) && (
+                <div style={{ fontSize: '12px', color: '#64748b', marginTop: '5px' }}>
+                  Отдел производства работ: видит только запросы КП своей роли —
+                  проекты, задачи и прайсы ему недоступны.
+                </div>
+              )}
             </div>
             <div style={{ flex: '1 1 180px', minWidth: '160px' }}>
               <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8', marginBottom: '5px' }}>Пароль *</div>
