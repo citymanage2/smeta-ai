@@ -6,6 +6,8 @@
 не безобидное действие. Правила, которые это ограничивают:
 
 - работы попадают к псевдо-подрядчику «Из смет», а не в прайс подрядчика;
+  запрос КП передаёт свой ключ «КП: <поставщик>» полем `contractor`
+  (`services/kp_pricelist.py`) — остальные ключи работы не трогаются;
 - единицы измерения приводятся к одному написанию, а цена за «100 м2»
   пересчитывается в цену за «м2»;
 - позиция без имени или без внятной цены не пишется вовсе, а попадает в сводку
@@ -101,8 +103,21 @@ def _prepare(items: list) -> "tuple[dict, dict, dict]":
             "unit": unit,
             "price": round(price / factor, 2),
         }
-        target = works if kind == "work" else materials
-        target[normalize_name(name)] = prepared
+        key = normalize_name(name)
+        if kind == "material":
+            materials[key] = prepared
+            continue
+
+        # У работы цена пишется в ключ подрядчика: по умолчанию «Из смет», запрос
+        # КП передаёт «КП: <поставщик>». Одна позиция прайса — много ключей,
+        # поэтому группа хранит цены по подрядчикам, а побеждает последняя
+        # цена того же подрядчика.
+        contractor = str(item.get("contractor") or "").strip() or ESTIMATE_CONTRACTOR
+        group = works.setdefault(key, {"name": name, "unit": unit, "prices": {}})
+        group["name"] = name
+        group["unit"] = unit
+        group["prices"].pop(contractor, None)
+        group["prices"][contractor] = {"price": prepared["price"], "unit": unit}
 
     return works, materials, skipped
 
@@ -132,12 +147,28 @@ def _price_for_existing_unit(
     return converted, False
 
 
-async def add_items(db: AsyncSession, items: list) -> dict:
-    """Записать позиции в прайс. Возвращает сводку «добавлено / обновлено / пропущено»."""
+async def add_items(
+    db: AsyncSession, items: list, *, commit: bool = True, with_written: bool = False,
+) -> dict:
+    """Записать позиции в прайс. Возвращает сводку «добавлено / обновлено / пропущено».
+
+    У позиции-работы необязательное поле `contractor` — ключ, в который пишется
+    цена (по умолчанию «Из смет»); остальные ключи работы не трогаются. Всё
+    прочее — единицы, дата цены, пропуски — одно для любого подрядчика.
+
+    `commit=False` — запись остаётся в транзакции вызывающего (запрос КП пишет
+    сводку в ту же транзакцию); кэш цен тогда перезагружает он сам после коммита.
+    `with_written=True` — в ответе ещё `written_prices`: что именно записано,
+    `[{kind, name_key, contractor, value}]` (цена — в единице позиции прайса).
+    """
     works, materials, skipped_reasons = _prepare(items)
     added = 0
     updated = 0
+    written: list[dict] = []
     now = datetime.now(timezone.utc)
+
+    def _skip_unit() -> None:
+        skipped_reasons[SKIP_UNIT_MISMATCH] = skipped_reasons.get(SKIP_UNIT_MISMATCH, 0) + 1
 
     # Существующие позиции ищем по нормализованному имени — так же, как их ищет
     # загрузка прайса файлом. Тяжёлую колонку `embedding` не читаем: она здесь
@@ -148,33 +179,48 @@ async def add_items(db: AsyncSession, items: list) -> dict:
         )).all()
         existing = {normalize_name(row.name): row for row in rows}
 
-        for key, item in works.items():
+        for key, group in works.items():
             found = existing.get(key)
             if found is None:
+                # Новая позиция: единица — последней присланной строки, цены
+                # других подрядчиков приводятся к ней тем же правилом, что к
+                # единице существующей позиции.
+                target_unit = group["unit"]
+                merged: dict = {}
+            else:
+                target_unit = found.unit
+                merged = dict(found.prices or {})
+
+            wrote: list[tuple[str, float]] = []
+            for contractor, entry in group["prices"].items():
+                price, unit_skip = _price_for_existing_unit(
+                    entry["price"], entry["unit"], target_unit
+                )
+                if unit_skip:
+                    _skip_unit()
+                    continue
+                # Цены прочих подрядчиков не трогаем — переписывается только свой ключ.
+                merged[contractor] = price
+                wrote.append((contractor, price))
+            if not wrote:
+                continue
+            written.extend(
+                {"kind": "work", "name_key": key, "contractor": c, "value": v} for c, v in wrote
+            )
+
+            if found is None:
                 db.add(PriceWork(
-                    name=item["name"],
-                    unit=item["unit"],
-                    prices={ESTIMATE_CONTRACTOR: item["price"]},
-                    min_price=item["price"],
-                    embedding=await _generate_embedding_safe(item["name"]),
+                    name=group["name"],
+                    unit=group["unit"],
+                    prices=merged,
+                    min_price=compute_min_price(merged),
+                    embedding=await _generate_embedding_safe(group["name"]),
                     updated_at=now,
                 ))
                 added += 1
                 continue
 
-            price, unit_skip = _price_for_existing_unit(
-                item["price"], item["unit"], found.unit
-            )
-            if unit_skip:
-                skipped_reasons[SKIP_UNIT_MISMATCH] = (
-                    skipped_reasons.get(SKIP_UNIT_MISMATCH, 0) + 1
-                )
-                continue
-
-            # Цены подрядчиков не трогаем — переписывается только цена из смет.
-            merged = dict(found.prices or {})
-            merged[ESTIMATE_CONTRACTOR] = price
-            new_unit = found.unit or item["unit"]
+            new_unit = found.unit or group["unit"]
             values = {
                 "prices": merged,
                 "min_price": compute_min_price(merged),
@@ -209,6 +255,8 @@ async def add_items(db: AsyncSession, items: list) -> dict:
                     embedding=await _generate_embedding_safe(item["name"]),
                     updated_at=now,
                 ))
+                written.append({"kind": "material", "name_key": key, "contractor": None,
+                                "value": item["price"]})
                 added += 1
                 continue
 
@@ -216,9 +264,7 @@ async def add_items(db: AsyncSession, items: list) -> dict:
                 item["price"], item["unit"], found.unit
             )
             if unit_skip:
-                skipped_reasons[SKIP_UNIT_MISMATCH] = (
-                    skipped_reasons.get(SKIP_UNIT_MISMATCH, 0) + 1
-                )
+                _skip_unit()
                 continue
 
             new_unit = found.unit or item["unit"]
@@ -232,7 +278,14 @@ async def add_items(db: AsyncSession, items: list) -> dict:
             await db.execute(
                 update(PriceMaterial).where(PriceMaterial.id == found.id).values(**values)
             )
+            written.append({"kind": "material", "name_key": key, "contractor": None, "value": price})
             updated += 1
+
+    if not commit:
+        result = _summary(added, updated, skipped_reasons)
+        if with_written:
+            result["written_prices"] = written
+        return result
 
     await db.commit()
 
@@ -241,6 +294,13 @@ async def add_items(db: AsyncSession, items: list) -> dict:
         # позиция участвовала бы в расчёте только после перезапуска сервера.
         await price_service.load_cache(db)
 
+    result = _summary(added, updated, skipped_reasons)
+    if with_written:
+        result["written_prices"] = written
+    return result
+
+
+def _summary(added: int, updated: int, skipped_reasons: dict) -> dict:
     skipped = sum(skipped_reasons.values())
     logger.info("price_bulk_add", added=added, updated=updated, skipped=skipped)
     return {

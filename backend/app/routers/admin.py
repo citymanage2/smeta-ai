@@ -22,7 +22,11 @@ from app.models.price_list import PriceList
 from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
 from app.utils.auth import get_admin_user
 from app.utils.price_change import price_changed, prices_changed
-from app.utils.price_min import compute_min_price
+from app.utils.price_min import (
+    compute_min_price,
+    reserved_contractor_error,
+    reserved_contractors,
+)
 from app.services import price_service
 from app.services.embedding_service import (
     normalize_name,
@@ -288,6 +292,20 @@ def _parse_file_for_type(data: bytes, filename: str, mime_type: str, is_works: b
         return _parse_csv_single(data, is_works)
     # PDF / DOCX — cannot parse automatically
     return []
+
+
+def _reject_reserved_contractors(works: list[dict]) -> None:
+    """Подрядчик «КП: …» в файле прайса — 422 до любой записи.
+
+    Цены «КП: …» идут в расчёт сметы раньше «Из смет» (`utils/price_min.py`), и
+    записывает их только запрос КП. Колонка с таким заголовком в файле молча
+    получила бы этот приоритет.
+    """
+    names: list[str] = []
+    for item in works:
+        names.extend(reserved_contractors(item.get("prices")))
+    if names:
+        raise HTTPException(status_code=422, detail=reserved_contractor_error(names))
 
 
 def _ext_from_filename(filename: str) -> str:
@@ -586,6 +604,8 @@ async def _handle_price_upload(
         items = _parse_file_for_type(data, file.filename, mime_type, is_works)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка разбора файла: {e}")
+    if is_works:
+        _reject_reserved_contractors(items)
 
     # Generate embeddings before touching the DB (one batch API call)
     embeddings: list = []
@@ -1058,6 +1078,8 @@ async def upload_prices(
         works_data, materials_data = _parse_xlsx_combined(data)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Ошибка разбора файла: {e}")
+    # До сноса таблиц: отказ после DELETE оставил бы прайс пустым.
+    _reject_reserved_contractors(works_data)
 
     now = datetime.now(timezone.utc)
 

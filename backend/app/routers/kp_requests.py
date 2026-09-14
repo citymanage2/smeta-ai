@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.kp_request import STATUS_DONE
 from app.models.user import User
 from app.schemas.kp_request import (
     KpCellOut,
@@ -45,12 +46,12 @@ from app.schemas.kp_request import (
     KpRequestBrief,
     KpRequestDetail,
 )
-from app.services import kp_offers, kp_parser
+from app.services import kp_offers, kp_parser, kp_pricelist
 from app.services import kp_requests as svc
 from app.services import storage_service
 from app.utils.auth import current_user_id, get_current_user, get_download_user
 from app.utils.owner_names import owner_names
-from app.utils.permissions import KP_CATEGORY_ROLE, is_production
+from app.utils.permissions import KP_CATEGORY_ROLE, can_manage_kp, can_work_kp, is_production
 
 router = APIRouter(tags=["kp-requests"])
 
@@ -426,4 +427,33 @@ async def complete_kp_request(
     current_user: dict = Depends(get_kp_user),
 ):
     request = await kp_offers.complete(db, request_id, body.report, current_user)
+    # Цены в прайс — следом, отдельной транзакцией (фаза 7): сбой записи не
+    # отменяет завершение, а отмечается `pricelist_status = failed`.
+    request = await kp_pricelist.write_safe(db, str(request.id))
+    return await svc.detail(db, request, current_user)
+
+
+@router.post("/kp-requests/{request_id}/pricelist/retry", response_model=KpRequestDetail)
+async def retry_kp_pricelist(
+    request_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """«Записать в прайс ещё раз» — сотрудник роли запроса, автор или руководитель продаж.
+
+    Повтор безопасен: та же цена дату не двигает, свои прежние ключи снимаются.
+    Сбой снова отмечается в запросе, ответ — карточка запроса.
+    """
+    request = await svc.get_visible(db, request_id, current_user)
+    if not (can_work_kp(request, current_user) or can_manage_kp(request, current_user)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Записать цены в прайс может отдел производства, автор запроса или руководитель",
+        )
+    if request.status != STATUS_DONE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Запрос не завершён — цены в прайс записываются при завершении",
+        )
+    request = await kp_pricelist.write_safe(db, str(request.id))
     return await svc.detail(db, request, current_user)

@@ -22,6 +22,7 @@ from app.models.job import Job
 from app.models.kp_request import (
     KpOffer, KpOfferPrice, KpRequest, KpRequestFile, KpRequestItem,
 )
+from app.models.price import PriceMaterial, PriceWork
 from app.models.project import Project
 from app.models.task import Task
 from app.models.user import User
@@ -46,7 +47,7 @@ def _pdf(pages: int = 1) -> bytes:
 
 
 _MODELS = (KpOfferPrice, KpRequestItem, KpOffer, KpRequestFile, KpRequest,
-           EstimateVersion, WorkflowCard, Task, Project, User, Job)
+           EstimateVersion, WorkflowCard, Task, Project, User, Job, PriceWork, PriceMaterial)
 
 
 async def _wipe(db):
@@ -56,7 +57,12 @@ async def _wipe(db):
 
 
 @pytest_asyncio.fixture
-async def env(db_session, fake_s3):
+async def env(db_session, fake_s3, monkeypatch):
+    # «Завершить» пишет цены в прайс (фаза 7): векторы не считаем, прайс чистим.
+    async def _no_embedding(_name):
+        return None
+
+    monkeypatch.setattr("app.services.price_bulk._generate_embedding_safe", _no_embedding)
     await _wipe(db_session)
 
     def user(name, role):

@@ -29,8 +29,12 @@ from app.services.embedding_service import (
 )
 from app.utils.auth import get_current_user
 from app.utils.permissions import get_manager_user
-from app.utils.price_change import price_changed, prices_changed
-from app.utils.price_min import compute_min_price
+from app.utils.price_change import MONEY_EPS, price_changed, prices_changed
+from app.utils.price_min import (
+    compute_min_price,
+    is_reserved_contractor,
+    reserved_contractor_error,
+)
 
 logger = structlog.get_logger()
 
@@ -120,6 +124,32 @@ async def _generate_embedding_safe(name: str) -> Optional[list]:
 
 async def _reload_cache(db: AsyncSession) -> None:
     await price_service.load_cache(db)
+
+
+def _reject_new_reserved(prev_prices: Optional[dict], new_prices: Optional[dict]) -> None:
+    """Цену «КП: …» руками не завести и не переписать — 422 с причиной.
+
+    Такие цены идут в расчёт раньше «Из смет» и пишет их только запрос КП
+    (`utils/price_min.py`). Форма каталога отправляет весь набор цен работы,
+    поэтому уже записанная цена из КП с прежним числом проходит, а убрать её
+    можно: отказ сделал бы работу с ценой из КП нередактируемой.
+    """
+    prev = prev_prices if isinstance(prev_prices, dict) else {}
+    bad: list[str] = []
+    for name, value in (new_prices or {}).items():
+        if not is_reserved_contractor(name):
+            continue
+        if name not in prev:
+            bad.append(str(name))
+            continue
+        try:
+            same = abs(float(prev[name]) - float(value)) <= MONEY_EPS
+        except (TypeError, ValueError):
+            same = False
+        if not same:
+            bad.append(str(name))
+    if bad:
+        raise HTTPException(status_code=422, detail=reserved_contractor_error(bad))
 
 
 def _escape_like(term: str) -> str:
@@ -317,6 +347,7 @@ async def create_work(
     _user=Depends(get_manager_user),
 ):
     prices = body.prices or {}
+    _reject_new_reserved(None, prices)
     min_price = compute_min_price(prices)
 
     embedding = await _generate_embedding_safe(body.name)
@@ -392,6 +423,7 @@ async def update_work(
     if body.unit is not None:
         work.unit = body.unit
     if body.prices is not None:
+        _reject_new_reserved(prev_prices, body.prices)
         work.prices = body.prices
         work.min_price = compute_min_price(body.prices)
 
