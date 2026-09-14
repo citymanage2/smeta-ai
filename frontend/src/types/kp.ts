@@ -114,6 +114,20 @@ export interface KpPermissions {
 
 export type KpVatMode = 'with_vat' | 'without_vat';
 
+export type KpParseStatus = 'queued' | 'processing' | 'parsed' | 'failed';
+
+/**
+ * Подсказки ИИ-разбора. Условия КП (НДС, ставка, «включает материалы») задаёт
+ * человек — догадка ИИ о них только показывается рядом.
+ */
+export interface KpParseHints {
+  prices_found?: number;
+  dropped_unknown?: number;
+  vat_mode?: KpVatMode;
+  vat_rate?: number;
+  includes_materials?: boolean;
+}
+
 /** КП к запросу — условия и файл. Зеркало `KpOfferOut`. */
 export interface KpOffer {
   id: string;
@@ -127,8 +141,11 @@ export interface KpOffer {
   mime_type: string | null;
   size_bytes: number | null;
   has_file: boolean;
-  parse_status: string | null;
+  /** ИИ-разбор файла (фаза 6): queued | processing | parsed | failed; null — файла нет. */
+  parse_status: KpParseStatus | null;
   parse_error: string | null;
+  parse_started_at?: string | null;
+  parse_hints?: KpParseHints | null;
   created_by: number | null;
   created_by_name: string | null;
   created_at: string;

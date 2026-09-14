@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, FileText, Pencil, Trash2 } from 'lucide-react';
+import { Check, FileText, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 
 import { kpOfferDownloadUrl } from '../../api/kpRequests';
 import { formatDecimal, formatMoney } from '../../utils/formatNumber';
@@ -20,6 +20,10 @@ import type {
  * * «включает материалы» помечено в ячейке;
  * * несводимая единица — причина в ячейке, выбрать такое КП нельзя.
  *
+ * ИИ-разбор файла (фаза 6): состояние разбора и ошибка — в заголовке колонки КП,
+ * «Разобрать заново» — сотруднику роли. Догадки ИИ о НДС и «включает материалы»
+ * условия КП не меняют: показываются подсказкой, только если расходятся с ними.
+ *
  * Правка цен и КП — только сотруднику роли, пока запрос в работе
  * (`permissions.can_edit_offers`); выбор КП — по `can_select_offer`, у продаж и
  * после завершения.
@@ -35,6 +39,8 @@ interface Props {
   onSelect: (itemId: string, offerId: string | null) => Promise<unknown>;
   onEditOffer: (offer: KpOffer) => void;
   onDeleteOffer: (offer: KpOffer) => Promise<unknown>;
+  /** «Разобрать заново» — поставить ИИ-разбор файла КП в очередь. */
+  onReparse?: (offer: KpOffer) => Promise<unknown>;
 }
 
 const th: React.CSSProperties = {
@@ -69,6 +75,47 @@ function formatDate(value: string | null): string {
   if (!value) return '';
   const [y, m, d] = value.slice(0, 10).split('-');
   return y && m && d ? `${d}.${m}.${y}` : value;
+}
+
+/** Строка состояния ИИ-разбора; null — разбора нет (КП без файла). */
+export function parseStatusText(offer: KpOffer): string | null {
+  switch (offer.parse_status) {
+    case 'queued': return 'Разбор ИИ: в очереди';
+    case 'processing': return 'ИИ разбирает файл…';
+    case 'parsed': {
+      const found = offer.parse_hints?.prices_found;
+      return typeof found === 'number' ? `Разобрано ИИ: цен — ${found}` : 'Разобрано ИИ';
+    }
+    case 'failed': return 'Разбор ИИ не удался';
+    default: return null;
+  }
+}
+
+/**
+ * Подсказки разбора, которые расходятся с условиями КП. Совпала догадка — молчим:
+ * подтверждать то, что человек и так выбрал, незачем.
+ */
+export function parseHintNotes(offer: KpOffer, isWork: boolean): string[] {
+  const hints = offer.parse_hints;
+  if (!hints) return [];
+  const notes: string[] = [];
+  if (hints.vat_mode) {
+    const rate = hints.vat_mode === 'with_vat' && typeof hints.vat_rate === 'number' ? hints.vat_rate : null;
+    const modeDiffers = hints.vat_mode !== offer.vat_mode;
+    const rateDiffers = !modeDiffers && rate !== null && rate !== (offer.vat_rate ?? 22);
+    if (modeDiffers || rateDiffers) {
+      const label = hints.vat_mode === 'without_vat'
+        ? 'без НДС'
+        : `с НДС${rate !== null ? ` ${formatDecimal(rate)} %` : ''}`;
+      notes.push(`По мнению ИИ, в КП цены ${label} — проверьте условия`);
+    }
+  }
+  if (isWork && typeof hints.includes_materials === 'boolean' && hints.includes_materials !== offer.includes_materials) {
+    notes.push(hints.includes_materials
+      ? 'По мнению ИИ, цены включают материалы — проверьте отметку'
+      : 'По мнению ИИ, цены без материалов — проверьте отметку');
+  }
+  return notes;
 }
 
 /** «1 250,5» → 1250.5; мусор — null. */
@@ -171,7 +218,7 @@ function PriceEditor({
 
 const KpComparisonTable: React.FC<Props> = ({
   request, busy = false, onSetPrice, onConfirm, onConfirmAll, onDeletePrice, onSelect,
-  onEditOffer, onDeleteOffer,
+  onEditOffer, onDeleteOffer, onReparse,
 }) => {
   // Одна открытая ячейка на таблицу: `${itemId}:${offerId}`.
   const [editing, setEditing] = useState<string | null>(null);
@@ -332,6 +379,24 @@ const KpComparisonTable: React.FC<Props> = ({
                         <FileText size={11} /> {offer.file_name ?? 'Файл КП'}
                       </a>
                     )}
+                    {parseStatusText(offer) && (
+                      <span
+                        data-testid={`kp-parse-${offer.id}`}
+                        style={{ fontWeight: 400, color: offer.parse_status === 'failed' ? '#b91c1c' : '#64748b' }}
+                      >
+                        {parseStatusText(offer)}
+                      </span>
+                    )}
+                    {offer.parse_status === 'failed' && offer.parse_error && (
+                      <span role="alert" style={{ fontWeight: 400, fontSize: 12, color: '#b91c1c', maxWidth: 260 }}>
+                        {offer.parse_error}
+                      </span>
+                    )}
+                    {parseHintNotes(offer, isWork).map((note) => (
+                      <span key={note} style={{ fontWeight: 400, fontSize: 12, color: '#b45309', maxWidth: 260 }}>
+                        {note}
+                      </span>
+                    ))}
                     {offer.created_by_name && (
                       <span style={{ fontWeight: 400, color: '#94a3b8' }}>Загрузил: {offer.created_by_name}</span>
                     )}
@@ -340,6 +405,12 @@ const KpComparisonTable: React.FC<Props> = ({
                         {drafts > 0 && (
                           <button type="button" style={tiny} disabled={busy} onClick={() => onConfirmAll(offer.id)}>
                             <Check size={11} /> Подтвердить все по КП ({drafts})
+                          </button>
+                        )}
+                        {onReparse && offer.has_file
+                          && (offer.parse_status === 'parsed' || offer.parse_status === 'failed' || offer.parse_status === null) && (
+                          <button type="button" style={tiny} disabled={busy} onClick={() => onReparse(offer)}>
+                            <RotateCcw size={11} /> Разобрать заново
                           </button>
                         )}
                         <button type="button" style={tiny} disabled={busy} onClick={() => onEditOffer(offer)}>

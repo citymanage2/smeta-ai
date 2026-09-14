@@ -18,6 +18,7 @@ import pytest_asyncio
 from sqlalchemy import func, select
 
 from app.models.estimate_version import EstimateVersion
+from app.models.job import Job
 from app.models.kp_request import (
     KpOffer, KpOfferPrice, KpRequest, KpRequestFile, KpRequestItem,
 )
@@ -45,7 +46,7 @@ def _pdf(pages: int = 1) -> bytes:
 
 
 _MODELS = (KpOfferPrice, KpRequestItem, KpOffer, KpRequestFile, KpRequest,
-           EstimateVersion, WorkflowCard, Task, Project, User)
+           EstimateVersion, WorkflowCard, Task, Project, User, Job)
 
 
 async def _wipe(db):

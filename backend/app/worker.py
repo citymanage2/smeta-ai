@@ -150,6 +150,20 @@ async def _handle_document_analogs(payload: dict, db) -> None:
         raise
 
 
+async def _handle_kp_parse_offer(payload: dict, db) -> None:
+    """ИИ-разбор файла КП (план 2026-09-14-zapros-kp.md, фаза 6).
+
+    Сервис сам доводит разбор до `parsed` или `failed` и не бросает: платный
+    вызов автоматически не повторяется, повтор — кнопкой «Разобрать заново».
+    """
+    from app.services import kp_parser
+
+    offer_id = payload.get("offer_id")
+    if not offer_id:
+        raise ValueError("kp.parse_offer: payload без offer_id")
+    await kp_parser.process_offer(db, str(offer_id))
+
+
 HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
     "task.process": _handle_task_process,
     "task.optimize": _handle_task_optimize,
@@ -158,6 +172,7 @@ HANDLERS: dict[str, Callable[[dict, object], Awaitable[None]]] = {
     "version.fill_prices": _handle_version_fill_prices,
     "retrain": _handle_retrain,
     "document.analogs": _handle_document_analogs,
+    "kp.parse_offer": _handle_kp_parse_offer,
 }
 
 

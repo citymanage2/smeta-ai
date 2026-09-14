@@ -8,7 +8,7 @@ import OfferUpload from '../components/kp/OfferUpload';
 import {
   cancelKpRequest, completeKpRequest, confirmKpOfferPrice, createKpOffer, deleteKpOffer,
   deleteKpOfferPrice, getKpRequest, kpErrorText, kpFileDownloadUrl, reopenKpRequest,
-  retryKpPricelist, selectKpOffer, setKpOfferPrice, takeKpRequest, updateKpOffer,
+  reparseKpOffer, retryKpPricelist, selectKpOffer, setKpOfferPrice, takeKpRequest, updateKpOffer,
 } from '../api/kpRequests';
 import { refreshKpCounters } from '../hooks/useKpCounters';
 import { useAuthStore } from '../stores/auth';
@@ -35,6 +35,8 @@ import {
  */
 
 const POLL_MS = 30_000;
+// Пока ИИ разбирает КП, запрос перечитывается чаще: черновики цен появятся сами.
+const PARSE_POLL_MS = 5_000;
 
 const STATUS_COLORS: Record<KpStatus, { bg: string; fg: string }> = {
   new: { bg: '#eff6ff', fg: '#1d4ed8' },
@@ -195,6 +197,15 @@ const KpRequestPage: React.FC = () => {
     }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [requestId, reload]);
+
+  const parsing = !!request?.offers.some((o) => o.parse_status === 'queued' || o.parse_status === 'processing');
+  useEffect(() => {
+    if (!parsing) return undefined;
+    const timer = window.setInterval(() => {
+      if (!document.hidden && !busyRef.current) reload();
+    }, PARSE_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [parsing, reload]);
 
   /** Действие с блокировкой кнопок; false — сервер отказал (текст ошибки показан). */
   const run = useCallback(async (action: () => Promise<unknown>, fallback: string): Promise<boolean> => {
@@ -449,6 +460,7 @@ const KpRequestPage: React.FC = () => {
               () => selectKpOffer(itemId, offerId), 'Не удалось сохранить выбор КП',
             )}
             onEditOffer={(offer) => { setShowUpload(false); setEditingOffer(offer); }}
+            onReparse={(offer) => run(() => reparseKpOffer(offer.id), 'Не удалось запустить разбор КП')}
             onDeleteOffer={async (offer) => {
               if (!window.confirm(`Удалить КП «${offerTitle(offer)}» вместе с его ценами?`)) return false;
               const ok = await run(() => deleteKpOffer(offer.id), 'Не удалось удалить КП');

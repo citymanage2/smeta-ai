@@ -142,6 +142,8 @@ class KpOfferOut(BaseModel):
     has_file: bool = False
     parse_status: Optional[str] = None
     parse_error: Optional[str] = None
+    parse_started_at: Optional[datetime] = None
+    parse_hints: Optional[dict] = None
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
     created_at: datetime

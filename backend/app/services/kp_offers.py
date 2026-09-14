@@ -19,6 +19,8 @@
   загрузке: молчаливое «без НДС» по умолчанию завысило бы цены на 22 %.
 * **Файл КП — только через роутер** с проверкой роли; ключ S3 наружу не
   отдаётся. Удаление КП удаляет его объект после коммита.
+* **КП с файлом сразу ставится на ИИ-разбор** (фаза 6, `kp_parser`) той же
+  транзакцией; черновики разбора пишутся через тот же «замок».
 """
 from __future__ import annotations
 
@@ -38,7 +40,7 @@ from app.models.kp_request import (
     CATEGORY_WORK, STATUS_DONE, STATUS_IN_PROGRESS, STATUS_NEW,
     KpOffer, KpOfferPrice, KpRequest, KpRequestItem,
 )
-from app.services import kp_pricing, kp_requests
+from app.services import kp_parser, kp_pricing, kp_requests
 from app.services import storage_service
 from app.utils.auth import current_user_id
 from app.utils.owner_names import owner_names
@@ -278,9 +280,15 @@ async def create_offer(
             mime_type=checked.mime_type if checked else None,
             size_bytes=len(checked.data) if checked else None,
             storage_key=key,
+            parse_status=kp_parser.PARSE_QUEUED if checked else None,
             **fields,
         )
         db.add(offer)
+        if checked is not None:
+            # Разбор ИИ (фаза 6) ставится этой же транзакцией: КП без job
+            # осталось бы «в очереди» навсегда.
+            await db.flush()
+            db.add(kp_parser.parse_job(offer_id, uid))
         await db.commit()
     except Exception:
         await db.rollback()
@@ -548,6 +556,8 @@ def offer_out(offer: KpOffer, names: dict) -> dict:
         "has_file": bool(offer.storage_key),
         "parse_status": offer.parse_status,
         "parse_error": offer.parse_error,
+        "parse_started_at": offer.parse_started_at,
+        "parse_hints": offer.parse_hints,
         "created_by": offer.created_by,
         "created_by_name": names.get(offer.created_by),
         "created_at": offer.created_at,
@@ -586,6 +596,7 @@ def permissions(request: KpRequest, current_user: dict) -> dict:
 async def offers_matrix(db: AsyncSession, request: KpRequest, items: list[KpRequestItem]) -> dict:
     """КП запроса и строки матрицы по позициям — три запроса на карточку, без N+1."""
     offers = await load_offers(db, str(request.id))
+    await kp_parser.expire_abandoned(db, offers)
     prices = await load_prices(db, offers)
     by_item: dict[str, list[KpOfferPrice]] = {}
     for p in prices:

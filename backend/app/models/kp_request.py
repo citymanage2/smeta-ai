@@ -171,6 +171,10 @@ class KpOffer(Base):
     parse_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     parse_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     parse_cost: Mapped[Optional[float]] = mapped_column(Numeric(asdecimal=False), nullable=True)
+    # Подсказки разбора (фаза 6, миграция 053): догадки ИИ, которые не заполняют
+    # поле сами — {vat_mode, vat_rate, includes_materials, prices_found,
+    # dropped_unknown}. Условия КП задаёт человек.
+    parse_hints: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

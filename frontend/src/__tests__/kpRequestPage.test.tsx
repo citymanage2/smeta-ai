@@ -42,6 +42,7 @@ vi.mock('../api/kpRequests', async () => {
     reopenKpRequest: vi.fn(),
     cancelKpRequest: vi.fn(),
     retryKpPricelist: vi.fn(),
+    reparseKpOffer: vi.fn(),
   };
 });
 
@@ -264,6 +265,82 @@ describe('Сравнительная таблица', () => {
     expect(screen.queryByRole('button', { name: 'Удалить КП' })).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Выбрать' }).length).toBeGreaterThan(0);
+  });
+});
+
+describe('ИИ-разбор КП', () => {
+  it('состояние разбора видно в заголовке колонки', () => {
+    const request = twoOffersRequest();
+    request.offers = [
+      offer({ id: 'o1', supplier_name: 'Кирпичный двор', parse_status: 'processing' }),
+      offer({ id: 'o2', supplier_name: 'Бетонстрой', parse_status: 'parsed',
+        parse_hints: { prices_found: 2, dropped_unknown: 0 } }),
+    ];
+    renderTable(request);
+    expect(screen.getByTestId('kp-offer-o1')).toHaveTextContent('ИИ разбирает файл');
+    expect(screen.getByTestId('kp-offer-o2')).toHaveTextContent('Разобрано ИИ: цен — 2');
+  });
+
+  it('ошибка разбора — текстом, ручной ввод и «Разобрать заново» доступны', async () => {
+    const onReparse = vi.fn().mockResolvedValue(undefined);
+    const request = twoOffersRequest();
+    request.offers[0] = offer({ id: 'o1', supplier_name: 'Кирпичный двор', parse_status: 'failed',
+      parse_error: 'Разбор не удался: ИИ не ответил. Введите цены вручную или запустите разбор заново.' });
+    renderTable(request, { onReparse });
+    const header = screen.getByTestId('kp-offer-o1');
+    expect(within(header).getByRole('alert')).toHaveTextContent('ИИ не ответил');
+    expect(within(screen.getByTestId('kp-cell-i1-o1')).getByRole('button', { name: 'Изменить цену' }))
+      .toBeInTheDocument();
+    await userEvent.click(within(header).getByRole('button', { name: 'Разобрать заново' }));
+    expect(onReparse).toHaveBeenCalledWith(expect.objectContaining({ id: 'o1' }));
+  });
+
+  it('пока разбор идёт или файла нет — «Разобрать заново» нет', () => {
+    const request = twoOffersRequest();
+    request.offers = [
+      offer({ id: 'o1', parse_status: 'queued' }),
+      offer({ id: 'o2', has_file: false, file_name: null, parse_status: null }),
+    ];
+    renderTable(request, { onReparse: noop });
+    expect(screen.getByTestId('kp-offer-o1')).toHaveTextContent('в очереди');
+    expect(screen.queryByRole('button', { name: 'Разобрать заново' })).not.toBeInTheDocument();
+  });
+
+  it('продажам «Разобрать заново» не показывается', () => {
+    const request = twoOffersRequest({ permissions: SALES_PERMS });
+    request.offers[0] = offer({ id: 'o1', parse_status: 'failed', parse_error: 'Сбой' });
+    renderTable(request, { onReparse: noop });
+    expect(screen.queryByRole('button', { name: 'Разобрать заново' })).not.toBeInTheDocument();
+  });
+
+  it('догадка ИИ о НДС и материалах — подсказкой, если расходится с условиями', () => {
+    const request = twoOffersRequest({ category: 'work' });
+    request.offers = [
+      offer({ id: 'o1', vat_mode: 'with_vat', vat_rate: 22, parse_status: 'parsed',
+        parse_hints: { vat_mode: 'with_vat', vat_rate: 20, includes_materials: true } }),
+      offer({ id: 'o2', vat_mode: 'without_vat', vat_rate: null, parse_status: 'parsed',
+        parse_hints: { vat_mode: 'without_vat', includes_materials: false } }),
+    ];
+    renderTable(request);
+    const first = screen.getByTestId('kp-offer-o1');
+    expect(first).toHaveTextContent('По мнению ИИ, в КП цены с НДС 20 %');
+    expect(first).toHaveTextContent('По мнению ИИ, цены включают материалы');
+    const second = screen.getByTestId('kp-offer-o2');
+    expect(second).not.toHaveTextContent('По мнению ИИ');
+  });
+
+  it('страница: «Разобрать заново» ставит разбор и перечитывает запрос', async () => {
+    const request = twoOffersRequest();
+    request.offers[0] = offer({ id: 'o1', supplier_name: 'Кирпичный двор', parse_status: 'failed',
+      parse_error: 'Сбой' });
+    vi.mocked(kpApi.getKpRequest).mockResolvedValue(request);
+    vi.mocked(kpApi.reparseKpOffer).mockResolvedValue(offer({ id: 'o1', parse_status: 'queued' }));
+    renderPage();
+    const header = await screen.findByTestId('kp-offer-o1');
+    const button = within(header).getByRole('button', { name: 'Разобрать заново' });
+    await userEvent.click(button);
+    expect(kpApi.reparseKpOffer).toHaveBeenCalledWith('o1');
+    await waitFor(() => expect(kpApi.getKpRequest).toHaveBeenCalledTimes(2));
   });
 });
 

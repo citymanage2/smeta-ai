@@ -45,7 +45,7 @@ from app.schemas.kp_request import (
     KpRequestBrief,
     KpRequestDetail,
 )
-from app.services import kp_offers
+from app.services import kp_offers, kp_parser
 from app.services import kp_requests as svc
 from app.services import storage_service
 from app.utils.auth import current_user_id, get_current_user, get_download_user
@@ -351,6 +351,19 @@ async def download_kp_offer(
         media_type=offer.mime_type or "application/octet-stream",
         headers={"Content-Disposition": _content_disposition(offer.file_name or "kp")},
     )
+
+
+@router.post("/kp-offers/{offer_id}/parse", response_model=KpOfferOut)
+async def reparse_kp_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """«Разобрать заново»: поставить ИИ-разбор файла КП в очередь (фаза 6).
+    Ручные и подтверждённые цены повторный разбор не трогает."""
+    offer = await kp_parser.restart(db, offer_id, current_user)
+    names = await owner_names([offer.created_by], db)
+    return kp_offers.offer_out(offer, names)
 
 
 # --- Цены в КП ---------------------------------------------------------------

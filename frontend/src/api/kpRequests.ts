@@ -125,6 +125,12 @@ export async function updateKpOffer(
   return res.data;
 }
 
+/** «Разобрать заново»: поставить ИИ-разбор файла КП в очередь. */
+export async function reparseKpOffer(offerId: string): Promise<KpOffer> {
+  const res = await apiClient.post<KpOffer>(`/kp-offers/${offerId}/parse`);
+  return res.data;
+}
+
 export async function deleteKpOffer(offerId: string): Promise<void> {
   await apiClient.delete(`/kp-offers/${offerId}`);
 }

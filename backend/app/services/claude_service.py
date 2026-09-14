@@ -205,6 +205,7 @@ async def _log_api_call(
     batch_id: Optional[str] = None,
     batch_custom_id: Optional[str] = None,
     is_extra: bool = False,
+    log_without_task: bool = False,
 ) -> None:
     """Записать вызов в ApiCallLog (отдельной сессией). batch=True → тарифы ×0.5.
 
@@ -216,8 +217,11 @@ async def _log_api_call(
     is_extra — доп: запрос по уже сформированному файлу стадии (цена строки,
     аналоги, шаги оптимизации). В карточке сметы такие деньги показываются
     отдельной цифрой от основной обработки.
+    log_without_task — вызов не относится к задаче (разбор КП, план
+    2026-09-14-zapros-kp.md, фаза 6), но деньги потрачены: строка пишется с
+    пустым task_id, иначе остаток на API (правило №13) их бы не увидел.
     """
-    if db is None or task_id is None:
+    if db is None or (task_id is None and not log_without_task):
         return
     try:
         from sqlalchemy import select
@@ -487,6 +491,8 @@ async def call_claude(
     db: Optional[AsyncSession] = None,
     max_tokens: int = 32000,
     is_extra: bool = False,
+    log_without_task: bool = False,
+    on_cost: Optional[Callable[[Decimal], None]] = None,
 ) -> str:
     """
     Call Claude API (non-streaming) with retry logic and optional web search.
@@ -502,7 +508,21 @@ async def call_claude(
     is_extra — вызов сделан по уже сформированному файлу стадии (доспрос из
         редактора: цена строки, аналоги, шаги оптимизации), а не обработчиком
         задачи. Разводит две статьи расходов в карточке сметы.
+
+    log_without_task — писать вызов в журнал и без `task_id` (нужен `db`):
+        разбор КП к задаче не привязан, а трата обязана попасть в остаток.
+
+    on_cost — сюда отдаётся стоимость каждого оплаченного ответа (и
+        оборванного по max_tokens) — тем же расчётом, что пишется в журнал.
     """
+
+    def _report_cost(input_t: int, output_t: int, cache_read_t: int, cache_creation_t: int, searches_t: int) -> None:
+        if on_cost is None:
+            return
+        on_cost(_calc_cost(
+            CLAUDE_MODEL, input_t, output_t, cache_read_t, cache_creation_t,
+            web_search_requests=searches_t,
+        ))
     kwargs = _build_message_params(
         messages,
         system_prompt=system_prompt,
@@ -576,7 +596,9 @@ async def call_claude(
                 await _log_api_call(
                     task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
                     duration_ms=call_duration_ms, web_search_requests=searches_t,
+                    log_without_task=log_without_task,
                 )
+                _report_cost(input_t, output_t, cache_read_t, cache_creation_t, searches_t)
                 raise ResponseTruncatedError(
                     "Ответ слишком большой, разбейте выполнение на подэтапы"
                 )
@@ -597,8 +619,9 @@ async def call_claude(
             await _log_api_call(
                 task_id, db, input_t, output_t, cache_read_t, cache_creation_t,
                 duration_ms=call_duration_ms, web_search_requests=searches_t,
-                is_extra=is_extra,
+                is_extra=is_extra, log_without_task=log_without_task,
             )
+            _report_cost(input_t, output_t, cache_read_t, cache_creation_t, searches_t)
 
             return result
 
