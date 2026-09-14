@@ -1793,7 +1793,10 @@ class TaskProcessor:
         """Системный промпт вызова: основной плюс включённые правила, если есть."""
         from app.services.prompt_rules import system_for
 
-        return system_for(SYSTEM_BASE, self._rules_block)
+        # getattr, а не атрибут напрямую: процессор создают и в обход `__init__`
+        # (тесты, служебные вызовы), и отсутствие правил не должно ронять вызов
+        # ИИ — вызывающий код часто глотает исключение, и расчёт молча пропал бы.
+        return system_for(SYSTEM_BASE, getattr(self, "_rules_block", None))
 
     async def _load_prompt_rules(self, task_type: Optional[str]) -> None:
         """Прочитать правила один раз на прогон. Сбой — считаем без правил."""
