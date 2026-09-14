@@ -73,7 +73,7 @@ _DEFAULTS = {
     "cleanup_pct": 3.0,
     "overhead_pct": 3.0,
     "contingency_pct": 2.0,
-    "profit_pct": 20.0,
+    "profit_pct": 22.0,
     "vat_full_cost_pct": 22.0,
     "tax_pct": 2.0,
 }

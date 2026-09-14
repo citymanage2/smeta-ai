@@ -152,7 +152,7 @@ export function calcSummary(
 
   // ── Footer ────────────────────────────────────────────────────────────────
   const contingency_pct = overrides.contingency_pct ?? 2;
-  const profit_pct = overrides.profit_pct ?? 20;
+  const profit_pct = overrides.profit_pct ?? 22;
   const vat_full_cost_pct = overrides.vat_full_cost_pct ?? 22;
   const other_tax_pct = overrides.tax_pct ?? 2;
 

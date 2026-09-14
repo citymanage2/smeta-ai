@@ -25,7 +25,7 @@ class SummaryOverrides(BaseModel):
     housing_rent_cost: Decimal = Field(default=Decimal("0"))
     workers_transport_cost: Decimal = Field(default=Decimal("0"))
     contingency_pct: Decimal = Field(default=Decimal("2.0"))
-    profit_pct: Decimal = Field(default=Decimal("20.0"))
+    profit_pct: Decimal = Field(default=Decimal("22.0"))
     vat_full_cost_pct: Decimal = Field(default=Decimal("22.0"))
     tax_pct: Decimal = Field(default=Decimal("2.0"))
     # Цели оптимизации (план 2026-09-01). База целей — одна на весь бланк:
