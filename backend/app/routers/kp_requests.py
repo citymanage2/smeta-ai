@@ -1,7 +1,9 @@
 """Запросы КП у отдела производства работ — HTTP-обвязка.
 
-План: plans/2026-09-14-zapros-kp.md, фаза 2. Логика — `services/kp_requests.py`,
-права — `utils/permissions.can_view_kp / can_work_kp / can_manage_kp`.
+План: plans/2026-09-14-zapros-kp.md, фазы 2 и 4. Логика — `services/kp_requests.py`
+(постановка, статусы, вложения автора) и `services/kp_offers.py` (КП, цены,
+выбор, завершение); права — `utils/permissions.can_view_kp / can_work_kp /
+can_manage_kp`.
 
 Роутер подключается в `main.py` **без** `forbid_production_roles`: это
 единственный, кроме входа, раздел отдела производства. Все его пути лежат под
@@ -28,15 +30,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.schemas.kp_request import (
+    KpCellOut,
+    KpCompleteIn,
     KpCountersResponse,
     KpCreatePayload,
     KpCreateResponse,
     KpFilesResponse,
+    KpOfferOut,
+    KpOfferPatch,
     KpPreviewRequest,
+    KpPriceIn,
+    KpSelectOfferIn,
     KpPreviewResponse,
     KpRequestBrief,
     KpRequestDetail,
 )
+from app.services import kp_offers
 from app.services import kp_requests as svc
 from app.services import storage_service
 from app.utils.auth import current_user_id, get_current_user, get_download_user
@@ -275,3 +284,133 @@ async def download_kp_request_file(
         media_type=row.mime_type or "application/octet-stream",
         headers={"Content-Disposition": _content_disposition(row.file_name)},
     )
+
+
+# --- КП (фаза 4) -------------------------------------------------------------
+
+@router.post(
+    "/kp-requests/{request_id}/offers",
+    response_model=KpOfferOut, status_code=status.HTTP_201_CREATED,
+)
+async def create_kp_offer(
+    request_id: str,
+    vat_mode: Optional[str] = Form(default=None),
+    vat_rate: Optional[str] = Form(default=None),
+    supplier_name: Optional[str] = Form(default=None),
+    offer_date: Optional[str] = Form(default=None),
+    includes_materials: bool = Form(default=False),
+    file: Optional[UploadFile] = File(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """Загрузить КП (файл и условия). Новый запрос этим же берётся в работу."""
+    upload = (file.filename or "file", await file.read()) if file is not None else None
+    offer = await kp_offers.create_offer(
+        db, request_id, current_user=current_user, supplier_name=supplier_name,
+        offer_date=offer_date, vat_mode=vat_mode, vat_rate=vat_rate,
+        includes_materials=includes_materials, file=upload,
+    )
+    names = await owner_names([offer.created_by], db)
+    return kp_offers.offer_out(offer, names)
+
+
+@router.patch("/kp-offers/{offer_id}", response_model=KpOfferOut)
+async def update_kp_offer(
+    offer_id: str,
+    body: KpOfferPatch,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    changes = {field: getattr(body, field) for field in body.model_fields_set}
+    offer = await kp_offers.update_offer(db, offer_id, changes, current_user)
+    names = await owner_names([offer.created_by], db)
+    return kp_offers.offer_out(offer, names)
+
+
+@router.delete("/kp-offers/{offer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_kp_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    await kp_offers.delete_offer(db, offer_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/kp-offers/{offer_id}/download")
+async def download_kp_offer(
+    offer_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_download_user),
+):
+    """Скачать файл КП. Токен — заголовком или `?token=`."""
+    offer = await kp_offers.offer_file(db, offer_id, current_user)
+    data = await storage_service.load_bytes(offer.storage_key)
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=offer.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": _content_disposition(offer.file_name or "kp")},
+    )
+
+
+# --- Цены в КП ---------------------------------------------------------------
+
+@router.put("/kp-offers/{offer_id}/prices/{item_id}", response_model=KpCellOut)
+async def set_kp_offer_price(
+    offer_id: str,
+    item_id: str,
+    body: KpPriceIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """Ручная цена позиции в КП — сразу подтверждена."""
+    return await kp_offers.set_price(
+        db, offer_id, item_id, price=body.price, unit=body.unit,
+        includes_materials=body.includes_materials, current_user=current_user,
+    )
+
+
+@router.post("/kp-offers/{offer_id}/prices/{item_id}/confirm", response_model=KpCellOut)
+async def confirm_kp_offer_price(
+    offer_id: str,
+    item_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    return await kp_offers.confirm_price(db, offer_id, item_id, current_user)
+
+
+@router.delete("/kp-offers/{offer_id}/prices/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_kp_offer_price(
+    offer_id: str,
+    item_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    await kp_offers.delete_price(db, offer_id, item_id, current_user)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/kp-request-items/{item_id}/selected-offer", response_model=KpRequestDetail)
+async def select_kp_offer(
+    item_id: str,
+    body: KpSelectOfferIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """Отметить КП выбранным у позиции (`offer_id: null` — снять выбор)."""
+    request = await kp_offers.select_offer(db, item_id, body.offer_id, current_user)
+    return await svc.detail(db, request, current_user)
+
+
+# --- Завершение --------------------------------------------------------------
+
+@router.post("/kp-requests/{request_id}/complete", response_model=KpRequestDetail)
+async def complete_kp_request(
+    request_id: str,
+    body: KpCompleteIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    request = await kp_offers.complete(db, request_id, body.report, current_user)
+    return await svc.detail(db, request, current_user)

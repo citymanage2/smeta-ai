@@ -1,11 +1,11 @@
-"""HTTP-контракт запросов КП (план 2026-09-14-zapros-kp.md, фаза 2).
+"""HTTP-контракт запросов КП (план 2026-09-14-zapros-kp.md, фазы 2 и 4).
 
 Ключ S3 (`storage_key`) в контракт не входит намеренно: файл скачивается только
 через роутер с проверкой роли (проблема 18 плана).
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -119,6 +119,93 @@ class KpPermissionsOut(BaseModel):
     can_work: bool
     can_manage: bool
     can_edit_files: bool
+    # Фаза 4: загрузить/править/удалить КП и цены (сотрудник роли, до завершения)
+    can_edit_offers: bool = False
+    # Завершить запрос (сотрудник роли, новый или в работе)
+    can_complete: bool = False
+    # Отметить КП выбранным у позиции (производство — в работе; продажи — и после завершения)
+    can_select_offer: bool = False
+
+
+# --- КП и цены (фаза 4) -----------------------------------------------------
+
+class KpOfferOut(BaseModel):
+    id: str
+    supplier_name: str = ""
+    offer_date: Optional[date] = None
+    vat_mode: str
+    vat_rate: Optional[float] = None
+    includes_materials: bool = False
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    has_file: bool = False
+    parse_status: Optional[str] = None
+    parse_error: Optional[str] = None
+    created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
+    created_at: datetime
+
+
+class KpOfferPatch(BaseModel):
+    """Частичная правка условий КП — применяются только переданные поля."""
+
+    supplier_name: Optional[str] = Field(default=None, max_length=500)
+    offer_date: Optional[date] = None
+    vat_mode: Optional[Literal["with_vat", "without_vat"]] = None
+    vat_rate: Optional[float] = None
+    includes_materials: Optional[bool] = None
+
+
+class KpPriceIn(BaseModel):
+    price: float = Field(gt=0)
+    unit: Optional[str] = Field(default=None, max_length=64)
+    # None — как у КП
+    includes_materials: Optional[bool] = None
+
+
+class KpCellOut(BaseModel):
+    """Ячейка матрицы «позиция × КП»: цена в единице КП и приведённая."""
+
+    offer_id: str
+    item_id: Optional[str] = None
+    price: Optional[float] = None
+    unit: Optional[str] = None
+    name_in_offer: Optional[str] = None
+    source: Optional[str] = None
+    confidence: Optional[str] = None
+    confirmed: Optional[bool] = None
+    includes_materials: bool = False
+    # Без НДС, за единицу позиции; None — цены нет или единица не сводится
+    normalized_price: Optional[float] = None
+    unit_status: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class KpBestOut(BaseModel):
+    """Итоговая цена позиции: выбранное КП, иначе минимум подтверждённых."""
+
+    offer_id: str
+    supplier_name: str = ""
+    offer_date: Optional[date] = None
+    price: float
+    includes_materials: bool = False
+    selected: bool = False
+    offers_count: int = 0
+
+
+class KpItemDetailOut(KpItemOut):
+    cells: list[KpCellOut] = Field(default_factory=list)
+    min_offer_id: Optional[str] = None
+    best: Optional[KpBestOut] = None
+
+
+class KpSelectOfferIn(BaseModel):
+    offer_id: Optional[str] = None
+
+
+class KpCompleteIn(BaseModel):
+    report: Optional[str] = Field(default=None, max_length=20000)
 
 
 class KpRequestDetail(KpRequestBrief):
@@ -130,8 +217,9 @@ class KpRequestDetail(KpRequestBrief):
     pricelist_error: Optional[str] = None
     pricelist_written_at: Optional[datetime] = None
     applied_version_id: Optional[str] = None
-    items: list[KpItemOut] = Field(default_factory=list)
+    items: list[KpItemDetailOut] = Field(default_factory=list)
     files: list[KpFileOut] = Field(default_factory=list)
+    offers: list[KpOfferOut] = Field(default_factory=list)
     permissions: KpPermissionsOut
 
 

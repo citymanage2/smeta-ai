@@ -665,6 +665,11 @@ async def detail(db: AsyncSession, request: KpRequest, current_user: dict) -> di
         + [f.uploaded_by for f in files],
         db,
     )
+    # КП и матрица цен (фаза 4). Импорт здесь: kp_offers сам опирается на этот модуль.
+    from app.services import kp_offers
+
+    offers = await kp_offers.offers_matrix(db, request, list(items))
+    matrix = offers["matrix"]
     out = _brief(
         request, project.name if project else None, card.name if card else None,
         names, len(items), len(files),
@@ -684,14 +689,17 @@ async def detail(db: AsyncSession, request: KpRequest, current_user: dict) -> di
                 "name": i.name, "unit": i.unit, "qty": i.qty, "sheet": i.sheet,
                 "source_no": i.source_no, "source_row_ids": list(i.source_row_ids or []),
                 "selected_offer_id": i.selected_offer_id,
+                **matrix[str(i.id)],
             }
             for i in items
         ],
         "files": [file_out(f, names) for f in files],
+        "offers": offers["offers"],
         "permissions": {
             "can_work": can_work_kp(request, current_user),
             "can_manage": can_manage_kp(request, current_user),
             "can_edit_files": not is_production(current_user.get("role")),
+            **kp_offers.permissions(request, current_user),
         },
     })
     return out
