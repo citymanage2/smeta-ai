@@ -33,6 +33,9 @@ import AddToPriceList from './actions/AddToPriceList';
 import AddFromPriceList from './actions/AddFromPriceList';
 import { PricePosition, buildPriceRows, insertRowsAfter } from './actions/priceInsert';
 import FindAnalogs from './actions/FindAnalogs';
+import RequestKp from './actions/RequestKp';
+import { useAuthStore } from '../../stores/auth';
+import { KP_SOURCE_KINDS, KpRequestBrief, KpSourceKind } from '../../types/kp';
 import AnalogsPanel from './AnalogsPanel';
 import { applyAnalogToRow } from './actions/analogsApply';
 import { moveRow, removeRowsCascade } from './rowOps';
@@ -85,6 +88,8 @@ interface Props {
   }) => void;
   onClose?: () => void;
   onApplied?: () => void;
+  /** Поставлен запрос КП — странице карточки пора обновить список запросов. */
+  onKpRequested?: (requests: KpRequestBrief[]) => void;
 }
 
 // --- Редактор ячейки -------------------------------------------------------
@@ -134,7 +139,7 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 export const DocumentEditor: React.FC<Props> = ({
   cardId, kind, fileSlot, fileIndex, title, showHead = true, fullHeight = false,
   initialVersionId, initialTab, initialSheet, initialCollapsed = false,
-  initialHideMinus = false, onStateChange, onClose, onApplied,
+  initialHideMinus = false, onStateChange, onClose, onApplied, onKpRequested,
 }) => {
   const {
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
@@ -216,6 +221,12 @@ export const DocumentEditor: React.FC<Props> = ({
   }, [isDirty]);
 
   const canWrite = !!meta?.can_write;
+  const isProduction = useAuthStore((state) => state.isProduction);
+  // Запрос КП ставится с четырёх стадий. Исходный файл заказчика (слот) — не
+  // документ стадии: сервер перечитал бы строки другого документа. Отделу
+  // производства кнопка не нужна — запросы ставят продажи.
+  const canRequestKp = !isProduction && !fileSlot
+    && (KP_SOURCE_KINDS as readonly string[]).includes(kind);
 
   // --- Высота таблицы «на весь экран» ---------------------------------------
   //
@@ -1061,6 +1072,20 @@ export const DocumentEditor: React.FC<Props> = ({
                   </Hint>
                 )}
               </div>
+            )}
+
+            {/* Запрос КП документ не меняет — поэтому и без права записи, и с
+                черновиком: позиции берутся из применённого документа. */}
+            {canRequestKp && (
+              <RequestKp
+                cardId={cardId}
+                kind={kind as KpSourceKind}
+                versionId={versionId}
+                selectedKeys={selectedKeys}
+                isDirty={isDirty}
+                onNotice={setNotice}
+                onCreated={onKpRequested}
+              />
             )}
           </div>
 

@@ -15,6 +15,7 @@ import StageProcessingPanel from '../components/card/StageProcessingPanel'
 import UsageChips from '../components/card/UsageChips'
 import { cardUsage } from '../utils/usageMetrics'
 import DocumentEditor from '../components/editor/DocumentEditor'
+import CardKpRequests from '../components/kp/CardKpRequests'
 import { KanbanStage } from '../types/workflow'
 import { DocumentKind } from '../api/documents'
 import { EditorTab } from '../stores/documentEditor'
@@ -44,6 +45,10 @@ const ProjectCardPage: React.FC = () => {
   const [initialLoad, setInitialLoad] = useState(true)
   const [selectedStage, setSelectedStage] = useState<KanbanStage | null>(null)
   const [softDismissed, setSoftDismissed] = useState(false)
+  // Запрос КП, поставленный из таблицы ниже, должен сразу появиться в списке
+  // запросов карточки, а не через полминуты опроса.
+  const [kpRefreshKey, setKpRefreshKey] = useState(0)
+  const handleKpRequested = useCallback(() => setKpRefreshKey((key) => key + 1), [])
   const initializedRef = useRef(false)
 
   const card = cards.find((c) => c.id === cardId) ?? null
@@ -247,6 +252,10 @@ const ProjectCardPage: React.FC = () => {
           )}
         </div>
 
+        {/* Запросы КП по смете — со всех стадий сразу: запрос ставят в перечне,
+            а цены применяют в оптимизации. Нет запросов — нет блока. */}
+        <CardKpRequests cardId={card.id} refreshKey={kpRefreshKey} />
+
         {/* Таблица этапа прямо на странице; «на весь экран» — в её панели. */}
         {showEditor && (
           <div style={{ marginTop: '16px' }}>
@@ -259,6 +268,7 @@ const ProjectCardPage: React.FC = () => {
               initialSheet={searchParams.get('sheet') ?? undefined}
               onStateChange={handleEditorState}
               onApplied={refetch}
+              onKpRequested={handleKpRequested}
             />
           </div>
         )}
