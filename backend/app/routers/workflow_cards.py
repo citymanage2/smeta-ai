@@ -30,6 +30,7 @@ from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.models.workflow_card import WorkflowCard
 from app.services import eta_service, storage_service, usage_metrics
+from app.services import kp_requests as kp_requests_service
 from app.schemas.workflow_card import (
     WorkflowCardCreate,
     WorkflowCardResponse,
@@ -451,9 +452,14 @@ async def permanent_delete_workflow_card(
         if task is not None:
             await db.delete(task)
 
+    # Запросы КП карточки: строки — явно (каскад БД не чистит S3, а в тестах
+    # SQLite и строки), файлы S3 — после коммита.
+    kp_request_ids = await kp_requests_service.purge_for_cards(db, [card_id])
+
     await db.flush()
     await db.delete(card)
     await db.commit()
+    await kp_requests_service.delete_storage(kp_request_ids)
     logger.info("WorkflowCard permanently deleted", card_id=card_id, task_count=len(task_ids))
 
 

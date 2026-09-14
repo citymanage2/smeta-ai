@@ -17,6 +17,7 @@ from app.models.summary_estimate import SummaryEstimate
 from app.models.user import User
 from app.utils.auth import get_current_user, get_admin_user, current_user_id
 from app.services.summary_service import target_total
+from app.services import kp_requests as kp_requests_service
 from app.utils.owner_names import owner_names as _owner_names
 from app.utils.permissions import (
     visibility_filter,
@@ -410,8 +411,14 @@ async def clear_project_trash(
     current_user: dict = Depends(get_admin_user),
 ):
     """Удалить все проекты из корзины навсегда (только для администраторов)."""
+    trashed = (
+        await db.execute(select(Project.id).where(Project.deleted_at.is_not(None)))
+    ).scalars().all()
+    # Запросы КП проектов: строки явно, файлы S3 — после коммита.
+    kp_request_ids = await kp_requests_service.purge_for_projects(db, [str(p) for p in trashed])
     await db.execute(delete(Project).where(Project.deleted_at.is_not(None)))
     await db.commit()
+    await kp_requests_service.delete_storage(kp_request_ids)
     logger.info("Project trash cleared")
 
 
@@ -609,8 +616,10 @@ async def permanent_delete_project(
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Проект не найден")
+    kp_request_ids = await kp_requests_service.purge_for_projects(db, [project_id])
     await db.delete(project)
     await db.commit()
+    await kp_requests_service.delete_storage(kp_request_ids)
     logger.info("Project permanently deleted", project_id=project_id)
 
 

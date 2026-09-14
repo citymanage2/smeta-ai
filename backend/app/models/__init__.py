@@ -17,5 +17,6 @@ from app.models.api_balance import ApiBalanceMark, ApiCostDay
 from app.models.ai_baseline import AiBaseline
 from app.models.price_decision import PriceDecision
 from app.models.prompt_rule import PromptRule
+from app.models.kp_request import KpRequest, KpRequestFile, KpOffer, KpRequestItem, KpOfferPrice
 
-__all__ = ["User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent", "WorkflowCard", "DocumentLock", "CorrectionSignal", "ApiBalanceMark", "ApiCostDay", "AiBaseline", "PriceDecision", "PromptRule"]
+__all__ = ["KpRequest", "KpRequestFile", "KpOffer", "KpRequestItem", "KpOfferPrice","User", "Task", "TaskResult", "PriceWork", "PriceMaterial", "PriceCacheWork", "PriceCacheMaterial", "Project", "TaskHistory", "EstimateVersion", "ApiCallLog", "SummaryEstimate", "Job", "SystemEvent", "WorkflowCard", "DocumentLock", "CorrectionSignal", "ApiBalanceMark", "ApiCostDay", "AiBaseline", "PriceDecision", "PromptRule"]

@@ -229,6 +229,7 @@ def create_app() -> FastAPI:
     from app.routers.corrections import router as corrections_router
     from app.routers.price_suggestions import router as price_suggestions_router
     from app.routers.prompt_rules import router as prompt_rules_router
+    from app.routers.kp_requests import router as kp_requests_router
 
     # Отдел производства работ (снабжение, подрядчики) по умолчанию не видит
     # ничего: зависимость висит на КАЖДОМ роутере, кроме входа и запросов КП.
@@ -262,6 +263,9 @@ def create_app() -> FastAPI:
     include_sales(corrections_router)
     include_sales(price_suggestions_router)
     include_sales(prompt_rules_router)
+    # Запросы КП — раздел отдела производства: без запрета, права внутри роутера
+    # (роль запроса), пути — под PRODUCTION_ALLOWED_PREFIXES.
+    app.include_router(kp_requests_router)
 
     # Global error handler
     @app.exception_handler(Exception)

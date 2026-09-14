@@ -130,6 +130,44 @@ def can_access(
 can_edit = can_access
 
 
+# --- Запрос КП ---------------------------------------------------------------
+# Объект запроса — любой с полями `target_role` и `author_id` (модель KpRequest).
+# Роль пользователя — действующая: роутер КП подставляет роль из БД (см.
+# `routers/kp_requests.get_kp_user`), чтобы смена роли не ждала перелогина.
+
+def can_view_kp(request, current_user: dict) -> bool:
+    """Видит ли пользователь запрос КП.
+
+    Продажи видят все запросы — проекты общие. Производство — только запросы,
+    адресованные своей роли; чужой запрос для него не существует (роутер
+    отвечает 404, как на несуществующий).
+    """
+    role = current_user.get("role")
+    if is_production(role):
+        return request.target_role == role
+    return True
+
+
+def can_work_kp(request, current_user: dict) -> bool:
+    """Может ли пользователь исполнять запрос: брать в работу, грузить КП,
+    вводить цены, завершать. Только сотрудник роли, которой запрос адресован —
+    любой из них, а не только взявший: запрос адресован роли целиком."""
+    role = current_user.get("role")
+    return is_production(role) and request.target_role == role
+
+
+def can_manage_kp(request, current_user: dict) -> bool:
+    """Отменить запрос или вернуть его в работу: автор или руководитель продаж
+    (админ — тоже). Производство — никогда, даже если числится автором."""
+    role = current_user.get("role")
+    if is_production(role):
+        return False
+    if is_manager(role):
+        return True
+    uid = current_user_id(current_user)
+    return uid is not None and request.author_id == uid
+
+
 async def get_manager_user(current_user: dict = Depends(get_current_user)) -> dict:
     """Зависимость: требует роль менеджера (admin | head_of_sales)."""
     if not is_manager(current_user.get("role")):

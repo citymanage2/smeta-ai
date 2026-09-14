@@ -1,0 +1,18 @@
+{
+  "_comment": "Общие примеры ключа свёртки одинаковых позиций: фронт (components/editor/collapse.ts, collapseKey) и сервер (backend/app/services/kp_requests.collapse_key) обязаны давать одинаковый ключ. Запрос КП группирует выделение на сервере, редактор — на экране; разойдутся — человек выделит одну свёрнутую строку, а в запрос уйдут две позиции. План plans/2026-09-14-zapros-kp.md, проблема 10.",
+  "cases": [
+    { "name": "Штукатурка стен", "unit": "м2", "kind": "work", "key": "work|штукатурка стен|м2" },
+    { "name": "  штукатурка   СТЕН ", "unit": " М2 ", "kind": "work", "key": "work|штукатурка стен|м2" },
+    { "name": "Штукатурка\tстен", "unit": "м2", "kind": "work", "key": "work|штукатурка стен|м2" },
+    { "name": "Штукатурка стен", "unit": "м3", "kind": "work", "key": "work|штукатурка стен|м3" },
+    { "name": "Штукатурка стен", "unit": "м2", "kind": "material", "key": "material|штукатурка стен|м2" },
+    { "name": "Ёлка", "unit": "шт", "kind": "material", "key": "material|ёлка|шт" },
+    { "name": "Елка", "unit": "шт", "kind": "material", "key": "material|елка|шт" },
+    { "name": "Кабель ВВГнг 3х2,5", "unit": null, "kind": "material", "key": "material|кабель ввгнг 3х2,5|" },
+    { "name": "Кабель ВВГнг 3х2,5", "unit": "", "kind": null, "key": "|кабель ввгнг 3х2,5|" },
+    { "name": "Раздел 1. Кровля", "unit": "", "kind": "section", "key": null },
+    { "name": "   ", "unit": "м2", "kind": "work", "key": null },
+    { "name": null, "unit": "м2", "kind": "work", "key": null },
+    { "name": "Грунтовка глубокого проникновения", "unit": "л", "kind": "material", "key": "material|грунтовка глубокого проникновения|л" }
+  ]
+}

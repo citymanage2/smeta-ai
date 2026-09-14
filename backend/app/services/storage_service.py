@@ -10,7 +10,9 @@ boto3 синхронный — блокирующие вызовы обёрну�
 Схема ключей:
     tasks/{task_id}/input/{file_index}-{sanitized_name}
     tasks/{task_id}/result/{slot}-{sanitized_name}
-Префикс по task_id → каскадное удаление всех объектов задачи одним delete_prefix.
+    kp/{request_id}/files/{token}-{sanitized_name}     — вложения автора запроса КП
+    kp/{request_id}/offers/{token}-{sanitized_name}    — файлы КП (фаза 4)
+Префикс по task_id / request_id → каскадное удаление всех объектов одним delete_prefix.
 """
 from __future__ import annotations
 
@@ -107,6 +109,17 @@ def build_result_key(task_id: str, slot: str, filename: str) -> str:
 
 def task_prefix(task_id: str) -> str:
     return f"tasks/{task_id}/"
+
+
+def kp_prefix(request_id: str) -> str:
+    """Все файлы запроса КП — вложения автора и сами КП."""
+    return f"kp/{request_id}/"
+
+
+def build_kp_key(request_id: str, kind: str, filename: str) -> str:
+    """Ключ файла запроса КП. `kind` — files (вложения автора) | offers (КП)."""
+    kind = _SAFE.sub("_", kind or "files")
+    return f"{kp_prefix(request_id)}{kind}/{_token()}-{sanitize_filename(filename)}"
 
 
 # ---------------------------------------------------------------------------
