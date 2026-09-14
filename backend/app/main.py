@@ -228,6 +228,7 @@ def create_app() -> FastAPI:
     from app.routers.documents import router as documents_router
     from app.routers.corrections import router as corrections_router
     from app.routers.price_suggestions import router as price_suggestions_router
+    from app.routers.prompt_rules import router as prompt_rules_router
 
     app.include_router(auth.router)
     app.include_router(tasks.router)
@@ -247,6 +248,7 @@ def create_app() -> FastAPI:
     app.include_router(documents_router)
     app.include_router(corrections_router)
     app.include_router(price_suggestions_router)
+    app.include_router(prompt_rules_router)
 
     # Global error handler
     @app.exception_handler(Exception)

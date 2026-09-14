@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.services import price_suggestions
+from app.services.document_service import user_display_name
 from app.utils.auth import get_current_user
 
 router = APIRouter(prefix="/price-suggestions", tags=["price-suggestions"])
@@ -93,7 +94,7 @@ async def accept_suggestion(
             name=body.name, row_type=body.row_type, unit=body.unit,
             price=body.price,
             user_id=_current_user_id(current_user),
-            user_name=current_user.get("full_name") or current_user.get("username"),
+            user_name=await user_display_name(db, current_user),
         )
     except ValueError as error:
         raise HTTPException(
@@ -124,7 +125,7 @@ async def reject_suggestion(
         db,
         name=body.name, row_type=body.row_type, unit=body.unit, price=body.price,
         user_id=_current_user_id(current_user),
-        user_name=current_user.get("full_name") or current_user.get("username"),
+        user_name=await user_display_name(db, current_user),
     )
 
 

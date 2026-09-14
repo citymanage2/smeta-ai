@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { getCorrections, getCorrectionsStats } from '../api/corrections';
 import { AccuracyStat, Correction, CorrectionsStats } from '../types/corrections';
+import PromptRulesCard from '../components/corrections/PromptRulesCard';
 
 // План: plans/2026-08-07-obuchenie-na-korrektirovkah.md, Фаза 3.
 //
@@ -273,6 +274,8 @@ const CorrectionsPage: React.FC = () => {
             </div>
           </div>
         )}
+
+        <PromptRulesCard />
 
         {stats && ((stats.by_price_source?.length ?? 0) > 0 || (stats.by_row_type?.length ?? 0) > 0) && (
           <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '16px' }}>

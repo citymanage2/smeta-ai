@@ -439,7 +439,7 @@ def _build_messages(
 
 def _build_message_params(
     messages: list[dict],
-    system_prompt: str = "",
+    system_prompt: "str | list[str]" = "",
     use_web_search: bool = False,
     image_data: Optional[list[dict]] = None,
     max_tokens: int = 32000,
@@ -460,14 +460,17 @@ def _build_message_params(
         "output_config": {"effort": "medium"},
         "messages": _build_messages(messages, image_data),
     }
-    if system_prompt:
-        params["system"] = [
-            {
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
+    # `system_prompt` — строка или список строк. Список нужен правилам из правок
+    # (`services/prompt_rules.py`): они идут отдельным блоком после основного
+    # промпта. Метка кеша ставится на последний блок, а не на каждый: лимит
+    # брейкпоинтов — четыре на запрос. Строка даёт ровно тот же `system`, что и
+    # раньше, — правил нет, промпт байт в байт прежний.
+    parts = [system_prompt] if isinstance(system_prompt, str) else list(system_prompt or [])
+    parts = [part for part in parts if part]
+    if parts:
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": part} for part in parts]
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        params["system"] = blocks
     if use_web_search:
         params["tools"] = [WEB_SEARCH_TOOL]
     return params

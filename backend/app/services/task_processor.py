@@ -624,6 +624,11 @@ class TaskProcessor:
     ):
         self.task_id = task_id
         self.db = db
+        # Блок правил из правок (`services/prompt_rules.py`). Читается один раз
+        # на прогон в `_load_prompt_rules`: правило, включённое посреди расчёта,
+        # иначе отправило бы один расчёт по двум разным промптам. None — правил
+        # нет, и промпт байт в байт прежний.
+        self._rules_block: Optional[str] = None
         # id job, под которой идёт ЭТОТ прогон. Признак поколения: «Перезапустить»
         # снимает старую job и ставит новую, и по нему прежний прогон понимает, что
         # его сменили, и останавливается на ближайшем чекпоинте. Без этого рестарт
@@ -1499,7 +1504,7 @@ class TaskProcessor:
             # использует независимую сессию — конкуренции по self.db нет.
             data = await self._call_claude_json_with_retry(
                 messages,
-                system_prompt=SYSTEM_BASE,
+                system_prompt=self._system(),
                 use_web_search=True,
                 processing_timeout=1200.0,
             )
@@ -1653,7 +1658,7 @@ class TaskProcessor:
                 build_batch_request(
                     custom_id=f"chunk-{i}",
                     messages=[{"role": "user", "content": prompt_text}],
-                    system_prompt=SYSTEM_BASE,
+                    system_prompt=self._system(),
                     use_web_search=True,
                 )
             )
@@ -1688,6 +1693,10 @@ class TaskProcessor:
         Идемпотентно: повторный вызов после рестарта повторно собирает ту же пачку.
         """
         from datetime import date as _date
+
+        # Поллер заходит сюда мимо `process()`, поэтому правила читаем и здесь:
+        # добор пропущенных пачкой позиций должен идти по тому же промпту.
+        await self._load_prompt_rules(task.task_type)
 
         _p = task.progress_data or {}
         batch_id = _p.get("batch_id")
@@ -1780,6 +1789,26 @@ class TaskProcessor:
         })
         await self._run_estimate_step3(task, items, matched, claude_results)
 
+    def _system(self):
+        """Системный промпт вызова: основной плюс включённые правила, если есть."""
+        from app.services.prompt_rules import system_for
+
+        return system_for(SYSTEM_BASE, self._rules_block)
+
+    async def _load_prompt_rules(self, task_type: Optional[str]) -> None:
+        """Прочитать правила один раз на прогон. Сбой — считаем без правил."""
+        from app.services import prompt_rules
+
+        try:
+            self._rules_block = await prompt_rules.load_block(self.db, task_type)
+        except Exception as error:  # noqa: BLE001 — правила не важнее расчёта
+            logger.warning("prompt_rules_load_failed", task_id=self.task_id, error=str(error))
+            try:
+                await self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            self._rules_block = None
+
     async def process(self) -> None:
         """Main processing method."""
         stop_event = asyncio.Event()
@@ -1816,6 +1845,7 @@ class TaskProcessor:
             )
 
             task_type = task.task_type.upper()
+            await self._load_prompt_rules(task_type)
 
             if task_type == "LIST_FROM_GRAND":
                 await self._handle_list_from_grand(task)
@@ -1950,7 +1980,7 @@ class TaskProcessor:
         try:
             data = await self._call_claude_json_with_retry(
                 messages,
-                system_prompt=SYSTEM_BASE,
+                system_prompt=self._system(),
                 use_web_search=False,
             )
         except ResponseTruncatedError:
@@ -1995,7 +2025,7 @@ class TaskProcessor:
         try:
             data = await self._call_claude_json_with_retry(
                 messages,
-                system_prompt=SYSTEM_BASE,
+                system_prompt=self._system(),
                 use_web_search=False,
             )
         except ResponseTruncatedError:
@@ -2429,7 +2459,7 @@ class TaskProcessor:
 
         try:
             data = await self._interruptible_claude_json_with_retry(
-                messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0
+                messages, system_prompt=self._system(), processing_timeout=1200.0
             )
         except ResponseTruncatedError:
             halves = _split_items_in_half(chunk)
@@ -2642,7 +2672,7 @@ class TaskProcessor:
             try:
                 data = await self._interruptible_claude_json_with_retry(
                     messages,
-                    system_prompt=SYSTEM_BASE,
+                    system_prompt=self._system(),
                     image_data=chunk["image_pages"] or None,
                     processing_timeout=1200.0,
                     max_tokens=64000,
@@ -2727,7 +2757,7 @@ class TaskProcessor:
                     all_images = chunks[0]["image_pages"] if chunks else []
                     data2 = await self._interruptible_claude_json_with_retry(
                         messages2,
-                        system_prompt=SYSTEM_BASE,
+                        system_prompt=self._system(),
                         image_data=all_images or None,
                         processing_timeout=900.0,
                         max_tokens=64000,
@@ -2837,7 +2867,7 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
 
             try:
-                data = await self._interruptible_claude_json_with_retry(messages, system_prompt=SYSTEM_BASE, processing_timeout=1200.0)
+                data = await self._interruptible_claude_json_with_retry(messages, system_prompt=self._system(), processing_timeout=1200.0)
             except TaskCancelledError:
                 if all_items:
                     await self._save_partial(all_items, i, total_chunks)
@@ -3613,7 +3643,7 @@ class TaskProcessor:
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_ENRICH_NORMS}"}]
             try:
                 data = await self._interruptible_claude_json_with_retry(
-                    messages, system_prompt=SYSTEM_BASE, processing_timeout=120.0
+                    messages, system_prompt=self._system(), processing_timeout=120.0
                 )
             except Exception:
                 # Non-fatal: rows stay without norms, import continues
@@ -3840,7 +3870,7 @@ async def _fix_empty_prices(self: "TaskProcessor") -> None:
         try:
             data = await self._call_claude_json_with_retry(
                 messages,
-                system_prompt=SYSTEM_BASE,
+                system_prompt=self._system(),
                 use_web_search=True,
                 processing_timeout=1200.0,
             )

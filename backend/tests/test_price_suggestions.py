@@ -355,3 +355,19 @@ async def test_person_can_correct_the_price_before_accepting(
     db_session.expire_all()
     work = (await db_session.execute(select(PriceWork))).scalar_one()
     assert work.prices == {ESTIMATE_CONTRACTOR: 2650.0}
+
+
+@pytest.mark.asyncio
+async def test_decision_is_signed_with_full_name(async_client, db_session, env):
+    """Решение подписано ФИО из базы, а не логином из токена."""
+    db_session.add_all([_signal(env["tasks"][0]), _signal(env["tasks"][1])])
+    await db_session.commit()
+
+    await async_client.post(
+        "/price-suggestions/reject",
+        json={"name": "Кладка стен", "row_type": "work", "unit": "м3", "price": 2500.0},
+        headers=_auth(env["pm1"]),
+    )
+    db_session.expire_all()
+    decision = (await db_session.execute(select(PriceDecision))).scalar_one()
+    assert decision.user_name == "Иванов Иван"
