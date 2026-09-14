@@ -104,6 +104,77 @@ export interface KpPermissions {
   can_work: boolean;
   can_manage: boolean;
   can_edit_files: boolean;
+  /** Загрузить/править/удалить КП и цены (сотрудник роли, до завершения). */
+  can_edit_offers?: boolean;
+  /** Завершить запрос (сотрудник роли, новый или в работе). */
+  can_complete?: boolean;
+  /** Отметить КП выбранным (производство — в работе; продажи — и после завершения). */
+  can_select_offer?: boolean;
+}
+
+export type KpVatMode = 'with_vat' | 'without_vat';
+
+/** КП к запросу — условия и файл. Зеркало `KpOfferOut`. */
+export interface KpOffer {
+  id: string;
+  supplier_name: string;
+  /** ГГГГ-ММ-ДД */
+  offer_date: string | null;
+  vat_mode: KpVatMode;
+  vat_rate: number | null;
+  includes_materials: boolean;
+  file_name: string | null;
+  mime_type: string | null;
+  size_bytes: number | null;
+  has_file: boolean;
+  parse_status: string | null;
+  parse_error: string | null;
+  created_by: number | null;
+  created_by_name: string | null;
+  created_at: string;
+}
+
+/** Ячейка «позиция × КП»: цена в единице КП и приведённая (без НДС, за ед. позиции). */
+export interface KpCell {
+  offer_id: string;
+  item_id?: string | null;
+  price: number | null;
+  unit: string | null;
+  name_in_offer: string | null;
+  source: 'ai' | 'manual' | string | null;
+  confidence: string | null;
+  /** null — цены в ячейке нет; false — черновик. */
+  confirmed: boolean | null;
+  includes_materials: boolean;
+  normalized_price: number | null;
+  unit_status: string | null;
+  /** Почему приведённой цены нет (единица не сводится). */
+  reason: string | null;
+}
+
+/** Итоговая цена позиции: выбранное КП, иначе минимум подтверждённых. */
+export interface KpBest {
+  offer_id: string;
+  supplier_name: string;
+  offer_date: string | null;
+  price: number;
+  includes_materials: boolean;
+  selected: boolean;
+  offers_count: number;
+}
+
+export interface KpItemDetail extends KpItem {
+  cells: KpCell[];
+  min_offer_id: string | null;
+  best: KpBest | null;
+}
+
+/** Сводка записи в прайс (фаза 7). */
+export interface KpPricelistSummary {
+  added?: number;
+  updated?: number;
+  skipped?: Record<string, number>;
+  [key: string]: unknown;
 }
 
 export interface KpRequestDetail extends KpRequestBrief {
@@ -111,13 +182,32 @@ export interface KpRequestDetail extends KpRequestBrief {
   source_version_id: string | null;
   report: string | null;
   pricelist_status: string | null;
-  pricelist_summary: Record<string, unknown> | null;
+  pricelist_summary: KpPricelistSummary | null;
   pricelist_error: string | null;
   pricelist_written_at: string | null;
   applied_version_id: string | null;
-  items: KpItem[];
+  items: KpItemDetail[];
   files: KpFile[];
+  offers: KpOffer[];
   permissions: KpPermissions;
+}
+
+/** Условия КП из формы загрузки/правки. */
+export interface KpOfferForm {
+  supplier_name: string;
+  /** ГГГГ-ММ-ДД или пусто */
+  offer_date: string;
+  /** null — человек ещё не выбрал: молча «без НДС» завысило бы цены. */
+  vat_mode: KpVatMode | null;
+  vat_rate: string;
+  includes_materials: boolean;
+}
+
+export interface KpPriceBody {
+  price: number;
+  unit: string | null;
+  /** null — как у КП */
+  includes_materials: boolean | null;
 }
 
 export interface KpCounters {
@@ -151,3 +241,9 @@ export const KP_ATTACHMENT_EXTENSIONS: readonly string[] = [
 ];
 export const KP_MAX_FILE_MB = 50;
 export const KP_MAX_FILES = 10;
+
+/** Файл КП — те же типы, что принимает сервер (`kp_offers.OFFER_FILE_TYPES`). */
+export const KP_OFFER_EXTENSIONS: readonly string[] = [
+  '.pdf', '.xlsx', '.xls', '.jpg', '.jpeg', '.png',
+];
+export const KP_DEFAULT_VAT_RATE = 22;

@@ -25,6 +25,11 @@ vi.mock('../hooks/useGlobalTaskPoller', () => ({
 vi.mock('../hooks/useSystemNotifications', () => ({
   useSystemNotifications: () => notificationsSpy(),
 }))
+// Счётчик новых запросов КП в шапке производства (фаза 5) — без сети.
+vi.mock('../hooks/useKpCounters', () => ({
+  useKpCounters: () => 0,
+  refreshKpCounters: () => undefined,
+}))
 
 const listUsers = vi.fn()
 vi.mock('../api/adminUsers', async () => {

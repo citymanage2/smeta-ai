@@ -28,6 +28,7 @@ const Corrections = lazy(() => import('./pages/Corrections'));
 const PriceLearning = lazy(() => import('./pages/PriceLearning'));
 const Employees = lazy(() => import('./pages/Employees'));
 const KpInbox = lazy(() => import('./pages/KpInbox'));
+const KpRequestPage = lazy(() => import('./pages/KpRequestPage'));
 
 const RouteFallback: React.FC = () => (
   <div style={{ padding: 32, textAlign: 'center', color: '#64748b' }}>Загрузка…</div>
@@ -213,6 +214,18 @@ const App: React.FC = () => {
           element={
             <ProtectedRoute allowProduction>
               <KpInbox />
+            </ProtectedRoute>
+          }
+        />
+        {/* Страница запроса КП: отделу производства — работа с КП, продажам —
+            просмотр, выбор КП и возврат в работу (права решает сервер). */}
+        <Route
+          path={`${KP_INBOX_PATH}/:requestId`}
+          element={
+            <ProtectedRoute allowProduction>
+              <ErrorBoundary>
+                <KpRequestPage />
+              </ErrorBoundary>
             </ProtectedRoute>
           }
         />

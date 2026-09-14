@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, FileText, Paperclip, Trash2 } from 'lucide-react';
+import { Link, useInRouterContext } from 'react-router-dom';
 
 import {
   addKpRequestFiles, cancelKpRequest, checkKpAttachments, currentUserIdFromToken,
@@ -50,6 +51,19 @@ function formatDate(value: string | null): string {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('ru-RU');
+}
+
+/**
+ * Переход на страницу запроса (сравнение КП, выбор, отчёт). Внутри роутера —
+ * ссылкой без перезагрузки; вне роутера (отдельный показ блока) — обычной.
+ */
+function RequestPageLink({ requestId }: { requestId: string }) {
+  const inRouter = useInRouterContext();
+  const style: React.CSSProperties = { ...smallButton, textDecoration: 'none' };
+  const to = `/kp/${requestId}`;
+  return inRouter
+    ? <Link to={to} style={style}>КП и цены</Link>
+    : <a href={to} style={style}>КП и цены</a>;
 }
 
 function Details({
@@ -302,6 +316,7 @@ const CardKpRequests: React.FC<Props> = ({ cardId, refreshKey = 0 }) => {
                 {request.author_name ? ` · ${request.author_name}` : ''}
               </span>
               <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+                <RequestPageLink requestId={request.id} />
                 <button type="button" style={smallButton} onClick={() => toggleOpen(request.id)}>
                   {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   {open ? 'Скрыть' : 'Открыть'}

@@ -1,7 +1,7 @@
 import apiClient from './client';
 import type {
-  KpCounters, KpCreatePayload, KpFile, KpPreview, KpPreviewBody,
-  KpRequestBrief, KpRequestDetail,
+  KpCategory, KpCell, KpCounters, KpCreatePayload, KpFile, KpOffer, KpOfferForm,
+  KpPreview, KpPreviewBody, KpPriceBody, KpRequestBrief, KpRequestDetail, KpStatus,
 } from '../types/kp';
 import {
   KP_ATTACHMENT_EXTENSIONS, KP_MAX_FILE_MB, KP_MAX_FILES,
@@ -66,15 +66,121 @@ export async function getKpCounters(): Promise<KpCounters> {
   return res.data;
 }
 
+// --- Рабочее место отдела производства (фаза 5) ------------------------------
+
+/** Производству — запросы своей роли; продажам — поставленные мной. */
+export async function listMyKpRequests(status?: KpStatus): Promise<KpRequestBrief[]> {
+  const res = await apiClient.get<KpRequestBrief[]>('/kp-requests/mine', {
+    params: status ? { status } : undefined,
+  });
+  return res.data;
+}
+
+export async function takeKpRequest(requestId: string): Promise<KpRequestDetail> {
+  const res = await apiClient.post<KpRequestDetail>(`/kp-requests/${requestId}/take`);
+  return res.data;
+}
+
+/** Пустая строка даты — «не указана». */
+function dateOrNull(value: string): string | null {
+  const text = value.trim();
+  return text ? text : null;
+}
+
+/**
+ * Загрузить КП. Multipart: условия полями формы и файл. Режим НДС обязателен —
+ * сервер без него ответит 422; ставку шлём только при «с НДС».
+ */
+export async function createKpOffer(
+  requestId: string, form: KpOfferForm, file: File | null, category: KpCategory,
+): Promise<KpOffer> {
+  const data = new FormData();
+  if (form.vat_mode) data.append('vat_mode', form.vat_mode);
+  if (form.vat_mode === 'with_vat' && form.vat_rate.trim()) data.append('vat_rate', form.vat_rate.trim());
+  if (form.supplier_name.trim()) data.append('supplier_name', form.supplier_name.trim());
+  const date = dateOrNull(form.offer_date);
+  if (date) data.append('offer_date', date);
+  data.append('includes_materials', category === 'work' && form.includes_materials ? 'true' : 'false');
+  if (file) data.append('file', file, file.name);
+  const res = await apiClient.post<KpOffer>(`/kp-requests/${requestId}/offers`, data);
+  return res.data;
+}
+
+/** Поправить условия КП (частично: сервер применяет только переданные поля). */
+export async function updateKpOffer(
+  offerId: string, form: KpOfferForm, category: KpCategory,
+): Promise<KpOffer> {
+  const body: Record<string, unknown> = {
+    supplier_name: form.supplier_name.trim(),
+    offer_date: dateOrNull(form.offer_date),
+  };
+  if (form.vat_mode) {
+    body.vat_mode = form.vat_mode;
+    body.vat_rate = form.vat_mode === 'with_vat' && form.vat_rate.trim()
+      ? Number(form.vat_rate.trim().replace(',', '.'))
+      : null;
+  }
+  if (category === 'work') body.includes_materials = form.includes_materials;
+  const res = await apiClient.patch<KpOffer>(`/kp-offers/${offerId}`, body);
+  return res.data;
+}
+
+export async function deleteKpOffer(offerId: string): Promise<void> {
+  await apiClient.delete(`/kp-offers/${offerId}`);
+}
+
+/** Ручная цена позиции в КП — сразу подтверждена. */
+export async function setKpOfferPrice(offerId: string, itemId: string, body: KpPriceBody): Promise<KpCell> {
+  const res = await apiClient.put<KpCell>(`/kp-offers/${offerId}/prices/${itemId}`, body);
+  return res.data;
+}
+
+export async function confirmKpOfferPrice(offerId: string, itemId: string): Promise<KpCell> {
+  const res = await apiClient.post<KpCell>(`/kp-offers/${offerId}/prices/${itemId}/confirm`);
+  return res.data;
+}
+
+export async function deleteKpOfferPrice(offerId: string, itemId: string): Promise<void> {
+  await apiClient.delete(`/kp-offers/${offerId}/prices/${itemId}`);
+}
+
+/** Отметить КП выбранным у позиции; `null` — снять выбор. */
+export async function selectKpOffer(itemId: string, offerId: string | null): Promise<KpRequestDetail> {
+  const res = await apiClient.put<KpRequestDetail>(
+    `/kp-request-items/${itemId}/selected-offer`, { offer_id: offerId },
+  );
+  return res.data;
+}
+
+export async function completeKpRequest(requestId: string, report: string): Promise<KpRequestDetail> {
+  const res = await apiClient.post<KpRequestDetail>(`/kp-requests/${requestId}/complete`, { report });
+  return res.data;
+}
+
+/** Повторить запись цен в прайс после сбоя (ручка — фаза 7). */
+export async function retryKpPricelist(requestId: string): Promise<KpRequestDetail> {
+  const res = await apiClient.post<KpRequestDetail>(`/kp-requests/${requestId}/pricelist/retry`);
+  return res.data;
+}
+
+function downloadUrl(path: string): string {
+  const token = localStorage.getItem('token') ?? '';
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com';
+  return `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
+}
+
 /**
  * Ссылка на скачивание вложения. Токен — в `?token=`: браузер открывает
  * ссылку сам и заголовок не пошлёт. Ключ S3 наружу не отдаётся, роль проверяет
  * сервер.
  */
 export function kpFileDownloadUrl(fileId: string): string {
-  const token = localStorage.getItem('token') ?? '';
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com';
-  return `${baseUrl}/kp-request-files/${fileId}/download?token=${encodeURIComponent(token)}`;
+  return downloadUrl(`/kp-request-files/${fileId}/download`);
+}
+
+/** Ссылка на файл КП — так же, через роутер с проверкой роли. */
+export function kpOfferDownloadUrl(offerId: string): string {
+  return downloadUrl(`/kp-offers/${offerId}/download`);
 }
 
 /** Текст ошибки сервера для человека: русский `detail` — как есть. */

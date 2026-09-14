@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { useAuthStore } from '../stores/auth';
 import { useGlobalTaskPoller } from '../hooks/useGlobalTaskPoller';
 import { useSystemNotifications } from '../hooks/useSystemNotifications';
+import { useKpCounters } from '../hooks/useKpCounters';
 import { ROLE_LABELS } from '../api/adminUsers';
 import { KP_INBOX_PATH } from '../utils/roles';
 import ProjectsSidebar from './ProjectsSidebar';
@@ -32,6 +33,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { role, logout, isAdmin, isManager, isAuthenticated, isProduction } = useAuthStore();
 
   const roleLabel = (role && ROLE_LABELS[role]) || 'Сотрудник';
+  // Новые запросы КП своей роли — только отделу производства (опрос 30 с).
+  const kpNew = useKpCounters(isAuthenticated && isProduction);
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
     const stored = localStorage.getItem('sidebarOpen');
@@ -103,8 +106,25 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {/* Отделу производства работ — только запросы КП своей роли. */}
           {isProduction ? (
-            <button onClick={() => navigate(KP_INBOX_PATH)} style={headerBtnStyle}>
+            <button
+              onClick={() => navigate(KP_INBOX_PATH)}
+              style={{ ...headerBtnStyle, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              title={kpNew > 0 ? `Новых запросов КП: ${kpNew}` : undefined}
+            >
               Мои задачи КП
+              {kpNew > 0 && (
+                <span
+                  data-testid="kp-new-counter"
+                  style={{
+                    minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                    backgroundColor: '#2563eb', color: '#ffffff', fontSize: 11,
+                    fontWeight: 600, lineHeight: '18px', textAlign: 'center',
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  {kpNew > 99 ? '99+' : kpNew}
+                </span>
+              )}
             </button>
           ) : (
             <>
