@@ -48,6 +48,18 @@ class KindStat(BaseModel):
     count: int
 
 
+class AccuracyStat(BaseModel):
+    """Насколько система промахивается по деньгам в одном разрезе."""
+    key: str
+    count: int
+    # Средний и медианный промах в процентах от того, что посчитала система.
+    # Знак сохраняется: «система завышает» и «занижает» — разные болезни.
+    avg_pct: Optional[float] = None
+    median_pct: Optional[float] = None
+    # Правки, у которых процент не посчитать (система ставила ноль или пусто).
+    no_base: int = 0
+
+
 class CorrectionsStats(BaseModel):
     total: int
     first_touch: int
@@ -58,6 +70,9 @@ class CorrectionsStats(BaseModel):
     top_fields: list[FieldStat]
     top_positions: list[PositionStat]
     by_kind: list[KindStat]
+    # Где система врёт систематически: по источнику цены и по типу строки.
+    by_price_source: list[AccuracyStat] = []
+    by_row_type: list[AccuracyStat] = []
 
 
 class CorrectionOut(BaseModel):
@@ -81,6 +96,8 @@ class CorrectionOut(BaseModel):
 _PRICE_FIELDS = ("price_work", "price_material")
 _PRICE_HINT = "цена"
 
+_ROW_TYPE_LABELS = {"work": "Работы", "material": "Материалы", "section": "Разделы"}
+
 
 def _require_manager(current_user: dict) -> None:
     if not is_manager(current_user.get("role")):
@@ -92,6 +109,42 @@ def _require_manager(current_user: dict) -> None:
 
 def _is_price_field(field: str) -> bool:
     return field in _PRICE_FIELDS or _PRICE_HINT in field.lower()
+
+
+def _accuracy(rows: list, label: str = "не указан") -> list[AccuracyStat]:
+    """Промах в процентах по группам «ключ → список (было, стало)».
+
+    Процент считается только там, где есть от чего считать: система поставила
+    ноль или пусто — делить не на что, и такая правка идёт в отдельный счётчик,
+    а не портит среднее нулём или бесконечностью.
+    """
+    from statistics import mean, median
+
+    buckets: dict[str, dict] = {}
+    for key, previous, new in rows:
+        bucket = buckets.setdefault(
+            str(key or label), {"count": 0, "pcts": [], "no_base": 0}
+        )
+        bucket["count"] += 1
+        if previous is None or new is None or float(previous) == 0:
+            bucket["no_base"] += 1
+            continue
+        bucket["pcts"].append(
+            (float(new) - float(previous)) / abs(float(previous)) * 100
+        )
+
+    stats = [
+        AccuracyStat(
+            key=key,
+            count=data["count"],
+            avg_pct=round(mean(data["pcts"]), 2) if data["pcts"] else None,
+            median_pct=round(median(data["pcts"]), 2) if data["pcts"] else None,
+            no_base=data["no_base"],
+        )
+        for key, data in buckets.items()
+    ]
+    stats.sort(key=lambda s: s.count, reverse=True)
+    return stats[:TOP_LIMIT]
 
 
 @router.get("/stats", response_model=CorrectionsStats)
@@ -173,6 +226,31 @@ async def get_stats(
     )
     price_edits = sum(count for field, count in price_res.all() if _is_price_field(field))
 
+    # Разрезы качества считаем по ценовым правкам с числами: промах в процентах
+    # имеет смысл для денег, а не для наименования или единицы.
+    money_res = await db.execute(
+        select(
+            CorrectionSignal.field,
+            CorrectionSignal.price_source,
+            CorrectionSignal.row_type,
+            CorrectionSignal.previous_num,
+            CorrectionSignal.new_num,
+        ).where(
+            CorrectionSignal.is_first_touch.is_(True),
+            CorrectionSignal.new_num.isnot(None),
+        )
+    )
+    money_rows = [row for row in money_res.all() if _is_price_field(row[0] or "")]
+
+    by_price_source = _accuracy(
+        [(row[1], row[3], row[4]) for row in money_rows], label="источник неизвестен"
+    )
+    by_row_type = _accuracy(
+        [(_ROW_TYPE_LABELS.get(row[2] or "", row[2]), row[3], row[4])
+         for row in money_rows],
+        label="тип не указан",
+    )
+
     return CorrectionsStats(
         total=total,
         first_touch=first_touch,
@@ -182,6 +260,8 @@ async def get_stats(
         top_fields=top_fields,
         top_positions=top_positions,
         by_kind=by_kind,
+        by_price_source=by_price_source,
+        by_row_type=by_row_type,
     )
 
 

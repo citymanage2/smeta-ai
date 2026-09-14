@@ -18,6 +18,17 @@ export interface KindStat {
   count: number;
 }
 
+/** Насколько система промахивается по деньгам в одном разрезе. */
+export interface AccuracyStat {
+  key: string;
+  count: number;
+  /** Знак сохранён: завышает система или занижает — разные болезни. */
+  avg_pct: number | null;
+  median_pct: number | null;
+  /** Правки, где процент не посчитать: система ставила ноль или пусто. */
+  no_base: number;
+}
+
 export interface CorrectionsStats {
   total: number;
   // Первые касания ячеек — только они говорят об ошибке системы.
@@ -28,6 +39,8 @@ export interface CorrectionsStats {
   top_fields: FieldStat[];
   top_positions: PositionStat[];
   by_kind: KindStat[];
+  by_price_source?: AccuracyStat[];
+  by_row_type?: AccuracyStat[];
 }
 
 export interface Correction {

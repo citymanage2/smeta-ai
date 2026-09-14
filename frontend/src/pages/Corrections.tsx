@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { getCorrections, getCorrectionsStats } from '../api/corrections';
-import { Correction, CorrectionsStats } from '../types/corrections';
+import { AccuracyStat, Correction, CorrectionsStats } from '../types/corrections';
 
 // План: plans/2026-08-07-obuchenie-na-korrektirovkah.md, Фаза 3.
 //
@@ -100,6 +100,50 @@ const Metric: React.FC<{ label: string; value: number; color?: string; hint?: st
     <div style={labelStyle}>{label}</div>
     <div style={{ fontSize: '24px', fontWeight: 700, color }}>{value}</div>
     {hint && <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>{hint}</div>}
+  </div>
+);
+
+/** «+12,5%» / «−8%»: знак — это смысл (система завышает или занижает). */
+function formatPct(value: number | null): string {
+  if (value === null) return '—';
+  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
+  return `${sign}${Math.abs(value).toString().replace('.', ',')}%`;
+}
+
+/**
+ * Где система промахивается систематически. Процент — от того, что посчитала
+ * система: «+12%» значит человек поднимал цену, то есть система занижала.
+ */
+const AccuracyCard: React.FC<{ title: string; items: AccuracyStat[] }> = ({ title, items }) => (
+  <div style={{ ...cardStyle, flex: '1 1 340px' }}>
+    <div style={{ ...labelStyle, marginBottom: '12px' }}>{title}</div>
+    {items.length === 0 ? (
+      <div style={{ color: '#94a3b8', fontSize: '13px' }}>Пока пусто</div>
+    ) : (
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+        <thead>
+          <tr style={{ color: '#94a3b8', fontSize: '11px', textAlign: 'right' }}>
+            <th style={{ textAlign: 'left', fontWeight: 600, paddingBottom: '6px' }}></th>
+            <th style={{ fontWeight: 600 }}>правок</th>
+            <th style={{ fontWeight: 600 }}>медиана</th>
+            <th style={{ fontWeight: 600 }}>среднее</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.key} style={{ color: '#334155' }}>
+              <td style={{ padding: '5px 0' }}>{item.key}</td>
+              <td style={{ textAlign: 'right' }}>{item.count}</td>
+              <td style={{ textAlign: 'right' }}><strong>{formatPct(item.median_pct)}</strong></td>
+              <td style={{ textAlign: 'right' }}>{formatPct(item.avg_pct)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px' }}>
+      Плюс — человек поднимал цену (система занижала), минус — опускал.
+    </div>
   </div>
 );
 
@@ -227,6 +271,13 @@ const CorrectionsPage: React.FC = () => {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {stats && ((stats.by_price_source?.length ?? 0) > 0 || (stats.by_row_type?.length ?? 0) > 0) && (
+          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '16px' }}>
+            <AccuracyCard title="Промах цены по источнику" items={stats.by_price_source ?? []} />
+            <AccuracyCard title="Промах цены по типу строки" items={stats.by_row_type ?? []} />
           </div>
         )}
 

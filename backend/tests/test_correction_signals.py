@@ -345,3 +345,47 @@ async def test_report_is_closed_for_project_manager(async_client, env):
     for path in ("/corrections/stats", "/corrections"):
         r = await async_client.get(path, headers=_pm1(env))
         assert r.status_code == 403, (path, r.text)
+
+
+@pytest.mark.asyncio
+async def test_accuracy_by_price_source_and_row_type(async_client, db_session, env):
+    """Где система врёт систематически: промах в % по источнику цены и типу.
+
+    Прайс: 3000→2500 (−16,67%) и 1000→1200 (+20%) → медиана и среднее +1,67%.
+    Кеш: 0→500 — процент не посчитать, правка идёт в no_base, а не в среднее.
+    Повторная правка (не первое касание) в разрез не попадает.
+    """
+    def sig(source, prev, new, row_type="work", first=True, key="x"):
+        return CorrectionSignal(
+            task_id=env["estimate_task_id"], document_kind="estimate",
+            row_key=key, row_name="Позиция", row_type=row_type, unit="м3",
+            field="price_work" if row_type == "work" else "price_material",
+            previous_value=str(prev), new_value=str(new),
+            previous_num=prev, new_num=new, is_first_touch=first,
+            price_source=source, user_name="Иванов Иван",
+        )
+
+    db_session.add_all([
+        sig("Прайс", 3000, 2500, key="a"),
+        sig("Прайс", 1000, 1200, row_type="material", key="b"),
+        sig("Кеш", 0, 500, key="c"),
+        sig("Прайс", 2500, 9999, first=False, key="a"),
+    ])
+    await db_session.commit()
+
+    head = _auth(env["head"], "head_of_sales", "head")
+    body = (await async_client.get("/corrections/stats", headers=head)).json()
+
+    by_source = {s["key"]: s for s in body["by_price_source"]}
+    assert by_source["Прайс"]["count"] == 2
+    assert by_source["Прайс"]["avg_pct"] == 1.67
+    assert by_source["Прайс"]["median_pct"] == 1.67
+    assert by_source["Прайс"]["no_base"] == 0
+    assert by_source["Кеш"]["count"] == 1
+    assert by_source["Кеш"]["avg_pct"] is None
+    assert by_source["Кеш"]["no_base"] == 1
+
+    by_type = {s["key"]: s for s in body["by_row_type"]}
+    assert by_type["Работы"]["count"] == 2
+    assert by_type["Работы"]["median_pct"] == -16.67
+    assert by_type["Материалы"]["avg_pct"] == 20.0
