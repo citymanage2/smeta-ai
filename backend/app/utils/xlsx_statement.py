@@ -17,6 +17,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from app.utils.kp_marks import STATEMENT_KP_KEY, kp_fill
 from app.utils.sheet_names import group_by_sheet, safe_sheet_title
 
 # Корпоративное оформление: синяя шапка, светлая заливка итога.
@@ -128,6 +129,8 @@ def _write_statement_sheet(
     has_total = [False] * len(keys)
 
     for row in rows:
+        # Пометка «цена из КП» — только заливка, значения и итог не меняются.
+        row_fill = kp_fill(row.get(STATEMENT_KP_KEY))
         for col, key in enumerate(keys, 1):
             raw = row.get(key)
             value: Any = raw
@@ -135,6 +138,8 @@ def _write_statement_sheet(
                 value = _to_number(raw)
             cell = ws.cell(row=row_idx, column=col, value=value)
             cell.border = _BORDER
+            if row_fill is not None:
+                cell.fill = row_fill
             if isinstance(value, float):
                 cell.number_format = _NUM_FMT
                 if _is_summable(key, labels[col - 1]):

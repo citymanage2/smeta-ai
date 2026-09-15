@@ -63,7 +63,7 @@ const STORED_FIELDS = [
   'cost', 'selected', 'abc_group', 'optimization_note', 'optimization_confidence',
   'is_excluded', 'work_row_id', 'qty_per_work_unit', 'qty_overridden',
   'qty_manual_backup', 'norm_reference',
-  'price_list_name', 'sources', 'notes', 'source_no',
+  'price_list_name', 'sources', 'notes', 'source_no', 'kp_ref',
 ];
 
 const TYPE_TO_LABEL: Record<string, string> = {

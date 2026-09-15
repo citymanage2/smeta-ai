@@ -27,6 +27,11 @@ export interface ExportRow {
    * ключ служебный, чтобы не столкнуться с колонкой файла заказчика.
    */
   __sheet?: string | null;
+  /**
+   * Пометка «цена из КП» (`kp_ref` строки). Сервер по ней заливает строку в
+   * файле; ключ служебный по той же причине, что и лист.
+   */
+  __kp_ref?: Record<string, unknown>;
   [field: string]: unknown;
 }
 
@@ -45,6 +50,9 @@ export interface ExportPayload {
   sheet_name: string;
   file_name?: string;
 }
+
+/** Служебный ключ пометки «цена из КП» — тот же, что `kp_marks.STATEMENT_KP_KEY`. */
+const KP_REF_KEY = '__kp_ref';
 
 /** Пресеты «в один клик» (решение пользователя 3.4). */
 export const PRESETS: Array<{
@@ -97,6 +105,12 @@ export function collapseExportRows(
     const info = groupInfoOf(row);
     const exported: ExportRow = { _id: info ? info.key : row.__key };
     for (const [key, value] of Object.entries(row)) {
+      // Пометка КП остаётся только у несвёрнутой строки: у группы цены
+      // разных позиций, и одной пометкой их не описать.
+      if (key === KP_REF_KEY && !info) {
+        exported[KP_REF_KEY] = value as Record<string, unknown>;
+        continue;
+      }
       // Служебные ключи свёртки и лист наружу не идут.
       if (key.startsWith('__') || key === '_id') continue;
       exported[key] = value;
@@ -127,6 +141,10 @@ export function rowsFromEditor(
     const exported: ExportRow = { _id: row.__key, _kind: kindOf(row) };
     const sheet = sheetOf?.(row) ?? null;
     if (sheet !== null) exported.__sheet = sheet;
+    const kpRef = row.kp_ref;
+    if (kpRef && typeof kpRef === 'object' && !Array.isArray(kpRef)) {
+      exported[KP_REF_KEY] = kpRef as Record<string, unknown>;
+    }
     for (const column of columns) exported[column.key] = row[column.key] ?? null;
     return exported;
   });
