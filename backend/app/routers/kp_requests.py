@@ -31,6 +31,10 @@ from app.database import get_db
 from app.models.kp_request import STATUS_DONE
 from app.models.user import User
 from app.schemas.kp_request import (
+    KpApplyIn,
+    KpApplyOut,
+    KpApplyPreviewIn,
+    KpApplyPreviewOut,
     KpCellOut,
     KpCompleteIn,
     KpCountersResponse,
@@ -46,7 +50,7 @@ from app.schemas.kp_request import (
     KpRequestBrief,
     KpRequestDetail,
 )
-from app.services import kp_offers, kp_parser, kp_pricelist
+from app.services import kp_apply, kp_offers, kp_parser, kp_pricelist
 from app.services import kp_requests as svc
 from app.services import storage_service
 from app.utils.auth import current_user_id, get_current_user, get_download_user
@@ -138,6 +142,32 @@ async def preview_kp_request(
         "skipped": split["skipped"],
         "missing_row_ids": split["missing"],
     }
+
+
+# --- Цены из КП в оптимизацию (фаза 8) ----------------------------------------
+# Объявлены раньше путей с {request_id}: «apply» не должен читаться как id запроса.
+
+@router.post("/kp-requests/apply/preview", response_model=KpApplyPreviewOut)
+async def preview_kp_apply(
+    body: KpApplyPreviewIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """Какие строки оптимизации получат цену из КП. Ничего не пишет."""
+    return await kp_apply.preview(db, body.card_id, body.version_id, current_user)
+
+
+@router.post("/kp-requests/apply", response_model=KpApplyOut)
+async def apply_kp_prices(
+    body: KpApplyIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_kp_user),
+):
+    """Новая версия оптимизации «Цены из КП» — одной транзакцией; конфликт — 409."""
+    return await kp_apply.apply(
+        db, body.card_id, body.version_id, body.client_rev, body.preview_hash,
+        body.choices, current_user,
+    )
 
 
 @router.post("/kp-requests", response_model=KpCreateResponse, status_code=status.HTTP_201_CREATED)

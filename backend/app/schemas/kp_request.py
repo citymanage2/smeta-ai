@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -238,3 +238,94 @@ class KpCountersResponse(BaseModel):
     new: int = 0
     # Завершённых, но не применённых запросов по карточкам (продажи)
     done_not_applied: dict[str, int] = Field(default_factory=dict)
+
+
+# --- Цены из КП в оптимизацию (фаза 8) ---------------------------------------
+
+class KpApplyPreviewIn(BaseModel):
+    card_id: str
+    version_id: str
+
+
+class KpApplyIn(BaseModel):
+    card_id: str
+    version_id: str
+    client_rev: int
+    preview_hash: str
+    # item_id → id строки / список id / null (пропустить) — только для «Неоднозначно»
+    choices: dict[str, Optional[Union[str, list[str]]]] = Field(default_factory=dict)
+
+
+class KpApplyRowOut(BaseModel):
+    row_id: str
+    name: Optional[str] = None
+    unit: Optional[str] = None
+    sheet: Optional[str] = None
+    source_no: Optional[str] = None
+    type: Optional[str] = None
+    field: str
+    old_price: Any = None
+    new_price: float
+    request_id: str
+    item_id: str
+    offer_id: str
+    supplier: Optional[str] = None
+    offer_date: Optional[str] = None
+    offers_count: int
+    includes_materials: bool
+    match: str
+
+
+class KpApplyCandidateOut(BaseModel):
+    row_id: str
+    name: Optional[str] = None
+    unit: Optional[str] = None
+    sheet: Optional[str] = None
+    source_no: Optional[str] = None
+    qty: Any = None
+    old_price: Any = None
+    new_price: float
+
+
+class KpApplyItemOut(BaseModel):
+    request_id: str
+    item_id: str
+    item_type: str
+    name: str
+    unit: Optional[str] = None
+    sheet: Optional[str] = None
+    source_no: Optional[str] = None
+    price: float
+    supplier: Optional[str] = None
+    offer_date: Optional[str] = None
+    offers_count: int
+    includes_materials: bool
+    candidates: list[KpApplyCandidateOut] = Field(default_factory=list)
+
+
+class KpApplySkippedOut(BaseModel):
+    row_id: str
+    item_id: str
+    name: Optional[str] = None
+    reason: str
+
+
+class KpApplyPreviewOut(BaseModel):
+    version_id: str
+    rev: int
+    preview_hash: str
+    rows: list[KpApplyRowOut]
+    ambiguous: list[KpApplyItemOut]
+    not_found: list[KpApplyItemOut]
+    skipped: list[KpApplySkippedOut]
+    no_price_count: int
+    includes_materials_count: int
+
+
+class KpApplyOut(BaseModel):
+    version_id: str
+    version_number: int
+    source_version_id: str
+    applied_rows: int
+    changes_count: int
+    request_ids: list[str]
