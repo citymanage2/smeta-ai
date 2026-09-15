@@ -37,7 +37,30 @@ from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
 # `source_no` — номер позиции в исходной смете заказчика. Едет от перечня до
 # сметы, версий оптимизации и разделов сводной: сверка со сметой заказчика
 # нужна на каждой стадии, а не только на первой.
-PASSTHROUGH_FIELDS = ("price_list_name", "sources", "notes", "sheet", "source_no")
+#
+# `kp_ref` — откуда цена строки взята из КП: `{request_id, offer_id, supplier,
+# offer_date, offers_count, includes_materials}`. Ставится применением цен из
+# КП к версии оптимизации и должен пережить сохранение из редактора.
+PASSTHROUGH_FIELDS = (
+    "price_list_name", "sources", "notes", "sheet", "source_no", "kp_ref",
+)
+
+# Поля строки, которые никогда не уходят в промпт. Номер исходной сметы ИИ
+# вернул бы частично (правило №7 CLAUDE.md), а ссылка на КП — служебная
+# подпись: модель не должна ни видеть поставщика, ни «переносить» её дальше.
+PROMPT_EXCLUDED_FIELDS = frozenset({"source_no", "kp_ref"})
+
+
+def without_prompt_fields(items: list) -> list:
+    """Копии позиций/строк для промпта: без `PROMPT_EXCLUDED_FIELDS`.
+
+    Исходные словари не меняются — вырезается копия.
+    """
+    return [
+        {k: v for k, v in item.items() if k not in PROMPT_EXCLUDED_FIELDS}
+        if isinstance(item, dict) else item
+        for item in items or []
+    ]
 
 _LABEL_TO_TYPE = {
     "работа": "work", "работы": "work", "work": "work",

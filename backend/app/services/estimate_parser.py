@@ -8,6 +8,8 @@ from typing import Optional
 
 import openpyxl
 
+from app.utils.source_numbers import SOURCE_NO_HEADER
+
 
 # Keywords used to detect column roles (case-insensitive, stripped)
 _NUM_KW = ("№", "num", "n", "п/п", "пп")
@@ -48,6 +50,20 @@ def _to_float(val) -> Optional[float]:
         return None
 
 
+def _is_source_no_header(cell_val: str) -> bool:
+    return " ".join(cell_val.split()).lower() == SOURCE_NO_HEADER.lower()
+
+
+def _source_no_cell(val) -> Optional[str]:
+    """Номер позиции исходной сметы строкой: 12.0 → «12», «1.1» остаётся «1.1»."""
+    if val is None:
+        return None
+    if isinstance(val, float) and val.is_integer():
+        val = int(val)
+    text = str(val).strip()
+    return text or None
+
+
 _BARE_PRICE_KW = ("цена", "price", "стоимость", "цена (руб", "цена руб")
 
 
@@ -58,7 +74,11 @@ def _detect_columns(header_row: list) -> dict:
         if cell is None:
             continue
         v = str(cell)
-        if "num" not in cols and _header_matches(v, _NUM_KW):
+        # «№ в исходной смете» тоже начинается с «№»: узнаём его раньше номера
+        # строки, иначе он занял бы место «№ п/п» (проблема 32 плана КП).
+        if "source_no" not in cols and _is_source_no_header(v):
+            cols["source_no"] = idx
+        elif "num" not in cols and _header_matches(v, _NUM_KW):
             cols["num"] = idx
         elif "type" not in cols and _header_matches(v, _TYPE_KW):
             cols["type"] = idx
@@ -282,7 +302,7 @@ def _parse_estimate_sheet(ws) -> list[dict]:
             cost = round(qty * (pw + pm), 2) if (pw + pm) > 0 else None
 
         row_id = str(uuid.uuid4())
-        result.append({
+        parsed = {
             "id": row_id,
             "lineage_id": row_id,
             "num": num,
@@ -296,7 +316,12 @@ def _parse_estimate_sheet(ws) -> list[dict]:
             "selected": False,
             "abc_group": None,
             "optimization_note": None,
-        })
+        }
+        if "source_no" in cols:
+            parsed["source_no"] = _source_no_cell(
+                row[cols["source_no"]].value if cols["source_no"] < len(row) else None
+            )
+        result.append(parsed)
 
     return link_materials_to_works(result)
 

@@ -47,6 +47,7 @@ from app.utils.pdf_ocr_extractor import (
 from app.utils.json_utils import extract_json
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.source_numbers import attach_source_numbers, lost_positions_warning
+from app.utils.estimate_rows import without_prompt_fields
 from app.utils.unit_normalizer import normalize_items
 from app.utils.item_contract import ensure_item_fields
 from app.utils.error_text import describe_exception
@@ -515,11 +516,10 @@ def _without_source_no(items: list) -> list:
 
     Номер нужен только перечню. Дальше он не едет: там его пришлось бы гонять
     через ИИ, а тот вернул бы часть номеров и потерял часть.
+    Заодно вырезается ссылка на КП (`kp_ref`) — служебное поле строки,
+    которому в промпте не место (проблема 34 плана КП).
     """
-    return [
-        {k: v for k, v in item.items() if k != "source_no"} if isinstance(item, dict) else item
-        for item in items or []
-    ]
+    return without_prompt_fields(items)
 
 
 def _tag_sheet(items: list, sheet: Optional[str]) -> None:
@@ -2866,7 +2866,10 @@ class TaskProcessor:
             else:
                 await self.update_progress("Проверяем полноту материалов по ГЭСН...")
 
-            chunk_json = json.dumps({"items": chunks[i]}, ensure_ascii=False, indent=2)
+            # Позиции чужой задачи: служебные поля строки в промпт не уходят.
+            chunk_json = json.dumps(
+                {"items": without_prompt_fields(chunks[i])}, ensure_ascii=False, indent=2
+            )
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_CHECK_PROJECT_COMPLETENESS}"}]
 
             try:
@@ -3642,7 +3645,9 @@ class TaskProcessor:
             chunks.append(current_chunk)
 
         for chunk in chunks:
-            chunk_json = json.dumps({"items": chunk}, ensure_ascii=False, indent=2)
+            chunk_json = json.dumps(
+                {"items": without_prompt_fields(chunk)}, ensure_ascii=False, indent=2
+            )
             messages = [{"role": "user", "content": f"{chunk_json}\n\n{PROMPT_ENRICH_NORMS}"}]
             try:
                 data = await self._interruptible_claude_json_with_retry(

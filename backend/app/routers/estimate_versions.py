@@ -19,6 +19,7 @@ from app.models.task import Task
 from app.models.task_input_file import TaskInputFile
 from app.services import storage_service
 from app.utils.file_parser import parse_file as _parse_file
+from app.utils.estimate_rows import without_prompt_fields
 from app.utils.price_coercion import is_negative_qty
 from app.utils.unit_compat import convert_price
 from app.schemas.estimate_version import (
@@ -811,7 +812,8 @@ async def _run_optimization_step(
                 task.progress_data = {"opt_step": step, "abc_breakdown": abc_breakdown, "chunks_done": 0, "chunks_total": 1}
                 await db.commit()
 
-            rows_json = _json.dumps(rows_for_claude, ensure_ascii=False)
+            # Номер исходной сметы и ссылка на КП в промпт не уходят (проблема 34 плана КП).
+            rows_json = _json.dumps(without_prompt_fields(rows_for_claude), ensure_ascii=False)
 
             # Load client context files (Проект, ТЗ, Другое)
             client_text, image_blocks = await _load_client_context(task, db)
@@ -1292,7 +1294,7 @@ async def optimize_custom(
     if not selected:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не найдены выбранные строки")
 
-    rows_json = _json.dumps(selected, ensure_ascii=False)
+    rows_json = _json.dumps(without_prompt_fields(selected), ensure_ascii=False)
     prompt = (
         "Ты — эксперт по строительным сметам.\n\n"
         "Для каждой выбранной позиции предложи варианты оптимизации по трём направлениям:\n"
@@ -1620,29 +1622,13 @@ async def create_manual_version(
     source = await _get_version_or_404(task_id, body.source_version_id, db)
     await _get_task_or_404(source.task_id, db, current_user)
 
-    count_result = await db.execute(
-        select(EstimateVersion).where(EstimateVersion.task_id == task_id)
-    )
-    all_versions = count_result.scalars().all()
-    next_num = _next_version_number(all_versions)
-
     from datetime import datetime, timezone
+    from app.services.estimate_versions_service import clone_version
+
     ts = datetime.now(timezone.utc).strftime("%H:%M")
     display_name = body.version_display_name or f"Ручная правка {ts}"
 
-    new_version = EstimateVersion(
-        id=str(uuid.uuid4()),
-        task_id=task_id,
-        version_number=next_num,
-        version_label="custom",
-        version_display_name=display_name,
-        rows=source.rows or [],
-        overhead_pct=source.overhead_pct,
-        transport_pct=source.transport_pct,
-        contingency_pct=source.contingency_pct,
-        expenses_overridden=source.expenses_overridden,
-    )
-    db.add(new_version)
+    new_version = await clone_version(db, source, display_name)
     await db.commit()
     await db.refresh(new_version)
 
