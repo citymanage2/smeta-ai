@@ -35,7 +35,6 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from app.config import settings
 from app.models.kp_request import (
     CATEGORY_WORK, STATUS_DONE, STATUS_IN_PROGRESS, STATUS_NEW,
     KpOffer, KpOfferPrice, KpRequest, KpRequestItem,
@@ -48,7 +47,8 @@ from app.utils.permissions import can_work_kp, is_production
 
 logger = structlog.get_logger()
 
-MAX_FILE_BYTES = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+# Лимит КП — свой (50 МБ, `kp_requests.KP_MAX_FILE_MB`), не общий лимит задач.
+MAX_FILE_BYTES = kp_requests.MAX_FILE_BYTES
 MAX_PDF_PAGES = 100
 
 # Тип — по расширению: браузеры присылают для .xls что угодно.
@@ -101,10 +101,7 @@ async def check_offer_file(name: Optional[str], data: bytes) -> OfferFile:
             detail=f"Тип файла «{name}» не поддерживается. Допустимые форматы КП: PDF, XLSX, XLS, JPG, PNG",
         )
     if len(data) > MAX_FILE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Файл «{name}» больше {settings.MAX_FILE_SIZE_MB} МБ",
-        )
+        raise kp_requests.too_large(name)
     if ext == ".pdf":
         try:
             pages = await run_in_threadpool(_pdf_pages, data)

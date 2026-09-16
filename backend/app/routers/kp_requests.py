@@ -104,11 +104,28 @@ def _content_disposition(filename: str) -> str:
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
+async def _read_limited(f: UploadFile, limit: int) -> tuple[str, bytes]:
+    """Прочитать не больше `limit + 1` байт: больше лимита — 413, не дочитывая."""
+    name = f.filename or "file"
+    data = await f.read(limit + 1)
+    if len(data) > limit:
+        raise svc.too_large(name.replace("\\", "/").split("/")[-1] or "file")
+    return name, data
+
+
 async def _read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
-    out = []
-    for f in files or []:
-        out.append((f.filename or "file", await f.read()))
-    return out
+    """Вложения автора: сначала число файлов, потом чтение с лимитом размера."""
+    files = files or []
+    if len(files) > svc.MAX_FILES:
+        raise svc.too_many_files()
+    return [await _read_limited(f, svc.MAX_FILE_BYTES) for f in files]
+
+
+async def _read_offer_upload(file: Optional[UploadFile]) -> Optional[tuple[str, bytes]]:
+    """Файл КП — с лимитом КП, не дочитывая файл больше лимита."""
+    if file is None:
+        return None
+    return await _read_limited(file, kp_offers.MAX_FILE_BYTES)
 
 
 # --- Постановка --------------------------------------------------------------
@@ -335,7 +352,7 @@ async def create_kp_offer(
     current_user: dict = Depends(get_kp_user),
 ):
     """Загрузить КП (файл и условия). Новый запрос этим же берётся в работу."""
-    upload = (file.filename or "file", await file.read()) if file is not None else None
+    upload = await _read_offer_upload(file)
     offer = await kp_offers.create_offer(
         db, request_id, current_user=current_user, supplier_name=supplier_name,
         offer_date=offer_date, vat_mode=vat_mode, vat_rate=vat_rate,

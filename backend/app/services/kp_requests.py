@@ -60,8 +60,25 @@ logger = structlog.get_logger()
 
 # --- Вложения ---------------------------------------------------------------
 
-MAX_FILE_BYTES = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+# Лимит файла КП — свой, по спецификации (50 МБ): общий MAX_FILE_SIZE_MB задач
+# на проде меньше (20 МБ в docker-compose.yml). Один на вложения и файлы КП.
+KP_MAX_FILE_MB = 50
+MAX_FILE_BYTES = KP_MAX_FILE_MB * 1024 * 1024
 MAX_FILES = settings.MAX_FILES_PER_REQUEST
+
+
+def too_large(name: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        detail=f"Файл «{name}» больше {KP_MAX_FILE_MB} МБ",
+    )
+
+
+def too_many_files() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"К запросу можно приложить не больше {MAX_FILES} файлов",
+    )
 
 # Тип файла определяется по расширению, а не по заголовку браузера: для .doc и
 # .xls браузеры присылают что угодно, вплоть до application/octet-stream.
@@ -105,10 +122,7 @@ def check_attachments(files: list[tuple[str, bytes]], existing: int = 0) -> list
     Проверка идёт до любой записи: иначе запрос создался бы, а файл — нет.
     """
     if existing + len(files) > MAX_FILES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"К запросу можно приложить не больше {MAX_FILES} файлов",
-        )
+        raise too_many_files()
     checked: list[UploadedFile] = []
     for name, data in files:
         name = (name or "file").replace("\\", "/").split("/")[-1] or "file"
@@ -123,10 +137,7 @@ def check_attachments(files: list[tuple[str, bytes]], existing: int = 0) -> list
                 ),
             )
         if len(data) > MAX_FILE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Файл «{name}» больше {settings.MAX_FILE_SIZE_MB} МБ",
-            )
+            raise too_large(name)
         checked.append(UploadedFile(file_name=name[:255], mime_type=mime, data=data))
     return checked
 

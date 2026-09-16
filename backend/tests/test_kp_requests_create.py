@@ -918,3 +918,76 @@ async def test_invalid_ids_are_404(async_client, kp_env):
     headers = _auth(kp_env["pm1"], "project_manager")
     assert (await async_client.get("/kp-requests/not-a-uuid", headers=headers)).status_code == 404
     assert (await async_client.get("/kp-request-files/1/download", headers=headers)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Чтение вложений: лимит до чтения, а не после
+# ---------------------------------------------------------------------------
+
+class _FakeUpload:
+    """UploadFile, который помнит, сколько у него просили прочитать."""
+
+    def __init__(self, name: str, size: int):
+        self.filename = name
+        self._data = b"x" * size
+        self.reads: list = []
+
+    async def read(self, size: int = -1) -> bytes:
+        self.reads.append(size)
+        return self._data if size is None or size < 0 else self._data[:size]
+
+
+def test_kp_file_limit_is_own_50_mb():
+    """Лимит КП — 50 МБ по спецификации, а не общий MAX_FILE_SIZE_MB задач."""
+    from app.services import kp_offers
+
+    assert kp.KP_MAX_FILE_MB == 50
+    assert kp.MAX_FILE_BYTES == 50 * 1024 * 1024
+    assert kp_offers.MAX_FILE_BYTES == 50 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_read_uploads_checks_count_before_reading(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers import kp_requests as router
+
+    files = [_FakeUpload(f"f{i}.pdf", 5) for i in range(kp.MAX_FILES + 1)]
+    with pytest.raises(HTTPException) as exc:
+        await router._read_uploads(files)
+    assert exc.value.status_code == 400
+    assert all(f.reads == [] for f in files)
+
+
+@pytest.mark.asyncio
+async def test_read_uploads_stops_at_limit(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers import kp_requests as router
+
+    monkeypatch.setattr(kp, "MAX_FILE_BYTES", 10)
+    ok = _FakeUpload("ok.pdf", 10)
+    big = _FakeUpload("big.pdf", 1000)
+    with pytest.raises(HTTPException) as exc:
+        await router._read_uploads([ok, big])
+    assert exc.value.status_code == 413
+    assert "big.pdf" in exc.value.detail
+    # Читается не больше лимита + 1 байт — файл целиком в память не попадает.
+    assert ok.reads == [11] and big.reads == [11]
+    assert await router._read_uploads([_FakeUpload("a.pdf", 10)]) == [("a.pdf", b"x" * 10)]
+
+
+@pytest.mark.asyncio
+async def test_read_offer_upload_stops_at_limit(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.routers import kp_requests as router
+    from app.services import kp_offers
+
+    monkeypatch.setattr(kp_offers, "MAX_FILE_BYTES", 10)
+    big = _FakeUpload("kp.pdf", 1000)
+    with pytest.raises(HTTPException) as exc:
+        await router._read_offer_upload(big)
+    assert exc.value.status_code == 413
+    assert big.reads == [11]
+    assert await router._read_offer_upload(None) is None
