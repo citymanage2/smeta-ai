@@ -9,13 +9,14 @@ import io
 
 import openpyxl
 
-from app.utils.kp_marks import KP_FILL_COLOR, KP_MATERIALS_FILL_COLOR, kp_fill
+from app.utils.kp_marks import KP_FILL_COLOR, KP_MATERIALS_FILL_COLOR, kp_fill, kp_ref_active
 
 KP_REF = {
     "request_id": "r1", "offer_id": "o1", "supplier": "ООО Кабель",
     "offer_date": "2026-09-10", "offers_count": 2, "includes_materials": False,
+    "field": "price_work", "price": 100.5,
 }
-KP_REF_MAT = {**KP_REF, "includes_materials": True}
+KP_REF_MAT = {**KP_REF, "includes_materials": True, "price": 200}
 
 
 def _rows():
@@ -63,9 +64,33 @@ def test_kp_fill_rules():
     assert kp_fill(None) is None
     assert kp_fill({}) is None
     assert kp_fill("строка") is None
-    assert kp_fill({"request_id": "r1"}).start_color.rgb.endswith(KP_FILL_COLOR)
+    # Пометка без `field`/`price` (записана до правила) — недействующая.
+    assert kp_fill({"request_id": "r1"}) is None
+    assert kp_fill(KP_REF).start_color.rgb.endswith(KP_FILL_COLOR)
     assert kp_fill(KP_REF_MAT).start_color.rgb.endswith(KP_MATERIALS_FILL_COLOR)
     assert KP_FILL_COLOR != KP_MATERIALS_FILL_COLOR
+
+
+def test_kp_ref_active_exact_numbers():
+    row = {"type": "work", "price_work": 100.5, "price_material": 30, "kp_ref": KP_REF}
+    assert kp_ref_active(row) is KP_REF
+    # Разница меньше полкопейки — та же цена (float-шум после пересчёта).
+    assert kp_ref_active({**row, "price_work": 100.504}) is KP_REF
+    assert kp_ref_active({**row, "price_work": "100,5"}) is KP_REF
+    # Цену поменяли — пометка больше не про эту цену.
+    assert kp_ref_active({**row, "price_work": 100.51}) is None
+    assert kp_ref_active({**row, "price_work": 120}) is None
+    assert kp_ref_active({**row, "price_work": None}) is None
+    # Смена цены другого поля пометку не снимает.
+    assert kp_ref_active({**row, "price_material": 999}) is KP_REF
+    # Без field/price, чужое поле, не объект — недействующая.
+    legacy = {k: v for k, v in KP_REF.items() if k not in ("field", "price")}
+    assert kp_ref_active({**row, "kp_ref": legacy}) is None
+    assert kp_ref_active({**row, "kp_ref": {**KP_REF, "field": "cost"}}) is None
+    assert kp_ref_active({**row, "kp_ref": {**KP_REF, "price": "100.5"}}) is None
+    assert kp_ref_active({**row, "kp_ref": {**KP_REF, "price": True}}) is None
+    assert kp_ref_active({**row, "kp_ref": "строка"}) is None
+    assert kp_ref_active(None) is None
 
 
 # ── generate_estimate_export ────────────────────────────────────────────────
@@ -84,6 +109,23 @@ def test_estimate_export_fills_kp_rows():
     assert {_color(c) for c in _row_by_name(ws, "Кабель")} == {None}
     # Раздел сохраняет свою заливку.
     assert _color(_row_by_name(ws, "Раздел 1")[0]) == "BDD7EE"
+
+
+def test_estimate_export_price_changed_after_kp_no_fill():
+    rows = _rows()
+    rows[1]["price_work"] = 120  # человек поменял цену строки после «Цены из КП»
+    rows[3]["kp_ref"] = {k: v for k, v in KP_REF_MAT.items() if k not in ("field", "price")}
+    ws = _export(rows).active
+    assert {_color(c) for c in _row_by_name(ws, "Монтаж кабеля")} == {None}
+    assert {_color(c) for c in _row_by_name(ws, "Монтаж лотка")} == {None}
+
+
+def test_estimate_export_fill_checks_base_price_not_coefficient_price():
+    """В `kp_ref.price` — исходная цена; коэффициент версии пометку не снимает."""
+    ws = _export(_rows(), coefficient={"work": 1.1, "material": 1, "scope": "all"}).active
+    row = _row_by_name(ws, "Монтаж кабеля")
+    assert row[5].value == 110.55
+    assert {_color(c) for c in row} == {KP_FILL_COLOR}
 
 
 def test_estimate_export_totals_unchanged_by_kp_ref():

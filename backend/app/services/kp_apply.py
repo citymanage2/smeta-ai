@@ -96,13 +96,16 @@ def _match(item: KpRequestItem, request: KpRequest, rows: list, task_id: str) ->
     item_type = item.item_type
     candidates = [r for r in rows if _eligible(r, item_type)]
 
+    name = _text(item.name)
     if request.source_task_id and str(request.source_task_id) == str(task_id):
+        # id строки переживает замену позиции аналогом: оптимизация пишет другое
+        # наименование в ту же строку. Цена из КП назначена за позицию запроса,
+        # поэтому без совпадения наименования row_id не доказательство.
         ids = {str(x) for x in (item.source_row_ids or [])}
-        found = [r for r in candidates if str(r.get("id")) in ids]
+        found = [r for r in candidates if str(r.get("id")) in ids and _text(r.get("name")) == name]
         if found:
             return MATCH_ROW_ID, found
 
-    name = _text(item.name)
     sheet = _sheet(item.sheet)
 
     def narrow(found: list) -> list:
@@ -376,13 +379,28 @@ def _chosen(plan: Plan, choices: Optional[dict]) -> dict:
 
 
 def _note(win: dict) -> str:
-    note = f"Из КП: {win['supplier'] or 'без названия'}"
+    note = f"{_NOTE_PREFIX} {win['supplier'] or 'без названия'}"
     offer_date = win.get("offer_date")
     if offer_date:
         note += f" от {_date_ru(date.fromisoformat(str(offer_date)[:10]))}"
     if win["includes_materials"]:
         note += ", цена включает материалы"
     return note
+
+
+_NOTE_PREFIX = "Из КП:"
+_NOTE_SEP = "; "
+
+
+def _merge_note(previous: Any, note: str) -> str:
+    """Пометка КП дописывается к примечанию оптимизации, а не затирает его.
+
+    Прежняя пометка КП (повторное применение) заменяется новой — не копится.
+    """
+    text = str(previous).strip() if previous is not None else ""
+    parts = [p for p in (x.strip() for x in text.split(_NOTE_SEP)) if p]
+    kept = [p for p in parts if not p.startswith(_NOTE_PREFIX)]
+    return _NOTE_SEP.join([*kept, note])
 
 
 def _apply_to_rows(rows: list, winners: dict) -> list:
@@ -399,10 +417,17 @@ def _apply_to_rows(rows: list, winners: dict) -> list:
         row["cost"] = row_cost(
             row.get("qty"), coerce_price(row.get("price_work")), coerce_price(row.get("price_material")),
         )
-        row["kp_ref"] = {k: win[k] for k in (
-            "request_id", "offer_id", "supplier", "offer_date", "offers_count", "includes_materials",
-        )}
-        row["optimization_note"] = _note(win)
+        # `field` и `price` — какую цену и какой записали: пометка действует, пока
+        # цена строки та же (`utils/kp_marks.kp_ref_active`, зеркально на фронте).
+        row["kp_ref"] = {
+            **{k: win[k] for k in (
+                "request_id", "offer_id", "supplier", "offer_date", "offers_count",
+                "includes_materials",
+            )},
+            "field": field_name,
+            "price": win["price"],
+        }
+        row["optimization_note"] = _merge_note(row.get("optimization_note"), _note(win))
     return out
 
 

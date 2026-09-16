@@ -1332,7 +1332,7 @@ def generate_estimate_export(
     брались от общего базиса, и выгруженная версия не сходилась с экраном.
     """
     from app.utils.xlsx_exporter import coefficient_for
-    from app.utils.kp_marks import kp_fill
+    from app.utils.kp_marks import kp_fill, kp_ref_active
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Смета"
@@ -1365,6 +1365,8 @@ def generate_estimate_export(
         rtype = r.get("type", "")
         is_section = rtype == "section"
 
+        # Пометка сверяется с исходной ценой строки — до коэффициента.
+        kp_ref = None if is_section else kp_ref_active(r)
         k_work, k_material = coefficient_for(coefficient, r.get("id"))
         if k_work != 1.0 or k_material != 1.0:
             r = dict(r)
@@ -1390,7 +1392,7 @@ def generate_estimate_export(
         ws.cell(row=row_idx, column=8, value=cost if not is_section else None)
 
         # Пометка «цена из КП» (kp_apply): только заливка, итоги не трогает.
-        kp_row_fill = None if is_section else kp_fill(r.get("kp_ref"))
+        kp_row_fill = kp_fill(kp_ref)
         for ci in range(1, len(COLS) + 1):
             cell = ws.cell(row=row_idx, column=ci)
             cell.border = THIN_BORDER

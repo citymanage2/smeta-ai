@@ -221,7 +221,10 @@ async def test_material_and_work_prices_go_to_new_version(async_client, db_sessi
     assert new["m1"]["kp_ref"] == {
         "request_id": mat_req, "offer_id": steel, "supplier": "ООО Сталь",
         "offer_date": "2026-09-10", "offers_count": 1, "includes_materials": False,
+        # Какая цена и какой записана — без коэффициента: пометка действует, пока она та же.
+        "field": "price_material", "price": 85000,
     }
+    assert new["w1"]["kp_ref"]["field"] == "price_work" and new["w1"]["kp_ref"]["price"] == 450
     assert new["m1"]["optimization_note"] == "Из КП: ООО Сталь от 10.09.2026"
 
     clone_id = str(clone.id)
@@ -344,12 +347,6 @@ async def test_not_found_and_unit_mismatch(async_client, db_session, env):
 async def test_row_id_match_only_for_same_optimization_and_price_in_row_unit(
     async_client, db_session, env,
 ):
-    # Строка переименована после запроса, но row_id тот же — цена доезжает.
-    rows = _base_rows()
-    rows[1]["name"] = "Арматура А500С d12"
-    await db_session.execute(update(EstimateVersion).where(EstimateVersion.id == env["version"])
-                             .values(rows=rows))
-    await db_session.commit()
     own, (own_item,) = await _request(
         db_session, env, "material", [{"name": "Арматура А500", "unit": "кг", "row_ids": ["m1"]}],
         source_kind="optimization", source_task_id=env["task"])
@@ -555,3 +552,67 @@ async def test_newer_version_after_preview_conflict(async_client, db_session, en
     assert [v.version_number for v in versions] == [0, 1]
     assert versions[0].rev == 3
     assert (await db_session.get(KpRequest, work_req)).applied_at is None
+
+
+@pytest.mark.asyncio
+async def test_row_id_match_requires_same_name_analog_not_priced(async_client, db_session, env):
+    """Оптимизация заменила позицию аналогом в той же строке: id прежний, имя другое.
+
+    Цена из КП назначена за позицию запроса — на аналог она не ложится.
+    """
+    rows = _base_rows()
+    rows[1]["name"] = "Арматура А400 (аналог)"
+    await db_session.execute(update(EstimateVersion).where(EstimateVersion.id == env["version"])
+                             .values(rows=rows))
+    await db_session.commit()
+    own, (own_item,) = await _request(
+        db_session, env, "material", [{"name": "Арматура А500", "unit": "т", "row_ids": ["m1"]}],
+        source_kind="optimization", source_task_id=env["task"])
+    offer = await _offer(db_session, own, "ООО Сталь")
+    await _price(db_session, offer, own_item, 85000, "т")
+
+    preview = (await _preview(async_client, env)).json()
+    assert preview["rows"] == []
+    assert [n["item_id"] for n in preview["not_found"]] == [own_item]
+
+    # Регистр и пробелы наименования — не повод отказать (та же нормализация).
+    rows[1]["name"] = "  арматура  а500 "
+    await db_session.execute(update(EstimateVersion).where(EstimateVersion.id == env["version"])
+                             .values(rows=rows))
+    await db_session.commit()
+    preview = (await _preview(async_client, env)).json()
+    (row,) = preview["rows"]
+    assert row["row_id"] == "m1" and row["match"] == "row_id" and row["new_price"] == 85000
+
+
+@pytest.mark.asyncio
+async def test_kp_note_appended_to_optimization_note_and_replaced_on_repeat(
+    async_client, db_session, env,
+):
+    rows = _base_rows()
+    rows[2]["optimization_note"] = "Заменено аналогом"
+    await db_session.execute(update(EstimateVersion).where(EstimateVersion.id == env["version"])
+                             .values(rows=rows))
+    await db_session.commit()
+    work_req, (plaster,) = await _request(
+        db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
+    offer = await _offer(db_session, work_req, "Бригада")
+    await _price(db_session, offer, plaster, 450)
+
+    preview = (await _preview(async_client, env)).json()
+    assert (await _apply(async_client, env, preview)).status_code == 200
+    _, clone = await _versions(db_session, env)
+    new = _by_id(clone.rows)
+    assert new["w1"]["optimization_note"] == "Заменено аналогом; Из КП: Бригада"
+    assert new["w2"]["optimization_note"] == "Из КП: Бригада"
+
+    # Повтор поверх новой версии: пометка КП заменяется, а не копится.
+    await db_session.execute(update(KpOffer).where(KpOffer.id == offer)
+                             .values(supplier_name="Бригада-2"))
+    await db_session.commit()
+    preview = (await _preview(async_client, env, version_id=str(clone.id))).json()
+    assert (await _apply(async_client, env, preview)).status_code == 200, preview
+    *_, again = await _versions(db_session, env)
+    new = _by_id(again.rows)
+    assert new["w1"]["optimization_note"] == "Заменено аналогом; Из КП: Бригада-2"
+    assert new["w2"]["optimization_note"] == "Из КП: Бригада-2"
