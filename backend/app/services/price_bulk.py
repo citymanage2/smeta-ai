@@ -183,9 +183,6 @@ async def add_items(
             wrote.append((contractor, price))
         return merged, wrote
 
-    # Существующие позиции ищем по нормализованному имени — так же, как их ищет
-    # загрузка прайса файлом. Тяжёлую колонку `embedding` не читаем: она здесь
-    # не нужна, а весит по 8–10 КБ на строку.
     # Векторы новых материалов — тоже до записи работ: блокировка строк работ
     # держится до коммита и не должна ждать медленный расчёт.
     material_embeddings: dict = {}
@@ -197,6 +194,9 @@ async def add_items(
             if key not in known:
                 material_embeddings[key] = await _generate_embedding_safe(item["name"])
 
+    # Существующие позиции ищем по нормализованному имени — так же, как их ищет
+    # загрузка прайса файлом. Тяжёлую колонку `embedding` не читаем: она здесь
+    # не нужна, а весит по 8–10 КБ на строку.
     if works:
         rows = (await db.execute(
             select(PriceWork.id, PriceWork.name, PriceWork.unit)

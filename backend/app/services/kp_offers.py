@@ -502,6 +502,7 @@ async def _parsing_offers(db: AsyncSession, request_id: str) -> list[str]:
             KpOffer.parse_status.in_((kp_parser.PARSE_QUEUED, kp_parser.PARSE_PROCESSING)),
         )
         .order_by(KpOffer.created_at, KpOffer.id)
+        .execution_options(populate_existing=True)  # время старта — из базы, не из сессии
     )).scalars().all()
     now = datetime.now(timezone.utc)
     return [
