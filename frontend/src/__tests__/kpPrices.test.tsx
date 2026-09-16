@@ -50,7 +50,7 @@ function brief(overrides: Partial<KpRequestBrief>): KpRequestBrief {
     status: 'done', author_id: 1, author_name: 'Анна', author_comment: null,
     taken_by_id: 2, taken_by_name: 'Олег', taken_at: null, completed_by_id: 2,
     completed_by_name: 'Олег', completed_at: '2026-09-15T10:00:00Z', applied_at: null,
-    items_count: 2, files_count: 0, created_at: '2026-09-14T10:00:00Z', updated_at: null,
+    items_count: 2, files_count: 0, confirmed_prices_count: 3, created_at: '2026-09-14T10:00:00Z', updated_at: null,
     ...overrides,
   };
 }
@@ -155,6 +155,15 @@ describe('кнопка «Цены из КП»', () => {
   it('неактивна без завершённых запросов', async () => {
     vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([
       brief({ status: 'in_progress' }), brief({ id: 'q2', status: 'cancelled' }),
+    ]);
+    renderButton();
+    await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalledWith('card-1'));
+    expect(kpButton()).toBeDisabled();
+  });
+
+  it('неактивна, если завершённые запросы без цен (поставщики не ответили)', async () => {
+    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([
+      brief({ confirmed_prices_count: 0 }), brief({ id: 'q2', confirmed_prices_count: 0 }),
     ]);
     renderButton();
     await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalledWith('card-1'));

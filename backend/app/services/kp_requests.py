@@ -577,16 +577,44 @@ async def briefs(db: AsyncSession, rows: list[tuple]) -> list[dict]:
     ids = [str(r.id) for r, _, _ in rows]
     items = await _counts(db, KpRequestItem, ids)
     files = await _counts(db, KpRequestFile, ids, KpRequestFile.deleted_at.is_(None))
+    priced = await _confirmed_prices(db, ids)
     names = await owner_names(
         [uid for r, _, _ in rows for uid in (r.author_id, r.taken_by_id, r.completed_by_id)], db,
     )
     return [
-        _brief(r, project_name, card_name, names, items.get(str(r.id), 0), files.get(str(r.id), 0))
+        _brief(
+            r, project_name, card_name, names, items.get(str(r.id), 0), files.get(str(r.id), 0),
+            priced.get(str(r.id), 0),
+        )
         for r, project_name, card_name in rows
     ]
 
 
-def _brief(r: KpRequest, project_name, card_name, names, items_count, files_count) -> dict:
+async def _confirmed_prices(db: AsyncSession, request_ids: list[str]) -> dict[str, int]:
+    """Число подтверждённых цен неудалённых КП по запросам.
+
+    Нужно кнопке «Цены из КП» (критерий 30 спецификации): завершённый запрос
+    без цен (поставщики не ответили) ставить в оптимизацию нечего.
+    """
+    if not request_ids:
+        return {}
+    query = (
+        select(KpOffer.request_id, func.count(KpOfferPrice.id))
+        .join(KpOfferPrice, KpOfferPrice.offer_id == KpOffer.id)
+        .where(
+            KpOffer.request_id.in_(request_ids),
+            KpOffer.deleted_at.is_(None),
+            KpOfferPrice.confirmed.is_(True),
+        )
+        .group_by(KpOffer.request_id)
+    )
+    return {str(rid): int(n) for rid, n in (await db.execute(query)).all()}
+
+
+def _brief(
+    r: KpRequest, project_name, card_name, names, items_count, files_count,
+    confirmed_prices_count: int = 0,
+) -> dict:
     return {
         "id": str(r.id),
         "project_id": str(r.project_id),
@@ -609,6 +637,7 @@ def _brief(r: KpRequest, project_name, card_name, names, items_count, files_coun
         "applied_at": r.applied_at,
         "items_count": items_count,
         "files_count": files_count,
+        "confirmed_prices_count": confirmed_prices_count,
         "created_at": r.created_at,
         "updated_at": r.updated_at,
     }
@@ -684,6 +713,7 @@ async def detail(db: AsyncSession, request: KpRequest, current_user: dict) -> di
     out = _brief(
         request, project.name if project else None, card.name if card else None,
         names, len(items), len(files),
+        (await _confirmed_prices(db, [str(request.id)])).get(str(request.id), 0),
     )
     out.update({
         "source_task_id": request.source_task_id,

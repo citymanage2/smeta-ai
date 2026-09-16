@@ -11,6 +11,7 @@
   атомарно; после завершения отдел производства ничего не правит (409).
 """
 import json
+from datetime import datetime, timezone
 
 import fitz
 import pytest
@@ -710,3 +711,31 @@ async def test_price_on_offer_deleted_meanwhile_is_404(async_client, db_session,
     assert resp.status_code == 404
     db_session.expire_all()
     assert (await db_session.execute(select(func.count()).select_from(KpOfferPrice))).scalar() == 0
+
+
+@pytest.mark.asyncio
+async def test_confirmed_prices_count_in_brief_and_detail(async_client, db_session, env):
+    """Критерий 30: кнопке «Цены из КП» нужно знать, есть ли в запросе цены.
+
+    Черновик ИИ не в счёт, цена удалённого КП — тоже.
+    """
+    async def mine_count():
+        resp = await async_client.get("/kp-requests/mine", headers=_h(env, SUPPLY))
+        assert resp.status_code == 200, resp.text
+        return next(r for r in resp.json() if r["id"] == env["material"])["confirmed_prices_count"]
+
+    assert await mine_count() == 0
+    offer = await _offer(async_client, env)
+    db_session.add(KpOfferPrice(offer_id=offer["id"], item_id=env["cement"], price=9.5, unit="кг",
+                                source="ai", confidence="low", confirmed=False))
+    await db_session.commit()
+    assert await mine_count() == 0
+
+    assert (await _put_price(async_client, env, offer["id"], "armature", 54900, "т")).status_code == 200
+    assert await mine_count() == 1
+    assert (await _detail(async_client, env))["confirmed_prices_count"] == 1
+
+    await db_session.execute(KpOffer.__table__.update().where(KpOffer.id == offer["id"])
+                             .values(deleted_at=datetime.now(timezone.utc)))
+    await db_session.commit()
+    assert await mine_count() == 0

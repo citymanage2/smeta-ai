@@ -109,6 +109,8 @@ class KpRequestBrief(BaseModel):
     applied_at: Optional[datetime] = None
     items_count: int = 0
     files_count: int = 0
+    # Подтверждённые цены неудалённых КП: 0 — в оптимизацию ставить нечего.
+    confirmed_prices_count: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
 

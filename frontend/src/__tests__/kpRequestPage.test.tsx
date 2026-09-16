@@ -115,7 +115,7 @@ function twoOffersRequest(overrides: Partial<KpRequestDetail> = {}): KpRequestDe
     author_id: 3, author_name: 'Петров', author_comment: 'Нужны цены до пятницы',
     taken_by_id: 7, taken_by_name: 'Снабженец', taken_at: '2026-09-10T09:00:00Z',
     completed_by_id: null, completed_by_name: null, completed_at: null, applied_at: null,
-    items_count: 2, files_count: 1, created_at: '2026-09-09T09:00:00Z', updated_at: null,
+    items_count: 2, files_count: 1, confirmed_prices_count: 0, created_at: '2026-09-09T09:00:00Z', updated_at: null,
     source_task_id: null, source_version_id: null, report: null,
     pricelist_status: null, pricelist_summary: null, pricelist_error: null,
     pricelist_written_at: null, applied_version_id: null,
@@ -590,7 +590,7 @@ function brief(overrides: Partial<KpRequestBrief>): KpRequestBrief {
     source_kind: 'estimate', category: 'material', target_role: 'supply_manager', status: 'new',
     author_id: 3, author_name: 'Петров', author_comment: null, taken_by_id: null, taken_by_name: null,
     taken_at: null, completed_by_id: null, completed_by_name: null, completed_at: null, applied_at: null,
-    items_count: 4, files_count: 0, created_at: '2026-09-09T09:00:00Z', updated_at: null,
+    items_count: 4, files_count: 0, confirmed_prices_count: 0, created_at: '2026-09-09T09:00:00Z', updated_at: null,
     ...overrides,
   };
 }

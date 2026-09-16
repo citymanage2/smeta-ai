@@ -68,7 +68,8 @@ const KpPrices: React.FC<Props> = ({
     const id = cardId;
     try {
       const list = await listCardKpRequests(id);
-      const count = list.filter((r) => r.status === 'done').length;
+      // Завершённый запрос без цен (поставщики не ответили) применять нечего.
+      const count = list.filter((r) => r.status === 'done' && r.confirmed_prices_count > 0).length;
       if (aliveRef.current && seq === seqRef.current && cardRef.current === id) setDoneCount(count);
       return count;
     } catch {
@@ -99,7 +100,7 @@ const KpPrices: React.FC<Props> = ({
 
   let reason: string | null = null;
   if (doneCount === null) reason = 'Проверяю завершённые запросы КП…';
-  else if (doneCount === 0) reason = 'Нет завершённых запросов КП по этой смете';
+  else if (doneCount === 0) reason = 'Нет завершённых запросов КП с ценами по этой смете';
   else if (rowsCount === 0) reason = 'В оптимизации нет строк';
   else if (!latest) reason = 'Нет версии оптимизации, к которой можно применить цены';
   else if (isDirty) reason = 'Сначала примените или отмените правки в таблице';

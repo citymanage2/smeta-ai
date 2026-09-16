@@ -149,7 +149,7 @@ function brief(overrides: Partial<KpRequestBrief>): KpRequestBrief {
     target_role: 'supply_manager', status: 'new', author_id: 7, author_name: 'Анна',
     author_comment: null, taken_by_id: null, taken_by_name: null, taken_at: null,
     completed_by_id: null, completed_by_name: null, completed_at: null,
-    applied_at: null, items_count: 3, files_count: 1,
+    applied_at: null, items_count: 3, files_count: 1, confirmed_prices_count: 0,
     created_at: '2026-09-14T09:00:00Z', updated_at: null,
     ...overrides,
   };

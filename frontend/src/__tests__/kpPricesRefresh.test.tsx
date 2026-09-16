@@ -69,7 +69,7 @@ function brief(overrides: Partial<KpRequestBrief> = {}): KpRequestBrief {
     status: 'done', author_id: 1, author_name: 'Анна', author_comment: null,
     taken_by_id: 2, taken_by_name: 'Олег', taken_at: null, completed_by_id: 2,
     completed_by_name: 'Олег', completed_at: '2026-09-15T10:00:00Z', applied_at: null,
-    items_count: 2, files_count: 0, created_at: '2026-09-14T10:00:00Z', updated_at: null,
+    items_count: 2, files_count: 0, confirmed_prices_count: 3, created_at: '2026-09-14T10:00:00Z', updated_at: null,
     ...overrides,
   };
 }

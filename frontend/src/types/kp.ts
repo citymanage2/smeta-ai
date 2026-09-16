@@ -96,6 +96,8 @@ export interface KpRequestBrief {
   applied_at: string | null;
   items_count: number;
   files_count: number;
+  /** Подтверждённые цены неудалённых КП: 0 — ставить в оптимизацию нечего. */
+  confirmed_prices_count: number;
   created_at: string;
   updated_at: string | null;
 }
