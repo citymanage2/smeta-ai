@@ -420,3 +420,45 @@ async def test_add_items_merges_key_into_fresh_prices(db_session, env, monkeypat
     row = await _work_row(db_session, "Штукатурка стен")
     assert row.prices == {"КП: СтройА": 500.0, "КП: СтройВ": 450.0, "КП: СтройБ": 600.0}
     assert row.min_price == 450.0
+
+
+async def _other_done_request(db, env, written, *, deleted=False, status="done") -> str:
+    source = await db.get(KpRequest, env["work"])
+    other = KpRequest(
+        project_id=source.project_id, card_id=source.card_id, source_kind="estimate",
+        category="work", target_role="contractor_manager", status=status,
+        author_id=env["pm1"], pricelist_status="done",
+        pricelist_summary={"added": 0, "updated": 0, "skipped": {}, "retired": 0, "written": written},
+        deleted_at=datetime.now(timezone.utc) if deleted else None,
+    )
+    db.add(other)
+    await db.commit()
+    return str(other.id)
+
+
+@pytest.mark.asyncio
+async def test_stale_key_kept_when_other_done_request_wrote_same(db_session, env):
+    """Тот же ключ с тем же значением записал другой завершённый запрос — не снимаем."""
+    a = await _add_offer(db_session, env["work"], "СтройА")
+    await _add_price(db_session, a, env["plaster"], 500, "м2")
+    await _add_price(db_session, a, env["masonry"], 300, "м2")
+    await _set_status(db_session, env["work"], "done")
+    await kp_pricelist.write(db_session, env["work"])
+
+    same = [{"kind": "work", "name_key": "штукатурка стен", "contractor": "КП: СтройА", "value": 500.0}]
+    await _other_done_request(db_session, env, same)
+    # Удалённый и не завершённый запросы не в счёт: кладку снимаем.
+    masonry = [{"kind": "work", "name_key": "кладка перегородок", "contractor": "КП: СтройА",
+                "value": 300.0}]
+    await _other_done_request(db_session, env, masonry, deleted=True)
+    await _other_done_request(db_session, env, masonry, status="in_progress")
+
+    await db_session.execute(update(KpOffer).where(KpOffer.id == a).values(supplier_name="СтройА-Групп"))
+    await db_session.commit()
+    request = await kp_pricelist.write(db_session, env["work"])
+    assert request.pricelist_summary["retired"] == 1
+
+    plaster = await _work_row(db_session, "Штукатурка стен")
+    assert plaster.prices == {"КП: СтройА": 500.0, "КП: СтройА-Групп": 500.0}
+    masonry_row = await _work_row(db_session, "Кладка перегородок")
+    assert masonry_row.prices == {"КП: СтройА-Групп": 300.0}

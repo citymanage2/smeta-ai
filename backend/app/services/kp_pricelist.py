@@ -27,7 +27,8 @@
   ценой иначе остался бы в прайсе и мог стать минимумом. Ключ, записанный этим
   запросом раньше (`pricelist_summary.written`) и не записанный сейчас,
   удаляется, **только если его значение с тех пор не изменилось**: иначе его
-  переписал другой запрос, и это уже не наша цена. Цена материала не
+  переписал другой запрос, и это уже не наша цена. И не удаляется, если тот же
+  ключ с тем же значением записал другой завершённый запрос: цена ещё его. Цена материала не
   удаляется: у позиции прайса одна цена, прежней мы не знаем.
 * **«Замок» на строке запроса** (`kp_offers._lock` со статусом `done`): два
   повтора и «Вернуть в работу» не проскакивают мимо записи.
@@ -129,9 +130,38 @@ def _work_entries(item: KpRequestItem, offers: list, prices: list, skipped: dict
     ]
 
 
-async def _retire_stale(db: AsyncSession, previous: list, current: list, now: datetime) -> int:
+def _same_value(a: Any, b: Any) -> bool:
+    try:
+        return abs(float(a) - float(b)) <= MONEY_EPS
+    except (TypeError, ValueError):
+        return False
+
+
+async def _owned_by_others(db: AsyncSession, request_id: str) -> dict:
+    """(имя, подрядчик) → значения, записанные другими завершёнными запросами."""
+    summaries = (await db.execute(
+        select(KpRequest.pricelist_summary).where(
+            KpRequest.id != request_id,
+            KpRequest.status == STATUS_DONE,
+            KpRequest.deleted_at.is_(None),
+            KpRequest.pricelist_summary.is_not(None),
+        )
+    )).scalars().all()
+    owned: dict[tuple, list] = {}
+    for summary in summaries:
+        written = summary.get("written") if isinstance(summary, dict) else None
+        for w in written or []:
+            if isinstance(w, dict) and w.get("kind") == "work" and w.get("contractor"):
+                owned.setdefault((w.get("name_key"), w["contractor"]), []).append(w.get("value"))
+    return owned
+
+
+async def _retire_stale(
+    db: AsyncSession, request_id: str, previous: list, current: list, now: datetime,
+) -> int:
     """Снять ключи работ, записанные этим запросом раньше и не записанные сейчас,
-    если их значение с тех пор не менялось. Возвращает число снятых ключей."""
+    если их значение с тех пор не менялось и тот же ключ с тем же значением не
+    записал другой завершённый запрос. Возвращает число снятых ключей."""
     fresh = {(w["name_key"], w["contractor"]) for w in current if w.get("kind") == "work"}
     stale: dict[str, list[dict]] = {}
     for w in previous or []:
@@ -143,6 +173,7 @@ async def _retire_stale(db: AsyncSession, previous: list, current: list, now: da
     if not stale:
         return 0
 
+    others = await _owned_by_others(db, request_id)
     rows = (await db.execute(
         select(PriceWork.id, PriceWork.name, PriceWork.unit, PriceWork.prices)
     )).all()
@@ -156,14 +187,14 @@ async def _retire_stale(db: AsyncSession, previous: list, current: list, now: da
         for w in entries:
             if w["contractor"] not in prices:
                 continue
-            try:
-                same = abs(float(prices[w["contractor"]]) - float(w.get("value"))) <= MONEY_EPS
-            except (TypeError, ValueError):
-                same = False
-            if same:
-                del prices[w["contractor"]]
-                changed = True
-                retired += 1
+            if not _same_value(prices[w["contractor"]], w.get("value")):
+                continue  # ключ переписали — это уже не наша цена
+            shared = others.get((w.get("name_key"), w["contractor"]), [])
+            if any(_same_value(prices[w["contractor"]], v) for v in shared):
+                continue  # та же цена другого завершённого запроса — она ещё чья-то
+            del prices[w["contractor"]]
+            changed = True
+            retired += 1
         if not changed:
             continue
         values: dict[str, Any] = {"prices": prices, "min_price": compute_min_price(prices)}
@@ -214,7 +245,7 @@ async def write(db: AsyncSession, request_id: str) -> KpRequest:
         now = datetime.now(timezone.utc)
         written = result.get("written_prices") or []
         previous = (request.pricelist_summary or {}).get("written") or []
-        retired = await _retire_stale(db, previous, written, now)
+        retired = await _retire_stale(db, rid, previous, written, now)
 
         summary = {
             "added": int(result.get("added") or 0),
