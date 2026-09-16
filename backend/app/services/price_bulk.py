@@ -170,57 +170,90 @@ async def add_items(
     def _skip_unit() -> None:
         skipped_reasons[SKIP_UNIT_MISMATCH] = skipped_reasons.get(SKIP_UNIT_MISMATCH, 0) + 1
 
+    def _merge(group: dict, target_unit: Optional[str], base: Optional[dict]) -> "tuple[dict, list]":
+        """Слить цены группы в словарь `base`: переписывается только свой ключ."""
+        merged = dict(base or {})
+        wrote: list[tuple[str, float]] = []
+        for contractor, entry in group["prices"].items():
+            price, unit_skip = _price_for_existing_unit(entry["price"], entry["unit"], target_unit)
+            if unit_skip:
+                _skip_unit()
+                continue
+            merged[contractor] = price
+            wrote.append((contractor, price))
+        return merged, wrote
+
     # Существующие позиции ищем по нормализованному имени — так же, как их ищет
     # загрузка прайса файлом. Тяжёлую колонку `embedding` не читаем: она здесь
     # не нужна, а весит по 8–10 КБ на строку.
+    # Векторы новых материалов — тоже до записи работ: блокировка строк работ
+    # держится до коммита и не должна ждать медленный расчёт.
+    material_embeddings: dict = {}
+    if materials and works:
+        known = {normalize_name(name) for (name,) in (await db.execute(
+            select(PriceMaterial.name)
+        )).all()}
+        for key, item in materials.items():
+            if key not in known:
+                material_embeddings[key] = await _generate_embedding_safe(item["name"])
+
     if works:
         rows = (await db.execute(
-            select(PriceWork.id, PriceWork.name, PriceWork.unit, PriceWork.prices)
+            select(PriceWork.id, PriceWork.name, PriceWork.unit)
         )).all()
         existing = {normalize_name(row.name): row for row in rows}
+
+        # Векторы новых позиций считаются медленно — до записи существующих:
+        # пока идёт расчёт, строки прайса не заблокированы и не прочитаны.
+        # Новая позиция: единица — последней присланной строки, цены других
+        # подрядчиков приводятся к ней тем же правилом, что к единице
+        # существующей позиции.
+        new_rows: list[tuple[str, dict, dict, list]] = []
+        for key, group in works.items():
+            if key in existing:
+                continue
+            merged, wrote = _merge(group, group["unit"], None)
+            if wrote:
+                new_rows.append((key, group, merged, wrote))
+        embeddings = {key: await _generate_embedding_safe(group["name"])
+                      for key, group, _m, _w in new_rows}
+
+        for key, group, merged, wrote in new_rows:
+            written.extend(
+                {"kind": "work", "name_key": key, "contractor": c, "value": v} for c, v in wrote
+            )
+            db.add(PriceWork(
+                name=group["name"],
+                unit=group["unit"],
+                prices=merged,
+                min_price=compute_min_price(merged),
+                embedding=embeddings[key],
+                updated_at=now,
+            ))
+            added += 1
 
         for key, group in works.items():
             found = existing.get(key)
             if found is None:
-                # Новая позиция: единица — последней присланной строки, цены
-                # других подрядчиков приводятся к ней тем же правилом, что к
-                # единице существующей позиции.
-                target_unit = group["unit"]
-                merged: dict = {}
-            else:
-                target_unit = found.unit
-                merged = dict(found.prices or {})
-
-            wrote: list[tuple[str, float]] = []
-            for contractor, entry in group["prices"].items():
-                price, unit_skip = _price_for_existing_unit(
-                    entry["price"], entry["unit"], target_unit
-                )
-                if unit_skip:
-                    _skip_unit()
-                    continue
-                # Цены прочих подрядчиков не трогаем — переписывается только свой ключ.
-                merged[contractor] = price
-                wrote.append((contractor, price))
+                continue
+            # Цены и единица — свежие, под блокировкой строки до коммита: между
+            # чтением списка и записью другое завершение запроса могло записать
+            # свой ключ «КП: …», а слияние в старый словарь его бы стёрло.
+            fresh = (await db.execute(
+                select(PriceWork.prices, PriceWork.unit)
+                .where(PriceWork.id == found.id)
+                .with_for_update()
+            )).one_or_none()
+            if fresh is None:
+                continue  # позицию удалили — писать цену некуда
+            merged, wrote = _merge(group, fresh.unit, fresh.prices)
             if not wrote:
                 continue
             written.extend(
                 {"kind": "work", "name_key": key, "contractor": c, "value": v} for c, v in wrote
             )
 
-            if found is None:
-                db.add(PriceWork(
-                    name=group["name"],
-                    unit=group["unit"],
-                    prices=merged,
-                    min_price=compute_min_price(merged),
-                    embedding=await _generate_embedding_safe(group["name"]),
-                    updated_at=now,
-                ))
-                added += 1
-                continue
-
-            new_unit = found.unit or group["unit"]
+            new_unit = fresh.unit or group["unit"]
             values = {
                 "prices": merged,
                 "min_price": compute_min_price(merged),
@@ -231,7 +264,7 @@ async def add_items(
             }
             # Та же цена из другой сметы — не переоценка: дата осталась бы
             # сегодняшней у позиции, которую никто не пересчитывал.
-            if prices_changed(found.prices, merged, found.unit, new_unit):
+            if prices_changed(fresh.prices, merged, fresh.unit, new_unit):
                 values["updated_at"] = now
             await db.execute(
                 update(PriceWork).where(PriceWork.id == found.id).values(**values)
@@ -252,7 +285,8 @@ async def add_items(
                     name=item["name"],
                     unit=item["unit"],
                     price=item["price"],
-                    embedding=await _generate_embedding_safe(item["name"]),
+                    embedding=(material_embeddings[key] if key in material_embeddings
+                               else await _generate_embedding_safe(item["name"])),
                     updated_at=now,
                 ))
                 written.append({"kind": "material", "name_key": key, "contractor": None,

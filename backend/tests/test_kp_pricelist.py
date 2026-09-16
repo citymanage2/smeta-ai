@@ -382,3 +382,41 @@ async def test_write_requires_done(db_session, env):
     with pytest.raises(HTTPException) as exc:
         await kp_pricelist.write(db_session, env["work"])
     assert exc.value.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Гонка записи: чужой ключ, записанный между чтением и записью
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_items_merges_key_into_fresh_prices(db_session, env, monkeypatch):
+    """Два завершения пишут одну работу: ключ «КП: …» соседа не стирается.
+
+    Между чтением прайса и записью идёт медленный расчёт векторов новых позиций;
+    сосед успевает записать свой ключ. Слияние обязано идти в свежий словарь.
+    """
+    db_session.add(PriceWork(name="Штукатурка стен", unit="м2",
+                             prices={"КП: СтройА": 500.0}, min_price=500.0, updated_at=OLD))
+    await db_session.commit()
+
+    async def _slow_embedding(_name):
+        # Пока «считается вектор», другое завершение записало свой ключ.
+        await db_session.execute(
+            update(PriceWork).where(PriceWork.name == "Штукатурка стен")
+            .values(prices={"КП: СтройА": 500.0, "КП: СтройВ": 450.0}, min_price=450.0)
+        )
+        return None
+
+    monkeypatch.setattr(price_bulk, "_generate_embedding_safe", _slow_embedding)
+    result = await price_bulk.add_items(db_session, [
+        {"kind": "work", "name": "Кладка перегородок", "unit": "м2", "price": 300,
+         "contractor": "КП: СтройБ"},
+        {"kind": "work", "name": "Штукатурка стен", "unit": "м2", "price": 600,
+         "contractor": "КП: СтройБ"},
+    ], commit=False, with_written=True)
+    await db_session.commit()
+
+    assert result["added"] == 1 and result["updated"] == 1
+    row = await _work_row(db_session, "Штукатурка стен")
+    assert row.prices == {"КП: СтройА": 500.0, "КП: СтройВ": 450.0, "КП: СтройБ": 600.0}
+    assert row.min_price == 450.0
