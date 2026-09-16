@@ -139,6 +139,14 @@ async def _offer(client, env, **kw):
     return resp.json()
 
 
+async def _parsed(db, offer: dict) -> dict:
+    """Разбор КП закончен: завершать запрос можно (идущий разбор держит «Завершить»)."""
+    await db.execute(KpOffer.__table__.update().where(KpOffer.id == offer["id"])
+                     .values(parse_status="parsed"))
+    await db.commit()
+    return offer
+
+
 async def _put_price(client, env, offer_id, item_key, price, unit=None, who=SUPPLY, **extra):
     body = {"price": price, "unit": unit, **extra}
     return await client.put(
@@ -493,7 +501,7 @@ async def test_selected_offer_validation_and_access(async_client, env):
 
 @pytest.mark.asyncio
 async def test_sales_can_select_after_done_production_cannot(async_client, db_session, env):
-    a = await _offer(async_client, env)
+    a = await _parsed(db_session, await _offer(async_client, env))
     await _put_price(async_client, env, a["id"], "cement", 10, "кг")
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
                                    headers=_h(env, SUPPLY), json={"report": "Ответил один"})
@@ -519,7 +527,7 @@ async def test_complete_requires_report(async_client, env):
 
 @pytest.mark.asyncio
 async def test_complete_with_draft_price_is_422_with_list(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await _parsed(db_session, await _offer(async_client, env))
     db_session.add(KpOfferPrice(offer_id=offer["id"], item_id=env["cement"], price=9.5, unit="кг",
                                 source="ai", confirmed=False))
     await db_session.commit()
@@ -530,6 +538,50 @@ async def test_complete_with_draft_price_is_422_with_list(async_client, db_sessi
     assert "Цемент М500" in detail and "ООО Металл" in detail
     db_session.expire_all()
     assert (await db_session.get(KpRequest, env["material"])).status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_complete_waits_for_running_parse(async_client, db_session, env):
+    """Идёт ИИ-разбор КП — завершать рано: его цены ещё не видны человеку."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import update
+
+    offer = await _offer(async_client, env)  # файл → разбор в очереди
+    manual = await _upload(async_client, env, supplier_name="Без файла")
+    assert manual.status_code == 201, manual.text
+    await _put_price(async_client, env, offer["id"], "cement", 10, "кг")
+    url = f"/kp-requests/{env['material']}/complete"
+
+    resp = await async_client.post(url, headers=_h(env, SUPPLY), json={"report": "Готово"})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Дождитесь разбора КП: ООО Металл"
+    db_session.expire_all()
+    assert (await db_session.get(KpRequest, env["material"])).status == "in_progress"
+
+    now = datetime.now(timezone.utc)
+    await db_session.execute(update(KpOffer).where(KpOffer.id == offer["id"])
+                             .values(parse_status="processing", parse_started_at=now))
+    await db_session.commit()
+    resp = await async_client.post(url, headers=_h(env, SUPPLY), json={"report": "Готово"})
+    assert resp.status_code == 422
+    assert "ООО Металл" in resp.json()["detail"]
+
+    # Разбор брошен (обработчик не ответил) — ждать нечего.
+    await db_session.execute(update(KpOffer).where(KpOffer.id == offer["id"])
+                             .values(parse_started_at=now - timedelta(minutes=16)))
+    await db_session.commit()
+    resp = await async_client.post(url, headers=_h(env, SUPPLY), json={"report": "Готово"})
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_complete_ignores_parse_of_deleted_offer(async_client, db_session, env):
+    offer = await _offer(async_client, env)
+    assert (await async_client.delete(f"/kp-offers/{offer['id']}", headers=_h(env, SUPPLY))).status_code == 204
+    resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
+                                   headers=_h(env, SUPPLY), json={"report": "Готово"})
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
@@ -547,7 +599,7 @@ async def test_complete_without_offers_with_report(async_client, db_session, env
 
 @pytest.mark.asyncio
 async def test_after_done_production_edits_409(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await _parsed(db_session, await _offer(async_client, env))
     await _put_price(async_client, env, offer["id"], "cement", 10, "кг")
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
                                    headers=_h(env, SUPPLY), json={"report": "Готово"})
@@ -603,8 +655,8 @@ async def test_complete_forbidden_for_sales_and_foreign_role(async_client, env):
 
 
 @pytest.mark.asyncio
-async def test_reopen_after_complete_allows_edits_again(async_client, env):
-    offer = await _offer(async_client, env)
+async def test_reopen_after_complete_allows_edits_again(async_client, db_session, env):
+    offer = await _parsed(db_session, await _offer(async_client, env))
     await async_client.post(f"/kp-requests/{env['material']}/complete",
                             headers=_h(env, SUPPLY), json={"report": "Готово"})
     resp = await async_client.post(f"/kp-requests/{env['material']}/reopen", headers=_h(env, PM))

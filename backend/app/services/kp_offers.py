@@ -495,6 +495,24 @@ async def _draft_prices(db: AsyncSession, request_id: str) -> list[tuple[str, st
     return [(name, supplier or file_name or "КП без названия") for name, supplier, file_name in rows]
 
 
+async def _parsing_offers(db: AsyncSession, request_id: str) -> list[str]:
+    """Поставщики КП, чей ИИ-разбор ещё идёт (в очереди или в работе, не брошен)."""
+    offers = (await db.execute(
+        select(KpOffer)
+        .where(
+            KpOffer.request_id == request_id,
+            KpOffer.deleted_at.is_(None),
+            KpOffer.parse_status.in_((kp_parser.PARSE_QUEUED, kp_parser.PARSE_PROCESSING)),
+        )
+        .order_by(KpOffer.created_at, KpOffer.id)
+    )).scalars().all()
+    now = datetime.now(timezone.utc)
+    return [
+        o.supplier_name or o.file_name or "КП без названия"
+        for o in offers if not kp_parser.is_abandoned(o, now)
+    ]
+
+
 async def complete(db: AsyncSession, request_id: str, report: Optional[str], current_user: dict) -> KpRequest:
     """«Завершить»: отчёт обязателен, черновых цен нет; атомарно.
 
@@ -524,6 +542,12 @@ async def complete(db: AsyncSession, request_id: str, report: Optional[str], cur
     )
     if result.rowcount == 0:
         raise await kp_requests._conflict(db, rid)
+
+    # Идущий разбор допишет черновики после завершения — их никто не увидит.
+    parsing = await _parsing_offers(db, rid)
+    if parsing:
+        await db.rollback()
+        raise _unprocessable(f"Дождитесь разбора КП: {', '.join(parsing)}")
 
     drafts = await _draft_prices(db, rid)
     if drafts:
