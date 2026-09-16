@@ -17,7 +17,9 @@
   отдельным подрядчиком «КП: <поставщик>»; «Из смет» и прочие ключи целы. У двух
   КП одного поставщика по одной позиции ключ один — берётся меньшая цена.
   Цена «включает материалы» в прайс работ **не пишется** (критерий 25).
-* **Сводка не молчит:** всё, что не записано, названо причиной.
+* **Сводка не молчит:** всё, что не записано, названо причиной. Две позиции
+  запроса с одним ключом прайса (имя по `normalize_name` и подрядчик) не
+  пишутся вовсе: последняя молча перетёрла бы первую.
 * **Отдельная транзакция после завершения.** Векторы новых позиций считаются
   медленно, а завершение не должно ждать их и не должно откатываться из-за
   сбоя прайса (критерий 28): завершение коммитится первым, запись — следом,
@@ -59,6 +61,7 @@ SKIP_NO_PRICE = "нет подтверждённой цены из КП"
 SKIP_UNIT_INCOMPATIBLE = "единица КП не сводится с позицией"
 SKIP_INCLUDES_MATERIALS = "цена включает материалы"
 SKIP_NO_SUPPLIER = "не указан поставщик"
+SKIP_DUPLICATE_NAME = "несколько позиций с одним наименованием — цена не записана"
 
 _ERROR_LEN = 500
 
@@ -156,6 +159,28 @@ async def _owned_by_others(db: AsyncSession, request_id: str) -> dict:
     return owned
 
 
+def _drop_name_collisions(owned: list[tuple[str, dict]], skipped: dict) -> list[dict]:
+    """Убрать записи позиций, которые в прайсе легли бы в один ключ.
+
+    Ключ прайса — `normalize_name` (правило №19) и подрядчик работы: у двух
+    позиций запроса с одним ключом последняя молча перетёрла бы первую, а какая
+    цена верна, система не выбирает. Такие записи не пишутся — пропуск с причиной.
+    """
+    def key(entry: dict) -> tuple:
+        return (entry["kind"], normalize_name(entry["name"]), entry.get("contractor"))
+
+    items_by_key: dict[tuple, set] = {}
+    for item_id, entry in owned:
+        items_by_key.setdefault(key(entry), set()).add(item_id)
+    out = []
+    for _item_id, entry in owned:
+        if len(items_by_key[key(entry)]) > 1:
+            _bump(skipped, SKIP_DUPLICATE_NAME)
+            continue
+        out.append(entry)
+    return out
+
+
 async def _retire_stale(
     db: AsyncSession, request_id: str, previous: list, current: list, now: datetime,
 ) -> int:
@@ -226,15 +251,16 @@ async def write(db: AsyncSession, request_id: str) -> KpRequest:
             by_item.setdefault(str(p.item_id), []).append(p)
 
         skipped: dict[str, int] = {}
-        entries: list[dict] = []
+        owned: list[tuple[str, dict]] = []
         for item in items:
             item_prices = by_item.get(str(item.id), [])
             if request.category == CATEGORY_WORK:
-                entries.extend(_work_entries(item, offers, item_prices, skipped))
+                owned.extend((str(item.id), e) for e in _work_entries(item, offers, item_prices, skipped))
             else:
                 entry = _material_entry(item, offers, item_prices, skipped)
                 if entry:
-                    entries.append(entry)
+                    owned.append((str(item.id), entry))
+        entries = _drop_name_collisions(owned, skipped)
 
         result = {"added": 0, "updated": 0, "skipped_reasons": {}, "written_prices": []}
         if entries:

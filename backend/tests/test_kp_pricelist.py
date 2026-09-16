@@ -462,3 +462,44 @@ async def test_stale_key_kept_when_other_done_request_wrote_same(db_session, env
     assert plaster.prices == {"КП: СтройА": 500.0, "КП: СтройА-Групп": 500.0}
     masonry_row = await _work_row(db_session, "Кладка перегородок")
     assert masonry_row.prices == {"КП: СтройА-Групп": 300.0}
+
+
+@pytest.mark.asyncio
+async def test_same_name_positions_in_request_not_written(db_session, env):
+    """Две позиции запроса с одним ключом прайса — какая цена верна, система не выбирает."""
+    db_session.add(KpRequestItem(request_id=env["material"], position=2, item_type="material",
+                                 name="арматура  А500", unit="кг", qty=10, source_row_ids=["r9"]))
+    work_twin = KpRequestItem(request_id=env["work"], position=2, item_type="work",
+                              name="ШТУКАТУРКА стен", unit="м2", qty=5, source_row_ids=["r8"])
+    db_session.add(work_twin)
+    await db_session.commit()
+    twin = (await db_session.execute(
+        select(KpRequestItem).where(KpRequestItem.name == "арматура  А500"))).scalar_one()
+    twin_id, work_twin_id = str(twin.id), str(work_twin.id)
+
+    m = await _add_offer(db_session, env["material"], "ООО Сталь")
+    await _add_price(db_session, m, env["armature"], 85, "кг")
+    await _add_price(db_session, m, twin_id, 90, "кг")
+    await _add_price(db_session, m, env["cement"], 10, "кг")
+    await _set_status(db_session, env["material"], "done")
+    request = await kp_pricelist.write(db_session, env["material"])
+    summary = request.pricelist_summary
+    assert summary["skipped"] == {kp_pricelist.SKIP_DUPLICATE_NAME: 2}
+    assert summary["added"] == 1
+    db_session.expire_all()
+    names = [r.name for r in (await db_session.execute(select(PriceMaterial))).scalars().all()]
+    assert names == ["Цемент М500"]
+
+    # Работа: коллизия — по имени и подрядчику; у другого подрядчика её нет.
+    a = await _add_offer(db_session, env["work"], "СтройА")
+    b = await _add_offer(db_session, env["work"], "СтройБ")
+    await _add_price(db_session, a, env["plaster"], 500, "м2")
+    await _add_price(db_session, a, work_twin_id, 550, "м2")
+    await _add_price(db_session, b, env["plaster"], 480, "м2")
+    await _set_status(db_session, env["work"], "done")
+    request = await kp_pricelist.write(db_session, env["work"])
+    assert request.pricelist_summary["skipped"] == {
+        kp_pricelist.SKIP_DUPLICATE_NAME: 2, kp_pricelist.SKIP_NO_PRICE: 1,
+    }
+    row = await _work_row(db_session, "Штукатурка стен")
+    assert row.prices == {"КП: СтройБ": 480.0}
