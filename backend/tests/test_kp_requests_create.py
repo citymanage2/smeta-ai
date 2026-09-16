@@ -12,6 +12,7 @@
 * окончательное удаление карточки/проекта удаляет запросы и их файлы в S3.
 """
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -724,7 +725,9 @@ async def test_reopen_done_request(async_client, db_session, kp_env, two_request
     assert (await async_client.post(url, headers=_auth(kp_env["pm1"], "project_manager"))).status_code == 409
     await db_session.execute(
         KpRequest.__table__.update().where(KpRequest.id == rid)
-        .values(status="done", taken_by_id=kp_env["contractor1"], completed_by_id=kp_env["contractor1"])
+        .values(status="done", taken_by_id=kp_env["contractor1"], completed_by_id=kp_env["contractor1"],
+                applied_at=datetime(2026, 9, 15, 12, 0, tzinfo=timezone.utc),
+                applied_version_id="7c1e2b1a-3f4d-4e5a-9b6c-1d2e3f4a5b6c")
     )
     await db_session.commit()
     assert (await async_client.post(url, headers=_auth(kp_env["pm2"], "project_manager"))).status_code == 403
@@ -732,6 +735,11 @@ async def test_reopen_done_request(async_client, db_session, kp_env, two_request
     resp = await async_client.post(url, headers=_auth(kp_env["pm1"], "project_manager"))
     assert resp.status_code == 200
     assert resp.json()["status"] == "in_progress"
+    # Вернули в работу — цены могут смениться: отметка «применено» снимается.
+    assert resp.json()["applied_at"] is None and resp.json()["applied_version_id"] is None
+    db_session.expire_all()
+    request = await db_session.get(KpRequest, rid)
+    assert request.applied_at is None and request.applied_version_id is None
 
 
 # ---------------------------------------------------------------------------

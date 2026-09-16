@@ -810,6 +810,9 @@ async def reopen(db: AsyncSession, request_id: str, current_user: dict) -> KpReq
             ),
             "completed_by_id": None,
             "completed_at": None,
+            # Вернули в работу — цены могут смениться: «применено» больше не правда.
+            "applied_at": None,
+            "applied_version_id": None,
         },
     )
 
