@@ -1,6 +1,6 @@
 import apiClient from './client';
 import type {
-  KpCategory, KpCell, KpCounters, KpCreatePayload, KpFile, KpOffer, KpOfferForm,
+  KpApplyBody, KpApplyPreview, KpApplyResult, KpCategory, KpCell, KpCounters, KpCreatePayload, KpFile, KpOffer, KpOfferForm,
   KpPreview, KpPreviewBody, KpPriceBody, KpRequestBrief, KpRequestDetail, KpStatus,
 } from '../types/kp';
 import {
@@ -166,6 +166,20 @@ export async function completeKpRequest(requestId: string, report: string): Prom
 /** Повторить запись цен в прайс после сбоя (ручка — фаза 7). */
 export async function retryKpPricelist(requestId: string): Promise<KpRequestDetail> {
   const res = await apiClient.post<KpRequestDetail>(`/kp-requests/${requestId}/pricelist/retry`);
+  return res.data;
+}
+
+/** Цены из КП в оптимизацию: какие строки получат цену. Ничего не пишет. */
+export async function previewKpApply(cardId: string, versionId: string): Promise<KpApplyPreview> {
+  const res = await apiClient.post<KpApplyPreview>('/kp-requests/apply/preview', {
+    card_id: cardId, version_id: versionId,
+  });
+  return res.data;
+}
+
+/** Применить предпросмотр: новая версия оптимизации «Цены из КП». 409 — всё устарело. */
+export async function applyKpPrices(body: KpApplyBody): Promise<KpApplyResult> {
+  const res = await apiClient.post<KpApplyResult>('/kp-requests/apply', body);
   return res.data;
 }
 

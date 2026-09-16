@@ -792,6 +792,25 @@
   background: #fef2f2;
 }
 
+/* Цена из КП (запрос КП, фаза 8). Цвета — те же, что заливка строк в xlsx
+   оптимизации (utils/kp_marks.py): голубой DDEBF7 — «цена из КП», персиковый
+   FCE4D6 — цена работы «включает материалы», проверьте материал позиции. */
+.rdg-row.de-row-kp .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.rdg-row.de-row-kp .rdg-cell {
+  background: #ddebf7;
+}
+
+.rdg-row.de-row-kp-materials .rdg-cell:first-child {
+  box-shadow: inset 3px 0 0 #ea580c;
+}
+
+.rdg-row.de-row-kp-materials .rdg-cell {
+  background: #fce4d6;
+}
+
 /* Группы А/В/С: где сосредоточены деньги сметы. */
 .rdg-row.de-row-abc-a .rdg-cell:first-child {
   box-shadow: inset 3px 0 0 #ef4444;

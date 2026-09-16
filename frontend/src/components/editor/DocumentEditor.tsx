@@ -34,6 +34,7 @@ import AddFromPriceList from './actions/AddFromPriceList';
 import { PricePosition, buildPriceRows, insertRowsAfter } from './actions/priceInsert';
 import FindAnalogs from './actions/FindAnalogs';
 import RequestKp from './actions/RequestKp';
+import KpPrices from './actions/KpPrices';
 import { useAuthStore } from '../../stores/auth';
 import { KP_SOURCE_KINDS, KpRequestBrief, KpSourceKind } from '../../types/kp';
 import AnalogsPanel from './AnalogsPanel';
@@ -521,8 +522,11 @@ export const DocumentEditor: React.FC<Props> = ({
             </button>
           );
         }
-        if (row[CHILD_KEY]) return <span className="de-group-child">{text}</span>;
-        return text;
+        // Подсказка строки (цена из КП: поставщик, дата, число КП) — на
+        // наименовании: подсветка без объяснения заставила бы гадать.
+        const hint = adapter.rowHint?.(row) ?? undefined;
+        if (row[CHILD_KEY]) return <span className="de-group-child" title={hint}>{text}</span>;
+        return hint ? <span title={hint}>{text}</span> : text;
       },
       renderEditCell: TextEditor,
     }));
@@ -1085,6 +1089,22 @@ export const DocumentEditor: React.FC<Props> = ({
                 isDirty={isDirty}
                 onNotice={setNotice}
                 onCreated={onKpRequested}
+              />
+            )}
+
+            {/* Цены из КП ложатся новой версией оптимизации — это запись, поэтому
+                только с правом записи и не отделу производства. */}
+            {kind === 'optimization' && canWrite && !isProduction && !fileSlot && meta && (
+              <KpPrices
+                cardId={cardId}
+                versions={meta.versions}
+                rowsCount={rows.length}
+                isDirty={isDirty}
+                onNotice={setNotice}
+                onApplied={(result) => {
+                  setComparing(false);
+                  load({ ...documentRef, versionId: result.version_id });
+                }}
               />
             )}
           </div>

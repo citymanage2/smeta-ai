@@ -264,3 +264,100 @@ export const KP_OFFER_EXTENSIONS: readonly string[] = [
   '.pdf', '.xlsx', '.xls', '.jpg', '.jpeg', '.png',
 ];
 export const KP_DEFAULT_VAT_RATE = 22;
+
+// --- Цены из КП в оптимизацию (фаза 8) ----------------------------------------
+// Контракт — `backend/app/schemas/kp_request.py` (KpApply*).
+
+/** Пометка строки оптимизации «цена из КП» — поле строки `kp_ref`. */
+export interface KpRef {
+  request_id?: string;
+  offer_id?: string;
+  supplier?: string | null;
+  offer_date?: string | null;
+  offers_count?: number;
+  includes_materials?: boolean;
+}
+
+export interface KpApplyRow {
+  row_id: string;
+  name: string | null;
+  unit: string | null;
+  sheet: string | null;
+  source_no: string | null;
+  type: string | null;
+  field: string;
+  old_price: number | string | null;
+  new_price: number;
+  request_id: string;
+  item_id: string;
+  offer_id: string;
+  supplier: string | null;
+  offer_date: string | null;
+  offers_count: number;
+  includes_materials: boolean;
+  match: string;
+}
+
+export interface KpApplyCandidate {
+  row_id: string;
+  name: string | null;
+  unit: string | null;
+  sheet: string | null;
+  source_no: string | null;
+  qty: number | string | null;
+  old_price: number | string | null;
+  new_price: number;
+}
+
+export interface KpApplyItem {
+  request_id: string;
+  item_id: string;
+  item_type: string;
+  name: string;
+  unit: string | null;
+  sheet: string | null;
+  source_no: string | null;
+  price: number;
+  supplier: string | null;
+  offer_date: string | null;
+  offers_count: number;
+  includes_materials: boolean;
+  candidates: KpApplyCandidate[];
+}
+
+export interface KpApplySkipped {
+  row_id: string;
+  item_id: string;
+  name: string | null;
+  reason: string;
+}
+
+export interface KpApplyPreview {
+  version_id: string;
+  rev: number;
+  preview_hash: string;
+  rows: KpApplyRow[];
+  ambiguous: KpApplyItem[];
+  not_found: KpApplyItem[];
+  skipped: KpApplySkipped[];
+  no_price_count: number;
+  includes_materials_count: number;
+}
+
+export interface KpApplyBody {
+  card_id: string;
+  version_id: string;
+  client_rev: number;
+  preview_hash: string;
+  /** Только для «Неоднозначно»: item_id → строка / строки / null (пропустить). */
+  choices: Record<string, string | string[] | null>;
+}
+
+export interface KpApplyResult {
+  version_id: string;
+  version_number: number;
+  source_version_id: string;
+  applied_rows: number;
+  changes_count: number;
+  request_ids: string[];
+}

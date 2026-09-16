@@ -1,3 +1,4 @@
+import type { KpRef } from '../../../types/kp';
 import { billableQty, isNegativeQty } from '../../../utils/negativeQty';
 import { calcEstimateTotals, rowCoefficient } from '../../../utils/estimateCalc';
 import { formatDecimal, formatMoney } from '../../../utils/formatNumber';
@@ -110,6 +111,28 @@ function unscale(
   if (factor === 1) return shown;
   if (base !== null && scale(base, factor) === shown) return base;
   return Math.round((shown / factor) * 100) / 100;
+}
+
+/** Пометка «цена из КП» — только объект: строка заказчика могла принести текст. */
+function kpRefOf(row: GridRow): KpRef | null {
+  const ref = row.kp_ref;
+  return ref && typeof ref === 'object' && !Array.isArray(ref) ? (ref as KpRef) : null;
+}
+
+/**
+ * Подсказка строки с ценой из КП: откуда цена — поставщик, дата, сколько КП
+ * сравнивали. `null` — у строки цены из КП нет.
+ */
+export function kpRowHint(row: GridRow): string | null {
+  const ref = kpRefOf(row);
+  if (!ref) return null;
+  const parts: string[] = [`Цена из КП: ${ref.supplier || 'поставщик не указан'}`];
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ref.offer_date ?? ''));
+  if (iso) parts.push(`от ${iso[3]}.${iso[2]}.${iso[1]}`);
+  if (typeof ref.offers_count === 'number' && ref.offers_count > 0) parts.push(`КП: ${ref.offers_count}`);
+  let hint = parts.join(', ');
+  if (ref.includes_materials) hint += '. Цена работы включает материалы — проверьте материал позиции';
+  return hint;
 }
 
 export const estimateAdapter: EditorAdapter = {
@@ -227,12 +250,21 @@ export const estimateAdapter: EditorAdapter = {
     // подозрительна. Ищем вхождением — пометка могла дописаться к прежней.
     if (note.includes(PRICE_UNIT_MISMATCH_PREFIX)) classes.push('de-row-price-unit-mismatch');
 
+    // Цена из КП (фаза 8 плана запроса КП). «Включает материалы» — отдельно:
+    // цена работы уже покрывает материал, а цена материала строки не тронута.
+    const kp = kpRefOf(row);
+    if (kp) classes.push(kp.includes_materials ? 'de-row-kp-materials' : 'de-row-kp');
+
     const abc = String(row.abc_group ?? '').trim().toUpperCase();
     if (abc === 'A' || abc === 'А') classes.push('de-row-abc-a');
     if (abc === 'B' || abc === 'В') classes.push('de-row-abc-b');
     if (abc === 'C' || abc === 'С') classes.push('de-row-abc-c');
 
     return classes.length > 0 ? classes.join(' ') : undefined;
+  },
+
+  rowHint(row: GridRow): string | null {
+    return kpRowHint(row);
   },
 
   displayValue(row: GridRow, key: string): string | null {
