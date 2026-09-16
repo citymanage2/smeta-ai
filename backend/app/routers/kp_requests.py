@@ -461,6 +461,10 @@ async def select_kp_offer(
 ):
     """Отметить КП выбранным у позиции (`offer_id: null` — снять выбор)."""
     request = await kp_offers.select_offer(db, item_id, body.offer_id, current_user)
+    if request.status == STATUS_DONE:
+        # Выбор КП меняет цену позиции — прайс завершённого запроса пишется
+        # заново тем же путём, что при завершении (сбой — `pricelist_status`).
+        request = await kp_pricelist.write_safe(db, str(request.id))
     return await svc.detail(db, request, current_user)
 
 

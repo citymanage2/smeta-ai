@@ -503,3 +503,37 @@ async def test_same_name_positions_in_request_not_written(db_session, env):
     }
     row = await _work_row(db_session, "Штукатурка стен")
     assert row.prices == {"КП: СтройБ": 480.0}
+
+
+@pytest.mark.asyncio
+async def test_select_offer_after_done_rewrites_pricelist(async_client, db_session, env):
+    """Продажи сменили выбранное КП в завершённом запросе — прайс получает цену выбора."""
+    a = await _add_offer(db_session, env["material"], "А")
+    b = await _add_offer(db_session, env["material"], "Б")
+    await _add_price(db_session, a, env["cement"], 10, "кг")
+    await _add_price(db_session, b, env["cement"], 12, "кг")
+    resp = await _complete(async_client, env, "material", "supply1", "supply_manager")
+    assert resp.status_code == 200, resp.text
+    assert (await _material_row(db_session, "Цемент М500")).price == 10.0
+
+    url = f"/kp-request-items/{env['cement']}/selected-offer"
+    resp = await async_client.put(url, headers=_auth(env["pm1"], "project_manager"), json={"offer_id": b})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["pricelist_status"] == "done"
+    assert (await _material_row(db_session, "Цемент М500")).price == 12.0
+
+    # Снять выбор — снова минимум.
+    resp = await async_client.put(url, headers=_auth(env["pm1"], "project_manager"), json={"offer_id": None})
+    assert resp.status_code == 200, resp.text
+    assert (await _material_row(db_session, "Цемент М500")).price == 10.0
+
+
+@pytest.mark.asyncio
+async def test_select_offer_in_progress_does_not_write_pricelist(async_client, db_session, env):
+    a = await _add_offer(db_session, env["material"], "А")
+    await _add_price(db_session, a, env["cement"], 10, "кг")
+    url = f"/kp-request-items/{env['cement']}/selected-offer"
+    resp = await async_client.put(url, headers=_auth(env["supply1"], "supply_manager"), json={"offer_id": a})
+    assert resp.status_code == 200, resp.text
+    db_session.expire_all()
+    assert (await db_session.execute(select(PriceMaterial))).scalars().all() == []
