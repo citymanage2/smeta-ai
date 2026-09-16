@@ -1,4 +1,5 @@
 import { CollapseFields, EditorColumn, GridRow, RowKind } from './adapters/types';
+import { activeKpRef } from './adapters/estimateAdapter';
 import { buildCollapsedRows, groupInfoOf } from './collapse';
 import { isDeductionRow } from './deductions';
 
@@ -136,15 +137,16 @@ export function rowsFromEditor(
   columns: ExportColumn[],
   kindOf: (row: GridRow) => 'work' | 'material' | 'section' | null,
   sheetOf?: (row: GridRow) => string | null,
+  coefficient?: unknown,
 ): ExportRow[] {
   return rows.map((row) => {
     const exported: ExportRow = { _id: row.__key, _kind: kindOf(row) };
     const sheet = sheetOf?.(row) ?? null;
     if (sheet !== null) exported.__sheet = sheet;
-    const kpRef = row.kp_ref;
-    if (kpRef && typeof kpRef === 'object' && !Array.isArray(kpRef)) {
-      exported[KP_REF_KEY] = kpRef as Record<string, unknown>;
-    }
+    // Только действующая пометка: цену правили после применения — в файле
+    // строка не должна заливаться «ценой из КП» (правило то же, что на экране).
+    const kpRef = activeKpRef(row, coefficient);
+    if (kpRef) exported[KP_REF_KEY] = kpRef as Record<string, unknown>;
     for (const column of columns) exported[column.key] = row[column.key] ?? null;
     return exported;
   });

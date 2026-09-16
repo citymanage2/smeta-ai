@@ -492,6 +492,89 @@ describe('Страница запроса', () => {
     await waitFor(() => expect(kpApi.retryKpPricelist).toHaveBeenCalledWith('req-1'));
   });
 
+  it('пока КП разбирается ИИ — «Завершить» неактивна: «Дождитесь разбора КП»', async () => {
+    const request = twoOffersRequest({
+      report: 'Готово',
+      offers: [offer({ id: 'o1', supplier_name: 'Кирпичный двор', parse_status: 'processing' })],
+    });
+    request.items = [request.items[0]];
+    vi.mocked(kpApi.getKpRequest).mockResolvedValue(request);
+    renderPage();
+    const button = await screen.findByRole('button', { name: 'Завершить' });
+    expect(button).toBeDisabled();
+    expect(screen.getByText('Дождитесь разбора КП')).toBeInTheDocument();
+  });
+
+  it('разбор в очереди тоже блокирует; разбор закончился — «Завершить» активна', async () => {
+    const request = twoOffersRequest({
+      report: 'Готово', offers: [offer({ id: 'o1', parse_status: 'queued' })],
+    });
+    request.items = [request.items[0]];
+    vi.mocked(kpApi.getKpRequest).mockResolvedValue(request);
+    const view = renderPage();
+    expect(await screen.findByText('Дождитесь разбора КП')).toBeInTheDocument();
+    view.unmount();
+    vi.mocked(kpApi.getKpRequest).mockResolvedValue({
+      ...request, offers: [offer({ id: 'o1', parse_status: 'done' })],
+    });
+    renderPage();
+    const button = await screen.findByRole('button', { name: 'Завершить' });
+    expect(button).toBeEnabled();
+    expect(screen.queryByText('Дождитесь разбора КП')).not.toBeInTheDocument();
+  });
+
+  it('сервер отказал в завершении (422) — показан его текст', async () => {
+    const request = twoOffersRequest({ report: 'Готово' });
+    request.items = [request.items[0]];
+    vi.mocked(kpApi.getKpRequest).mockResolvedValue(request);
+    vi.mocked(kpApi.completeKpRequest).mockRejectedValue({
+      response: { status: 422, data: { detail: 'Дождитесь окончания разбора КП «Кирпичный двор»' } },
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole('button', { name: 'Завершить' }));
+    expect(await screen.findByText('Дождитесь окончания разбора КП «Кирпичный двор»')).toBeInTheDocument();
+  });
+
+  it('ответ фонового опроса, ушедший до действия, не перетирает результат действия', async () => {
+    const polls: Array<() => void> = [];
+    const spy = vi.spyOn(window, 'setInterval').mockImplementation(((fn: () => void, ms?: number) => {
+      // Опрос страницы — раз в 30 секунд; остальные интервалы (счётчики) не нужны.
+      if (ms === 30_000) polls.push(fn);
+      return polls.length + 1000;
+    }) as unknown as typeof window.setInterval);
+    // В jsdom документ «скрыт», и опрос бы молчал.
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    try {
+      const request = twoOffersRequest({
+        status: 'new', taken_by_id: null, taken_by_name: null, offers: [],
+        items: [detailItem({ id: 'i1' })],
+      });
+      vi.mocked(kpApi.getKpRequest).mockResolvedValue(request);
+      renderPage();
+      const take = await screen.findByRole('button', { name: 'Взять в работу' });
+
+      // Опрос ушёл за данными, ответ задерживается — и приходит старым.
+      let resolveStale: (value: typeof request) => void = () => undefined;
+      vi.mocked(kpApi.getKpRequest).mockReturnValueOnce(
+        new Promise((resolve) => { resolveStale = resolve; }),
+      );
+      for (const poll of polls) poll();
+      expect(kpApi.getKpRequest).toHaveBeenCalledTimes(2);
+      vi.mocked(kpApi.takeKpRequest).mockResolvedValue({ ...request, status: 'in_progress' });
+      await userEvent.click(take);
+      expect(await screen.findByText('В работе')).toBeInTheDocument();
+
+      resolveStale(request);
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      expect(screen.getByText('В работе')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Взять в работу' })).not.toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+      hidden.mockRestore();
+      vi.mocked(kpApi.getKpRequest).mockReset();
+    }
+  });
+
   it('запрос чужой роли — «не найден»', async () => {
     vi.mocked(kpApi.getKpRequest).mockRejectedValue({
       response: { status: 404, data: { detail: 'Запрос КП не найден' } },
@@ -580,3 +663,30 @@ describe('Карточка сметы → страница запроса', () =
     expect(await screen.findByText('Страница-запроса')).toBeInTheDocument();
   });
 });
+
+describe('Запросы КП в карточке: гонка открытия', () => {
+  it('быстро открыли A, потом B — поздний ответ по A не подменяет детали B', async () => {
+    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([
+      brief({ id: 'req-a', category: 'material' }),
+      brief({ id: 'req-b', category: 'work' }),
+    ]);
+    let resolveA: (value: KpRequestDetail) => void = () => undefined;
+    vi.mocked(kpApi.getKpRequest).mockImplementation((id: string) => (
+      id === 'req-a'
+        ? new Promise((resolve) => { resolveA = resolve; })
+        : Promise.resolve(twoOffersRequest({ id: 'req-b', author_comment: 'Детали B' }))
+    ));
+    render(<CardKpRequests cardId="c1" />);
+    const rowA = await screen.findByTestId('kp-request-req-a');
+    const rowB = screen.getByTestId('kp-request-req-b');
+    await userEvent.click(within(rowA).getByRole('button', { name: 'Открыть' }));
+    await userEvent.click(within(rowB).getByRole('button', { name: 'Открыть' }));
+    expect(await screen.findByText(/Детали B/)).toBeInTheDocument();
+
+    resolveA(twoOffersRequest({ id: 'req-a', author_comment: 'Детали A' }));
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+    expect(screen.getByText(/Детали B/)).toBeInTheDocument();
+    expect(screen.queryByText(/Детали A/)).not.toBeInTheDocument();
+  });
+});
+

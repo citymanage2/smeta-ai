@@ -91,6 +91,11 @@ interface Props {
   onApplied?: () => void;
   /** Поставлен запрос КП — странице карточки пора обновить список запросов. */
   onKpRequested?: (requests: KpRequestBrief[]) => void;
+  /**
+   * Запросы КП карточки изменились без постановки нового — например, цены из
+   * КП применены к оптимизации (у запроса появилась отметка «применено»).
+   */
+  onKpChanged?: () => void;
 }
 
 // --- Редактор ячейки -------------------------------------------------------
@@ -140,12 +145,12 @@ const KIND_TITLES: Record<DocumentKind, string> = {
 export const DocumentEditor: React.FC<Props> = ({
   cardId, kind, fileSlot, fileIndex, title, showHead = true, fullHeight = false,
   initialVersionId, initialTab, initialSheet, initialCollapsed = false,
-  initialHideMinus = false, onStateChange, onClose, onApplied, onKpRequested,
+  initialHideMinus = false, onStateChange, onClose, onApplied, onKpRequested, onKpChanged,
 }) => {
   const {
     meta, versionId, adapter, columns, rows, loading, error, conflict, applying, draftState,
     isDirty, selectedKeys, tab, sheet, search, lock, undoStack, redoStack,
-    load, setRows, applyChanges, discardChanges, undo, redo, selectVersion,
+    load, setRows, applyChanges, discardChanges, undo, redo, selectVersion, refreshVersions,
     setTab, setSheet, setSearch, setSelected, heartbeat, reset, setCoefficient,
   } = useDocumentEditorStore();
 
@@ -524,7 +529,7 @@ export const DocumentEditor: React.FC<Props> = ({
         }
         // Подсказка строки (цена из КП: поставщик, дата, число КП) — на
         // наименовании: подсветка без объяснения заставила бы гадать.
-        const hint = adapter.rowHint?.(row) ?? undefined;
+        const hint = adapter.rowHint?.(row, { coefficient: meta?.coefficient }) ?? undefined;
         if (row[CHILD_KEY]) return <span className="de-group-child" title={hint}>{text}</span>;
         return hint ? <span title={hint}>{text}</span> : text;
       },
@@ -533,19 +538,19 @@ export const DocumentEditor: React.FC<Props> = ({
     return editable
       ? [{ ...SelectColumn, frozen: true }, dragColumn, ...data]
       : [{ ...SelectColumn, frozen: true }, ...data];
-  }, [columns, canWrite, handleRowDrop, adapter, collapsed, collapseFields, toggleGroup]);
+  }, [columns, canWrite, handleRowDrop, adapter, collapsed, collapseFields, toggleGroup, meta?.coefficient]);
 
   // Работа, материал и раздел различаются цветом: в смете на тысячу строк тип,
   // написанный словом в первой колонке, глазом не выделяется.
   const rowClass = useCallback((row: GridRow) => {
     const kind = adapter.rowKind(row);
     const byKind = kind ? `de-row-${kind}` : '';
-    const byState = adapter.rowClass?.(row);
+    const byState = adapter.rowClass?.(row, { coefficient: meta?.coefficient });
     // Свёрнутая строка и её позиции: группа выделена, позиции сдвинуты — иначе
     // на экране не видно, где кончается одна группа и начинается другая.
     const byGroup = isGroupRow(row) ? 'de-row-group' : (row[CHILD_KEY] ? 'de-row-child' : '');
     return [byKind, byState, byGroup].filter(Boolean).join(' ') || undefined;
-  }, [adapter]);
+  }, [adapter, meta?.coefficient]);
 
   // --- Правка ячейки --------------------------------------------------------
 
@@ -976,7 +981,9 @@ export const DocumentEditor: React.FC<Props> = ({
               documentTitle={title ?? KIND_TITLES[kind] ?? 'Выгрузка'}
               projectName={meta.project.name}
               columns={columnsFromEditor(columns)}
-              rows={rowsFromEditor(rows, columnsFromEditor(columns), adapter.rowKind, adapter.sheetOf)}
+              rows={rowsFromEditor(
+                rows, columnsFromEditor(columns), adapter.rowKind, adapter.sheetOf, meta?.coefficient,
+              )}
               preselectedIds={selectedKeys}
               // Свёртка в файле — по тем же правилам и тем же кодом, что на
               // экране: две копии правил однажды разошлись бы в объёмах.
@@ -1100,10 +1107,15 @@ export const DocumentEditor: React.FC<Props> = ({
                 versions={meta.versions}
                 rowsCount={rows.length}
                 isDirty={isDirty}
+                openVersionId={versionId}
+                openCoefficient={meta.coefficient}
                 onNotice={setNotice}
+                onRefreshDocument={refreshVersions}
                 onApplied={(result) => {
                   setComparing(false);
                   load({ ...documentRef, versionId: result.version_id });
+                  // «КП получены: N» в карточке считает неприменённые запросы.
+                  onKpChanged?.();
                 }}
               />
             )}

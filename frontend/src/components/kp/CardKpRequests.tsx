@@ -173,6 +173,9 @@ const CardKpRequests: React.FC<Props> = ({ cardId, refreshKey = 0 }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const aliveRef = useRef(true);
+  // Какой запрос раскрыт сейчас. Ответ по запросу, который успели закрыть или
+  // сменить другим, не должен ни подменить детали, ни показать чужую ошибку.
+  const openRef = useRef<string | null>(null);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -184,6 +187,7 @@ const CardKpRequests: React.FC<Props> = ({ cardId, refreshKey = 0 }) => {
   const cardRef = useRef(cardId);
   useEffect(() => {
     cardRef.current = cardId;
+    openRef.current = null;
     setRequests([]);
     setOpenId(null);
     setDetail(null);
@@ -208,19 +212,23 @@ const CardKpRequests: React.FC<Props> = ({ cardId, refreshKey = 0 }) => {
   const loadDetail = useCallback(async (requestId: string) => {
     try {
       const data = await getKpRequest(requestId);
-      if (aliveRef.current) setDetail(data);
+      if (aliveRef.current && openRef.current === requestId && data.id === requestId) setDetail(data);
     } catch (err) {
-      if (aliveRef.current) setError(kpErrorText(err, 'Не удалось открыть запрос КП'));
+      if (aliveRef.current && openRef.current === requestId) {
+        setError(kpErrorText(err, 'Не удалось открыть запрос КП'));
+      }
     }
   }, []);
 
   const toggleOpen = (requestId: string) => {
     setError(null);
     if (openId === requestId) {
+      openRef.current = null;
       setOpenId(null);
       setDetail(null);
       return;
     }
+    openRef.current = requestId;
     setOpenId(requestId);
     setDetail(null);
     loadDetail(requestId);
@@ -232,7 +240,7 @@ const CardKpRequests: React.FC<Props> = ({ cardId, refreshKey = 0 }) => {
     try {
       await action();
       await reload();
-      if (openId === requestId) await loadDetail(requestId);
+      if (openRef.current === requestId) await loadDetail(requestId);
     } catch (err) {
       if (aliveRef.current) setError(kpErrorText(err, fallback));
     } finally {

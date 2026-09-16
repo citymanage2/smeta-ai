@@ -269,6 +269,7 @@ const ProjectCardPage: React.FC = () => {
               onStateChange={handleEditorState}
               onApplied={refetch}
               onKpRequested={handleKpRequested}
+              onKpChanged={handleKpRequested}
             />
           </div>
         )}

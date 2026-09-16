@@ -113,18 +113,47 @@ function unscale(
   return Math.round((shown / factor) * 100) / 100;
 }
 
-/** Пометка «цена из КП» — только объект: строка заказчика могла принести текст. */
-function kpRefOf(row: GridRow): KpRef | null {
+/**
+ * Действующая пометка «цена из КП».
+ *
+ * Пометка говорит «эта цена — из КП», и верна она ровно до правки цены: после
+ * неё в ячейке уже цена человека, а подсветка и заливка в файле продолжали бы
+ * приписывать её поставщику. Поэтому пометка действует, только если в ней
+ * записаны поле и исходная цена (`field`, `price` — пишет сервер при
+ * применении) и цена строки в этом поле с ней совпадает. Старая пометка без
+ * поля и цены — недействующая: проверить её нечем.
+ *
+ * Строка таблицы держит цену с коэффициентом, исходная едет рядом
+ * (`__base_price_*`); сравнивается исходная — та же, что уйдёт в документ.
+ * У хранимой строки (без `__base_*`) в поле цены и так лежит исходная.
+ */
+export function activeKpRef(row: GridRow, coefficient?: unknown): KpRef | null {
   const ref = row.kp_ref;
-  return ref && typeof ref === 'object' && !Array.isArray(ref) ? (ref as KpRef) : null;
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
+  const { field, price } = ref as KpRef;
+  if (field !== 'price_work' && field !== 'price_material') return null;
+  const expected = typeof price === 'number' && Number.isFinite(price) ? price : null;
+  if (expected === null) return null;
+
+  const shown = toNumber(row[field]);
+  const baseKey = field === 'price_work' ? BASE_WORK : BASE_MATERIAL;
+  let original = shown;
+  if (baseKey in row) {
+    const factor = rowCoefficient(coefficient, row.__key);
+    original = unscale(
+      shown, toNumber(row[baseKey]), field === 'price_work' ? factor.work : factor.material,
+    );
+  }
+  if (original === null) return null;
+  return Math.abs(original - expected) < 0.005 ? (ref as KpRef) : null;
 }
 
 /**
  * Подсказка строки с ценой из КП: откуда цена — поставщик, дата, сколько КП
- * сравнивали. `null` — у строки цены из КП нет.
+ * сравнивали. `null` — у строки нет действующей цены из КП.
  */
-export function kpRowHint(row: GridRow): string | null {
-  const ref = kpRefOf(row);
+export function kpRowHint(row: GridRow, coefficient?: unknown): string | null {
+  const ref = activeKpRef(row, coefficient);
   if (!ref) return null;
   const parts: string[] = [`Цена из КП: ${ref.supplier || 'поставщик не указан'}`];
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ref.offer_date ?? ''));
@@ -230,7 +259,7 @@ export const estimateAdapter: EditorAdapter = {
     return calcEstimateTotals(rows, pct);
   },
 
-  rowClass(row: GridRow): string | undefined {
+  rowClass(row: GridRow, ctx?: AdapterContext): string | undefined {
     const classes: string[] = [];
 
     // Вычет: объём меньше нуля корректирует соседнюю позицию, стоимость по нему
@@ -252,7 +281,7 @@ export const estimateAdapter: EditorAdapter = {
 
     // Цена из КП (фаза 8 плана запроса КП). «Включает материалы» — отдельно:
     // цена работы уже покрывает материал, а цена материала строки не тронута.
-    const kp = kpRefOf(row);
+    const kp = activeKpRef(row, ctx?.coefficient);
     if (kp) classes.push(kp.includes_materials ? 'de-row-kp-materials' : 'de-row-kp');
 
     const abc = String(row.abc_group ?? '').trim().toUpperCase();
@@ -263,8 +292,8 @@ export const estimateAdapter: EditorAdapter = {
     return classes.length > 0 ? classes.join(' ') : undefined;
   },
 
-  rowHint(row: GridRow): string | null {
-    return kpRowHint(row);
+  rowHint(row: GridRow, ctx?: AdapterContext): string | null {
+    return kpRowHint(row, ctx?.coefficient);
   },
 
   displayValue(row: GridRow, key: string): string | null {

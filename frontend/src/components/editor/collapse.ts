@@ -30,6 +30,8 @@ export const GROUP_KEY = '__group';
 export const MIXED_KEY = '__mixed';
 /** Позиция внутри раскрытой группы — по этому признаку она сдвинута отступом. */
 export const CHILD_KEY = '__child';
+/** Пометка строки «цена из КП» — принадлежит позиции, а не группе. */
+const KP_REF_FIELD = 'kp_ref';
 
 export interface GroupInfo {
   /** Ключ группы: тип + наименование + единица. */
@@ -127,6 +129,11 @@ function buildGroupRow(
     // Служебные ключи позиции (лист, исходная цена) свёрнутой строке не
     // принадлежат: она не строка документа и в документ не сохраняется.
     if (field === '__key' || field.startsWith('__') || summed.has(field)) continue;
+    // Пометка «цена из КП» описывает цену одной позиции (поставщик, КП, какую
+    // цену поставили). Группе её не переносим вовсе — как и в выгрузке: у
+    // позиций группы КП разные, а сравнение объектов по тексту считало бы
+    // любые две пометки одинаковыми и отдало бы группе пометку первой строки.
+    if (field === KP_REF_FIELD) continue;
     const value = first[field];
     if (keyed.has(field) || members.every((member) => sameValue(member[field], value))) {
       group[field] = value;

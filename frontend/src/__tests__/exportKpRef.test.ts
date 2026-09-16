@@ -10,13 +10,16 @@ import {
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 import { CollapseFields, GridRow } from '../components/editor/adapters/types';
 
-const KP_REF = { request_id: 'r1', supplier: 'ООО Кабель', includes_materials: true };
+const KP_REF = {
+  request_id: 'r1', supplier: 'ООО Кабель', includes_materials: true,
+  field: 'price_work', price: 150,
+};
 const COLUMNS = [{ key: 'name', label: 'Наименование', numeric: false }];
 
 describe('kp_ref в выгрузке', () => {
   it('строка с kp_ref получает __kp_ref, без него — нет, колонкой он не становится', () => {
     const rows = [
-      { __key: 'a', name: 'Монтаж', kp_ref: KP_REF },
+      { __key: 'a', name: 'Монтаж', price_work: 150, kp_ref: KP_REF },
       { __key: 'b', name: 'Кабель', kp_ref: null },
     ] as unknown as GridRow[];
     const exported = rowsFromEditor(rows, COLUMNS, () => 'work');

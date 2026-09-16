@@ -276,6 +276,13 @@ export interface KpRef {
   offer_date?: string | null;
   offers_count?: number;
   includes_materials?: boolean;
+  /**
+   * Какую цену строки поставило КП и какой она была при применении (исходная,
+   * без коэффициента). Пометка действует, только пока цена строки в `field`
+   * равна `price`: правка цены снимает её.
+   */
+  field?: 'price_work' | 'price_material';
+  price?: number;
 }
 
 export interface KpApplyRow {

@@ -156,6 +156,10 @@ const KpRequestPage: React.FC = () => {
   // Отчёт, который человек уже начал писать, опрос не перетирает.
   const reportTouchedRef = useRef(false);
   const idRef = useRef(requestId);
+  // Поколение данных: действие его увеличивает. Перечитывание запоминает
+  // поколение при старте и отбрасывает ответ, если оно сменилось, — иначе
+  // фоновый опрос, ушедший до действия, перетёр бы его результат старым.
+  const generationRef = useRef(0);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -170,13 +174,15 @@ const KpRequestPage: React.FC = () => {
 
   const reload = useCallback(async (initial = false) => {
     const id = idRef.current;
+    const generation = generationRef.current;
     try {
       const data = await getKpRequest(id);
+      if (generation !== generationRef.current) return;
       accept(data);
       if (aliveRef.current && id === idRef.current) setLoadError(null);
     } catch (err) {
       // Первая загрузка — ошибка вместо страницы; фоновое перечитывание — молча.
-      if (initial && aliveRef.current && id === idRef.current) {
+      if (initial && aliveRef.current && id === idRef.current && generation === generationRef.current) {
         setLoadError(kpErrorText(err, 'Не удалось открыть запрос КП'));
       }
     }
@@ -184,6 +190,7 @@ const KpRequestPage: React.FC = () => {
 
   useEffect(() => {
     idRef.current = requestId;
+    generationRef.current += 1;
     reportTouchedRef.current = false;
     setRequest(null);
     setLoadError(null);
@@ -210,6 +217,7 @@ const KpRequestPage: React.FC = () => {
   /** Действие с блокировкой кнопок; false — сервер отказал (текст ошибки показан). */
   const run = useCallback(async (action: () => Promise<unknown>, fallback: string): Promise<boolean> => {
     busyRef.current = true;
+    generationRef.current += 1;
     setBusy(true);
     setError(null);
     try {
@@ -262,6 +270,9 @@ const KpRequestPage: React.FC = () => {
   const completeProblems: string[] = [];
   if (!report.trim()) completeProblems.push('Напишите отчёт: кто ответил, сроки поставки, доставка');
   if (drafts > 0) completeProblems.push(`Не подтверждены цены: ${drafts} — подтвердите или исправьте их в таблице`);
+  // Разбор ещё идёт: его черновики цен появятся после завершения и остались бы
+  // неподтверждёнными в завершённом запросе. Сервер отказывает так же (422).
+  if (parsing) completeProblems.push('Дождитесь разбора КП');
   const uploadOpen = canEditOffers && (showUpload || request.offers.length === 0);
   const backTo = isProduction ? KP_INBOX_PATH : `/projects/${request.project_id}/cards/${request.card_id}`;
 

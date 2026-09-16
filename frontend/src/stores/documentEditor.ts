@@ -90,6 +90,12 @@ interface DocumentEditorState {
 
   load: (ref: DocumentRef) => Promise<void>;
   selectVersion: (versionId: string) => Promise<void>;
+  /**
+   * Перечитать список версий, не трогая строки, черновик и `rev` открытой
+   * версии. Нужен окну «Цены из КП»: коллега мог создать новую версию, и цены
+   * должны лечь на неё — перезагрузка документа закрыла бы окно.
+   */
+  refreshVersions: () => Promise<void>;
   /** Поставить коэффициент к ценам или снять его (null). */
   setCoefficient: (payload: CoefficientPayload | null) => Promise<void>;
   setRows: (rows: GridRow[], options?: { skipHistory?: boolean }) => void;
@@ -282,6 +288,16 @@ export const useDocumentEditorStore = create<DocumentEditorState>((set, get) => 
     const { ref } = get();
     if (!ref) return;
     await get().load({ ...ref, versionId });
+  },
+
+  refreshVersions: async () => {
+    const { ref, versionId } = get();
+    if (!ref) return;
+    const fresh = await getDocumentMeta({ ...ref, versionId: versionId ?? undefined });
+    const { meta, ref: current } = get();
+    // Пока ждали, документ могли сменить или перезагрузить — чужой ответ не берём.
+    if (!meta || current !== ref) return;
+    set({ meta: { ...meta, versions: fresh.versions } });
   },
 
   setCoefficient: async (payload: CoefficientPayload | null) => {

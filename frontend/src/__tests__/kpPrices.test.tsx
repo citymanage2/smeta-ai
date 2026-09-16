@@ -93,8 +93,11 @@ beforeEach(() => {
 describe('строка с ценой из КП', () => {
   it('подсвечена «цена из КП», подсказка — поставщик, дата и число КП', () => {
     const r = {
-      __key: 'r1', type: 'Материал', name: 'Кирпич',
-      kp_ref: { supplier: 'ООО Кирпич', offer_date: '2026-09-10', offers_count: 3, includes_materials: false },
+      __key: 'r1', type: 'Материал', name: 'Кирпич', price_material: 42.5,
+      kp_ref: {
+        supplier: 'ООО Кирпич', offer_date: '2026-09-10', offers_count: 3, includes_materials: false,
+        field: 'price_material', price: 42.5,
+      },
     };
     const css = estimateAdapter.rowClass?.(r) ?? '';
     expect(css.split(' ')).toContain('de-row-kp');
@@ -107,8 +110,11 @@ describe('строка с ценой из КП', () => {
 
   it('цена работы «включает материалы» — отдельная подсветка и «проверьте материал позиции»', () => {
     const r = {
-      __key: 'r2', type: 'Работа', name: 'Монтаж',
-      kp_ref: { supplier: 'СтройМонтаж', offer_date: null, offers_count: 1, includes_materials: true },
+      __key: 'r2', type: 'Работа', name: 'Монтаж', price_work: 900,
+      kp_ref: {
+        supplier: 'СтройМонтаж', offer_date: null, offers_count: 1, includes_materials: true,
+        field: 'price_work', price: 900,
+      },
     };
     const css = (estimateAdapter.rowClass?.(r) ?? '').split(' ');
     expect(css).toContain('de-row-kp-materials');

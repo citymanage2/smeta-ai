@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Tags } from 'lucide-react';
 
 import { listCardKpRequests } from '../../../api/kpRequests';
@@ -26,8 +26,13 @@ interface Props {
   versions: VersionBrief[];
   rowsCount: number;
   isDirty: boolean;
+  /** Открытая в редакторе версия и её коэффициент к ценам (коэффициент — у версии). */
+  openVersionId?: string | null;
+  openCoefficient?: unknown;
   onApplied: (result: KpApplyResult) => void;
   onNotice: (message: string) => void;
+  /** Перечитать список версий документа (409 предпросмотра: версия устарела). */
+  onRefreshDocument?: () => Promise<void>;
 }
 
 /** Последняя неоткатанная версия — источник цен из КП. */
@@ -41,20 +46,54 @@ export function latestAliveVersion(versions: VersionBrief[]): VersionBrief | nul
 }
 
 const KpPrices: React.FC<Props> = ({
-  cardId, versions, rowsCount, isDirty, onApplied, onNotice,
+  cardId, versions, rowsCount, isDirty, openVersionId, openCoefficient,
+  onApplied, onNotice, onRefreshDocument,
 }) => {
   const [doneCount, setDoneCount] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
+  const cardRef = useRef(cardId);
+  const aliveRef = useRef(true);
+  const seqRef = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
-    listCardKpRequests(cardId)
-      .then((list) => {
-        if (!cancelled) setDoneCount(list.filter((r) => r.status === 'done').length);
-      })
-      .catch(() => { if (!cancelled) setDoneCount(0); });
-    return () => { cancelled = true; };
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
+  // Число завершённых запросов перечитывается не только при открытии
+  // редактора: запрос завершают в отделе производства, пока смета открыта.
+  // Иначе ноль, прочитанный утром, держал бы кнопку неактивной до перезагрузки.
+  const refreshDone = useCallback(async (): Promise<number | null> => {
+    const seq = ++seqRef.current;
+    const id = cardId;
+    try {
+      const list = await listCardKpRequests(id);
+      const count = list.filter((r) => r.status === 'done').length;
+      if (aliveRef.current && seq === seqRef.current && cardRef.current === id) setDoneCount(count);
+      return count;
+    } catch {
+      // Ошибка сети не должна прятать уже известное число.
+      if (aliveRef.current && seq === seqRef.current && cardRef.current === id) {
+        setDoneCount((prev) => prev ?? 0);
+      }
+      return null;
+    }
   }, [cardId]);
+
+  useEffect(() => {
+    cardRef.current = cardId;
+    setDoneCount(null);
+    void refreshDone();
+    // Вернулись на вкладку со сметой — могли завершить запрос КП.
+    const onFocus = () => { void refreshDone(); };
+    const onVisible = () => { if (!document.hidden) void refreshDone(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [cardId, refreshDone]);
 
   const latest = useMemo(() => latestAliveVersion(versions), [versions]);
 
@@ -81,7 +120,11 @@ const KpPrices: React.FC<Props> = ({
         <button
           type="button"
           className="de-btn"
-          onClick={() => setOpen(true)}
+          onClick={() => {
+            setOpen(true);
+            // Список мог измениться с последнего чтения — подсказка честная.
+            void refreshDone();
+          }}
           disabled={reason !== null}
         >
           <Tags size={14} />
@@ -93,8 +136,12 @@ const KpPrices: React.FC<Props> = ({
         <KpApplyDialog
           cardId={cardId}
           versionId={latest.id}
+          // Коэффициент известен только у открытой версии; у другой — не
+          // гадаем, пояснение не показываем.
+          coefficient={latest.id === openVersionId ? openCoefficient : undefined}
           onClose={() => setOpen(false)}
           onApplied={handleApplied}
+          onRefreshDocument={onRefreshDocument}
         />
       )}
     </>

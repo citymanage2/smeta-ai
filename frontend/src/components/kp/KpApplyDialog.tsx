@@ -1,8 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, X } from 'lucide-react';
 
 import { applyKpPrices, kpErrorText, previewKpApply } from '../../api/kpRequests';
 import { formatDecimal, formatMoney } from '../../utils/formatNumber';
+import { formatFactor, isActiveCoefficient } from '../../utils/estimateCalc';
+import { toNumber } from '../editor/adapters/types';
 import { LumaSpin } from '../ui/LumaSpin';
 import type { KpApplyItem, KpApplyPreview, KpApplyResult } from '../../types/kp';
 
@@ -21,8 +23,19 @@ interface Props {
   cardId: string;
   /** Последняя неоткатанная версия оптимизации — к ней и применяются цены. */
   versionId: string;
+  /**
+   * Коэффициент к ценам версии (`{work, material, scope}`), если известен.
+   * Новая версия его наследует, и в таблице цены КП покажутся умноженными —
+   * без пояснения «Стало 100» и «в таблице 120» выглядят как ошибка.
+   */
+  coefficient?: unknown;
   onClose: () => void;
   onApplied: (result: KpApplyResult) => void;
+  /**
+   * Перечитать версии документа. Предпросмотр ответил 409 — цены применяются к
+   * последней версии, а редактор знает устаревший список.
+   */
+  onRefreshDocument?: () => Promise<void>;
 }
 
 const SKIP = '';
@@ -151,31 +164,79 @@ const AmbiguousItem: React.FC<{
   );
 };
 
-const KpApplyDialog: React.FC<Props> = ({ cardId, versionId, onClose, onApplied }) => {
+/** «В таблице цены покажутся с коэффициентом ×1,2» — или null, если коэффициента нет. */
+export function coefficientNote(coefficient: unknown): string | null {
+  if (!isActiveCoefficient(coefficient)) return null;
+  const value = coefficient as Record<string, unknown>;
+  const work = toNumber(value.work) ?? 1;
+  const material = toNumber(value.material) ?? 1;
+  const factor = (raw: number) => (raw > 0 ? raw : 1);
+  const w = factor(work);
+  const m = factor(material);
+  if (w === 1 && m === 1) return null;
+  const partial = Array.isArray(value.scope) ? ' (у выбранных строк)' : '';
+  const text = w === m
+    ? `×${formatFactor(w)}`
+    : `работ ×${formatFactor(w)}, материалов ×${formatFactor(m)}`;
+  return `В таблице цены покажутся с коэффициентом ${text}${partial}: `
+    + 'здесь — цены КП без коэффициента, как они запишутся в версию.';
+}
+
+const KpApplyDialog: React.FC<Props> = ({
+  cardId, versionId, coefficient, onClose, onApplied, onRefreshDocument,
+}) => {
   const [data, setData] = useState<KpApplyPreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadConflict, setLoadConflict] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // Версия читается из ref: после «Обновить документ» новая версия приходит
+  // пропсом, и предпросмотр должен взять её, а не ту, что была в замыкании.
+  const versionRef = useRef(versionId);
+  versionRef.current = versionId;
+  // Ответ устаревшего предпросмотра не должен перетереть свежий.
+  const loadSeqRef = useRef(0);
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setData(null);
     setLoadError(null);
+    setLoadConflict(false);
     setApplyError(null);
     setStale(false);
     setChoices({});
     try {
-      setData(await previewKpApply(cardId, versionId));
+      const preview = await previewKpApply(cardId, versionRef.current);
+      if (seq === loadSeqRef.current) setData(preview);
     } catch (error) {
+      if (seq !== loadSeqRef.current) return;
       const status = (error as { response?: { status?: number } })?.response?.status;
+      setLoadConflict(status === 409);
       setLoadError(status === 409
-        ? kpErrorText(error, 'Цены из КП применяются к последней версии оптимизации — откройте её и повторите')
+        ? kpErrorText(error, 'Цены из КП применяются к последней версии оптимизации — обновите документ и повторите')
         : kpErrorText(error, 'Не удалось собрать предпросмотр цен из КП'));
     }
-  }, [cardId, versionId]);
+  }, [cardId]);
 
-  useEffect(() => { void load(); }, [load]);
+  const handleRefreshDocument = useCallback(async () => {
+    if (!onRefreshDocument) return;
+    setRefreshing(true);
+    try {
+      await onRefreshDocument();
+    } catch {
+      // Не удалось перечитать — предпросмотр ниже скажет, что не так.
+    } finally {
+      setRefreshing(false);
+    }
+    await load();
+  }, [onRefreshDocument, load]);
+
+  const note = coefficientNote(coefficient);
+
+  useEffect(() => { void load(); }, [load, versionId]);
 
   const chosenCount = useMemo(
     () => Object.values(choices).filter((value) => value !== SKIP).length,
@@ -233,6 +294,16 @@ const KpApplyDialog: React.FC<Props> = ({ cardId, versionId, onClose, onApplied 
             </div>
           )}
           {loadError && <div style={noteStyle('error')} role="alert">{loadError}</div>}
+          {loadConflict && onRefreshDocument && (
+            <div>
+              <button
+                type="button" style={buttonStyle} disabled={refreshing}
+                onClick={() => void handleRefreshDocument()}
+              >
+                Обновить документ
+              </button>
+            </div>
+          )}
 
           {data && (
             <>
@@ -240,6 +311,9 @@ const KpApplyDialog: React.FC<Props> = ({ cardId, versionId, onClose, onApplied 
                 Будет создана новая версия оптимизации «Цены из КП». Текущая версия не
                 меняется — новую можно откатить, как любую другую.
               </div>
+              {note && (
+                <div data-testid="kp-apply-coefficient" style={noteStyle('warn')}>{note}</div>
+              )}
 
               {nothing && (
                 <div data-testid="kp-apply-nothing" style={noteStyle('warn')}>

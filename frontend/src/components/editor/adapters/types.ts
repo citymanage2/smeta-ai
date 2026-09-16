@@ -153,12 +153,12 @@ export interface EditorAdapter {
    * Css-классы строки: подсветка вычетов, исключённых позиций, цен из прайса и
    * групп А/В/С. У плоских документов подсвечивать нечего — метод необязателен.
    */
-  rowClass?(row: GridRow): string | undefined;
+  rowClass?(row: GridRow, ctx?: AdapterContext): string | undefined;
   /**
    * Подсказка к строке (показывается на наименовании): откуда взялась подсветка,
    * например поставщик и дата цены из КП. `null` — подсказывать нечего.
    */
-  rowHint?(row: GridRow): string | null;
+  rowHint?(row: GridRow, ctx?: AdapterContext): string | null;
   /**
    * Колонки для свёртки одинаковых позиций. `null` — свернуть нечем: в файле
    * заказчика может не оказаться колонки с наименованием, и группировать
