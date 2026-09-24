@@ -3558,7 +3558,14 @@ class TaskProcessor:
         )
 
         # Save result file
-        await self.save_result(self._result_filename(task, "Смета_из_перечня.xlsx"), _XLSX_MIME, excel_data)
+        # Имени у задачи сметы нет — файл называем по карточке («Смета_ПОМЕЩЕНИЯ_№93»),
+        # чтобы сметы одного проекта различались в загрузках.
+        from app.services import result_names
+
+        fallback_name = await result_names.task_file_name(
+            self.db, self.task_id, "Смета", "Смета_из_перечня.xlsx",
+        )
+        await self.save_result(self._result_filename(task, fallback_name), _XLSX_MIME, excel_data)
 
         # Save cost and estimation_status
         task_res = await self.db.execute(select(Task).where(Task.id == self.task_id))

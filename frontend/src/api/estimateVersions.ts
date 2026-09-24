@@ -167,7 +167,13 @@ export async function exportVersion(
   const url = window.URL.createObjectURL(new Blob([response.data]));
   const link = document.createElement('a');
   link.href = url;
-  link.setAttribute('download', `smeta_${displayName}.xlsx`);
+  // Имя — от сервера: он добавляет название карточки. Нет заголовка — прежнее.
+  const disposition: string = response.headers?.['content-disposition'] ?? '';
+  const rfcMatch = disposition.match(/filename\*=UTF-8''([^;\s]+)/i);
+  link.setAttribute(
+    'download',
+    rfcMatch ? decodeURIComponent(rfcMatch[1]) : `smeta_${displayName}.xlsx`,
+  );
   document.body.appendChild(link);
   link.click();
   link.remove();

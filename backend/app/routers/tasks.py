@@ -1686,8 +1686,15 @@ async def _run_optimization_background(
 
             # Archive the previous "optimized" slot by renaming it to a versioned snapshot.
             # This avoids storing file bytes in the JSON history field.
+            # Файл называем по карточке («Оптимизация_ПОМЕЩЕНИЯ_№93»), а не
+            # безликим optimized.xlsx: сметы проекта различаются в загрузках.
+            from app.services import result_names
+
+            opt_name = await result_names.task_file_name(
+                db, task_id, "Оптимизация", "optimized.xlsx",
+            )
             opt_key = await storage_service.store_result_file(
-                task_id, "optimized", "optimized.xlsx", XLSX_MIME, optimized_bytes
+                task_id, "optimized", opt_name, XLSX_MIME, optimized_bytes
             )
             if prev_optimized:
                 archive_slot = f"optimized_v{version_count + 1}"
@@ -1701,7 +1708,7 @@ async def _run_optimization_background(
                 db.add(TaskResult(
                     task_id=task_id,
                     slot="optimized",
-                    file_name="optimized.xlsx",
+                    file_name=opt_name,
                     mime_type=XLSX_MIME,
                     storage_key=opt_key,
                     size_bytes=len(optimized_bytes),
@@ -1711,7 +1718,7 @@ async def _run_optimization_background(
                 db.add(TaskResult(
                     task_id=task_id,
                     slot="optimized",
-                    file_name="optimized.xlsx",
+                    file_name=opt_name,
                     mime_type=XLSX_MIME,
                     storage_key=opt_key,
                     size_bytes=len(optimized_bytes),

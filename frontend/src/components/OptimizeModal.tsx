@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { formatTaskError } from '../utils/formatError';
 import { analyzeOptimize, runOptimize, getTaskStatus, OptimizeItem } from '../api/tasks';
-import apiClient from '../api/client';
+import { downloadSlotFile } from '../api/projects';
 
 interface OptimizeModalProps {
   taskId: string;
@@ -119,15 +119,8 @@ const OptimizeModal: React.FC<OptimizeModalProps> = ({ taskId, onClose }) => {
   async function handleDownload() {
     setDownloadError('');
     try {
-      const response = await apiClient.get(`/tasks/${taskId}/files/optimized/download`, {
-        responseType: 'blob',
-      });
-      const url = URL.createObjectURL(response.data);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'optimized.xlsx';
-      a.click();
-      URL.revokeObjectURL(url);
+      // Имя файла — от сервера: он называет оптимизацию по карточке.
+      await downloadSlotFile(taskId, 'optimized');
     } catch {
       setDownloadError('Не удалось скачать файл. Попробуйте ещё раз.');
     }

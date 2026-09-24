@@ -1479,7 +1479,19 @@ async def export_version(
 
     safe_name = version.version_display_name.replace(" ", "_").replace("/", "-")
     ascii_fallback = f"smeta_v{version.version_number}.xlsx"
-    utf8_encoded = _quote(f"smeta_{safe_name}.xlsx", safe="")
+    # Имя по карточке («Оптимизация_ПОМЕЩЕНИЯ_№93_V1…»): версии смет одного
+    # проекта иначе неразличимы в загрузках. Карточки нет — прежнее имя.
+    from app.services import result_names
+
+    prefix = "Оптимизация" if task.task_type == "ESTIMATE_OPTIMIZATION" else "Смета"
+    card_file = result_names.stage_file_name(
+        prefix, await result_names.card_name_for_task(db, str(task.id)),
+    )
+    download_name = (
+        f"{card_file[:-len('.xlsx')]}_{safe_name}.xlsx" if card_file
+        else f"smeta_{safe_name}.xlsx"
+    )
+    utf8_encoded = _quote(download_name, safe="")
     content_disposition = f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
 
     return StreamingResponse(

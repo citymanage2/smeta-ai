@@ -27,7 +27,7 @@ from app.models.estimate_version import EstimateVersion
 from app.models.project import Project
 from app.models.result import TaskResult
 from app.models.task import Task
-from app.services import storage_service
+from app.services import result_names, storage_service
 from app.utils.estimate_rows import items_to_rows, rows_to_items
 from app.utils.xlsx_exporter import DEFAULT_OVERHEAD_PCT, generate_estimate_xlsx
 
@@ -102,11 +102,18 @@ async def _store_estimate_file(db: AsyncSession, task: Task, data: bytes) -> Non
             ).order_by(TaskResult.id.desc()).limit(1)
         )
         file_name = _clean_name(res_result.scalar_one_or_none()) or ESTIMATE_FILENAME
+    if file_name == ESTIMATE_FILENAME:
+        # Запасное имя без названия карточки — от смет, посчитанных до того,
+        # как файл стал называться по карточке. Имя, данное человеком, не трогаем.
+        file_name = await result_names.task_file_name(
+            db, str(task.id), "Смета", ESTIMATE_FILENAME,
+        )
 
     key = await storage_service.store_result_file(
         str(task.id), ESTIMATE_SLOT, file_name, XLSX_MIME, data,
     )
     if existing is not None:
+        existing.file_name = file_name
         existing.storage_key = key
         existing.size_bytes = len(data)
     else:
