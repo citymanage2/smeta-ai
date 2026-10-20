@@ -1392,12 +1392,24 @@ class TaskProcessor:
 
         tick = progress_tick if progress_tick is not None else cancel_check_interval
         started_at = asyncio.get_event_loop().time()
+        # Остановка watcher-а — сигналом, а не cancel(). Пачка может кончиться,
+        # пока он посреди запроса к self.db, а SQLAlchemy считает прерванный
+        # запрос оборванным соединением и помечает его негодным внутри открытой
+        # транзакции. Дальше любая запись основной корутины падала с
+        # PendingRollbackError «Can't reconnect until invalid transaction is
+        # rolled back» — так 20.10.2026 упала смета на 16 из 26 частей, а
+        # оплаченные ответы последней группы не дошли до чекпоинта.
+        stop = asyncio.Event()
 
         async def _watch():
             last_published = -1
             try:
                 while True:
-                    await asyncio.sleep(tick)
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=tick)
+                        return
+                    except asyncio.TimeoutError:
+                        pass
                     if all(t.done() for t in tasks):
                         return
 
@@ -1420,12 +1432,9 @@ class TaskProcessor:
                             )
                         except Exception as pub_err:  # noqa: BLE001
                             # Живой индикатор — вспомогательный: сбой его записи
-                            # не должен ронять уже оплаченную пачку.
-                            logger.warning(
-                                "Failed to publish chunk progress",
-                                task_id=self.task_id,
-                                error=str(pub_err),
-                            )
+                            # не должен ронять уже оплаченную пачку. Сессию
+                            # чиним сразу — на ней ещё проверка отмены.
+                            await self._recover_session("chunk_progress", pub_err)
 
                     try:
                         await self._check_cancelled()
@@ -1435,6 +1444,10 @@ class TaskProcessor:
                             if not t.done():
                                 t.cancel()
                         return
+                    except Exception as check_err:  # noqa: BLE001
+                        # Раньше такой сбой молча завершал watcher: до конца
+                        # пачки не было ни отмены, ни дедлайна, ни прогресса.
+                        await self._recover_session("cancel_check", check_err)
             except asyncio.CancelledError:
                 return
 
@@ -1442,7 +1455,8 @@ class TaskProcessor:
         try:
             results = await asyncio.gather(*tasks, return_exceptions=True)
         finally:
-            watcher.cancel()
+            # Ждём, пока watcher выйдет сам: между запросами, а не посреди.
+            stop.set()
             try:
                 await watcher
             except (asyncio.CancelledError, Exception):
@@ -1594,6 +1608,49 @@ class TaskProcessor:
                     logger.info("Saved to price cache", task_id=self.task_id, name=_item_name)
         except Exception as _cache_err:
             logger.warning("Failed to save to price cache", task_id=self.task_id, name=_item_name, error=str(_cache_err))
+            # Ошибку глотаем, а сломанную сессию — нет: иначе следующая запись
+            # прогресса уронит задачу, и группа оплаченных ответов не дойдёт до
+            # чекпоинта.
+            await self._recover_session("price_cache", _cache_err)
+
+    async def _recover_session(self, step: str, error: BaseException) -> None:
+        """Вернуть self.db в рабочее состояние после сбоя вспомогательной записи.
+
+        Сбой запроса (обрыв соединения, ошибка flush) оставляет сессию в
+        состоянии «нужен rollback»: любой следующий запрос основной корутины
+        падает PendingRollbackError. Вспомогательные шаги — кеш цен, строка
+        прогресса, проверка отмены — свои ошибки глотают, поэтому и сессию
+        обязаны вернуть рабочей. Откат безопасен: незафиксированных записей на
+        этих шагах нет, всё нужное уже закоммичено.
+
+        Откат помечает загруженные объекты устаревшими, а первое же обращение к
+        полю задачи в async-коде упало бы на ленивой загрузке. Поэтому задача
+        перечитывается сразу — тем же объектом из identity map.
+        """
+        logger.warning(
+            "DB session recovered after failed step",
+            task_id=self.task_id,
+            step=step,
+            error=str(error),
+        )
+        try:
+            await self.db.rollback()
+            (
+                await self.db.execute(select(Task).where(Task.id == self.task_id))
+            ).scalar_one_or_none()
+        except Exception as recover_err:  # noqa: BLE001
+            # БД недоступна — следующий шаг основной корутины упадёт сам, с
+            # честной причиной. Здесь главное не оставить транзакцию оборванной.
+            logger.warning(
+                "DB session recovery failed",
+                task_id=self.task_id,
+                step=step,
+                error=str(recover_err),
+            )
+            try:
+                await self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     @staticmethod
     def _pending_chunks(chunks: list, done_ids: set) -> list:
