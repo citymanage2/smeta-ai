@@ -215,6 +215,84 @@ def test_comparison_export_material_styles():
     assert not any(ws.cell(row=work, column=c).font.i for c in range(1, 13))
 
 
+# ── Выгрузка-ведомость (конструктор) ────────────────────────────────────────
+
+# Колонки и строки — как их собирает «Ведомость по сводной»
+# (`SummaryEditorTabs.exportRows`): тип строки едет ключом `_kind`.
+STATEMENT_COLUMNS = [
+    {"key": "section_name", "label": "Раздел", "numeric": False},
+    {"key": "num", "label": "№", "numeric": True},
+    {"key": "name", "label": "Наименование", "numeric": False},
+    {"key": "unit", "label": "Ед. изм.", "numeric": False},
+    {"key": "qty", "label": "Кол-во", "numeric": True},
+    {"key": "price_work", "label": "Цена работ", "numeric": True},
+    {"key": "cost_work", "label": "Стоим. работ", "numeric": True},
+    {"key": "price_material", "label": "Цена матер.", "numeric": True},
+    {"key": "cost_material", "label": "Стоим. матер.", "numeric": True},
+]
+STATEMENT_ROWS = [
+    {"_id": "c:1", "_kind": "work", "_section": "c", "section_name": "Гостиница",
+     "num": 1, "name": "Вырубка деревьев", "unit": "шт", "qty": 303,
+     "price_work": 3800, "cost_work": 1151400, "price_material": None, "cost_material": None},
+    {"_id": "c:2", "_kind": "material", "_section": "c", "section_name": "Гостиница",
+     "num": 2, "name": "Рабочий", "unit": "чел/час", "qty": 606,
+     "price_work": None, "cost_work": None, "price_material": 320, "cost_material": 193920},
+]
+
+
+def test_statement_material_styles():
+    from app.utils.xlsx_statement import generate_statement_xlsx
+    ws = _book(generate_statement_xlsx(
+        STATEMENT_COLUMNS, STATEMENT_ROWS, title="Ведомость по сводной",
+    )).worksheets[0]
+    work = _row_of(ws, "Вырубка деревьев", 3)
+    material = _row_of(ws, "Рабочий", 3)
+
+    assert not any(ws.cell(row=work, column=c).font.i for c in range(1, 10))
+    # Раздел и № — чёрные; наименование … стоимость материалов — синий курсив.
+    assert not any(_blue_italic(ws.cell(row=material, column=c)) for c in (1, 2))
+    assert all(_blue_italic(ws.cell(row=material, column=c)) for c in range(3, 10))
+    assert [ws.cell(row=material, column=c).alignment.horizontal for c in (3, 4, 5)] == [
+        "right", "right", "right",
+    ]
+    # Рамка ведомости не пострадала.
+    assert ws.cell(row=material, column=3).border.left.style == "thin"
+
+    # № — целым числом, а не «1,00»; деньги — прежним форматом.
+    assert ws.cell(row=work, column=2).value == 1
+    assert isinstance(ws.cell(row=work, column=2).value, int)
+    assert ws.cell(row=work, column=2).number_format == "General"
+    assert [ws.cell(row=material, column=c).value for c in range(1, 10)] == [
+        "Гостиница", 2, "Рабочий", "чел/час", 606, None, None, 320, 193920,
+    ]
+    assert ws.cell(row=material, column=9).number_format == "#,##0.00"
+
+    # Итог: № и цены не складываются, стоимости — да.
+    total = material + 1
+    assert ws.cell(row=total, column=1).value == "ИТОГО"
+    assert ws.cell(row=total, column=2).value is None
+    assert ws.cell(row=total, column=7).value == 1151400
+    assert ws.cell(row=total, column=9).value == 193920
+
+
+def test_statement_material_label_based_columns():
+    """Документ с колонками из файла заказчика: ключи свои, решают подписи."""
+    from app.utils.xlsx_statement import generate_statement_xlsx
+    columns = [
+        {"key": "c0", "label": "№ п/п", "numeric": False},
+        {"key": "c1", "label": "Наименование работ и затрат", "numeric": False},
+        {"key": "c2", "label": "Примечание", "numeric": False},
+    ]
+    rows = [{"_id": "1", "_kind": "material", "c0": "1", "c1": "Кабель", "c2": "из КП"}]
+    ws = _book(generate_statement_xlsx(columns, rows, title="")).worksheets[0]
+    row = _row_of(ws, "Кабель", 2)
+
+    assert not _blue_italic(ws.cell(row=row, column=1))
+    assert _blue_italic(ws.cell(row=row, column=2))
+    assert ws.cell(row=row, column=2).alignment.horizontal == "right"
+    assert not _blue_italic(ws.cell(row=row, column=3))
+
+
 # ── Перечень: правило прежнее, цвет общий ───────────────────────────────────
 
 def test_perechen_material_styles_unchanged():

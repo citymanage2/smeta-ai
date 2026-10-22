@@ -19,6 +19,7 @@ from openpyxl.utils import get_column_letter
 
 from app.utils.kp_marks import STATEMENT_KP_KEY, kp_fill
 from app.utils.sheet_names import group_by_sheet, safe_sheet_title
+from app.utils.xlsx_row_style import is_material, style_material_cell
 
 # Корпоративное оформление: синяя шапка, светлая заливка итога.
 _HEADER_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -42,6 +43,29 @@ def _is_summable(key: str, label: str) -> bool:
         return False
     lowered = str(label or "").strip().lower()
     return not any(word in lowered for word in _NOT_SUMMABLE_WORDS)
+
+
+# Тип строки — тот же ключ, по которому окно выгрузки собирает пресеты
+# «Ведомость работ / материалов» (`exportBuilder.ExportRow._kind`).
+STATEMENT_KIND_KEY = "_kind"
+
+# Колонки, которые у материала остаются чёрными, как в перечне: номер, раздел,
+# источник цены, примечание. Ключи — колонок редактора; подписи — для
+# документа с колонками из файла заказчика, где ключи свои.
+_MATERIAL_PLAIN_KEYS = frozenset({"num", "source_no", "section_name", "price_list_name", "notes"})
+_MATERIAL_PLAIN_WORDS = ("№", "раздел", "источник", "примечан")
+
+
+def _material_plain(key: str, label: str) -> bool:
+    if key in _MATERIAL_PLAIN_KEYS:
+        return True
+    lowered = str(label or "").strip().lower()
+    return any(word in lowered for word in _MATERIAL_PLAIN_WORDS)
+
+
+def _is_number_column(key: str, label: str) -> bool:
+    """Порядковый номер: пишется целым, а не деньгами («1», а не «1,00»)."""
+    return key == "num" or str(label or "").strip() == "№"
 
 
 def _to_number(value: Any) -> Optional[float]:
@@ -127,15 +151,20 @@ def _write_statement_sheet(
 
     totals = [0.0] * len(keys)
     has_total = [False] * len(keys)
+    plain = [_material_plain(key, label) for key, label in zip(keys, labels)]
+    number_cols = [_is_number_column(key, label) for key, label in zip(keys, labels)]
 
     for row in rows:
         # Пометка «цена из КП» — только заливка, значения и итог не меняются.
         row_fill = kp_fill(row.get(STATEMENT_KP_KEY))
+        material = is_material(row.get(STATEMENT_KIND_KEY))
         for col, key in enumerate(keys, 1):
             raw = row.get(key)
             value: Any = raw
             if numeric[col - 1]:
                 value = _to_number(raw)
+            if number_cols[col - 1] and isinstance(value, float) and value.is_integer():
+                value = int(value)
             cell = ws.cell(row=row_idx, column=col, value=value)
             cell.border = _BORDER
             if row_fill is not None:
@@ -145,6 +174,9 @@ def _write_statement_sheet(
                 if _is_summable(key, labels[col - 1]):
                     totals[col - 1] += value
                     has_total[col - 1] = True
+            # Материал — синий курсив, текст вправо; колонка «Тип» на месте.
+            if material and not plain[col - 1]:
+                style_material_cell(cell, right=key != "type")
         row_idx += 1
 
     if show_total and rows:
