@@ -9,6 +9,7 @@ from app.constants import TASK_TYPE_LABELS, ESTIMATION_STATUS_LABELS
 from app.utils.price_coercion import coerce_price, coerce_qty, coerce_qty_signed
 from app.utils.sheet_names import group_by_sheet, safe_sheet_title
 from app.utils.source_numbers import SOURCE_NO_HEADER, has_source_numbers, source_no_value
+from app.utils.xlsx_row_style import is_material, is_work, style_material_cell
 
 _HEADER_FILL = PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -254,9 +255,10 @@ def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict],
         if mat_cost is not None:
             total_materials += mat_cost
 
-        is_work = str(item.get("type", "")).strip() == "Работа"
+        work = is_work(item.get("type"))
+        material = is_material(item.get("type"))
 
-        row_fill = _WORK_ROW_FILL if is_work else None
+        row_fill = _WORK_ROW_FILL if work else None
 
         values = ([source_no_value(item)] if with_source_no else []) + [
             idx,
@@ -274,15 +276,21 @@ def _write_estimate_sheet(ws, items: list, coefficient: Optional[dict],
         ]
         off = 1 if with_source_no else 0
         money_cols = {5 + off, 6 + off, 7 + off, 8 + off}
+        # Материал — синим курсивом от наименования до стоимости; номера,
+        # источник цены и примечание остаются чёрными, как в перечне.
+        material_cols = range(2 + off, 9 + off)
+        right_cols = {2 + off, 3 + off, 4 + off}
         for col, val in enumerate(values, 1):
             cell = ws.cell(row=row_num, column=col, value=val)
-            cell.font = Font(bold=is_work)
+            cell.font = Font(bold=work)
             if row_fill:
                 cell.fill = row_fill
             if col in money_cols and isinstance(val, (int, float)):
                 cell.number_format = "#,##0.00"
             if col == 4 + off and isinstance(val, (int, float)):
                 cell.number_format = "#,##0.##"
+            if material and col in material_cols:
+                style_material_cell(cell, right=col in right_cols)
         row_num += 1
 
     return total_works, total_materials, row_num

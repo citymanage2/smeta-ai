@@ -7,6 +7,7 @@ from openpyxl.utils import get_column_letter
 from app.models.summary_estimate import SummaryEstimate
 from app.utils.price_coercion import coerce_qty, coerce_qty_signed
 from app.utils.summary_calc import FIXED_ROW_KEYS, FIXED_ROW_LABELS, calc_summary
+from app.utils.xlsx_row_style import is_material, is_work, style_material_cell
 
 _HEADER_FILL = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
 _TOTAL_FILL = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
@@ -91,8 +92,11 @@ def _write_section_sheet(ws, section: dict) -> None:
         mp = _to_f(row.get("material_price") or row.get("price_material"))
         work_cost = round(qty * wp, 2)
         mat_cost = round(qty * mp, 2)
-        is_work = str(row.get("type", "")).strip() == "Работа"
-        fill = _WORK_FILL if is_work else None
+        # Раздел хранит копию строк документа, где тип — "work"/"material", а
+        # старые снимки — «Работа»/«Материал». Сравнение с одним написанием
+        # молча гасило выделение во всём файле.
+        material = is_material(row.get("type"))
+        fill = _WORK_FILL if is_work(row.get("type")) else None
         r = idx + 1
 
         values = [idx, row.get("name", ""), row.get("unit", ""), qty_shown or None,
@@ -103,6 +107,9 @@ def _write_section_sheet(ws, section: dict) -> None:
                 cell.fill = fill
             if col in (5, 6, 7, 8) and isinstance(val, (int, float)):
                 cell.number_format = _NUM_FMT
+            # Номер остаётся чёрным, как в перечне.
+            if material and col > 1:
+                style_material_cell(cell, right=col in (2, 3, 4))
 
 
 def _write_summary_sheet(ws, sections: list, overrides: dict) -> None:

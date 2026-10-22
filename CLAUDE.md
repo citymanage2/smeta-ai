@@ -104,6 +104,7 @@ smeta-ai/
 | Цены из КП в прайс | `backend/app/services/kp_pricelist.py` |
 | Цены из КП в оптимизацию (предпросмотр, новая версия) | `backend/app/services/kp_apply.py`, `backend/app/services/estimate_versions_service.py` |
 | Пометка «цена из КП» в xlsx | `backend/app/utils/kp_marks.py` |
+| Строка материала в xlsx (синий курсив, вправо) — одно правило на все файлы | `backend/app/utils/xlsx_row_style.py` |
 | Экраны КП: входящие, страница запроса, окна | `frontend/src/pages/KpInbox.tsx`, `KpRequestPage.tsx`, `frontend/src/components/kp/` |
 
 **Правила, которые легко нарушить:**

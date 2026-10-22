@@ -12,6 +12,7 @@ from app.utils.source_numbers import (
     has_source_numbers,
     source_no_value as _source_no_value,
 )
+from app.utils.xlsx_row_style import MATERIAL_FONT_COLOR, is_material, style_material_cell
 
 logger = structlog.get_logger()
 
@@ -44,7 +45,7 @@ THIN_BORDER = Border(
 # ── Перечень sheet style constants ───────────────────────────────────────────
 _P_FONT_BLACK = Font(name="Arial", size=9, color="000000")
 _P_FONT_BLACK_BOLD = Font(name="Arial", size=9, bold=True, color="000000")
-_P_FONT_BLUE_ITALIC = Font(name="Arial", size=9, italic=True, color="4284F3")
+_P_FONT_BLUE_ITALIC = Font(name="Arial", size=9, italic=True, color=MATERIAL_FONT_COLOR)
 _P_BORDER = Border(
     left=Side(style="thin", color="000000"),
     right=Side(style="thin", color="000000"),
@@ -98,7 +99,7 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False,
 
     for item in items:
         item_type = str(item.get("type", "")).strip()
-        is_material = item_type.lower() in ("материал", "material", "материалы")
+        material = is_material(item_type)
 
         # Section header row (only when with_sections and section changes)
         if with_sections:
@@ -134,16 +135,16 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False,
 
         # Col 2: тип — center; materials: blue italic
         c2 = ws.cell(row=data_row, column=2 + off, value=item_type)
-        c2.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c2.font = _P_FONT_BLUE_ITALIC if material else _P_FONT_BLACK
         c2.alignment = Alignment(horizontal="center", vertical="center")
         c2.border = _P_BORDER
 
         # Col 3: наименование — left (work) / right (material), wrap
         name = str(item.get("name", "") or "")
         c3 = ws.cell(row=data_row, column=3 + off, value=name)
-        c3.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c3.font = _P_FONT_BLUE_ITALIC if material else _P_FONT_BLACK
         c3.alignment = Alignment(
-            horizontal="right" if is_material else "left",
+            horizontal="right" if material else "left",
             vertical="center", wrap_text=True,
         )
         c3.border = _P_BORDER
@@ -151,9 +152,9 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False,
         # Col 4: ед. изм. — center (work) / right (material)
         unit = str(item.get("unit", "") or "")
         c4 = ws.cell(row=data_row, column=4 + off, value=unit)
-        c4.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c4.font = _P_FONT_BLUE_ITALIC if material else _P_FONT_BLACK
         c4.alignment = Alignment(
-            horizontal="right" if is_material else "center",
+            horizontal="right" if material else "center",
             vertical="center",
         )
         c4.border = _P_BORDER
@@ -161,9 +162,9 @@ def _write_perechen_sheet(ws, items: list, with_sections: bool = False,
         # Col 5: кол-во — center (work) / right (material), 2 decimals
         qty = item.get("quantity")
         c5 = ws.cell(row=data_row, column=5 + off, value=qty)
-        c5.font = _P_FONT_BLUE_ITALIC if is_material else _P_FONT_BLACK
+        c5.font = _P_FONT_BLUE_ITALIC if material else _P_FONT_BLACK
         c5.alignment = Alignment(
-            horizontal="right" if is_material else "center",
+            horizontal="right" if material else "center",
             vertical="center",
         )
         if qty is not None:
@@ -1393,6 +1394,7 @@ def generate_estimate_export(
 
         # Пометка «цена из КП» (kp_apply): только заливка, итоги не трогает.
         kp_row_fill = kp_fill(kp_ref)
+        material = is_material(rtype)
         for ci in range(1, len(COLS) + 1):
             cell = ws.cell(row=row_idx, column=ci)
             cell.border = THIN_BORDER
@@ -1403,6 +1405,9 @@ def generate_estimate_export(
                 cell.font = NORMAL_FONT
                 if kp_row_fill is not None:
                     cell.fill = kp_row_fill
+                # Материал — синий курсив поверх заливки КП, номер чёрный.
+                if material and ci > 1:
+                    style_material_cell(cell, right=ci in (3, 4, 5))
         for ci in (6, 7, 8):
             ws.cell(row=row_idx, column=ci).number_format = _NUMBER_FMT
         row_idx += 1
@@ -1722,6 +1727,7 @@ def generate_comparison_export(versions: list, customer_estimate: Optional[dict]
 
         rtype = rep.get("type", "")
         is_section = rtype == "section"
+        material = is_material(rtype)
         is_added = lid not in {(r.get("lineage_id") or r.get("id", "")) for r in original_rows}
 
         ws.cell(row=row_idx, column=1, value=rep.get("num") if not is_section else None)
@@ -1738,6 +1744,8 @@ def generate_comparison_export(versions: list, customer_estimate: Optional[dict]
                 cell.fill = _SECTION_FILL
             elif is_added:
                 cell.fill = _added_fill
+            if material and ci > 1:
+                style_material_cell(cell, right=ci in (3, 4))
 
         orig_cost = orig_cost_by_lineage.get(lid, 0.0)
 
@@ -1768,6 +1776,8 @@ def generate_comparison_export(versions: list, customer_estimate: Optional[dict]
                             cell.fill = _CHEAPER_FILL
                         elif cost > orig_cost + 0.01:
                             cell.fill = _DEARER_FILL
+                    if material:
+                        style_material_cell(cell)
 
         row_idx += 1
 

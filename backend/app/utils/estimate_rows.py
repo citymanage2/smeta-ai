@@ -70,6 +70,18 @@ _LABEL_TO_TYPE = {
 _TYPE_TO_LABEL = {"work": "Работа", "material": "Материал", "section": "Раздел"}
 
 
+def canonical_type(raw_type: Any) -> str:
+    """Тип строки в любом написании → "work" | "material" | "section".
+
+    Позиция ИИ пишет «Работа», строка документа — "work", а раздел сводной
+    хранит копию строк документа. Сравнение с одним написанием молча не
+    срабатывает на другом: так файл сводной выходил без выделения работ.
+    Незнакомое значение возвращается как есть (в нижнем регистре).
+    """
+    key = str(raw_type or "").strip().lower()
+    return _LABEL_TO_TYPE.get(key, key)
+
+
 def _row_type(raw_type: Any, work_price: Optional[float], material_price: Optional[float]) -> str:
     key = str(raw_type or "").strip().lower()
     if key in _LABEL_TO_TYPE:
@@ -139,8 +151,7 @@ def row_to_item(row: dict) -> dict:
     `row_id` кладём в позицию намеренно: генератор xlsx лишние ключи игнорирует,
     а обратный перевод по нему сохраняет идентичность строки.
     """
-    row_type = str(row.get("type") or "work").strip().lower()
-    row_type = _LABEL_TO_TYPE.get(row_type, row_type)
+    row_type = canonical_type(row.get("type") or "work")
 
     item = {
         "row_id": str(row.get("id") or ""),
