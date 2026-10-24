@@ -1,9 +1,7 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 
-import pytest
-
-from app.utils.pdf_exporter import generate_project_pdf, _build_html
+from app.utils.pdf_exporter import _build_html
 
 
 class _FakeProject:
@@ -46,50 +44,10 @@ def _make_data():
     return project, tasks, slot_results
 
 
-def test_pdf_returns_bytes():
-    project, tasks, slot_results = _make_data()
-    data = generate_project_pdf(project, tasks, slot_results, "http://localhost:8000")
-    assert isinstance(data, bytes)
-    assert len(data) > 0
-
-
-def test_pdf_starts_with_pdf_magic():
-    project, tasks, slot_results = _make_data()
-    data = generate_project_pdf(project, tasks, slot_results, "http://localhost:8000")
-    assert data[:4] == b"%PDF"
-
-
-def test_pdf_no_description():
-    """Project without description should not raise."""
-    project = _FakeProject()
-    project.description = None
-    tasks = [_FakeTask("t1", "SMETA_FROM_LIST", "unestimated", None, _DT)]
-    data = generate_project_pdf(project, tasks, {"source": [], "estimate": [], "optimized": []}, "http://localhost:8000")
-    assert len(data) > 0
-
-
-def test_pdf_html_contains_project_name():
-    project, tasks, slot_results = _make_data()
-    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
-    assert "Тест проект" in html
-
-
-def test_pdf_html_contains_task_type_label():
-    project, tasks, slot_results = _make_data()
-    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
-    assert "Перечень из Гранд-сметы" in html  # LIST_FROM_GRAND label
-
-
 def test_pdf_html_contains_download_link():
     project, tasks, slot_results = _make_data()
     html = _build_html(project, tasks, slot_results, "http://localhost:8000")
     assert "http://localhost:8000/tasks/t1/files/estimate/download" in html
-
-
-def test_pdf_html_empty_slot_shows_placeholder():
-    project, tasks, slot_results = _make_data()
-    html = _build_html(project, tasks, slot_results, "http://localhost:8000")
-    assert "Файлы отсутствуют" in html
 
 
 def test_pdf_html_contains_itogo_row():

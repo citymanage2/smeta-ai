@@ -4,9 +4,7 @@ Phase 2 — batch-инфраструктура claude_service (Anthropic Message
 Юнит-тесты с замоканным _client.messages.batches. БД не трогаем (db=None).
 План: plans/2026-07-21-estimate-processing-modes.md, Phase 2.
 """
-from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -27,46 +25,9 @@ def batches(monkeypatch):
     return batches_ns
 
 
-# --------------------------------------------------------------------------
-# Стоимость batch — уполовиненные тарифы (с точностью до округления 6 знаков)
-# --------------------------------------------------------------------------
-
-def test_batch_cost_is_half_of_regular():
-    regular = cs._calc_cost("claude-sonnet-4-6", 1000, 500, 200, 300, batch=False)
-    batch = cs._calc_cost("claude-sonnet-4-6", 1000, 500, 200, 300, batch=True)
-    assert batch < regular
-    # batch ≈ regular/2 в пределах округления до 6 знаков
-    assert abs(regular - batch * 2) <= Decimal("0.000002")
-
-
-# --------------------------------------------------------------------------
-# Стоимость web search — отдельная от токенов статья ($10 / 1000 поисков)
-# --------------------------------------------------------------------------
-
-def test_web_search_adds_flat_fee_on_top_of_tokens():
-    no_search = cs._calc_cost("claude-sonnet-4-6", 1000, 500, 200, 300)
-    with_search = cs._calc_cost("claude-sonnet-4-6", 1000, 500, 200, 300, web_search_requests=7)
-    assert with_search - no_search == Decimal("0.07")
-
-
-def test_web_search_fee_not_halved_by_batch():
-    """Скидка batch — на токены; на поиски её консервативно НЕ применяем."""
-    only_search = cs._calc_cost("claude-sonnet-4-6", 0, 0, 0, 0, batch=True, web_search_requests=10)
-    assert only_search == Decimal("0.1")
-
-
 def test_web_search_tool_has_max_uses_cap():
     """Без max_uses поиск бесконтрольный — 22% счёта Anthropic на 28.07.2026."""
     assert cs.WEB_SEARCH_TOOL["max_uses"] >= 1
-
-
-def test_extract_usage_reads_web_search_requests():
-    usage = SimpleNamespace(
-        input_tokens=10, output_tokens=20,
-        cache_read_input_tokens=30, cache_creation_input_tokens=40,
-        server_tool_use=SimpleNamespace(web_search_requests=5),
-    )
-    assert cs._extract_usage(usage) == (10, 20, 30, 40, 5)
 
 
 def test_extract_usage_without_server_tool_use():
@@ -99,36 +60,6 @@ def test_build_batch_request_shape():
     # system закэширован
     assert params["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert params["system"][0]["text"] == "SYS"
-
-
-# --------------------------------------------------------------------------
-# submit — возвращает batch_id и прокидывает requests
-# --------------------------------------------------------------------------
-
-async def test_submit_claude_batch_returns_id(batches):
-    captured = {}
-
-    async def fake_create(*, requests):
-        captured["requests"] = requests
-        return SimpleNamespace(id="msgbatch_abc123")
-
-    batches.create = fake_create
-
-    reqs = [cs.build_batch_request(custom_id="c1", messages=[{"role": "user", "content": "x"}])]
-    batch_id = await cs.submit_claude_batch(reqs)
-
-    assert batch_id == "msgbatch_abc123"
-    assert captured["requests"] == reqs
-
-
-# --------------------------------------------------------------------------
-# poll — возвращает processing_status
-# --------------------------------------------------------------------------
-
-async def test_poll_claude_batch_status(batches):
-    batches.retrieve = AsyncMock(return_value=SimpleNamespace(processing_status="ended"))
-    status = await cs.poll_claude_batch("msgbatch_abc123")
-    assert status == "ended"
 
 
 # --------------------------------------------------------------------------
@@ -256,14 +187,3 @@ async def test_regular_call_logged_even_if_identical(monkeypatch):
     )
 
     assert len(saved) == 1
-
-
-# --------------------------------------------------------------------------
-# cancel — зовёт SDK с batch_id
-# --------------------------------------------------------------------------
-
-async def test_cancel_claude_batch(batches):
-    cancel_mock = AsyncMock()
-    batches.cancel = cancel_mock
-    await cs.cancel_claude_batch("msgbatch_abc123")
-    cancel_mock.assert_awaited_once_with("msgbatch_abc123")

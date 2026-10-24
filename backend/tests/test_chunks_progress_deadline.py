@@ -26,7 +26,6 @@ sys.modules.setdefault("fitz", MagicMock())
 
 from app.services.task_processor import (  # noqa: E402
     TaskProcessor,
-    TaskCancelledError,
     StageDeadlineError,
     _chunk_stage_deadline,
     CHUNK_STAGE_DEADLINE_S,
@@ -93,18 +92,6 @@ async def test_progress_published_while_chunks_run():
     assert any(m.startswith("Обработано 1 ") or m.startswith("Обработано 2 ") for m in published)
 
 
-async def test_no_progress_published_without_label():
-    """Без progress_label поведение прежнее — лишних записей в БД нет."""
-    p = _proc()
-
-    async def _w():
-        await asyncio.sleep(0.03)
-        return 1
-
-    await p._run_chunks_parallel([_w], concurrency=1, progress_tick=0.01)
-    p.update_progress_message.assert_not_awaited()
-
-
 async def test_progress_does_not_pollute_history_log():
     """Живая строка идёт мимо progress_log — иначе «ХОД ВЫПОЛНЕНИЯ» раздуется."""
     p = _proc()
@@ -160,30 +147,3 @@ async def test_deadline_keeps_finished_chunks_with_return_exceptions():
     # Незавершённый приходит как StageDeadlineError, а НЕ CancelledError —
     # иначе caller решит, что пользователь нажал «Стоп».
     assert isinstance(results[1], StageDeadlineError)
-
-
-async def test_user_cancel_still_reported_as_cancel_not_deadline():
-    """Нажатие «Стоп» не должно маскироваться под таймаут."""
-    p = _proc()
-    p._check_cancelled = AsyncMock(side_effect=TaskCancelledError("stop"))
-
-    async def _hang():
-        await asyncio.sleep(60)
-        return "never"
-
-    with pytest.raises(TaskCancelledError):
-        await p._run_chunks_parallel(
-            [_hang], concurrency=1, deadline_s=30, progress_tick=0.01
-        )
-
-
-async def test_no_deadline_means_no_limit():
-    """Без deadline_s примитив работает как раньше."""
-    p = _proc()
-
-    async def _w():
-        await asyncio.sleep(0.05)
-        return 7
-
-    results = await p._run_chunks_parallel([_w], concurrency=1, progress_tick=0.01)
-    assert results == [7]

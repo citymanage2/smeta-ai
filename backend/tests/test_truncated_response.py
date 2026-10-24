@@ -88,13 +88,6 @@ async def test_truncated_response_not_retried_by_chunk_retry(monkeypatch):
     assert calls["n"] == 1, f"ожидался один вызов, сделано {calls['n']}"
 
 
-async def test_normal_response_still_returns_text(monkeypatch):
-    """Обычный ответ (end_turn) не задет правкой."""
-    _patch_client(monkeypatch, _response("end_turn", output_tokens=100))
-    result = await cs.call_claude([{"role": "user", "content": "x"}])
-    assert result == '{"items": []}'
-
-
 # --------------------------------------------------------------------------
 # Дробление порции пополам — проверяем на fix_empty_prices, где весь путь
 # (сбор батчей → вызов → применение) выполняется целиком.

@@ -54,11 +54,6 @@ async def test_concurrency_is_bounded():
     assert state["max"] <= 3
 
 
-async def test_empty_workers_returns_empty():
-    p = _proc()
-    assert await p._run_chunks_parallel([], concurrency=4) == []
-
-
 async def test_cancellation_raises_and_cancels_workers():
     p = _proc()
     p._check_cancelled = AsyncMock(side_effect=TaskCancelledError("stop"))

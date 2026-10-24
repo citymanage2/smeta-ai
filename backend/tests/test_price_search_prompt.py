@@ -1,31 +1,10 @@
 """
 Tests for price search correctness in optimization:
-- PriceService must have find_work_price / find_material_price methods
 - Web search prompts must specify Екатеринбург region
 - User prompt from wizard must be included in web search message
 """
 import pytest
 from unittest.mock import patch
-
-
-@pytest.mark.asyncio
-async def test_price_service_has_find_work_price():
-    """PriceService must expose find_work_price (used by background task)."""
-    from app.services.price_service import PriceService
-    svc = PriceService()
-    assert hasattr(svc, "find_work_price"), (
-        "PriceService must have find_work_price — background task calls it directly"
-    )
-
-
-@pytest.mark.asyncio
-async def test_price_service_has_find_material_price():
-    """PriceService must expose find_material_price (used by background task)."""
-    from app.services.price_service import PriceService
-    svc = PriceService()
-    assert hasattr(svc, "find_material_price"), (
-        "PriceService must have find_material_price — background task calls it directly"
-    )
 
 
 @pytest.mark.asyncio

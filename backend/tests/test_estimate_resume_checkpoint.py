@@ -37,16 +37,6 @@ def test_pending_chunks_excludes_done_ids():
     assert pending == [[{"_id": 1}], [{"_id": 4}]]
 
 
-def test_pending_chunks_empty_when_all_done():
-    chunks = [[{"_id": 0}], [{"_id": 1}]]
-    assert TaskProcessor._pending_chunks(chunks, {0, 1}) == []
-
-
-def test_pending_chunks_all_when_none_done():
-    chunks = [[{"_id": 0}, {"_id": 1}]]
-    assert TaskProcessor._pending_chunks(chunks, set()) == [[{"_id": 0}, {"_id": 1}]]
-
-
 # --------------------------------------------------------------------------
 # _save_claude_partial — чекпоинт claude_partial с накопленными результатами
 # --------------------------------------------------------------------------

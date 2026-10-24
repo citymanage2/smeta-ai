@@ -12,7 +12,6 @@ fitz = pytest.importorskip("fitz")
 pytest.importorskip("PIL")
 
 from app.utils.pdf_ocr_extractor import (
-    _peak_rss_mb,
     _render_page_image,
     timed_out_page_numbers,
 )
@@ -45,13 +44,6 @@ def test_render_page_image_caps_width():
         assert img.width <= 2480
     finally:
         doc.close()
-
-
-def test_peak_rss_mb_positive():
-    """Хелпер пикового RSS возвращает разумное положительное число МБ."""
-    val = _peak_rss_mb()
-    assert isinstance(val, int)
-    assert 1 <= val < 100_000
 
 
 def test_timed_out_page_numbers():

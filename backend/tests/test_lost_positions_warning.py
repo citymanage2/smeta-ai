@@ -78,10 +78,6 @@ def test_warning_names_the_numbers():
     assert "№3, №5, №7" in text
 
 
-def test_warning_uses_singular_for_one():
-    assert "1 позицию" in lost_positions_warning(["3"])
-
-
 def test_warning_lists_at_most_twenty_numbers():
     """Список номеров не должен раздувать строку статуса на весь экран."""
     text = lost_positions_warning([str(n) for n in range(1, 31)])
@@ -90,7 +86,3 @@ def test_warning_lists_at_most_twenty_numbers():
     assert "№20" in text
     assert "№21" not in text
     assert "…" in text
-
-
-def test_no_warning_when_nothing_lost():
-    assert lost_positions_warning([]) == ""

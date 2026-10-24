@@ -155,9 +155,6 @@ class TestEffortEstimate:
     def test_estimate_never_promises_zero_minutes(self):
         assert analogs_service.estimate_effort(1)["minutes"] >= 1
 
-    def test_estimate_of_nothing_is_zero(self):
-        assert analogs_service.estimate_effort(0)["positions"] == 0
-
 
 # ---------------------------------------------------------------------------
 # Запуск

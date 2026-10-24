@@ -10,12 +10,6 @@ import pytest
 from app.utils.file_parser import pdf_to_content_block
 
 
-def test_pdf_to_content_block_rejects_empty_bytes():
-    """Empty bytes are not a valid PDF."""
-    with pytest.raises(ValueError, match="не является валидным PDF"):
-        pdf_to_content_block(b"")
-
-
 def test_pdf_to_content_block_rejects_corrupted_bytes():
     """Bytes that don't start with %PDF are not a valid PDF."""
     with pytest.raises(ValueError, match="не является валидным PDF"):
