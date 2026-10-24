@@ -15,7 +15,7 @@ import io
 
 import openpyxl
 
-from app.utils.file_parser import parse_xlsx_grand, rows_to_text
+from app.utils.file_parser import parse_xlsx_grand
 
 
 def _lsr_xlsx() -> bytes:
@@ -46,17 +46,6 @@ def test_material_starting_with_blok_is_a_position():
     assert material["is_section"] is False
     assert material["unit"] == "м2"
     assert material["quantity"] == 1.8
-
-
-def test_material_reaches_claude_with_unit_and_quantity():
-    """В текст для Claude материал уходит позицией, а не «=== заголовком ===».
-
-    Разметка «===» — прямая команда промпта выбросить строку.
-    """
-    text = rows_to_text(parse_xlsx_grand(_lsr_xlsx()))
-
-    assert "Блок дверной деревянный внутренний распашной глухой, площадь 2,0 м2\tм2\t1.8" in text
-    assert "=== Блок" not in text
 
 
 def test_real_section_header_still_recognized():

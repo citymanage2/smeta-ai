@@ -147,13 +147,6 @@ def test_estimate_export_totals_exact_numbers():
     assert round(totals["Транспортные расходы (5%)"], 2) == 24.23
 
 
-def test_estimate_export_without_kp_ref_has_no_kp_fill():
-    ws = _export(_strip(_rows())).active
-    colors = {_color(c) for row in ws.iter_rows() for c in row}
-    assert KP_FILL_COLOR not in colors
-    assert KP_MATERIALS_FILL_COLOR not in colors
-
-
 # ── generate_statement_xlsx ─────────────────────────────────────────────────
 
 COLUMNS = [

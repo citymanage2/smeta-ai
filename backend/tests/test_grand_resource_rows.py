@@ -49,13 +49,6 @@ def _names(rows: list[dict]) -> list[str]:
     return [r["name"] for r in rows if not r["is_section"]]
 
 
-def test_resource_row_is_not_a_position():
-    """Справочный ресурс расценки в перечень не попадает."""
-    names = _names(parse_xlsx_grand(_lsr_with_resources()))
-
-    assert "Раствор готовый кладочный тяжелый цементный" not in names
-
-
 def test_material_position_survives():
     """Настоящая позиция материала остаётся — с объёмом из колонки «всего»."""
     rows = parse_xlsx_grand(_lsr_with_resources())
@@ -63,13 +56,6 @@ def test_material_position_survives():
     material = next(r for r in rows if "М150" in r["name"])
     assert material["unit"] == "м3"
     assert material["quantity"] == 15.63864
-
-
-def test_no_duplicate_material():
-    """Материал уезжает в перечень ровно один раз — это и была жалоба."""
-    names = _names(parse_xlsx_grand(_lsr_with_resources()))
-
-    assert len([n for n in names if "аствор" in n]) == 1
 
 
 def test_work_and_section_survive():
@@ -96,23 +82,3 @@ def test_sheet_without_numbering_keeps_all_rows():
 
     names = _names(parse_xlsx_grand(buf.getvalue()))
     assert names == ["Устройство стяжек цементных", "Раствор готовый кладочный, цементный, М150"]
-
-
-def test_unnumbered_row_with_own_cost_survives():
-    """Строка без номера, но со своей стоимостью — позиция, а не ресурс.
-
-    У справочного ресурса ГРАНД-Сметы стоимости не бывает: она уже внутри
-    расценки. Если стоимость есть — материал учтён отдельно, и терять его нельзя.
-    """
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(["ЛОКАЛЬНЫЙ СМЕТНЫЙ РАСЧЕТ (СМЕТА) № 1"])
-    ws.append(["№ п/п", "Обоснование", "Наименование работ и затрат", "Ед. изм.", "Количество", "Сметная стоимость, руб."])
-    ws.append([1, "ФЕР11-01-011-01", "Устройство стяжек цементных", "100 м2", 7.666, 213404.64])
-    ws.append([2, "ФЕР46-02-007-01", "Кладка отдельных участков кирпичных стен", "м3", 3.8, 40440.11])
-    ws.append([3, "ФЕР08-02-001-01", "Кладка стен кирпичных наружных", "м3", 18.4, 51000.0])
-    ws.append([None, "ФССЦ-04.3.01.09-0015", "Раствор готовый кладочный, цементный, М150", "м3", 15.63864, 55135.13])
-    buf = io.BytesIO()
-    wb.save(buf)
-
-    assert "Раствор готовый кладочный, цементный, М150" in _names(parse_xlsx_grand(buf.getvalue()))

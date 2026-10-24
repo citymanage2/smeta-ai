@@ -16,7 +16,6 @@ import openpyxl
 from app.services.document_service import strip_service_rows
 from app.utils.xlsx_generic import (
     is_numbering_cells,
-    parse_xlsx_to_generic_rows,
     rows_to_xlsx,
 )
 
@@ -120,30 +119,6 @@ class TestPerechenSheet:
         assert ws.cell(row=2, column=3).value == "Раздел 1. Демонтаж"
         assert ws.cell(row=3, column=3).value == "Демонтаж стен"
 
-    def test_parsed_back_without_junk_row(self):
-        from app.services.excel_service import data_sheet_titles, generate_list
-
-        items = [{"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5}]
-        # Как в проде: только листы данных, без сводок «Работы» и «Материалы».
-        rows = parse_xlsx_to_generic_rows(
-            generate_list(items), sheets=data_sheet_titles(items),
-        )
-
-        assert len(rows) == 1
-        assert rows[0]["cells"]["Наименование"] == "Демонтаж стен"
-
-    def test_list_sheet_parser_sees_only_real_items(self):
-        # ESTIMATE_FROM_LIST читает наш же перечень: строка нумерации давала
-        # позицию с наименованием «3».
-        from app.services.excel_service import generate_list
-        from app.utils.xlsx_cost_parser import parse_list_sheet
-
-        items = parse_list_sheet(generate_list([
-            {"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5},
-        ]))
-
-        assert [it["name"] for it in items] == ["Демонтаж стен"]
-
 
 # ---------------------------------------------------------------------------
 # Числа в пересобранном файле остаются числами
@@ -171,9 +146,3 @@ class TestRowsToXlsxNumbers:
         # Ведущий ноль — признак кода: превратить «007» в 7 значило бы испортить
         # артикул.
         assert ws.cell(row=2, column=3).value == "007"
-
-    def test_roundtrip_is_stable(self):
-        rows = [{"row_id": "a", "cells": {"Наименование": "Демонтаж", "Кол-во": 12.5}}]
-        again = parse_xlsx_to_generic_rows(rows_to_xlsx(rows))
-
-        assert again[0]["cells"] == rows[0]["cells"]

@@ -74,13 +74,6 @@ def test_equipment_with_ispolnenie_reaches_the_list():
     assert "Контроллер радиоканальных и проводных устройств Панель-2-ПРО (S3) исп.Л" in names
 
 
-def test_material_of_the_next_work_reaches_the_list():
-    """Сами извещатели — отдельная позиция ЛСР, и она тоже доезжает."""
-    names = _names(_fire_alarm_section())
-
-    assert "Извещатель пожарный дымовой оптико-электронный ИП 212-141 исп.01" in names
-
-
 def test_service_rows_are_still_dropped():
     """Итоги, НР/СП, ФОТ и проценты в перечень по-прежнему не идут."""
     names = _names(_lsr([

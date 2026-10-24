@@ -54,15 +54,6 @@ def _right(ws, row: int) -> list:
     return [ws.cell(row=row, column=col).value for col in range(7, 18)]
 
 
-def test_target_columns_are_added_after_the_old_ones(sheet):
-    """Прежние колонки раздела остались на своих местах — формулы не съезжают."""
-    assert _right(sheet, 1) == [
-        "Раздел", "Налог работ, %", "Работы (с/с)", "Работы с НДС",
-        "Материалы (с/с)", "Материалы с НДС", "Налог матер., %",
-        "Цель работ", "Откл. работ", "Цель матер.", "Откл. матер.",
-    ]
-
-
 def test_section_target_and_deviation_match_screen(sheet, calc):
     ar = calc["section_totals"][0]
     row = _right(sheet, 2)

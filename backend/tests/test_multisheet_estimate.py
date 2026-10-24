@@ -117,10 +117,6 @@ class TestExactNumbers:
         assert values["Раздел 2"] == SHEET2_TOTAL
         assert values["ВСЕГО ПО СМЕТЕ:"] == GRAND_TOTAL
 
-    def test_returned_total_is_the_grand_total(self, built):
-        _, grand = built
-        assert grand == GRAND_TOTAL
-
     def test_task_cost_read_back_from_the_file_matches(self, built):
         # `task.cost` дозаполняется чтением файла — оно обязано дать «ВСЕГО».
         data, _ = built

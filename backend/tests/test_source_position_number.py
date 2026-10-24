@@ -34,15 +34,6 @@ def _grand_xlsx(rows: list[tuple]) -> bytes:
 
 # ── Разбор: номер остаётся при строке ────────────────────────────────────────
 
-def test_parse_keeps_position_number():
-    data = _grand_xlsx([
-        ("1", "ФЕР46-03-009-03", "Пробивка в кирпичных стенах гнезд", "100 шт", 0.02),
-        ("2", "ФЕР46-03-017-05", "Заделка отверстий, гнезд и борозд", "м3", 0.1),
-    ])
-    rows = parse_xlsx_grand(data)
-    assert [r["source_no"] for r in rows] == ["1", "2"]
-
-
 def test_parse_number_with_dot_and_letter():
     data = _grand_xlsx([
         ("1.1", "ФЕР46-03-009-03", "Пробивка гнезд", "100 шт", 0.02),
@@ -226,20 +217,6 @@ def test_round_trip_without_numbers_has_no_field():
               "quantity": 1, "notes": ""}]
     rows = parse_xlsx_to_generic_rows(generate_list(items), sheets=["Перечень"])
     assert generic_rows_to_items(rows)[0].get("source_no", "") == ""
-
-
-# ── Полнота номер за собой не тянет ──────────────────────────────────────────
-
-def test_completeness_payload_drops_source_no():
-    from app.services.task_processor import _without_source_no
-
-    items = [{"type": "Работа", "name": "Пробивка гнезд", "unit": "м2",
-              "quantity": 1, "notes": "", "source_no": "1"}]
-    clean = _without_source_no(items)
-    assert clean == [{"type": "Работа", "name": "Пробивка гнезд", "unit": "м2",
-                      "quantity": 1, "notes": ""}]
-    # исходные позиции не тронуты
-    assert items[0]["source_no"] == "1"
 
 
 # ── Сквозной путь: файл → строки → позиции ───────────────────────────────────

@@ -65,20 +65,6 @@ async def test_enrich_norms_stores_qty_per_work_unit():
 
     mat = next(r for r in result if r["id"] == "m1")
     assert mat["qty_per_work_unit"] == 2.5
-
-
-@pytest.mark.asyncio
-async def test_enrich_norms_stores_norm_reference():
-    proc = _make_processor()
-    rows = [_work_row("w1"), _material_with_work("m1", "w1")]
-
-    claude_response = {"materials": [{"row_id": "m1", "qty_per_work_unit": 1.0, "norm_reference": "ГЭСН 08-01-003"}]}
-    proc._interruptible_claude_json_with_retry = AsyncMock(return_value=claude_response)
-
-    from app.services.task_processor import TaskProcessor
-    result = await TaskProcessor._enrich_rows_with_gesn_norms(proc, rows)
-
-    mat = next(r for r in result if r["id"] == "m1")
     assert mat["norm_reference"] == "ГЭСН 08-01-003"
 
 

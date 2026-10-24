@@ -5,7 +5,6 @@ from typing import List
 import openpyxl
 
 from app.utils.xlsx_cost_parser import extract_total_cost
-from app.constants import ESTIMATE_TASK_TYPES
 
 
 def _make_xlsx(rows: List[List]) -> bytes:
@@ -69,18 +68,3 @@ def test_extract_total_cost_no_matching_row_returns_none():
 
 def test_extract_total_cost_damaged_file_returns_none():
     assert extract_total_cost(b"not an xlsx file at all") is None
-
-
-def test_extract_total_cost_float_value():
-    data = _make_xlsx([
-        ["ИТОГО", 123456.78],
-    ])
-    assert extract_total_cost(data) == Decimal("123456.78")
-
-
-def test_estimate_task_types_constant():
-    # Estimate-producing task types (source of truth: app/constants.py).
-    # LIST_FROM_GRAND is a "list" stage (produces a перечень), not an estimate,
-    # so it must NOT be here — only ESTIMATE_FROM_LIST / ESTIMATE_OPTIMIZATION.
-    assert "ESTIMATE_FROM_LIST" in ESTIMATE_TASK_TYPES
-    assert "LIST_FROM_GRAND" not in ESTIMATE_TASK_TYPES

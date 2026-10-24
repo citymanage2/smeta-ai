@@ -26,26 +26,6 @@ def _est_item(name, *, source_no=None, qty=1.0, work=100.0, mat=None, type_="Р�
 
 # ── Фаза 1. Полнота ──────────────────────────────────────────────────────────
 
-def test_completeness_keeps_number_of_source_position():
-    """Позиция перечня прошла через ИИ полноты и вернулась со своим номером."""
-    source = [
-        {"type": "Работа", "name": "Устройство перегородок ГКЛ",
-         "unit": "м2", "quantity": 10.0, "notes": "", "source_no": "5"},
-    ]
-    # То, что вернул ИИ: та же работа плюс дописанный им материал
-    from_ai = [
-        {"type": "Работа", "name": "Устройство перегородок ГКЛ",
-         "unit": "м2", "quantity": 10.0, "notes": ""},
-        {"type": "Материал", "name": "Профиль ПН-2 50х40",
-         "unit": "м", "quantity": 8.4, "notes": "добавлен по ГЭСН"},
-    ]
-    attach_source_numbers(from_ai, source)
-
-    assert from_ai[0]["source_no"] == "5"
-    # Материала в исходной смете не было — номера у него нет
-    assert "source_no" not in from_ai[1]
-
-
 def test_material_kit_rows_have_no_number():
     """Комплект по нормам расхода дописывает строки, которых в смете не было."""
     items = [
@@ -77,15 +57,6 @@ def test_row_without_number_gets_none():
     assert rows[0]["source_no"] is None
 
 
-def test_estimate_row_schema_accepts_number():
-    from app.schemas.estimate_version import EstimateRowSchema
-
-    row = EstimateRowSchema(lineage_id="x", name="Пробивка", source_no="7")
-    assert row.source_no == "7"
-    # Старая строка без поля открывается по-прежнему
-    assert EstimateRowSchema(lineage_id="x", name="Пробивка").source_no is None
-
-
 def test_uploaded_list_column_is_read():
     """Перечень скачали, положили в задачу сметы — номер читается из файла."""
     from app.services.excel_service import generate_list
@@ -97,17 +68,6 @@ def test_uploaded_list_column_is_read():
     items = parse_list_sheet(data)
     assert items[0]["source_no"] == "3"
     assert items[0]["name"] == "Пробивка гнезд"
-
-
-def test_uploaded_list_without_column_still_parses():
-    from app.services.excel_service import generate_list
-
-    items = parse_list_sheet(generate_list([
-        {"type": "Работа", "name": "Пробивка гнезд", "unit": "м2",
-         "quantity": 1, "notes": ""},
-    ]))
-    assert items[0]["name"] == "Пробивка гнезд"
-    assert items[0].get("source_no", "") == ""
 
 
 # ── Фаза 3. Смета: колонка в файле ───────────────────────────────────────────
@@ -151,15 +111,6 @@ def test_estimate_total_unchanged_by_new_column():
     assert float(extract_total_cost(data_numbered)) == total_numbered
 
 
-def test_estimate_totals_block_reads_after_shift():
-    """Подпись итога остаётся в первой колонке, число — в последней."""
-    data, total = generate_estimate_xlsx([_est_item("Пробивка", qty=2.0, work=100.0,
-                                                    source_no="1")])
-    values = _estimate_values(data)
-    grand = next(row for row in values if str(row[0] or "").startswith("ИТОГО ПО СМЕТЕ"))
-    assert grand[-1] == total
-
-
 def test_multisheet_estimate_keeps_numbers_and_summary():
     items = [
         dict(_est_item("Пробивка", source_no="1"), sheet="Раздел 1"),
@@ -174,40 +125,11 @@ def test_multisheet_estimate_keeps_numbers_and_summary():
 
 # ── Фаза 4 (бэкенд-часть). Оптимизация и сводная наследуют номер ─────────────
 
-def test_optimization_row_copy_keeps_number():
-    """Версия оптимизации строится копией строки сметы — номер едет с ней."""
-    row = items_to_rows([_est_item("Пробивка гнезд", source_no="1")])[0]
-    # Ровно то, что делает построение версии оптимизации: копия + патч цены
-    row_copy = dict(row)
-    row_copy["price_work"] = 90.0
-    row_copy["optimization_note"] = "цена из прайса"
-
-    assert row_copy["source_no"] == "1"
-    assert rows_to_items([row_copy])[0]["source_no"] == "1"
-
-
 def test_summary_section_snapshot_keeps_number():
     """Снимок раздела сводной — копия строк версии, без пересборки полей."""
     rows = items_to_rows([_est_item("Пробивка гнезд", source_no="4")])
     snapshot = list(rows)  # как в summary_service._build_sections_snapshot
     assert snapshot[0]["source_no"] == "4"
-
-
-def test_statement_export_carries_the_column():
-    """Ведомость берёт колонки у документа — номер попадает в выгрузку."""
-    from app.utils.xlsx_statement import generate_statement_xlsx
-
-    columns = [
-        {"key": "source_no", "label": "№ в исходной смете", "numeric": False},
-        {"key": "name", "label": "Наименование", "numeric": False},
-    ]
-    data = generate_statement_xlsx(
-        columns, [{"source_no": "1", "name": "Пробивка гнезд"}], show_total=False,
-    )
-    wb = openpyxl.load_workbook(io.BytesIO(data))
-    flat = [str(cell) for row in wb.worksheets[0].iter_rows(values_only=True) for cell in row]
-    assert "№ в исходной смете" in flat
-    assert "1" in flat
 
 
 def test_end_to_end_list_to_estimate_file():

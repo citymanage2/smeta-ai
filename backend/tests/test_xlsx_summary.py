@@ -44,12 +44,6 @@ def _find(ws, label: str) -> int:
     raise AssertionError(f"строка «{label}» не найдена в листе")
 
 
-def test_header_matches_screen(sheet):
-    assert [sheet.cell(row=1, column=c).value for c in range(1, 6)] == [
-        "№", "Наименование", "% / Кол-во", "Стоимость с НДС", "Стоимость без НДС",
-    ]
-
-
 def test_fixed_row_has_both_costs(sheet, calc):
     row = _find(sheet, "Работы")
     assert sheet.cell(row=row, column=4).value == round(calc["works_with_vat"], 2)

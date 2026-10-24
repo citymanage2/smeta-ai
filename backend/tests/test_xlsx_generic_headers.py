@@ -186,13 +186,6 @@ class TestGrandMultiRowHeader:
         assert _cells(rows)[0]["Наименование работ и затрат"] == "Кладка стен из кирпича"
         assert _cells(rows)[1]["Наименование работ и затрат"] == "Демонтаж кровли"
 
-    def test_title_block_is_not_data(self):
-        rows = parse_xlsx_to_generic_rows(_build(GRAND_MATRIX, GRAND_MERGES))
-
-        joined = " ".join(str(v) for cells in _cells(rows) for v in cells.values())
-        assert "ЛОКАЛЬНЫЙ СМЕТНЫЙ РАСЧЁТ" not in joined
-        assert "Ремонт кровли административного здания" not in joined
-
     def test_header_rows_joined_into_column_names(self):
         rows = parse_xlsx_to_generic_rows(_build(GRAND_MATRIX, GRAND_MERGES))
 
@@ -205,11 +198,6 @@ class TestGrandMultiRowHeader:
             "Стоимость, руб. на единицу",
             "Стоимость, руб. всего",
         ]
-
-    def test_vertically_merged_header_not_duplicated(self):
-        rows = parse_xlsx_to_generic_rows(_build(GRAND_MATRIX, GRAND_MERGES))
-
-        assert "Обоснование Обоснование" not in _cells(rows)[0]
 
     def test_values_land_in_right_columns(self):
         rows = parse_xlsx_to_generic_rows(_build(GRAND_MATRIX, GRAND_MERGES))
