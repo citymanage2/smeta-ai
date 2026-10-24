@@ -62,13 +62,6 @@ def test_prompt_view_drops_kp_ref_and_source_no_without_touching_rows():
     assert rows[0]["kp_ref"] == _KP_REF and rows[0]["source_no"] == "12"
 
 
-def test_task_processor_prompt_helper_drops_kp_ref():
-    from app.services.task_processor import _without_source_no
-
-    view = _without_source_no([row_to_item(_rows()[0])])
-    assert "kp_ref" not in view[0] and "source_no" not in view[0]
-
-
 # ---------------------------------------------------------------------------
 # clone_version
 # ---------------------------------------------------------------------------

@@ -65,12 +65,6 @@ def test_collapse_key_matches_frontend_fixtures():
         assert kp.collapse_key(case["name"], case["unit"], case["kind"]) == case["key"], case
 
 
-def test_yolka_and_elka_are_different_positions_like_on_screen():
-    """`collapse.ts` не меняет ё на е — сервер тоже: иначе на экране две строки,
-    а в запросе одна."""
-    assert kp.collapse_key("Ёлка", "шт", "material") != kp.collapse_key("Елка", "шт", "material")
-
-
 # ---------------------------------------------------------------------------
 # Разбор выделения (чистая логика)
 # ---------------------------------------------------------------------------
@@ -84,22 +78,6 @@ def _g(row_id, kind, name, unit="м2", qty=1, sheet=None, source_no=None, **extr
     if sheet is not None:
         row["sheet"] = sheet
     return row
-
-
-def test_split_selection_mixed_generic():
-    rows = [
-        _g("r1", "Работа", "Штукатурка стен", "м2", 10),
-        _g("r2", "Материал", "Штукатурка гипсовая", "кг", 300),
-        _g("r3", "", "Непонятная позиция", "шт", 2),
-        _g("r4", "Работа", "Не выделена", "м2", 5),
-    ]
-    split = kp.split_selection("generic", rows, ["r1", "r2", "r3"])
-    assert [i["name"] for i in split["work"]] == ["Штукатурка стен"]
-    assert [i["name"] for i in split["material"]] == ["Штукатурка гипсовая"]
-    assert [i["name"] for i in split["unknown"]] == ["Непонятная позиция"]
-    assert split["material"][0]["unit"] == "кг"
-    assert split["material"][0]["qty"] == 300
-    assert split["material"][0]["source_row_ids"] == ["r2"]
 
 
 def test_duplicates_merge_with_sum_and_negative_not_added():

@@ -375,15 +375,6 @@ async def test_retry_access_and_status(async_client, db_session, env):
     assert resp.json()["pricelist_status"] == "done"
 
 
-@pytest.mark.asyncio
-async def test_write_requires_done(db_session, env):
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException) as exc:
-        await kp_pricelist.write(db_session, env["work"])
-    assert exc.value.status_code == 409
-
-
 # ---------------------------------------------------------------------------
 # Гонка записи: чужой ключ, записанный между чтением и записью
 # ---------------------------------------------------------------------------

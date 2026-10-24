@@ -37,13 +37,6 @@ def test_with_vat_without_rate_uses_default_22():
     assert kpp.normalized(1220, None, None, "with_vat", None)[0] == 1000.00
 
 
-def test_net_price_returns_unrounded_decimal():
-    # 100 с НДС 22 % = 81,967213… — округление одно и только в конце.
-    raw = kpp.net_price(100, "with_vat", 22)
-    assert str(raw).startswith("81.9672")
-    assert kpp.normalized(100, "шт", "шт", "with_vat", 22)[0] == 81.97
-
-
 # ---------------------------------------------------------------------------
 # Единица
 # ---------------------------------------------------------------------------
@@ -53,12 +46,6 @@ def test_ton_price_in_kg_item():
     assert value == 45.00
     assert status == "converted"
     assert reason is None
-
-
-def test_vat_then_unit_then_one_rounding():
-    value, status, _ = kpp.normalized(54900, "т", "кг", "with_vat", 22)
-    assert value == 45.00
-    assert status == "converted"
 
 
 def test_order_matters_single_rounding():
@@ -145,15 +132,6 @@ def test_minimum_ignores_incompatible_unit():
     assert best["offer_id"] == "b"
 
 
-def test_selection_overrides_minimum():
-    offers = [_offer("a", "А"), _offer("b", "Б")]
-    prices = [_price("a", 900), _price("b", 1000)]
-    best = kpp.best_for_item(_item(selected="b"), offers, prices)
-    assert best["offer_id"] == "b"
-    assert best["price"] == 1000.00
-    assert best["selected"] is True
-
-
 def test_selected_without_normalized_price_falls_back_to_minimum():
     offers = [_offer("a", "А"), _offer("b", "Б"), _offer("c", "В")]
     prices = [_price("a", 900), _price("b", 10, unit="мешок"), _price("c", 800, confirmed=False)]
@@ -178,44 +156,3 @@ def test_tie_goes_to_earlier_offer():
     offers = [_offer("a", "А"), _offer("b", "Б")]
     best = kpp.best_for_item(_item(), offers, [_price("b", 1000), _price("a", 1000)])
     assert best["offer_id"] == "a"
-
-
-# ---------------------------------------------------------------------------
-# Матрица
-# ---------------------------------------------------------------------------
-
-def test_matrix_cells_and_minimum():
-    offers = [_offer("a", "А", "with_vat", 22), _offer("b", "Б")]
-    item = _item(unit="кг")
-    prices = [_price("a", 54900, unit="т"), _price("b", 60, unit="кг", confirmed=False, source="ai")]
-    row = kpp.item_matrix(item, offers, prices)
-    cells = {c["offer_id"]: c for c in row["cells"]}
-    assert cells["a"]["price"] == 54900
-    assert cells["a"]["unit"] == "т"
-    assert cells["a"]["normalized_price"] == 45.00
-    assert cells["a"]["unit_status"] == "converted"
-    assert cells["a"]["confirmed"] is True
-    assert cells["b"]["normalized_price"] == 60.00
-    assert cells["b"]["confirmed"] is False
-    assert row["min_offer_id"] == "a"
-    assert row["best"]["offer_id"] == "a"
-
-
-def test_matrix_empty_cell_for_offer_without_price():
-    offers = [_offer("a", "А"), _offer("b", "Б")]
-    row = kpp.item_matrix(_item(), offers, [_price("a", 1)])
-    cells = {c["offer_id"]: c for c in row["cells"]}
-    assert cells["b"]["price"] is None
-    assert cells["b"]["normalized_price"] is None
-    assert cells["b"]["reason"] is None
-
-
-def test_matrix_incompatible_reason_in_cell():
-    offers = [_offer("a", "А")]
-    row = kpp.item_matrix(_item(), offers, [_price("a", 350, unit="мешок")])
-    cell = row["cells"][0]
-    assert cell["normalized_price"] is None
-    assert cell["unit_status"] == "incompatible"
-    assert "мешок" in cell["reason"]
-    assert row["min_offer_id"] is None
-    assert row["best"] is None

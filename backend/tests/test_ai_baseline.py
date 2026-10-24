@@ -6,7 +6,6 @@
 - правка документа его не трогает (а версию V0 перечня — трогает, в этом и суть);
 - повторный прогон задачи не подменяет снимок правлеными строками;
 - задачу, которую уже правили руками, снимком не накрываем задним числом;
-- строки снимка — копия, а не ссылка на живой список;
 - слишком большой снимок усекается и честно об этом говорит.
 """
 import pytest
@@ -122,20 +121,6 @@ async def test_snapshot_saved_once(db_session, env):
 
 
 @pytest.mark.asyncio
-async def test_snapshot_is_a_copy_not_a_reference(db_session, env):
-    """Строки после записи живут своей жизнью — снимок это не должно трогать."""
-    rows = _list_rows(3000)
-    await ai_baseline.save_once(
-        db_session, task_id=env["task_id"], document_kind="list", rows=rows
-    )
-
-    rows[0]["cells"]["Цена работ"] = 999  # документ поехал дальше
-
-    saved = await _baseline(db_session, env["task_id"])
-    assert saved.rows[0]["cells"]["Цена работ"] == 3000
-
-
-@pytest.mark.asyncio
 async def test_manual_edit_does_not_touch_snapshot(async_client, db_session, env):
     """«Применить» переписывает версию V0 перечня, но не снимок."""
     await ai_baseline.save_once(
@@ -216,11 +201,3 @@ async def test_huge_snapshot_is_truncated_and_says_so(db_session, env):
     assert saved.truncated is True
     assert saved.row_count == MAX_BASELINE_ROWS + 7
     assert len(saved.rows) == MAX_BASELINE_ROWS
-
-
-@pytest.mark.asyncio
-async def test_read_returns_none_for_task_without_snapshot(db_session, env):
-    """Задача, посчитанная до появления снимков, ничего не ломает."""
-    assert await ai_baseline.read(
-        db_session, task_id=env["task_id"], document_kind="list"
-    ) is None

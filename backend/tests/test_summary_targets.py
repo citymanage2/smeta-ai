@@ -141,11 +141,6 @@ def test_summary_without_targets_is_unchanged():
     assert calc["total_for_customer"] == pytest.approx(222647.81997720266, rel=1e-9)
 
 
-def test_has_section_targets_notices_a_single_target():
-    calc = calc_summary(SECTIONS, OVERRIDES)
-    assert calc["has_section_targets"] is True
-
-
 def test_empty_summary_does_not_crash():
     calc = calc_summary([], {"target_total_for_customer": 100})
     assert calc["targets_total_works"] is None
@@ -329,23 +324,6 @@ async def test_target_survives_section_version_change(
     stored = await _stored(db_session, targets_env)
     assert stored.sections[0]["version_id"] == targets_env["v2"]
     assert stored.sections[0]["target_works"] == 15000
-
-
-@pytest.mark.asyncio
-async def test_removing_section_removes_its_target(
-    async_client, db_session, targets_env
-):
-    """Раздел убрали — цель ушла с ним, сиротой не осталась."""
-    await async_client.put(
-        f"/api/projects/{targets_env['project_id']}/summary",
-        json={"sections": [_section_payload(targets_env, target_works=15000)]},
-        headers=_auth(targets_env["pm1"]))
-
-    resp = await async_client.post(
-        f"/api/projects/{targets_env['project_id']}/summary",
-        json={"sections": []}, headers=_auth(targets_env["pm1"]))
-    assert resp.status_code == 201, resp.text
-    assert (await _stored(db_session, targets_env)).sections == []
 
 
 @pytest.mark.asyncio

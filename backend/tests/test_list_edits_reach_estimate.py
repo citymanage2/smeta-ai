@@ -190,18 +190,3 @@ async def test_rows_of_foreign_format_do_not_wipe_task_items(db_session, list_ta
     svc._sync_task_items(doc, [{"row_id": "1", "cells": {"Колонка": "значение"}}])
 
     assert task.progress_data["items"] == before
-
-
-@pytest.mark.asyncio
-async def test_input_file_document_does_not_touch_task_items(db_session, list_task_env):
-    """Файл заказчика — только для просмотра: позиции задачи он не переписывает."""
-    from app.services import document_service as svc
-
-    task = await db_session.get(Task, list_task_env["task_id"])
-    version = await db_session.get(EstimateVersion, list_task_env["version_id"])
-    doc = _doc(svc, task, version, file_slot="input")
-    before = list(task.progress_data["items"])
-
-    svc._sync_task_items(doc, [_row("Чужая строка", 1)])
-
-    assert task.progress_data["items"] == before

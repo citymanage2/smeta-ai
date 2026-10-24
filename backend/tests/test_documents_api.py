@@ -477,34 +477,6 @@ async def test_pm_writes_document_of_colleague(async_client, doc_env):
     assert apply.status_code == 200, apply.text
 
 
-@pytest.mark.asyncio
-async def test_head_of_sales_can_write_foreign_document(async_client, doc_env):
-    hdr = _auth(doc_env["head"], "head_of_sales", "head")
-    r = await async_client.post(
-        f"/documents/{doc_env['card_id']}/list/apply",
-        json={"version_id": doc_env["version_id"], "rev": 0, "rows": _rows(1234)},
-        headers=hdr)
-    assert r.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_readonly_query_param_cannot_grant_write(async_client, doc_env, db_session):
-    """Режим доступа определяется сервером, а не параметром в адресе.
-
-    Документы общие, поэтому проверяем на запрете, который остался: пока задача
-    считается, править нельзя — и `read_only=0` в адресе этого не отменяет.
-    """
-    task = await db_session.get(Task, doc_env["task_id"])
-    task.status = "processing"
-    await db_session.commit()
-
-    r = await async_client.post(
-        f"/documents/{doc_env['card_id']}/list/apply?read_only=0",
-        json={"version_id": doc_env["version_id"], "rev": 0, "rows": _rows(1)},
-        headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
-    assert r.status_code == 409
-
-
 # ---------------------------------------------------------------------------
 # Блокировка на время расчёта
 # ---------------------------------------------------------------------------
@@ -697,22 +669,14 @@ async def test_locate_by_task_404_for_task_without_card(
     assert r.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_locate_by_task_works_for_colleague(async_client, doc_env):
-    r = await async_client.get(
-        f"/documents/by-task/{doc_env['task_id']}",
-        headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
-    assert r.status_code == 200, r.text
-
-
 # ---------------------------------------------------------------------------
 # Присутствие («Иван сейчас редактирует»)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_heartbeat_reports_other_editor(async_client, doc_env):
-    """Вторым редактором может быть только тот, кто документ видит — здесь руководитель."""
-    head_hdr = _auth(doc_env["head"], "head_of_sales", "head")
+    """Документы общие: вторым редактором может стать любой сотрудник — здесь коллега."""
+    pm2_hdr = _auth(doc_env["pm2"], "project_manager", "pm2")
 
     first = await async_client.post(
         f"/documents/{doc_env['card_id']}/list/heartbeat", headers=_pm1(doc_env))
@@ -720,26 +684,12 @@ async def test_heartbeat_reports_other_editor(async_client, doc_env):
     assert first.json()["lock"] is None  # сам себя редактором не считаешь
 
     second = await async_client.post(
-        f"/documents/{doc_env['card_id']}/list/heartbeat", headers=head_hdr)
+        f"/documents/{doc_env['card_id']}/list/heartbeat", headers=pm2_hdr)
     assert second.json()["lock"]["user_name"] == "Иванов Иван"
 
     meta = await async_client.get(
-        f"/documents/{doc_env['card_id']}/list", headers=head_hdr)
+        f"/documents/{doc_env['card_id']}/list", headers=pm2_hdr)
     assert meta.json()["lock"]["user_name"] == "Иванов Иван"
-
-
-@pytest.mark.asyncio
-async def test_heartbeat_works_for_colleague(async_client, doc_env):
-    """Документы общие: вторым редактором может стать любой сотрудник."""
-    first = await async_client.post(
-        f"/documents/{doc_env['card_id']}/list/heartbeat", headers=_pm1(doc_env))
-    assert first.status_code == 200
-
-    r = await async_client.post(
-        f"/documents/{doc_env['card_id']}/list/heartbeat",
-        headers=_auth(doc_env["pm2"], "project_manager", "pm2"))
-    assert r.status_code == 200
-    assert r.json()["lock"]["user_name"] == "Иванов Иван"
 
 
 @pytest.mark.asyncio

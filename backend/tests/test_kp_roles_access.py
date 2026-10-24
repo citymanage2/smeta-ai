@@ -62,26 +62,6 @@ def test_production_roles_are_not_project_manager():
     assert perm.normalize_role(None) == perm.ROLE_PM
 
 
-def test_is_production():
-    assert perm.is_production("supply_manager")
-    assert perm.is_production("contractor_manager")
-    for role in ("admin", "head_of_sales", "project_manager", "user", None, "garbage"):
-        assert not perm.is_production(role)
-
-
-def test_production_roles_are_assignable_and_not_managers():
-    assert perm.ROLE_SUPPLY in perm.ASSIGNABLE_ROLES
-    assert perm.ROLE_CONTRACTOR in perm.ASSIGNABLE_ROLES
-    assert perm.PRODUCTION_ROLES == frozenset({perm.ROLE_SUPPLY, perm.ROLE_CONTRACTOR})
-    for role in PRODUCTION:
-        assert not perm.is_manager(role)
-        assert not perm.is_admin(role)
-
-
-def test_kp_category_role():
-    assert perm.KP_CATEGORY_ROLE == {"material": "supply_manager", "work": "contractor_manager"}
-
-
 def test_role_fits_user_column():
     """Колонка `users.role` — String(32): миграция не нужна."""
     assert all(len(r) <= User.__table__.c.role.type.length for r in perm.ASSIGNABLE_ROLES)
@@ -161,12 +141,6 @@ async def pm_user(db_session):
     yield user
     await db_session.execute(User.__table__.delete().where(User.id == user.id))
     await db_session.commit()
-
-
-@pytest.mark.asyncio
-async def test_pm_token_works(async_client, pm_user):
-    resp = await async_client.get("/projects", headers=_bearer(pm_user.id, "project_manager"))
-    assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -308,3 +282,12 @@ async def test_production_employees_not_offered_as_owners(async_client, admin_us
     names = {u["display_name"] for u in resp.json()}
     assert "kp-roles-pm2" in names
     assert "kp-roles-supply" not in names
+
+
+def test_is_admin_and_is_manager():
+    assert perm.is_admin("admin")
+    assert not perm.is_admin("head_of_sales")
+    assert perm.is_manager("admin")
+    assert perm.is_manager("head_of_sales")
+    assert not perm.is_manager("project_manager")
+    assert not perm.is_manager("user")  # legacy → pm

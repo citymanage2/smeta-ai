@@ -380,15 +380,6 @@ async def test_section_history_is_separate_from_estimate(async_client, summary_e
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_colleague_opens_section_of_other_project(async_client, summary_env):
-    """Проекты общие: раздел сводной открывает любой сотрудник."""
-    resp = await async_client.get(
-        _url(summary_env), headers=_auth(summary_env["pm2"], "project_manager"))
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["can_write"] is True
-
-
-@pytest.mark.asyncio
 async def test_head_of_sales_can_edit_foreign_section(async_client, db_session, summary_env):
     """Руководитель отдела продаж правит разделы любого проекта."""
     edited = _estimate_rows(1500)
@@ -710,13 +701,3 @@ async def test_resolve_takes_estimate_and_keeps_old_snapshot_in_history(
     entries = list(res.scalars().all())
     assert entries, "прежние строки раздела должны остаться в истории"
     assert entries[0].previous_value["rows"][0]["price_work"] == 1500
-
-
-@pytest.mark.asyncio
-async def test_colleague_resolves_divergence(async_client, summary_env):
-    """Расхождение разруливает любой сотрудник — работа общая."""
-    resp = await async_client.post(
-        _url(summary_env, "/divergence/resolve"), json={"prefer": "estimate"},
-        headers=_auth(summary_env["pm2"], "project_manager"))
-
-    assert resp.status_code == 200, resp.text

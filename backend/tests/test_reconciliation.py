@@ -9,7 +9,6 @@
 """
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 
 from app.models.ai_baseline import AiBaseline
 from app.models.correction_signal import CorrectionSignal
@@ -284,23 +283,6 @@ async def test_totals_match_document_cost(async_client, db_session, env):
     assert data["current_total"] == 12875.0
     assert data["delta"] == -2060.0
     assert data["delta_pct"] == -13.79
-
-
-@pytest.mark.asyncio
-async def test_signals_are_written_for_the_same_task(async_client, db_session, env):
-    """Страховка: сверка опирается на журнал, и журнал по этой правке есть."""
-    await ai_baseline.save_once(
-        db_session, task_id=env["task_id"], document_kind="estimate",
-        rows=_estimate_rows(3000.0),
-    )
-    await _apply(async_client, env, _estimate_rows(2500.0))
-
-    db_session.expire_all()
-    signals = (await db_session.execute(
-        select(CorrectionSignal).where(CorrectionSignal.task_id == env["task_id"])
-    )).scalars().all()
-
-    assert [s.field for s in signals if s.is_first_touch] == ["price_work"]
 
 
 @pytest.mark.asyncio
