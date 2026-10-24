@@ -111,6 +111,21 @@
    при собранном `frontend/dist` (в .gitignore) — на чистом клоне падает;
    `test_anthropic_admin_cost::test_returns_none_without_admin_key` при заданном
    `ANTHROPIC_API_KEY` уходит в настоящий HTTP.
+9. **(фаза 3) `/prices/match-preview` для материала всегда показывает цену `null`:**
+   `price_service.find_top_n_materials` кладёт цену в ключ `min_price`, а роутер
+   (`prices_catalog.match_preview`) читает `price`. Старый тест подставлял
+   подделку с ключом `price` и этого не видел; на векторах в БД (`price_db`)
+   видно сразу. → поправить ключ в роутере или в сервисе.
+10. **(фаза 3) Тесты ходят в сеть:** `test_price_unit_match.py`
+    `test_nesvodimaya_edinica_cenu_ne_daet`, `test_kesh_tozhe_sveryaet_edinicu`,
+    `test_pozicii_ishodnoy_zadachi_ne_pravyatsya` отправляют позицию в настоящий
+    `call_claude` (клиент не подменён) и по 40 с ждут повторов после ошибки
+    соединения. → при переписывании файла на `processor_env` уйдёт само.
+11. **(фаза 3) Общая in-memory база — одно соединение на все сессии:**
+    `rollback()` любой сессии откатывает чужую незакоммиченную запись. Тест с
+    настоящей конкуренцией сессий на `TestSessionLocal` будет мигать (у цикла
+    воркера `claim_one` на пустой очереди терял `complete` соседней job).
+    Поэтому `worker_loop` — на своей базе-файле.
 
 ---
 
@@ -415,6 +430,22 @@
 6. **Фронт:** хелпер «число из текста» (NBSP, копейки) и поиск строк по роли
    вместо `.de-grid`, `.rdg-cell`, `getAllByRole('checkbox')[1]`.
 
+**Сделано 25.10.2026 (фаза 3).** Как пользоваться — в docstring каждого модуля.
+
+| № | Что | Где |
+|---|---|---|
+| 1 | `processor_env` — задача и `TaskProcessor` на `db_session` | `backend/tests/helpers/processor.py` |
+| 2 | `price_db` (+ `axis`, `similar`) — прайс и кеш с векторами, подменена модель эмбеддингов | `backend/tests/helpers/prices.py` |
+| 3 | `make_kp_env` (+ `headers`, `upload_offer`, `create_offer`, `add_offer`, `add_price`) | `backend/tests/helpers/kp.py` |
+| 4 | `api_error`, `balance_error`, `rate_limit_error`, `server_error`, `claude_message`; фикстуры `claude_api`, `api_sleeps` | `backend/tests/helpers/anthropic_api.py` |
+| 5 | `worker_loop` — `_poll_loop` по-настоящему, ядра и память закреплены | `backend/tests/helpers/worker_loop.py` |
+| 6 | `parseScreenNumber`, `numberAfter`, `numberNextTo`, `getGridRow`, `cellIn` | `frontend/src/__tests__/screenQueries.ts` |
+
+Плюс `app_sessions` в `conftest.py` — собственные сессии приложения
+(`AsyncSessionLocal()`) идут в тестовую БД. Отступление от плана в п. 5: цикл
+воркера — не на `TestSessionLocal`, а на своей базе-файле («Найдено по пути»,
+п. 11). Помеченные ниже «[x] фаза 3» пункты уже переписаны на эти фикстуры.
+
 ### Оставлено при удалении — переписать, затем удалить
 
 Исполнители фазы 1–2 нашли, что эти тесты — не чистые дубли: в каждом есть
@@ -441,16 +472,16 @@
 - `test_admin.py::test_admin_list_tasks_requires_admin` — сверяет текст «Недостаточно прав». → только 403.
 - `test_admin_api_health.py::test_balance_detail_includes_status_and_message` — юнит приватного форматтера. → в `test_process_pauses_on_insufficient_balance`: 402 и текст API → «402» в progress задачи.
 - `test_admin_api_health.py::test_api_health_no_balance_names_the_proxy` — слова в hint. → `verdict == "no_balance"` и `via_proxy`.
-- `test_balance_pause.py::test_chunk_retry_reraises_balance_immediately` — считает вызовы своего `_call_claude_json`. → `patch_claude_create` с балансовой 400: один вызов `messages.create` и исключение.
+- **[x] фаза 3** `test_balance_pause.py::test_chunk_retry_reraises_balance_immediately` — считает вызовы своего `_call_claude_json`. → `patch_claude_create` с балансовой 400: один вызов `messages.create` и исключение.
 - `test_balance_pause_hardening.py::test_submit_estimate_batch_checkpoints_before_submit` — db=MagicMock, аргументы `_save_progress_data`. → db_session; после исключения в БД `_stage == "claude_partial"`.
 - `test_balance_pause_hardening.py::test_fix_empty_prices_saves_paid_batches_before_balance_pause` — замоканы БД и свои методы. → db_session, второй вызов ИИ — баланс; читать рабочую версию сметы.
 - `test_cost_sync_pause.py::test_401_pauses_too` — приватный глобал. → parametrize 401/403 с `test_403_pauses_for_a_day`: «второй тик не ходит».
 - `test_anthropic_admin_cost.py::test_returns_none_without_admin_key` — при заданном `ANTHROPIC_API_KEY` уходит настоящий HTTP. → обнулить оба ключа.
 - `test_anthropic_admin_cost.py::test_http_error_propagates` — тривиально. → httpx-ответ 403, в тексте ошибки «HTTP 403» — маркер паузы worker (закрывает контракт из «Найдено по пути», п. 4).
 - `test_api_cost_pricing.py::TestBatchDiscount::test_web_search_not_discounted` — убрать строку-копию константы `WEB_SEARCH_COST_PER_REQUEST`, число $0.10 оставить.
-- `test_api_rate_limit_counter.py::test_rate_limit_is_recorded` — приватный `_record_rate_limit`. → `call_claude` с одним 429, затем `GET /admin/queue-health`: `hits_1h == 1`, `max_wait_s_24h == 60`.
-- `test_api_rate_limit_counter.py::test_recording_failure_never_raises` — приватный метод. → через `call_claude`: 429, затем успех при сломанной сессии → «ok».
-- `test_api_rate_limit_counter.py::test_balance_error_is_not_counted` — monkeypatch своего метода. → настоящий 429 с «credit balance», строки `system_events` нет.
+- **[x] фаза 3** `test_api_rate_limit_counter.py::test_rate_limit_is_recorded` — приватный `_record_rate_limit`. → `call_claude` с одним 429, затем `GET /admin/queue-health`: `hits_1h == 1`, `max_wait_s_24h == 60`.
+- **[x] фаза 3** `test_api_rate_limit_counter.py::test_recording_failure_never_raises` — приватный метод. → через `call_claude`: 429, затем успех при сломанной сессии → «ok».
+- **[x] фаза 3** `test_api_rate_limit_counter.py::test_balance_error_is_not_counted` — monkeypatch своего метода. → настоящий 429 с «credit balance», строки `system_events` нет.
 - `test_rate_limit_retry.py::test_default_sleep_used_when_no_retry_after_header, test_retry_after_above_minimum_uses_header_value, test_backoff_minimum_60s_for_first_429, test_exponential_backoff_increases_per_consecutive_429, test_backoff_capped_at_900s` — пять тестов одной формулы со слабыми `any(s >= X)`. → один parametrize «retry-after → точный список sleep».
 - `test_rate_limit_retry.py::test_rate_limit_sleep_counted_in_cumulative_timeout` — бюджет не проверяется. → sleep 0.1 с при бюджете 0.05 с → TimeoutError, один вызов.
 - `test_usage_extra_logged.py` — все 4: шпионят за kwargs своих функций. → `test_app` + `patch_claude_create` с usage; строка `ApiCallLog` (task_id, is_extra) в БД.
@@ -473,10 +504,10 @@
 - `test_resume_poller.py::test_claim_flips_paused_to_pending_once` — `_claim` только из тестовой ветки. → два тика `resume_paused_tasks` подряд: второй [], job одна.
 - `test_worker_admission.py::test_brake_on_by_container_ratio` — срабатывает через запас, не долю. → `WORKER_MEM_MIN_FREE_MB=0`.
 - `test_worker_admission.py::test_slots_from_available_memory_on_shared_host, test_slots_limited_by_container_memory, test_slots_keep_configured_when_memory_is_plenty, test_slots_unchanged_when_ratio_disabled, test_slots_unchanged_without_cgroup` + `test_worker_duplicate_run_guard.py::test_slots_limited_by_cpu` — `os.cpu_count` не закреплён. → одна таблица с закреплённым `cpu_count`.
-- `test_worker_admission.py::test_poll_loop_skips_claim_when_staggered` + `test_worker_memory_brake.py::test_poll_loop_skips_claim_when_braked` — список вызовов и `sem._value`. → parametrize на TestSessionLocal: queued-job остаётся queued.
-- `test_worker_admission.py::test_started_at_recorded_and_cleaned` + `test_worker_duplicate_run_guard.py::test_inflight_task_ids_cleaned_after_run` — приватные `_inflight_*`. → следующую job той же задачи берут сразу.
+- **[x] фаза 3** `test_worker_admission.py::test_poll_loop_skips_claim_when_staggered` + `test_worker_memory_brake.py::test_poll_loop_skips_claim_when_braked` — список вызовов и `sem._value`. → parametrize на TestSessionLocal: queued-job остаётся queued.
+- **[x] фаза 3** `test_worker_admission.py::test_started_at_recorded_and_cleaned` + `test_worker_duplicate_run_guard.py::test_inflight_task_ids_cleaned_after_run` — приватные `_inflight_*`. → следующую job той же задачи берут сразу.
 - `test_worker_admission.py::test_burst_claims_are_stopped_after_first` — вызовы подменённого `claim_one`. → 4 queued-job и медленный run_job: в running ровно одна.
-- `test_worker_duplicate_run_guard.py::test_poll_loop_drops_duplicate_and_does_not_run_it` — аргументы вызовов. → реальная БД: дубль `superseded`, run_job не стартовал.
+- **[x] фаза 3** `test_worker_duplicate_run_guard.py::test_poll_loop_drops_duplicate_and_does_not_run_it` — аргументы вызовов. → реальная БД: дубль `superseded`, run_job не стартовал.
 - `test_worker_duplicate_run_guard.py::test_embedding_threads_leave_a_core` — повторяет формулу. → cpu_count=4, EMBEDDING_THREADS=0 → ровно 3.
 - `test_worker_price_cache_warmup.py::test_warm_price_cache_loads, test_ensure_price_cache_retries_when_empty` — вызовы `load_cache`. → тестовая БД: `_ensure_price_cache()` → `is_cache_loaded()`.
 - `test_task_worker_heartbeat.py::test_none_for_other_task_job, test_queued_job_has_no_heartbeat_yet, test_finished_job_is_not_a_live_signal` — сервис в обход эндпоинта. → parametrize `test_status_endpoint_null_without_job`.
@@ -492,7 +523,7 @@
 - `test_claude_batch.py::test_batch_entry_logged_once, test_batch_entry_not_logged_twice, test_regular_call_logged_even_if_identical` — фейк-сессия отвечает «запись есть» на любой SELECT. → тестовая БД: batch дважды → 1 строка, обычный дважды → 2.
 - `test_estimate_batch_mode.py::test_submit_estimate_batch_writes_checkpoint` — аргументы мока. → db_session, мок `submit_claude_batch`; `progress_data` в БД.
 - `test_processing_mode_router.py` — все 5 на приватную функцию из пяти строк. → один parametrize, лучше через `POST /tasks`.
-- `test_chunk_tally_visible.py::test_milestone_goes_to_history, test_milestone_silent_without_stage, test_pause_message_carries_tally, test_interrupt_message_without_tally_is_unchanged` — мок `update_progress`. → db_session: цифры 4 и 9 в `task.progress_log`.
+- **[x] фаза 3** `test_chunk_tally_visible.py::test_milestone_goes_to_history, test_milestone_silent_without_stage, test_pause_message_carries_tally, test_interrupt_message_without_tally_is_unchanged` — мок `update_progress`. → db_session: цифры 4 и 9 в `task.progress_log`.
 - `test_chunks_progress_deadline.py::test_deadline_scales_with_batch_size` — копия формулы. → `large > small` и заметно больше штатной длительности.
 - `test_chunks_progress_deadline.py::test_progress_does_not_pollute_history_log` — «не вызван». → db_session: `progress_log` пуст, `progress_message` обновлён.
 - `test_truncated_response.py::test_truncated_response_is_still_logged` — замокан `_log_api_call`. → строка ApiCallLog с web_search_requests=4.
@@ -527,9 +558,9 @@
 ### Б5. Цены, единицы, эталон, эмбеддинги
 
 - `test_price_cache_no_full_reload.py::test_embedding_task_does_not_reload_whole_cache` — MagicMock-сессия и `assert_not_awaited`. → строка PriceCacheWork в БД, проверять `embedding`.
-- `test_price_match_preview.py::test_match_found, test_just_below_threshold_suggests_threshold, test_nothing_similar` — подмена приватных кешей. → parametrize по похожести на векторах в БД (фикстура 2).
-- `test_price_service_embedding.py` — 5 тестов подбора выше и ниже порога. → два теста на публичном `batch_embedding_match_*` (фикстура 2).
-- `test_price_unit_match.py` — 12 тестов правила №8 (прайс ×5, кеш ×2, шаг 3 ×5) на MagicMock-БД с результатом из `await_args`. → фикстура 1, итог через `estimate_store.read_items`.
+- **[x] фаза 3** `test_price_match_preview.py::test_match_found, test_just_below_threshold_suggests_threshold, test_nothing_similar` — подмена приватных кешей. → parametrize по похожести на векторах в БД (фикстура 2).
+- **[x] фаза 3** `test_price_service_embedding.py` — 5 тестов подбора выше и ниже порога. → два теста на публичном `batch_embedding_match_*` (фикстура 2).
+- `test_price_unit_match.py` — 12 тестов правила №8 (прайс ×5, кеш ×2, шаг 3 ×5) на MagicMock-БД с результатом из `await_args`. → фикстура 1, итог через `estimate_store.read_items`. **Фаза 3:** переписаны 2 из 12 (`test_cena_za_tonnu_…`, `test_ii_vernul_cenu_za_meshok_…`) — образец для остальных.
 - `test_price_unit_reprice.py::test_dobor_ne_pishet_cenu_za_meshok, test_dobor_pereschityvaet_svodimuyu_edinicu` — подменены свои `read_items`/`write_items`. → db_session, `fix_empty_prices`, parametrize.
 - `test_price_unit_reprice.py::test_promt_pereschyota_trebuet_edinicu_pozicii` — `inspect.getsource`. → `POST /tasks/{id}/estimate-items/{i}/reprice`: цена за мешок → пусто и пометка (закрывает непокрытую кнопку «Цена»).
 - `test_unit_normalizer.py::TestNormalizeUnitQuantity` — 15 тестов по строке на кейс. → строками в таблицы `test_unit_multiplier_with_tail.py`.
@@ -548,10 +579,10 @@
 - `test_kp_requests_create.py::test_known_type_in_wrong_category_is_422, test_row_in_two_groups_is_422, test_missing_row_is_422, test_empty_groups_is_422` — четыре одинаковых. → parametrize + «ни одного KpRequest не создано».
 - `test_kp_requests_create.py::test_purge_other_cards_untouched` — несуществующий id. → через эндпоинт: две карточки, одна удалена, вторая цела.
 - `test_kp_requests_create.py::test_read_uploads_checks_count_before_reading, test_read_uploads_stops_at_limit, test_read_offer_upload_stops_at_limit` — точный список вызовов `read`. → parametrize: код 400/413 и «прочитано ≤ лимит+1».
-- `test_kp_offers.py::test_complete_waits_for_running_parse` — точная формулировка. → `"ООО Металл" in detail`.
+- **[x] фаза 3** `test_kp_offers.py::test_complete_waits_for_running_parse` — точная формулировка. → `"ООО Металл" in detail`.
 - `test_kp_parser.py::test_worker_knows_parse_job, test_upload_with_file_queues_parse_in_same_transaction` — строка `JOB_KIND` и форма payload. → загрузить КП, прогнать job через `worker.HANDLERS`, КП `parsed`.
 - `test_kp_parser.py::test_pdf_goes_as_document_block, test_image_goes_as_image_block, test_xlsx_goes_as_text` — kwargs своей обёртки. → parametrize через `patch_claude_create`: блок в `messages`.
-- `test_kp_apply.py::test_history_entry_and_no_correction_signals` — убрать проверку текста описания.
+- **[x] фаза 3** `test_kp_apply.py::test_history_entry_and_no_correction_signals` — убрать проверку текста описания.
 - `test_kp_clone_version_and_ref.py::test_create_manual_version_route_response_unchanged` — `set(body) == {…}` замораживает схему. → номер версии, строки, коэффициент, task_type в БД.
 - Попутно: ослабить `version_display_name == "Цены из КП"` в `test_material_and_work_prices_go_to_new_version`.
 
@@ -588,13 +619,13 @@
 ### Ф1. Редактор, свёртка, расчёты, выгрузка, сводная
 
 - `coefficient › с коэффициентом видно, какой он и на что действует` — подпись. → ждать загрузку по data-row-count, цена 1050.
-- `coefficient › итоги считаются по ставкам версии, если у неё свои` — подпись и строка с копейками. → нормализованное число 9800.
+- **[x] фаза 3** `coefficient › итоги считаются по ставкам версии, если у неё свои` — подпись и строка с копейками. → нормализованное число 9800.
 - `coefficient › правка ячейки при коэффициенте сохраняет исходную цену` — сам зовёт `fromGrid`. → «Применить», `price_work=1500` в payload.
 - `collapseRows › служебные поля позиций свёрнутой строке не наследуются` — ключей `__*` ровно три. → отсутствие `__sheet`, `__base_price_*`.
 - `editorCollapse › вкладки листов отключаются, итог по всему документу` — `.de-totals` и строка. → tablist=null, итог числом.
 - `editorCollapse › общий объём не редактируется` — классы. → после двойного клика нет поля ввода.
 - `editorCollapse › вставка из буфера отклоняется с подсказкой` — фраза и `isDirty`. → строки не изменились, «Применить» недоступна.
-- `editorDeductions › вычет не попадает в общий объём свёрнутой группы` — `toContain('20')` выполняется при ошибке. → ячейка объёма = 20.
+- **[x] фаза 3** `editorDeductions › вычет не попадает в общий объём свёрнутой группы` — `toContain('20')` выполняется при ошибке. → ячейка объёма = 20.
 - `editorDraft › после смены вкладки вставка не уходит в чужую строку` — без выбранной ячейки регрессию не воспроизводит. → выбрать ячейку, вставить.
 - `editorDraft › вставка в документ только для чтения игнорируется` — пройдёт и без `canWrite`. → кликнуть ячейку перед вставкой.
 - `editorDraft › исходный файл заказчика открывается только на просмотр` — только фраза. → нет «Применить», правка не меняет строки (правило №2).
@@ -707,8 +738,16 @@
   типов. → отдельный tsconfig для тестов в фазе 5.
 
 ### Фаза 3: Общие фикстуры
-- **Статус:** [ ]
-- Раздел 2, «Общие фикстуры», пп. 1–6.
+- **Статус:** [x] 25.10.2026 — шесть фикстур (таблица в разделе 2, «Общие
+  фикстуры»); на каждую переписаны тесты из раздела 2 (помечены «[x] фаза 3»):
+  19 тестов бэкенда и 2 фронта. Каждый переписанный тест проверен поломкой
+  продового кода — временно ломалась строка, тест падал, строка возвращалась.
+- Заодно: копии окружения КП в `test_kp_offers/parser/pricelist/apply` заменены
+  на `make_kp_env`; пять фабрик ошибок Anthropic (`test_balance_pause*`,
+  `test_rate_limit_retry`, `test_admin_api_health`, `test_api_rate_limit_counter`)
+  — на `tests/helpers/anthropic_api.py`.
+- Гейт: полный pytest — 1542 passed, 4 failed (`test_spa_catch_all`: в рабочей
+  копии нет `frontend/dist`, «Найдено по пути», п. 8); фронт — 549 passed, tsc чисто.
 
 ### Фаза 4: Переписывание бэкенда
 - **Статус:** [ ]
@@ -727,9 +766,10 @@
 
 ## Итог
 
-Реализован частично. Сделаны фазы 0–2 (25.10.2026): опасные тесты убраны,
-≈358 тестов-помех удалено (бэкенд 1785 → 1550, фронт 663 → 540), переносы сделаны, полные наборы зелёные.
-Осталось: фаза 3 (общие фикстуры), 4–5 (переписывание ≈326 тестов и пяти из
+Реализован частично. Сделаны фазы 0–3 (25.10.2026): опасные тесты убраны,
+≈358 тестов-помех удалено (бэкенд 1785 → 1550, фронт 663 → 540), переносы сделаны,
+общие фикстуры готовы и на них переписан 21 тест, полные наборы зелёные.
+Осталось: 4–5 (переписывание ≈300 тестов и пяти из
 «Оставлено при удалении»), 6 (спорные — пользователь доверил решать по
 рекомендациям), 7 (документация). Пункты «Найдено по пути» — отдельные задачи;
 п. 2 («Перевод смет») закрыт — функция удалена.

@@ -53,6 +53,7 @@ smeta-ai/
 | Цены моделей и стоимость вызова | `backend/app/services/claude_service.py` |
 | AI-промпты и сервисы | `backend/app/services/` |
 | Кто что видит и правит | `backend/app/utils/permissions.py` |
+| Общие фикстуры тестов: процессор на БД, прайс с векторами, КП, ошибки API, цикл воркера, числа с экрана | `backend/tests/helpers/`, `frontend/src/__tests__/screenQueries.ts` |
 
 **Доступ: проекты и задачи общие.** Любой сотрудник видит и правит любой проект
 и любую задачу — `visibility_filter` не фильтрует, `can_access` разрешает.
