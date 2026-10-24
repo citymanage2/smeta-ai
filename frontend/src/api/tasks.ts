@@ -1,4 +1,4 @@
-import apiClient from './client';
+import apiClient, { API_BASE_URL } from './client';
 import { Task, TaskResult, HistoryEntry, RevertResponse } from '../types';
 import { TaskEta } from '../utils/eta';
 
@@ -141,7 +141,7 @@ export async function addInputFile(taskId: string, file: File): Promise<{ name: 
 
 export async function downloadInputFile(taskId: string, fileIndex: number, _fileName: string): Promise<void> {
   const token = localStorage.getItem('token') ?? '';
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com';
+  const baseUrl = API_BASE_URL;
   const url = `${baseUrl}/tasks/${taskId}/input-file/${fileIndex}?token=${encodeURIComponent(token)}`;
   const a = document.createElement('a');
   a.href = url;

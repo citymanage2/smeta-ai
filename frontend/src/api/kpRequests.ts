@@ -1,4 +1,4 @@
-import apiClient from './client';
+import apiClient, { API_BASE_URL } from './client';
 import type {
   KpApplyBody, KpApplyPreview, KpApplyResult, KpCategory, KpCell, KpCounters, KpCreatePayload, KpFile, KpOffer, KpOfferForm,
   KpPreview, KpPreviewBody, KpPriceBody, KpRequestBrief, KpRequestDetail, KpStatus,
@@ -185,7 +185,7 @@ export async function applyKpPrices(body: KpApplyBody): Promise<KpApplyResult> {
 
 function downloadUrl(path: string): string {
   const token = localStorage.getItem('token') ?? '';
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || 'https://smeta-ai-backend.onrender.com';
+  const baseUrl = API_BASE_URL;
   return `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
 }
 

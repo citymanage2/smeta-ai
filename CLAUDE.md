@@ -34,8 +34,7 @@ smeta-ai/
 ├── frontend/             ← React-приложение (TypeScript + Vite)
 │   └── src/              ← компоненты, страницы, стор, утилиты
 ├── docker-compose.yml    ← прод-топология для Timeweb (web+worker, managed PG)
-├── docker-compose.dev.yml ← локальное окружение (db+volumes+reload+frontend)
-└── render.yaml           ← деплой на Render.com
+└── docker-compose.dev.yml ← локальное окружение (db+volumes+reload+frontend)
 ```
 
 ### Где что искать
@@ -386,7 +385,7 @@ smeta-ai/
 
 **Frontend:** React 18, TypeScript, Vite, React Router 6, Zustand, Axios.
 
-**Инфраструктура:** Docker Compose (локально), Render.com (прод), Nginx (frontend).
+**Инфраструктура:** Docker Compose (локально), Timeweb Cloud Apps (прод, `docker-compose.yml`), Nginx (frontend). Render.com погашен.
 
 ### Как гонять тесты бэкенда
 
