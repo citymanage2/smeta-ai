@@ -351,3 +351,53 @@ async def seed_users(db_session: AsyncSession, fake_s3):
     await db_session.execute(text("DELETE FROM tasks"))
     await db_session.execute(text("DELETE FROM users"))
     await db_session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Сессии приложения на тестовой БД
+# ---------------------------------------------------------------------------
+
+# Модули, которые берут фабрику сессий себе в момент импорта
+# (`from app.database import AsyncSessionLocal`). Прочие читают её из
+# `app.database` при вызове — им хватает подмены там.
+_SESSION_FACTORY_USERS = (
+    "app.main",
+    "app.worker",
+    "app.routers.tasks",
+    "app.routers.estimate_versions",
+    "app.services.resume_poller",
+    "app.services.batch_poller",
+)
+
+
+@pytest.fixture
+def app_sessions(monkeypatch):
+    """Собственные сессии приложения (`AsyncSessionLocal()`) — на тестовую БД.
+
+    Процессор, воркер, журнал вызовов API и чекпоинты пишут не в сессию запроса,
+    а в свою: `async with AsyncSessionLocal() as db`. Без подмены такая запись
+    уходит мимо тестовой базы (или падает), и тест не видит результата. Нужна
+    там, где нет `test_app` (он подменяет то же самое для HTTP-тестов).
+    Возвращает `TestSessionLocal` — им удобно читать результат свежей сессией.
+    """
+    import app.database as db_module
+
+    monkeypatch.setattr(db_module, "engine", test_engine)
+    monkeypatch.setattr(db_module, "AsyncSessionLocal", TestSessionLocal)
+    for name in _SESSION_FACTORY_USERS:
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "AsyncSessionLocal"):
+            monkeypatch.setattr(module, "AsyncSessionLocal", TestSessionLocal)
+    return TestSessionLocal
+
+
+# ---------------------------------------------------------------------------
+# Общие фикстуры из tests/helpers (план 2026-10-25-chistka-testov.md, фаза 3).
+# Импорт сюда регистрирует их для всех тестов; описание — в модулях.
+# ---------------------------------------------------------------------------
+
+from tests.helpers.anthropic_api import api_sleeps, claude_api  # noqa: E402,F401
+from tests.helpers.prices import price_db  # noqa: E402,F401
+from tests.helpers.kp import make_kp_env  # noqa: E402,F401
+from tests.helpers.processor import processor_env  # noqa: E402,F401
+from tests.helpers.worker_loop import worker_loop  # noqa: E402,F401

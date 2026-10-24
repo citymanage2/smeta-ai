@@ -10,48 +10,17 @@ Required behaviour:
 - After all retries are exhausted the original RateLimitError is re-raised.
 """
 import asyncio
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import httpx2
 import pytest
-import anthropic
 
 from app.services.claude_service import call_claude
+from tests.helpers.anthropic_api import claude_message, rate_limit_error
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_rate_limit_error(retry_after: Optional[float] = None) -> anthropic.RateLimitError:
-    """Build a fake RateLimitError, optionally carrying a retry-after header."""
-    headers: dict[str, str] = {"x-request-id": "test-req"}
-    if retry_after is not None:
-        headers["retry-after"] = str(retry_after)
-
-    raw_response = httpx2.Response(
-        status_code=429,
-        headers=headers,
-        content=b'{"error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}}',
-        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
-    )
-    return anthropic.RateLimitError(
-        message="Rate limit exceeded",
-        response=raw_response,
-        body={"error": {"type": "rate_limit_error", "message": "Rate limit exceeded"}},
-    )
-
-
-def _make_success_response(text: str = "ok") -> MagicMock:
-    block = MagicMock()
-    block.text = text
-    block.stop_reason = None
-    response = MagicMock()
-    response.stop_reason = "end_turn"
-    response.content = [block]
-    return response
-
 
 # ---------------------------------------------------------------------------
 # Basic retry tests (pre-existing behaviour)
@@ -65,8 +34,8 @@ async def test_rate_limit_is_retried(monkeypatch, patch_claude_create):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise _make_rate_limit_error(retry_after=0.01)
-        return _make_success_response()
+            raise rate_limit_error(retry_after=0.01)
+        return claude_message("ok")
 
     patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
@@ -87,8 +56,8 @@ async def test_default_sleep_used_when_no_retry_after_header(monkeypatch, patch_
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise _make_rate_limit_error(retry_after=None)  # no header
-        return _make_success_response()
+            raise rate_limit_error(retry_after=None)  # no header
+        return claude_message("ok")
 
     patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
@@ -114,8 +83,8 @@ async def test_retry_after_above_minimum_uses_header_value(monkeypatch, patch_cl
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise _make_rate_limit_error(retry_after=300)  # well above 60 s minimum
-        return _make_success_response()
+            raise rate_limit_error(retry_after=300)  # well above 60 s minimum
+        return claude_message("ok")
 
     patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
@@ -137,8 +106,8 @@ async def test_backoff_minimum_60s_for_first_429(monkeypatch, patch_claude_creat
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise _make_rate_limit_error(retry_after=5)  # below 60 s minimum
-        return _make_success_response()
+            raise rate_limit_error(retry_after=5)  # below 60 s minimum
+        return claude_message("ok")
 
     patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
@@ -160,8 +129,8 @@ async def test_exponential_backoff_increases_per_consecutive_429(monkeypatch, pa
         nonlocal call_count
         call_count += 1
         if call_count <= 3:
-            raise _make_rate_limit_error(retry_after=1)  # always below minimums
-        return _make_success_response()
+            raise rate_limit_error(retry_after=1)  # always below minimums
+        return claude_message("ok")
 
     patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
@@ -184,8 +153,8 @@ async def test_backoff_capped_at_900s(monkeypatch, patch_claude_create):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise _make_rate_limit_error(retry_after=9999)  # absurdly large
-        return _make_success_response()
+            raise rate_limit_error(retry_after=9999)  # absurdly large
+        return claude_message("ok")
 
     patch_claude_create(fake_create)
     monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
@@ -206,7 +175,7 @@ async def test_slow_api_call_triggers_processing_timeout(monkeypatch, patch_clau
     """When the API call itself takes longer than processing_timeout, TimeoutError is raised."""
     async def slow_create(**kwargs):
         await asyncio.sleep(10)  # real sleep inside the API call — causes timeout
-        return _make_success_response()
+        return claude_message("ok")
 
     patch_claude_create(slow_create)
     # NOT patching asyncio.sleep globally — the sleep inside slow_create is real
@@ -230,8 +199,8 @@ async def test_rate_limit_sleep_counted_in_cumulative_timeout(monkeypatch, patch
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise _make_rate_limit_error(retry_after=0.01)
-        return _make_success_response()
+            raise rate_limit_error(retry_after=0.01)
+        return claude_message("ok")
 
     # Мокаем sleep — мгновенный, elapsed остаётся близким к 0
     patch_claude_create(fake_create)

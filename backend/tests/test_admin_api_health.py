@@ -10,12 +10,10 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from sqlalchemy import delete
 
 sys.modules.setdefault("fitz", MagicMock())
 
-import app.routers.admin as admin_router  # noqa: E402
 from app.models.task import Task  # noqa: E402
 from app.services.claude_service import InsufficientBalanceError  # noqa: E402
 from app.services.task_processor import _balance_error_detail  # noqa: E402
@@ -148,17 +146,10 @@ async def test_api_health_counts_paused_tasks(
 # ---------------------------------------------------------------------------
 
 async def test_api_ping_maps_balance_error(monkeypatch):
-    import anthropic
-    import httpx2
-
     from app.services import claude_service as cs
+    from tests.helpers.anthropic_api import balance_error
 
-    body = {"error": {"type": "invalid_request_error", "message": "credit balance is too low"}}
-    raw = httpx2.Response(
-        status_code=400, headers={}, content=b"{}",
-        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
-    )
-    err = anthropic.APIStatusError("credit balance", response=raw, body=body)
+    err = balance_error(400, "credit balance is too low")
 
     fake_client = MagicMock()
     fake_client.messages.create = AsyncMock(side_effect=err)

@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-import fitz
 import openpyxl
 import pytest
 import pytest_asyncio
@@ -26,34 +25,9 @@ from sqlalchemy import select
 
 from app.models.api_call_log import ApiCallLog
 from app.models.job import Job
-from app.models.kp_request import (
-    KpOffer, KpOfferPrice, KpRequest, KpRequestFile, KpRequestItem,
-)
-from app.models.project import Project
-from app.models.user import User
-from app.models.workflow_card import WorkflowCard
+from app.models.kp_request import KpOffer, KpOfferPrice, KpRequest
 from app.services import kp_parser
-from app.utils.auth import create_access_token, hash_password
-
-_PASSWORD_HASH = hash_password("x1234")
-
-_MODELS = (KpOfferPrice, KpRequestItem, KpOffer, KpRequestFile, KpRequest,
-           WorkflowCard, Project, Job, ApiCallLog, User)
-
-
-async def _wipe(db):
-    for model in _MODELS:
-        await db.execute(model.__table__.delete())
-    await db.commit()
-
-
-def _pdf(pages: int = 1) -> bytes:
-    doc = fitz.open()
-    for _ in range(pages):
-        doc.new_page()
-    data = doc.tobytes()
-    doc.close()
-    return data
+from tests.helpers.kp import CONTRACTOR, PM, SUPPLY, create_offer, headers, upload_offer
 
 
 def _xlsx() -> bytes:
@@ -68,81 +42,8 @@ def _xlsx() -> bytes:
 
 
 @pytest_asyncio.fixture
-async def env(db_session, fake_s3):
-    await _wipe(db_session)
-
-    def user(name, role):
-        return User(username=name, role=role, full_name=name.upper(), is_active=True,
-                    password_hash=_PASSWORD_HASH)
-
-    users = {
-        "pm1": user("pm1", "project_manager"),
-        "supply1": user("supply1", "supply_manager"),
-        "contractor1": user("contractor1", "contractor_manager"),
-    }
-    db_session.add_all(users.values())
-    await db_session.flush()
-    project = Project(name="Объект", owner_id=users["pm1"].id)
-    db_session.add(project)
-    await db_session.flush()
-    card = WorkflowCard(project_id=str(project.id), name="КР", stage="list")
-    db_session.add(card)
-    await db_session.flush()
-
-    def request(category, role):
-        return KpRequest(
-            project_id=str(project.id), card_id=str(card.id), source_kind="list",
-            category=category, target_role=role, status="new", author_id=users["pm1"].id,
-        )
-
-    material = request("material", "supply_manager")
-    work = request("work", "contractor_manager")
-    db_session.add_all([material, work])
-    await db_session.flush()
-    items = {
-        "armature": KpRequestItem(request_id=material.id, position=0, item_type="material",
-                                  name="Арматура А500", unit="кг", qty=2000, source_row_ids=["r1"]),
-        "cement": KpRequestItem(request_id=material.id, position=1, item_type="material",
-                                name="Цемент М500", unit="кг", qty=500, source_row_ids=["r2"]),
-        "plaster": KpRequestItem(request_id=work.id, position=0, item_type="work",
-                                 name="Штукатурка стен", unit="м2", qty=100, source_row_ids=["r3"]),
-    }
-    db_session.add_all(items.values())
-    await db_session.commit()
-
-    out = {name: u.id for name, u in users.items()}
-    out.update(material=str(material.id), work=str(work.id),
-               **{name: str(i.id) for name, i in items.items()})
-    yield out
-    await _wipe(db_session)
-
-
-SUPPLY = ("supply1", "supply_manager")
-CONTRACTOR = ("contractor1", "contractor_manager")
-PM = ("pm1", "project_manager")
-
-
-def _h(env, who):
-    uid = env[who[0]]
-    return {"Authorization": f"Bearer {create_access_token(uid, who[1], who[0])}"}
-
-
-async def _upload(client, env, request_key="material", who=SUPPLY, file=None, **fields):
-    data = {"supplier_name": "ООО Металл", "vat_mode": "with_vat", "vat_rate": "22"}
-    data.update(fields)
-    data = {k: v for k, v in data.items() if v is not None}
-    files = [("file", file)] if file else []
-    resp = await client.post(
-        f"/kp-requests/{env[request_key]}/offers", headers=_h(env, who), data=data, files=files,
-    )
-    return resp
-
-
-async def _offer(client, env, **kw):
-    kw.setdefault("file", ("kp.pdf", _pdf(), "application/pdf"))
-    resp = await _upload(client, env, **kw)
-    assert resp.status_code == 201, resp.text
-    return resp.json()
+async def env(make_kp_env):
+    return await make_kp_env()
 
 
 class FakeClaude:
@@ -217,7 +118,7 @@ def test_worker_knows_parse_job():
 
 @pytest.mark.asyncio
 async def test_upload_with_file_queues_parse_in_same_transaction(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     assert offer["parse_status"] == "queued"
     jobs = (await db_session.execute(select(Job).where(Job.kind == "kp.parse_offer"))).scalars().all()
     assert len(jobs) == 1
@@ -228,7 +129,7 @@ async def test_upload_with_file_queues_parse_in_same_transaction(async_client, d
 
 @pytest.mark.asyncio
 async def test_upload_without_file_has_no_parse(async_client, db_session, env):
-    resp = await _upload(async_client, env)
+    resp = await upload_offer(async_client, env)
     assert resp.status_code == 201, resp.text
     assert resp.json()["parse_status"] is None
     jobs = (await db_session.execute(select(Job))).scalars().all()
@@ -241,7 +142,7 @@ async def test_upload_without_file_has_no_parse(async_client, db_session, env):
 
 @pytest.mark.asyncio
 async def test_parse_writes_drafts_and_drops_foreign_ids(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
 
     def answer(ids):
         return {"prices": [
@@ -269,7 +170,7 @@ async def test_parse_writes_drafts_and_drops_foreign_ids(async_client, db_sessio
     assert stored.parse_hints["dropped_unknown"] == 3
 
     # Карточка: черновик с приведённой ценой (54 900 с НДС 22 % за т → 45,00 за кг).
-    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=_h(env, SUPPLY))).json()
+    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=headers(env, SUPPLY))).json()
     cell = detail["items"][0]["cells"][0]
     assert cell["confirmed"] is False and cell["source"] == "ai"
     assert cell["normalized_price"] == 45.0
@@ -278,7 +179,7 @@ async def test_parse_writes_drafts_and_drops_foreign_ids(async_client, db_sessio
 
 @pytest.mark.asyncio
 async def test_prompt_has_positions_without_database_ids(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
     text = _prompt_text(fake.calls[0]["messages"])
     assert "Арматура А500" in text and "Цемент М500" in text
@@ -290,9 +191,9 @@ async def test_prompt_has_positions_without_database_ids(async_client, db_sessio
 
 @pytest.mark.asyncio
 async def test_manual_price_survives_parse(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     resp = await async_client.put(
-        f"/kp-offers/{offer['id']}/prices/{env['cement']}", headers=_h(env, SUPPLY),
+        f"/kp-offers/{offer['id']}/prices/{env['cement']}", headers=headers(env, SUPPLY),
         json={"price": 10, "unit": "кг"},
     )
     assert resp.status_code == 200, resp.text
@@ -314,7 +215,7 @@ async def test_manual_price_survives_parse(async_client, db_session, env, monkey
 
 @pytest.mark.asyncio
 async def test_total_only_is_divided_by_quantity_with_low_confidence(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
 
     def answer(ids):
         return {"prices": [
@@ -366,7 +267,7 @@ def test_postprocess_parses_russian_numbers_and_first_answer_wins():
 
 @pytest.mark.asyncio
 async def test_api_error_marks_failed_and_manual_input_works(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     fake = await _run(db_session, monkeypatch, offer["id"], error=RuntimeError("HTTP 529 overloaded"))
     stored = await db_session.get(KpOffer, offer["id"])
     assert stored.parse_status == "failed"
@@ -376,7 +277,7 @@ async def test_api_error_marks_failed_and_manual_input_works(async_client, db_se
     assert await _prices(db_session, offer["id"]) == {}
 
     resp = await async_client.put(
-        f"/kp-offers/{offer['id']}/prices/{env['cement']}", headers=_h(env, SUPPLY),
+        f"/kp-offers/{offer['id']}/prices/{env['cement']}", headers=headers(env, SUPPLY),
         json={"price": 10, "unit": "кг"},
     )
     assert resp.status_code == 200, resp.text
@@ -384,7 +285,7 @@ async def test_api_error_marks_failed_and_manual_input_works(async_client, db_se
 
 @pytest.mark.asyncio
 async def test_unparsable_answer_marks_failed(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     await _run(db_session, monkeypatch, offer["id"], answer="Извините, не могу прочитать файл")
     stored = await db_session.get(KpOffer, offer["id"])
     assert stored.parse_status == "failed"
@@ -393,7 +294,7 @@ async def test_unparsable_answer_marks_failed(async_client, db_session, env, mon
 
 @pytest.mark.asyncio
 async def test_reparse_replaces_only_unconfirmed_ai_prices(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     db_session.add_all([
         # Черновик прошлого разбора по позиции, которой в новом ответе нет, — уходит.
         KpOfferPrice(offer_id=offer["id"], item_id=env["armature"], price=1, unit="кг",
@@ -407,7 +308,7 @@ async def test_reparse_replaces_only_unconfirmed_ai_prices(async_client, db_sess
     stored.parse_error = "Разбор не удался"
     await db_session.commit()
 
-    resp = await async_client.post(f"/kp-offers/{offer['id']}/parse", headers=_h(env, SUPPLY))
+    resp = await async_client.post(f"/kp-offers/{offer['id']}/parse", headers=headers(env, SUPPLY))
     assert resp.status_code == 200, resp.text
     assert resp.json()["parse_status"] == "queued"
     assert resp.json()["parse_error"] is None
@@ -427,16 +328,16 @@ async def test_reparse_replaces_only_unconfirmed_ai_prices(async_client, db_sess
 
 @pytest.mark.asyncio
 async def test_reparse_rules(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     url = f"/kp-offers/{offer['id']}/parse"
     # Разбор уже в очереди — второй не ставится.
-    assert (await async_client.post(url, headers=_h(env, SUPPLY))).status_code == 409
+    assert (await async_client.post(url, headers=headers(env, SUPPLY))).status_code == 409
     # Продажи разбор не запускают, чужая роль запроса не видит.
-    assert (await async_client.post(url, headers=_h(env, PM))).status_code == 403
-    assert (await async_client.post(url, headers=_h(env, CONTRACTOR))).status_code == 404
+    assert (await async_client.post(url, headers=headers(env, PM))).status_code == 403
+    assert (await async_client.post(url, headers=headers(env, CONTRACTOR))).status_code == 404
 
-    no_file = (await _upload(async_client, env)).json()
-    resp = await async_client.post(f"/kp-offers/{no_file['id']}/parse", headers=_h(env, SUPPLY))
+    no_file = (await upload_offer(async_client, env)).json()
+    resp = await async_client.post(f"/kp-offers/{no_file['id']}/parse", headers=headers(env, SUPPLY))
     assert resp.status_code == 422
 
     stored = await db_session.get(KpOffer, offer["id"])
@@ -444,13 +345,13 @@ async def test_reparse_rules(async_client, db_session, env):
     request = await db_session.get(KpRequest, env["material"])
     request.status = "done"
     await db_session.commit()
-    assert (await async_client.post(url, headers=_h(env, SUPPLY))).status_code == 409
+    assert (await async_client.post(url, headers=headers(env, SUPPLY))).status_code == 409
 
 
 @pytest.mark.asyncio
 async def test_guesses_fill_only_empty_fields(async_client, db_session, env, monkeypatch):
     # Поставщик не указан, дата пустая, НДС и ставку человек выбрал сам.
-    offer = await _offer(async_client, env, supplier_name=None, vat_mode="with_vat", vat_rate="22")
+    offer = await create_offer(async_client, env, supplier_name=None, vat_mode="with_vat", vat_rate="22")
     answer = {
         "supplier_guess": "ООО «Сталь-Центр»", "date_guess": "2026-09-11",
         "vat_mode_guess": "without_vat", "vat_rate_guess": 20,
@@ -468,13 +369,13 @@ async def test_guesses_fill_only_empty_fields(async_client, db_session, env, mon
     assert "includes_materials" not in stored.parse_hints
     assert stored.includes_materials is False
 
-    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=_h(env, SUPPLY))).json()
+    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=headers(env, SUPPLY))).json()
     assert detail["offers"][0]["parse_hints"]["vat_rate"] == 20
 
 
 @pytest.mark.asyncio
 async def test_guesses_do_not_overwrite_filled_fields(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env, supplier_name="ООО Металл", offer_date="2026-09-01")
+    offer = await create_offer(async_client, env, supplier_name="ООО Металл", offer_date="2026-09-01")
     answer = {"supplier_guess": "ИП Другой", "date_guess": "2026-01-01", "prices": []}
     await _run(db_session, monkeypatch, offer["id"], answer=answer)
     stored = await db_session.get(KpOffer, offer["id"])
@@ -484,7 +385,7 @@ async def test_guesses_do_not_overwrite_filled_fields(async_client, db_session, 
 
 @pytest.mark.asyncio
 async def test_includes_materials_guess_is_only_a_hint_for_work(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env, request_key="work", who=CONTRACTOR, supplier_name="ООО Отделка")
+    offer = await create_offer(async_client, env, request_key="work", who=CONTRACTOR, supplier_name="ООО Отделка")
     answer = {"includes_materials_guess": True, "prices": [{"item_id": "1", "unit": "м2", "unit_price": 700}]}
     await _run(db_session, monkeypatch, offer["id"], answer=answer)
     stored = await db_session.get(KpOffer, offer["id"])
@@ -496,7 +397,7 @@ async def test_includes_materials_guess_is_only_a_hint_for_work(async_client, db
 
 @pytest.mark.asyncio
 async def test_bad_guesses_are_ignored(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env, supplier_name=None)
+    offer = await create_offer(async_client, env, supplier_name=None)
     answer = {"supplier_guess": "   ", "date_guess": "11 сентября", "vat_mode_guess": "maybe",
               "vat_rate_guess": 150, "prices": []}
     await _run(db_session, monkeypatch, offer["id"], answer=answer)
@@ -512,7 +413,7 @@ async def test_bad_guesses_are_ignored(async_client, db_session, env, monkeypatc
 
 @pytest.mark.asyncio
 async def test_request_completed_meanwhile_writes_nothing(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     request = await db_session.get(KpRequest, env["material"])
     request.status = "done"
     await db_session.commit()
@@ -527,7 +428,7 @@ async def test_request_completed_meanwhile_writes_nothing(async_client, db_sessi
 
 @pytest.mark.asyncio
 async def test_process_skips_offer_not_queued(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     stored = await db_session.get(KpOffer, offer["id"])
     stored.parse_status = "parsed"
     await db_session.commit()
@@ -537,8 +438,8 @@ async def test_process_skips_offer_not_queued(async_client, db_session, env, mon
 
 @pytest.mark.asyncio
 async def test_process_deleted_offer_is_noop(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
-    resp = await async_client.delete(f"/kp-offers/{offer['id']}", headers=_h(env, SUPPLY))
+    offer = await create_offer(async_client, env)
+    resp = await async_client.delete(f"/kp-offers/{offer['id']}", headers=headers(env, SUPPLY))
     assert resp.status_code == 204
     fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
     assert fake.calls == []
@@ -546,33 +447,33 @@ async def test_process_deleted_offer_is_noop(async_client, db_session, env, monk
 
 @pytest.mark.asyncio
 async def test_abandoned_parse_becomes_failed_on_read(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     stored = await db_session.get(KpOffer, offer["id"])
     stored.parse_status = "processing"
     stored.parse_started_at = datetime.now(timezone.utc) - timedelta(minutes=20)
     await db_session.commit()
 
-    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=_h(env, SUPPLY))).json()
+    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=headers(env, SUPPLY))).json()
     assert detail["offers"][0]["parse_status"] == "failed"
     assert "прервался" in detail["offers"][0]["parse_error"]
     db_session.expire_all()
     stored = await db_session.get(KpOffer, offer["id"])
     assert stored.parse_status == "failed"
     # Брошенный разбор можно запустить заново.
-    resp = await async_client.post(f"/kp-offers/{offer['id']}/parse", headers=_h(env, SUPPLY))
+    resp = await async_client.post(f"/kp-offers/{offer['id']}/parse", headers=headers(env, SUPPLY))
     assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
 async def test_fresh_processing_is_not_abandoned(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     stored = await db_session.get(KpOffer, offer["id"])
     stored.parse_status = "processing"
     stored.parse_started_at = datetime.now(timezone.utc) - timedelta(minutes=5)
     await db_session.commit()
-    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=_h(env, SUPPLY))).json()
+    detail = (await async_client.get(f"/kp-requests/{env['material']}", headers=headers(env, SUPPLY))).json()
     assert detail["offers"][0]["parse_status"] == "processing"
-    resp = await async_client.post(f"/kp-offers/{offer['id']}/parse", headers=_h(env, SUPPLY))
+    resp = await async_client.post(f"/kp-offers/{offer['id']}/parse", headers=headers(env, SUPPLY))
     assert resp.status_code == 409
 
 
@@ -582,7 +483,7 @@ async def test_fresh_processing_is_not_abandoned(async_client, db_session, env):
 
 @pytest.mark.asyncio
 async def test_pdf_goes_as_document_block(async_client, db_session, env, monkeypatch):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
     blocks = fake.calls[0]["image_data"]
     assert len(blocks) == 1 and blocks[0]["type"] == "document"
@@ -595,7 +496,7 @@ async def test_image_goes_as_image_block(async_client, db_session, env, monkeypa
 
     buf = io.BytesIO()
     Image.new("RGB", (20, 20), "white").save(buf, format="PNG")
-    offer = await _offer(async_client, env, file=("kp.png", buf.getvalue(), "image/png"))
+    offer = await create_offer(async_client, env, file=("kp.png", buf.getvalue(), "image/png"))
     fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
     blocks = fake.calls[0]["image_data"]
     assert len(blocks) == 1 and blocks[0]["type"] == "image"
@@ -603,7 +504,7 @@ async def test_image_goes_as_image_block(async_client, db_session, env, monkeypa
 
 @pytest.mark.asyncio
 async def test_xlsx_goes_as_text(async_client, db_session, env, monkeypatch):
-    offer = await _offer(
+    offer = await create_offer(
         async_client, env,
         file=("kp.xlsx", _xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     )
@@ -637,7 +538,7 @@ def test_broken_spreadsheet_raises_readable_error():
 
 @pytest.mark.asyncio
 async def test_parse_cost_in_call_log(async_client, db_session, env, monkeypatch, patch_claude_create):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
 
     async def fake_create(**kwargs):
         return SimpleNamespace(

@@ -17,7 +17,6 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx2
 import anthropic
 import pytest
 
@@ -29,18 +28,7 @@ from app.services.claude_service import (  # noqa: E402
     _is_insufficient_balance,
 )
 from app.services.task_processor import TaskProcessor  # noqa: E402
-
-
-def _api_status_error(status_code: int, message: str) -> anthropic.APIStatusError:
-    """Сфабриковать APIStatusError с заданным статусом и текстом в body.error.message."""
-    body = {"error": {"type": "invalid_request_error", "message": message}}
-    raw = httpx2.Response(
-        status_code=status_code,
-        headers={},
-        content=b"{}",
-        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
-    )
-    return anthropic.APIStatusError(message, response=raw, body=body)
+from tests.helpers.anthropic_api import api_error  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +75,7 @@ def test_non_balance_not_flagged(text):
 
 async def test_submit_batch_maps_balance_error(monkeypatch):
     async def fake_create(**kwargs):
-        raise _api_status_error(400, "Your credit balance is too low")
+        raise api_error(400, "Your credit balance is too low")
 
     fake_client = MagicMock()
     fake_client.messages.batches.create = fake_create
@@ -101,7 +89,7 @@ async def test_submit_batch_maps_balance_error(monkeypatch):
 
 async def test_submit_batch_non_balance_error_propagates(monkeypatch):
     async def fake_create(**kwargs):
-        raise _api_status_error(400, "invalid request shape")
+        raise api_error(400, "invalid request shape")
 
     fake_client = MagicMock()
     fake_client.messages.batches.create = fake_create
