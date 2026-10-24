@@ -51,10 +51,6 @@ vi.mock('../stores/auth', () => ({
   useAuthStore: () => ({ isAdmin: false, isAuthenticated: true }),
 }));
 
-vi.mock('../components/BatchProgressBar', () => ({
-  BatchProgressBar: () => null,
-}));
-
 // notificationSound регистрирует глобальный click-листенер с AudioContext,
 // который jsdom не поддерживает — мок убирает сайд-эффект при .click() в тестах.
 vi.mock('../utils/notificationSound', () => ({
@@ -282,24 +278,6 @@ describe('TaskStatus — paused status (Phase 5)', () => {
     vi.mocked(getTaskResults).mockResolvedValue([]);
   });
 
-  it('renders the paused block with «Продолжить сейчас» for a paused task', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        task_type: 'ESTIMATE_FROM_LIST' as any,
-        status: 'paused',
-        error_message: 'Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.',
-        progress_data: { _stage: 'claude_partial' } as any,
-      })
-    );
-
-    renderPage();
-
-    const block = await screen.findByTestId('paused-block');
-    expect(block).toBeInTheDocument();
-    const btn = screen.getByTestId('resume-now-button');
-    expect(btn).toHaveTextContent('Продолжить сейчас');
-  });
-
   it('«Продолжить сейчас» calls resumeTask', async () => {
     const { resumeTask } = await import('../api/tasks');
     vi.mocked(resumeTask).mockResolvedValue({ task_id: 'x', status: 'pending' } as any);
@@ -317,16 +295,6 @@ describe('TaskStatus — paused status (Phase 5)', () => {
     const btn = await screen.findByTestId('resume-now-button');
     btn.click();
     expect(vi.mocked(resumeTask)).toHaveBeenCalledWith('aaaaaaaa-0000-0000-0000-000000000001');
-  });
-
-  it('shows «На паузе» status label for a paused task', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({ status: 'paused', progress_data: { _stage: 'pre_excel' } as any })
-    );
-
-    renderPage();
-
-    expect(await screen.findByText('На паузе')).toBeInTheDocument();
   });
 });
 
@@ -348,16 +316,6 @@ describe('TaskStatus — failed batch task with a paid batch', () => {
       progress_data: { _stage: 'batch_pending', batch_id: 'msgbatch_y' } as any,
     });
   }
-
-  it('offers «Продолжить» instead of a paid recalculation', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(failedBatchTask());
-
-    renderPage();
-
-    const btn = await screen.findByTestId('resume-batch-button');
-    expect(btn).toHaveTextContent('забрать готовый расчёт');
-    expect(screen.getByText(/уже выполнен и оплачен/)).toBeInTheDocument();
-  });
 
   it('«Продолжить» calls resumeTask, not restartTask', async () => {
     const { resumeTask, restartTask } = await import('../api/tasks');

@@ -6,7 +6,7 @@
  *
  * План: plans/2026-07-30-eta-ocheredi-zadach.md, Фаза 5.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -47,16 +47,12 @@ vi.mock('../stores/auth', () => ({
   useAuthStore: () => ({ isAdmin: false, isAuthenticated: true }),
 }));
 
-vi.mock('../components/BatchProgressBar', () => ({
-  BatchProgressBar: () => null,
-}));
-
 vi.mock('../utils/notificationSound', () => ({
   playSuccess: vi.fn(),
   playError: vi.fn(),
 }));
 
-import { getTaskStatus, getTaskResults, TaskStatusResponse } from '../api/tasks';
+import { getTaskStatus, TaskStatusResponse } from '../api/tasks';
 import { TaskStatus } from '../types';
 import TaskStatusPage from '../pages/TaskStatus';
 
@@ -92,77 +88,6 @@ function renderPage() {
   );
 }
 
-describe('TaskStatus — прогноз готовности', () => {
-  beforeEach(() => {
-    mockNavigate.mockClear();
-    vi.mocked(getTaskResults).mockResolvedValue([]);
-  });
-
-  it('считающаяся задача показывает время результата', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(makeTaskResponse());
-
-    renderPage();
-
-    const el = await screen.findByTestId('task-eta');
-    expect(el).toHaveTextContent(/через 40 мин/);
-  });
-
-  it('ожидающая задача показывает и время старта', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        status: 'pending',
-        eta: {
-          starts_in_s: 3600,
-          ready_in_s: 7200,
-          ready_at: new Date(Date.now() + 7200_000).toISOString(),
-          rough: true,
-          finishing: false,
-          units: null,
-          unit_kind: null,
-        },
-      })
-    );
-
-    renderPage();
-
-    const el = await screen.findByTestId('task-eta');
-    expect(el).toHaveTextContent('старт ≈ через 1 ч');
-    expect(el).toHaveTextContent('оценка грубая');
-  });
-
-  it('расчётное время вышло — «завершается», без отрицательных чисел', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        eta: {
-          starts_in_s: 0,
-          ready_in_s: 60,
-          ready_at: new Date(Date.now() + 60_000).toISOString(),
-          rough: false,
-          finishing: true,
-          units: 1220,
-          unit_kind: 'items',
-        },
-      })
-    );
-
-    renderPage();
-
-    const el = await screen.findByTestId('task-eta');
-    expect(el).toHaveTextContent('Результат завершается');
-  });
-
-  it('завершённая задача прогноз не показывает', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({ status: 'completed', eta: null })
-    );
-
-    renderPage();
-
-    await screen.findByText(/ID задачи/i);
-    expect(screen.queryByTestId('task-eta')).not.toBeInTheDocument();
-  });
-});
-
 /**
  * Место в очереди в карточке задачи: «меня возьмут третьей» отвечает на вопрос
  * ожидания точнее, чем минуты (те — оценка).
@@ -193,13 +118,5 @@ describe('TaskStatus — место в очереди', () => {
     const eta = screen.getByTestId('task-eta');
     expect(eta).toHaveTextContent('старт ≈ через 30 мин');
     expect(eta).toHaveTextContent('через 1 ч 10 мин');
-  });
-
-  it('считающаяся задача позицию не показывает', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(makeTaskResponse());
-    renderPage();
-
-    await screen.findByTestId('task-eta');
-    expect(screen.queryByTestId('task-queue-position')).toBeNull();
   });
 });

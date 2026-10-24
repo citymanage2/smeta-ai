@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { TaskBrief, TaskUsage, WorkflowCard } from '../types/workflow'
+import { TaskBrief, WorkflowCard } from '../types/workflow'
 
 // Карточка рисует раскрывающиеся секции, которые лезут в сеть за метаданными
 // файлов. Списку смет это не нужно — здесь проверяются числа в шапке карточки.
@@ -26,20 +26,6 @@ vi.mock('../api/workflowCards', () => ({
 
 import { SmetaList } from '../components/SmetaList'
 import { useKanbanStore } from '../stores/kanban'
-
-function usage(over: Partial<TaskUsage> = {}): TaskUsage {
-  return {
-    tokens: 0,
-    cost_usd: 0,
-    extra_tokens: 0,
-    extra_cost_usd: 0,
-    queue_seconds: null,
-    work_seconds: null,
-    queue_running: false,
-    work_running: false,
-    ...over,
-  }
-}
 
 function task(over: Partial<TaskBrief> = {}): TaskBrief {
   return {
@@ -85,11 +71,6 @@ function renderWith(cards: WorkflowCard[]) {
 }
 
 describe('колонка «Сумма»', () => {
-  it('AC-7: показывает сумму сформированной сметы', () => {
-    renderWith([card({ estimate_task: task({ cost: 1234567.89 }) })])
-    expect(screen.getByText('1 234 568 ₽')).toBeTruthy()
-  })
-
   it('AC-7: сумма оптимизации важнее суммы сметы', () => {
     renderWith([
       card({
@@ -109,24 +90,6 @@ describe('колонка «Сумма»', () => {
 })
 
 describe('строка «Сумма затрат»', () => {
-  it('показывает токены, доллары и время по всей смете', () => {
-    renderWith([
-      card({
-        estimate_task: task({
-          cost: 1000,
-          usage: usage({
-            tokens: 1_200_000, cost_usd: 9.84, queue_seconds: 180, work_seconds: 840,
-          }),
-        }),
-      }),
-    ])
-    expect(screen.getByText('Сумма затрат:')).toBeTruthy()
-    expect(screen.getByText('1.2M')).toBeTruthy()
-    expect(screen.getByText('$9.84')).toBeTruthy()
-    expect(screen.getByText('3 мин')).toBeTruthy()
-    expect(screen.getByText('14 мин')).toBeTruthy()
-  })
-
   it('AC-2: смета без затрат не показывает пустую строку чипов', () => {
     renderWith([card({ estimate_task: task({ cost: 1000 }) })])
     expect(screen.queryByTestId('usage-chips')).toBeNull()

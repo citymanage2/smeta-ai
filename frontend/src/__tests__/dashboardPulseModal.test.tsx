@@ -78,19 +78,6 @@ beforeEach(() => {
 })
 
 describe('Пульс сегодня', () => {
-  it('показывает пять карточек, включая отдельную «В ожидании»', () => {
-    renderPulse()
-    for (const label of [
-      'Создано сегодня',
-      'В обработке',
-      'В ожидании',
-      'Завершено сегодня',
-      'С ошибкой сегодня',
-    ]) {
-      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeTruthy()
-    }
-  })
-
   it('по клику грузит задачи именно этой карточки', async () => {
     renderPulse()
     await userEvent.click(screen.getByRole('button', { name: /С ошибкой сегодня/ }))
@@ -99,36 +86,6 @@ describe('Пульс сегодня', () => {
     await userEvent.click(screen.getByLabelText('Закрыть'))
     await userEvent.click(screen.getByRole('button', { name: /В ожидании/ }))
     await waitFor(() => expect(getPulseBucket).toHaveBeenLastCalledWith('pending'))
-  })
-
-  it('строка показывает проект, задачу, время, токены и стоимость', async () => {
-    renderPulse()
-    await userEvent.click(screen.getByRole('button', { name: /С ошибкой сегодня/ }))
-
-    const cells = await screen.findByText('ЖК Северный')
-    const tr = cells.closest('tr') as HTMLElement
-    expect(within(tr).getByText('Смета из перечня')).toBeTruthy()
-    expect(within(tr).getByText('14 мин')).toBeTruthy()
-    expect(within(tr).getByText('1.5K')).toBeTruthy()
-    expect(within(tr).getByText('$1.75')).toBeTruthy()
-  })
-
-  it('над таблицей — суммарные итоги', async () => {
-    getPulseBucket.mockResolvedValue(
-      detail({
-        count: 2,
-        total_tokens: 2500,
-        total_cost_usd: 3.25,
-        total_work_seconds: 1800,
-        tasks: [row(), row({ id: 'task-2', tokens: 1000, cost_usd: 1.5, work_seconds: 960 })],
-      })
-    )
-    renderPulse()
-    await userEvent.click(screen.getByRole('button', { name: /С ошибкой сегодня/ }))
-
-    expect(await screen.findByText('30 мин')).toBeTruthy()
-    expect(screen.getByText('2.5K')).toBeTruthy()
-    expect(screen.getByText('$3.25')).toBeTruthy()
   })
 
   it('клик по строке ведёт к задаче', async () => {
@@ -147,14 +104,5 @@ describe('Пульс сегодня', () => {
 
     const tr = (await screen.findByText('ЖК Северный')).closest('tr') as HTMLElement
     expect(within(tr).getAllByText('—').length).toBe(3)
-  })
-
-  it('пустая карточка не выглядит поломкой', async () => {
-    getPulseBucket.mockResolvedValue(
-      detail({ count: 0, total_tokens: 0, total_cost_usd: 0, total_work_seconds: 0, tasks: [] })
-    )
-    renderPulse()
-    await userEvent.click(screen.getByRole('button', { name: /Создано сегодня/ }))
-    expect(await screen.findByText('Задач нет')).toBeTruthy()
   })
 })

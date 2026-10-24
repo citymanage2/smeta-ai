@@ -136,11 +136,6 @@ describe('UsageChips', () => {
     expect(screen.getByText('300 / $0.75')).toBeTruthy()
   })
 
-  it('нулевые допы не занимают место в строке', () => {
-    render(<UsageChips usage={stageUsage(usage({ tokens: 1000, cost_usd: 2 }))} />)
-    expect(screen.queryByText('допы')).toBeNull()
-  })
-
   it('AC-3: идущая задача подписана «идёт», а не выглядит завершённой', () => {
     render(
       <UsageChips

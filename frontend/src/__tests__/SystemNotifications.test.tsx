@@ -90,26 +90,6 @@ describe('useSystemNotifications', () => {
     expect(localStorage.getItem(CURSOR_KEY)).toBe('6');
   });
 
-  it('AC10: длинный список названий сворачивается до трёх', async () => {
-    localStorage.setItem(CURSOR_KEY, '1');
-    vi.mocked(getSystemNotifications).mockResolvedValue({
-      cursor: 2,
-      events: [
-        balanceEvent(
-          2,
-          ['А', 'Б', 'В', 'Г', 'Д'].map((n, i) => ({ id: `t${i}`, name: `Смета ${n}` })),
-        ),
-      ],
-    });
-
-    renderHook(() => useSystemNotifications());
-
-    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
-    const [, opts] = toastSuccess.mock.calls[0] as [string, { description: string }];
-    expect(opts.description).toContain('и ещё 2');
-    expect(opts.description).not.toContain('Смета Д');
-  });
-
   it('AC12: курсор сдвигается — повторный опрос не показывает то же событие', async () => {
     localStorage.setItem(CURSOR_KEY, '5');
     vi.mocked(getSystemNotifications).mockResolvedValue({

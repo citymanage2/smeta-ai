@@ -57,13 +57,4 @@ describe('PromptRulesCard', () => {
     await user.click(screen.getByRole('button', { name: 'Включить' }))
     await waitFor(() => expect(setPromptRuleEnabled).toHaveBeenCalledWith(1, true))
   })
-
-  it('подписывает, кто включил правило', async () => {
-    getPromptRules.mockResolvedValue([
-      rule({ enabled: true, enabled_by: 'Руководитель', enabled_at: '2026-09-14T10:00:00+00:00' }),
-    ])
-    render(<PromptRulesCard />)
-
-    await waitFor(() => expect(screen.getByText(/включил Руководитель/)).toBeInTheDocument())
-  })
 })

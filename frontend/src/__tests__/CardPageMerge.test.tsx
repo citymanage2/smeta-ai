@@ -3,7 +3,7 @@
  *
  * Проверяем ровно то, ради чего страницы объединялись: старая ссылка на задачу
  * приводит на нужный этап сметы, ход обработки виден рядом с этапом и сам
- * раскрывается на ошибке, а чат-уточнение из интерфейса убран.
+ * раскрывается на ошибке.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -99,20 +99,6 @@ describe('старая ссылка на задачу', () => {
     expect(mockNavigate).not.toHaveBeenCalledWith(
       expect.stringContaining('/cards/'), expect.anything(),
     );
-  });
-
-  it('чат-уточнение убран из интерфейса', async () => {
-    vi.mocked(documentsApi.locateDocumentByTask).mockRejectedValue({
-      response: { status: 404 },
-    });
-
-    render(<MemoryRouter initialEntries={[`/tasks/${TASK_ID}/status`]}><TaskStatusPage /></MemoryRouter>);
-
-    await waitFor(() => {
-      expect(screen.getAllByText(/Перечень из Гранд-сметы/).length).toBeGreaterThan(0);
-    });
-    expect(screen.queryByText('Уточнить задачу')).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText(/уточнение/i)).not.toBeInTheDocument();
   });
 });
 

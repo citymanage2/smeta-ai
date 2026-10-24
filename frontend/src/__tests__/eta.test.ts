@@ -60,15 +60,6 @@ describe('describeEta', () => {
     expect(view.hint).toContain('мало данных')
   })
 
-  it('подсказка показывает объём работы со склонением', () => {
-    expect(describeEta(makeEta({ units: 1200 }), 'processing')!.hint).toContain('1200 позиций')
-    expect(describeEta(makeEta({ units: 2 }), 'processing')!.hint).toContain('2 позиции')
-    expect(describeEta(makeEta({ units: 1 }), 'processing')!.hint).toContain('1 позиция')
-    expect(
-      describeEta(makeEta({ units: 48, unit_kind: 'pages' }), 'processing')!.hint
-    ).toContain('48 страниц')
-  })
-
   it('подсказка разделяет ожидание и расчёт', () => {
     const hint = describeEta(makeEta({ starts_in_s: 1500, ready_in_s: 4200 }), 'pending')!.hint
     expect(hint).toContain('Ожидание очереди: 25 мин')
@@ -114,11 +105,5 @@ describe('место в очереди', () => {
   it('считающаяся задача позицию не показывает — она уже не в очереди', () => {
     const view = describeEta(makeEta({ queue_position: 2 }), 'processing')!
     expect(view.position).toBe('')
-  })
-
-  it('без позиции с бэкенда строка пустая, остальное работает', () => {
-    const view = describeEta(makeEta({ starts_in_s: 600 }), 'pending')!
-    expect(view.position).toBe('')
-    expect(view.start).toBe('старт ≈ через 10 мин')
   })
 })

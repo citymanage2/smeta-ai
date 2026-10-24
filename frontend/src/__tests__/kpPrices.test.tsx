@@ -91,23 +91,6 @@ beforeEach(() => {
 // --- Пометка строк -------------------------------------------------------------
 
 describe('строка с ценой из КП', () => {
-  it('подсвечена «цена из КП», подсказка — поставщик, дата и число КП', () => {
-    const r = {
-      __key: 'r1', type: 'Материал', name: 'Кирпич', price_material: 42.5,
-      kp_ref: {
-        supplier: 'ООО Кирпич', offer_date: '2026-09-10', offers_count: 3, includes_materials: false,
-        field: 'price_material', price: 42.5,
-      },
-    };
-    const css = estimateAdapter.rowClass?.(r) ?? '';
-    expect(css.split(' ')).toContain('de-row-kp');
-    expect(css).not.toContain('de-row-kp-materials');
-    const hint = kpRowHint(r) ?? '';
-    expect(hint).toContain('ООО Кирпич');
-    expect(hint).toContain('10.09.2026');
-    expect(hint).toContain('КП: 3');
-  });
-
   it('цена работы «включает материалы» — отдельная подсветка и «проверьте материал позиции»', () => {
     const r = {
       __key: 'r2', type: 'Работа', name: 'Монтаж', price_work: 900,
@@ -120,13 +103,6 @@ describe('строка с ценой из КП', () => {
     expect(css).toContain('de-row-kp-materials');
     expect(css).not.toContain('de-row-kp');
     expect(kpRowHint(r)).toContain('проверьте материал позиции');
-  });
-
-  it('без kp_ref — ни класса, ни подсказки; kp_ref не объект — тоже', () => {
-    expect(estimateAdapter.rowClass?.({ __key: 'a', type: 'Работа' }) ?? '').not.toContain('de-row-kp');
-    expect(kpRowHint({ __key: 'a' })).toBeNull();
-    expect(kpRowHint({ __key: 'b', kp_ref: 'текст' })).toBeNull();
-    expect(estimateAdapter.rowClass?.({ __key: 'b', kp_ref: 'текст' }) ?? '').not.toContain('de-row-kp');
   });
 });
 

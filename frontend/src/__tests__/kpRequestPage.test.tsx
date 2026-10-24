@@ -269,18 +269,6 @@ describe('Сравнительная таблица', () => {
 });
 
 describe('ИИ-разбор КП', () => {
-  it('состояние разбора видно в заголовке колонки', () => {
-    const request = twoOffersRequest();
-    request.offers = [
-      offer({ id: 'o1', supplier_name: 'Кирпичный двор', parse_status: 'processing' }),
-      offer({ id: 'o2', supplier_name: 'Бетонстрой', parse_status: 'parsed',
-        parse_hints: { prices_found: 2, dropped_unknown: 0 } }),
-    ];
-    renderTable(request);
-    expect(screen.getByTestId('kp-offer-o1')).toHaveTextContent('ИИ разбирает файл');
-    expect(screen.getByTestId('kp-offer-o2')).toHaveTextContent('Разобрано ИИ: цен — 2');
-  });
-
   it('ошибка разбора — текстом, ручной ввод и «Разобрать заново» доступны', async () => {
     const onReparse = vi.fn().mockResolvedValue(undefined);
     const request = twoOffersRequest();

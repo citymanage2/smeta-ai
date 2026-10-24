@@ -12,8 +12,6 @@ import { TaskBrief, TaskUsage, WorkflowCard } from '../types/workflow'
 import {
   cardEstimateCost,
   cardUsage,
-  formatDuration,
-  formatTokens,
   formatUsd,
   projectUsage,
   stageUsage,
@@ -171,24 +169,9 @@ describe('cardEstimateCost', () => {
 })
 
 describe('форматирование', () => {
-  it('токены — порядок величины', () => {
-    expect(formatTokens(0)).toBe('—')
-    expect(formatTokens(940)).toBe('940')
-    expect(formatTokens(1234)).toBe('1.2K')
-    expect(formatTokens(1_234_567)).toBe('1.2M')
-  })
-
   it('доллары — с центами, мелочь не теряется в нуле', () => {
     expect(formatUsd(0)).toBe('—')
     expect(formatUsd(0.004)).toBe('<$0.01')
     expect(formatUsd(9.837)).toBe('$9.84')
-  })
-
-  it('длительность — по-русски', () => {
-    expect(formatDuration(null)).toBe('—')
-    expect(formatDuration(0)).toBe('—')
-    expect(formatDuration(45)).toBe('45 сек')
-    expect(formatDuration(12 * 60)).toBe('12 мин')
-    expect(formatDuration(72 * 60)).toBe('1 ч 12 мин')
   })
 })

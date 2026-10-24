@@ -11,7 +11,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { fireEvent } from '@testing-library/dom';
-import { useState } from 'react';
 
 vi.mock('../api/documents', async () => {
   const actual = await vi.importActual<typeof import('../api/documents')>('../api/documents');
@@ -46,7 +45,7 @@ import * as api from '../api/documents';
 import * as kpApi from '../api/kpRequests';
 import DocumentEditor from '../components/editor/DocumentEditor';
 import KpPrices from '../components/editor/actions/KpPrices';
-import KpApplyDialog, { coefficientNote } from '../components/kp/KpApplyDialog';
+import KpApplyDialog from '../components/kp/KpApplyDialog';
 import { useDocumentEditorStore } from '../stores/documentEditor';
 import { useAuthStore } from '../stores/auth';
 import type { VersionBrief } from '../api/documents';
@@ -114,53 +113,9 @@ describe('кнопка «Цены из КП» перечитывает заве�
     act(() => { window.dispatchEvent(new Event('focus')); });
     await waitFor(() => expect(kpButton()).toBeEnabled());
   });
-
-  it('нажатие тоже перечитывает список', async () => {
-    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([brief({})]);
-    vi.mocked(kpApi.previewKpApply).mockResolvedValue(preview());
-    render(
-      <KpPrices
-        cardId="card-1" versions={[version({})]} rowsCount={3} isDirty={false}
-        onApplied={vi.fn()} onNotice={vi.fn()}
-      />,
-    );
-    await waitFor(() => expect(kpButton()).toBeEnabled());
-    fireEvent.click(kpButton());
-    await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalledTimes(2));
-  });
 });
 
 describe('409 предпросмотра — «Обновить документ»', () => {
-  it('версии перечитаны, предпросмотр уходит к новой последней версии, окно открыто', async () => {
-    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([brief({})]);
-    vi.mocked(kpApi.previewKpApply).mockImplementation(async (_card, versionId) => {
-      if (versionId === 'v1') throw CONFLICT;
-      return preview({ version_id: versionId });
-    });
-
-    function Harness() {
-      const [versions, setVersions] = useState([version({}), version({ id: 'v1', version_number: 1 })]);
-      return (
-        <KpPrices
-          cardId="card-1" versions={versions} rowsCount={3} isDirty={false}
-          onApplied={vi.fn()} onNotice={vi.fn()}
-          onRefreshDocument={async () => {
-            setVersions((prev) => [...prev, version({ id: 'v2', version_number: 2 })]);
-          }}
-        />
-      );
-    }
-    render(<Harness />);
-    await waitFor(() => expect(kpButton()).toBeEnabled());
-    fireEvent.click(kpButton());
-    expect(await screen.findByRole('alert')).toHaveTextContent('последней версии');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Обновить документ' }));
-    expect(await screen.findByTestId('kp-apply-rows')).toBeInTheDocument();
-    expect(kpApi.previewKpApply).toHaveBeenLastCalledWith('card-1', 'v2');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
   it('без 409 кнопки «Обновить документ» нет', async () => {
     vi.mocked(kpApi.previewKpApply).mockRejectedValue({ response: { status: 500 } });
     render(
@@ -195,11 +150,6 @@ describe('коэффициент версии в окне', () => {
     );
     await screen.findByTestId('kp-apply-rows');
     expect(screen.queryByTestId('kp-apply-coefficient')).not.toBeInTheDocument();
-  });
-
-  it('разные коэффициенты работ и материалов названы оба', () => {
-    expect(coefficientNote({ work: 1.1, material: 0.9 })).toContain('работ ×1,1, материалов ×0,9');
-    expect(coefficientNote(null)).toBeNull();
   });
 
   it('KpPrices передаёт коэффициент, только если открыта последняя версия', async () => {

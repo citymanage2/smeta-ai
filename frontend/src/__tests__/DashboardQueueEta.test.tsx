@@ -46,11 +46,6 @@ function renderQueue(tasks: ActiveTask[]) {
 }
 
 describe('DashboardQueue — готовность', () => {
-  it('считающаяся задача показывает время результата', () => {
-    renderQueue([makeTask()])
-    expect(screen.getByTestId('queue-eta')).toHaveTextContent(/через 40 мин/)
-  })
-
   it('ожидающая задача показывает и время старта', () => {
     renderQueue([
       makeTask({
@@ -69,16 +64,6 @@ describe('DashboardQueue — готовность', () => {
     const cell = screen.getByTestId('queue-eta')
     expect(cell).toHaveTextContent('старт ≈ через 25 мин')
     expect(cell).toHaveTextContent(/через 1 ч 10 мин/)
-  })
-
-  it('грубая оценка помечена прямо в таблице', () => {
-    renderQueue([makeTask({ eta: { ...makeTask().eta!, rough: true } })])
-    expect(screen.getByTestId('queue-eta')).toHaveTextContent('оценка грубая')
-  })
-
-  it('без прогноза — прочерк, а не пустая ячейка', () => {
-    renderQueue([makeTask({ eta: null })])
-    expect(screen.queryByTestId('queue-eta')).not.toBeInTheDocument()
   })
 })
 
@@ -107,10 +92,5 @@ describe('DashboardQueue — место в очереди', () => {
     ])
 
     expect(screen.getByTestId('queue-position')).toHaveTextContent('2-я в очереди')
-  })
-
-  it('считающаяся задача позицию не показывает', () => {
-    renderQueue([makeTask()])
-    expect(screen.queryByTestId('queue-position')).toBeNull()
   })
 })

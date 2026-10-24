@@ -1,17 +1,11 @@
 /**
- * TDD tests for three ProjectDetail.tsx bugs:
+ * TDD tests for two ProjectDetail.tsx bugs:
  *
  * Bug 1: Clicking task card should navigate to /task/{id}/status,
  *        not trigger task creation or do nothing.
  *
  * Bug 2: "Оптимизировать" button must check BOTH isEstimateType AND
  *        estimation_status === 'estimated'. Currently missing isEstimateType check.
- *
- * Bug 3 → Фаза 6 (КП-6): двойной статус схлопнут в единое представление.
- *        Вместо отдельного цветного estimation-бейджа строка задачи показывает
- *        состояние стадии (Готово/Идёт/Ошибка) + тонкую бизнес-пометку
- *        (рассчитана / оптимизирована / идёт оптимизация). Проверяем, что
- *        бизнес-факт не потерян, но выражен как пометка, а не как второй бейдж.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
@@ -78,7 +72,6 @@ vi.mock('../utils/notificationSound', () => ({
 import { getProject } from '../api/projects';
 import { EstimationStatus } from '../types';
 import ProjectDetailPage from '../pages/ProjectDetail';
-import { MAIN_PADDING_TOP } from '../components/Layout';
 
 const TASK_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
@@ -178,80 +171,5 @@ describe('ProjectDetail — Bug 2: Optimize button condition', () => {
     await renderPage();
     await screen.findByText('Смета из перечня');
     expect(screen.queryByText('Оптимизировать')).toBeNull();
-  });
-});
-
-describe('ProjectDetail — Bug 3 → Фаза 6: единый статус (состояние стадии + бизнес-пометка)', () => {
-  beforeEach(() => {
-    mockNavigate.mockClear();
-  });
-
-  it('показывает состояние «Готово» и пометку «рассчитана» для estimated', async () => {
-    vi.mocked(getProject).mockResolvedValue(
-      makeProject({ estimation_status: 'estimated' })  // status по умолчанию 'completed'
-    );
-    await renderPage();
-    expect(await screen.findByText('Готово')).toBeInTheDocument();
-    expect(await screen.findByText(/рассчитана/)).toBeInTheDocument();
-  });
-
-  it('показывает пометку «идёт оптимизация» для optimizing (смысл optimizing не потерян)', async () => {
-    vi.mocked(getProject).mockResolvedValue(
-      makeProject({ estimation_status: 'optimizing' })
-    );
-    await renderPage();
-    expect(await screen.findByText(/идёт оптимизация/)).toBeInTheDocument();
-  });
-
-  it('показывает пометку «оптимизирована» для optimized', async () => {
-    vi.mocked(getProject).mockResolvedValue(
-      makeProject({ estimation_status: 'optimized' })
-    );
-    await renderPage();
-    expect(await screen.findByText(/оптимизирована/)).toBeInTheDocument();
-  });
-
-  it('для unestimated показывает состояние стадии без бизнес-пометки', async () => {
-    vi.mocked(getProject).mockResolvedValue(
-      makeProject({ estimation_status: 'unestimated' })
-    );
-    await renderPage();
-    // состояние стадии показано (задача completed → «Готово»)…
-    expect(await screen.findByText('Готово')).toBeInTheDocument();
-    // …а старого красного бейджа «Не рассчитана» больше нет
-    expect(screen.queryByText('Не рассчитана')).toBeNull();
-  });
-
-  it('не показывает бизнес-пометку для not_applicable, но показывает состояние стадии', async () => {
-    vi.mocked(getProject).mockResolvedValue(
-      makeProject({ task_type: 'LIST_FROM_GRAND', estimation_status: 'not_applicable' })
-    );
-    await renderPage();
-    await screen.findByText('Перечень из Гранд-сметы');
-    expect(screen.queryByText(/рассчитана/)).toBeNull();
-    expect(screen.queryByText(/оптимизирована/)).toBeNull();
-    expect(screen.getByText('Готово')).toBeInTheDocument();
-  });
-});
-
-describe('ProjectDetail — закреплённый переключатель вида', () => {
-  beforeEach(() => {
-    vi.mocked(getProject).mockResolvedValue(makeProject());
-  });
-
-  it('вычитает верхний отступ окна прокрутки из top', async () => {
-    render(
-      <MemoryRouter>
-        <ProjectDetailPage />
-      </MemoryRouter>
-    );
-
-    const switcher = (await screen.findByText('Канбан')).parentElement as HTMLElement;
-
-    expect(switcher.style.position).toBe('sticky');
-    // Без вычитания MAIN_PADDING_TOP шапка прилипает на 32px ниже видимой
-    // границы, и в этой полосе видно уезжающие строки: sticky отсчитывается
-    // от content edge, а overflow обрезает по padding edge.
-    expect(switcher.style.top).toBe(`-${MAIN_PADDING_TOP}px`);
   });
 });

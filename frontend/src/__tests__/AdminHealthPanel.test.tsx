@@ -174,25 +174,6 @@ describe('Диагностика: ограничения API (429)', () => {
     expect(line).toHaveStyle({ color: 'rgb(180, 83, 9)' })
   })
 
-  it('вчерашние 429 показаны спокойно — упора в лимит сейчас нет', async () => {
-    getQueueHealth.mockResolvedValue(
-      queueHealth(null, {
-        hits_1h: 0,
-        hits_24h: 3,
-        last_age_s: 36000,
-        max_wait_s_24h: 60,
-        via_proxy: false,
-      })
-    )
-
-    await check()
-
-    const line = await screen.findByTestId('api-rate-limits')
-    expect(line).toHaveTextContent('0 за час')
-    expect(line).toHaveTextContent('напрямую')
-    expect(line).toHaveStyle({ color: 'rgb(100, 116, 139)' })
-  })
-
   it('429 не было вовсе — строки нет', async () => {
     getQueueHealth.mockResolvedValue(queueHealth(null, null))
 

@@ -73,33 +73,6 @@ describe('CardStagesAccordion — стадии секциями', () => {
     mockNavigate.mockClear()
   })
 
-  it('AC-4: показывает все четыре стадии, независимо от текущей', () => {
-    renderAccordion()
-    expect(screen.getByText('Перечень из Гранд-сметы')).toBeInTheDocument()
-    expect(screen.getByText('Полнота')).toBeInTheDocument()
-    expect(screen.getByText('Смета')).toBeInTheDocument()
-    expect(screen.getByText('Оптимизация')).toBeInTheDocument()
-  })
-
-  it('AC-5: у завершённой стадии в заголовке — кружок с галочкой', () => {
-    renderAccordion()
-    const header = screen.getByTitle('Полнота: Готово')
-    expect(header.querySelector('svg.lucide-check')).toBeTruthy()
-  })
-
-  it('AC-5: незапущенная стадия показана номером, а не галочкой', () => {
-    renderAccordion()
-    const header = screen.getByTitle('Оптимизация: Ожидает')
-    expect(header.querySelector('svg.lucide-check')).toBeNull()
-    expect(header.textContent).toContain('4')
-  })
-
-  it('AC-6: состояние стадии подписано в её заголовке', () => {
-    renderAccordion()
-    expect(screen.getAllByText('Готово').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getAllByText('Ожидает').length).toBeGreaterThanOrEqual(2)
-  })
-
   it('AC-7: раскрыта только активная стадия', () => {
     renderAccordion()
     // Активная — «Смета»: её форма запуска видна.

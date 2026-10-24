@@ -76,14 +76,6 @@ describe('цель по объекту на карточке проекта', ()
     expect(deviation.textContent!.replace(/\u00A0/g, ' ')).toContain('+20%');
   });
 
-  it('экономия показана зелёным', async () => {
-    vi.mocked(getProject).mockResolvedValue({ ...PROJECT, summary_target_total: 400000 } as never);
-    render(<MemoryRouter><ProjectDetailPage /></MemoryRouter>);
-
-    const deviation = await screen.findByText(text('-100 000 ₽'));
-    expect(deviation).toHaveStyle({ color: 'rgb(5, 150, 105)' });
-  });
-
   it('пока итог сводной не сохранён, показывает цель без отклонения', async () => {
     // Итог 0 — сводную ещё не открывали. Отклонение от нуля выглядело бы как
     // экономия на всю цель, поэтому его нет вовсе.

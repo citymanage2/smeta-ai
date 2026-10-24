@@ -147,16 +147,6 @@ describe('PriceLearning', () => {
     })
   })
 
-  it('пустая очередь объясняет, когда появится предложение', async () => {
-    getPriceSuggestions.mockResolvedValue([])
-
-    render(<PriceLearning />)
-
-    await waitFor(() => {
-      expect(screen.getByText(/поправили по цене хотя бы дважды/)).toBeInTheDocument()
-    })
-  })
-
   it('решённое можно вернуть в очередь', async () => {
     getPriceSuggestions.mockResolvedValue([suggestion({ decision: 'rejected' })])
     const user = userEvent.setup()

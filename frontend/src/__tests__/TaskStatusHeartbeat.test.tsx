@@ -48,10 +48,6 @@ vi.mock('../stores/auth', () => ({
   useAuthStore: () => ({ isAdmin: false, isAuthenticated: true }),
 }));
 
-vi.mock('../components/BatchProgressBar', () => ({
-  BatchProgressBar: () => null,
-}));
-
 vi.mock('../utils/notificationSound', () => ({
   playSuccess: vi.fn(),
   playError: vi.fn(),

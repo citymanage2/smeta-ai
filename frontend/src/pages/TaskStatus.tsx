@@ -5,7 +5,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Pencil, Check, X } from 'lucide-react';
 import Layout from '../components/Layout';
 import { LumaSpin, SectionLoader } from '../components/ui/LumaSpin';
-import { BatchProgressBar } from '../components/BatchProgressBar';
 import { TaskStatus as TStatus, TaskResult, TASK_TYPE_LABELS, STATUS_LABELS, ProjectCard } from '../types';
 import {
   getTaskStatus,
@@ -709,7 +708,7 @@ const TaskStatusPage: React.FC = () => {
                 // Пачка отправлена в Batch API: она обрабатывается на стороне
                 // Anthropic, и живого обработчика за задачей нет ПО ЗАМЫСЛУ
                 // (то же исключение, что в sweep_orphaned_tasks на бэкенде).
-                // Тревожить тут нечем — прогресс показывает BatchProgressBar.
+                // Тревожить тут нечем — прогресс показывает «Ход выполнения».
                 if (isBatchPending(task)) return null;
 
                 // Свежесозданная задача ждёт свободный обработчик считаные
@@ -832,7 +831,6 @@ const TaskStatusPage: React.FC = () => {
                             {msg}
                           </span>
                         </div>
-                        {isLast && <BatchProgressBar message={msg} />}
                       </div>
                     );
                   })}

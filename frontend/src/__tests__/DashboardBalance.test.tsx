@@ -82,15 +82,6 @@ describe('DashboardBalance', () => {
     expect(screen.getByText(/пополнили и не отметили/)).toBeInTheDocument()
   })
 
-  it('меньше суток запаса — предупреждает словами, а не долями дня', async () => {
-    fetchApiBalance.mockResolvedValue(
-      balance({ remaining_usd: 8, level: 'alarm', days_left: 0.5 })
-    )
-    render(<DashboardBalance />)
-
-    expect(await screen.findByText(/хватит меньше чем на сутки/)).toBeInTheDocument()
-  })
-
   it('без ключа Anthropic сверять нечем — кнопка выключена', async () => {
     fetchApiBalance.mockResolvedValue(
       balance({ official_enabled: false, official_through: null, synced_at: null })

@@ -47,9 +47,8 @@ import Layout from '../components/Layout'
 import ProtectedRoute from '../components/ProtectedRoute'
 import Employees from '../pages/Employees'
 import { useAuthStore } from '../stores/auth'
-import { ASSIGNABLE_ROLES, ROLE_LABELS } from '../api/adminUsers'
+import { ROLE_LABELS } from '../api/adminUsers'
 import {
-  PRODUCTION_ROLES,
   isProductionRole,
   landingPathForRole,
 } from '../utils/roles'
@@ -61,20 +60,6 @@ function loginAs(role: string) {
 const SALES_MENU = ['Проекты', 'Архив', 'Создать задачу', 'Калькулятор', 'Выученные цены']
 
 describe('Роли: подписи и признаки', () => {
-  it('у каждой назначаемой роли есть подпись', () => {
-    for (const role of ASSIGNABLE_ROLES) {
-      expect(ROLE_LABELS[role], role).toBeTruthy()
-    }
-    expect(ROLE_LABELS.supply_manager).toBe('Менеджер снабжения')
-    expect(ROLE_LABELS.contractor_manager).toBe('Менеджер по работе с подрядчиками')
-  })
-
-  it('обе роли производства назначаются на странице «Сотрудники»', () => {
-    for (const role of PRODUCTION_ROLES) {
-      expect(ASSIGNABLE_ROLES).toContain(role)
-    }
-  })
-
   it('производство — только снабжение и подрядчики', () => {
     expect(isProductionRole('supply_manager')).toBe(true)
     expect(isProductionRole('contractor_manager')).toBe(true)

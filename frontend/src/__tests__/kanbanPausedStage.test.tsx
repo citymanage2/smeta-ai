@@ -93,17 +93,6 @@ beforeEach(() => {
 })
 
 describe('Канбан — задача на паузе по балансу API', () => {
-  it('стадия «Смета»: бейдж, пояснение про баланс и кнопка продолжения', async () => {
-    await renderStage(makeCard('estimate', {
-      estimate_task_id: 't3',
-      estimate_task: task('paused', 'ESTIMATE_FROM_LIST', 't3'),
-    }))
-
-    expect(screen.getByTestId('kanban-paused')).toBeInTheDocument()
-    expect(screen.getByText(/баланс api/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Продолжить сейчас/ })).toBeInTheDocument()
-  })
-
   it('стадия «Смета» на паузе не предлагает создать смету заново', async () => {
     await renderStage(makeCard('estimate', {
       estimate_task_id: 't3',

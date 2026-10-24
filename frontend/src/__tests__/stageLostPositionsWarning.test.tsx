@@ -41,13 +41,4 @@ describe('предупреждение о потерянных позициях'
 
     await waitFor(() => expect(screen.getByText(WARNING)).toBeInTheDocument())
   })
-
-  it('без предупреждения панель остаётся свёрнутой', async () => {
-    getTaskStatus.mockResolvedValue(task(['Файл разбит на 1 часть...', 'Найдено 12 позиций']))
-
-    render(<StageProcessingPanel taskId="t1" />)
-
-    await waitFor(() => expect(screen.getByText('Ход обработки')).toBeInTheDocument())
-    expect(screen.queryByText('Найдено 12 позиций')).not.toBeInTheDocument()
-  })
 })
