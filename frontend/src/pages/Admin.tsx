@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { SpreadsheetTestEditor } from '../components/admin/SpreadsheetTestEditor';
-import EstimateMigrationPanel from '../components/admin/EstimateMigrationPanel';
 import { formatApiDetail } from '../utils/formatError';
 import Layout from '../components/Layout';
 import { AdminTask, TaskStatus, TaskType, TASK_TYPE_LABELS, STATUS_LABELS, AdminTasksParams } from '../types';
@@ -478,7 +477,7 @@ const PriceUploadCard: React.FC<PriceUploadCardProps> = ({
 
 const AdminPage: React.FC = () => {
   const { version: taskSyncVersion, bump: bumpTaskSync } = useTaskSync();
-  const [activeTab, setActiveTab] = useState<'tasks' | 'trash' | 'prices' | 'estimates' | 'spreadsheet'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'trash' | 'prices' | 'spreadsheet'>('tasks');
 
   // Tasks state
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -828,7 +827,7 @@ const AdminPage: React.FC = () => {
             marginBottom: '28px',
           }}
         >
-          {(['tasks', 'trash', 'prices', 'estimates', 'spreadsheet'] as const).map((tab) => (
+          {(['tasks', 'trash', 'prices', 'spreadsheet'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -851,8 +850,6 @@ const AdminPage: React.FC = () => {
                 ? `Корзина${trashTotal > 0 ? ` (${trashTotal})` : ''}`
                 : tab === 'prices'
                 ? 'Прайс-листы'
-                : tab === 'estimates'
-                ? 'Перевод смет'
                 : 'Онлайн редактор ТЕСТ'}
             </button>
           ))}
@@ -1430,13 +1427,6 @@ const AdminPage: React.FC = () => {
         )}
 
         {/* ---- SPREADSHEET TAB ---- */}
-        {/* ---- ПЕРЕВОД СМЕТ ---- */}
-        {activeTab === 'estimates' && (
-          <div style={{ padding: '8px 0' }}>
-            <EstimateMigrationPanel />
-          </div>
-        )}
-
         {activeTab === 'spreadsheet' && (
           <Suspense fallback={<SectionLoader message="Загрузка редактора..." />}>
             <SpreadsheetTestEditor />

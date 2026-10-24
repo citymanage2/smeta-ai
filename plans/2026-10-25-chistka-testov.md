@@ -656,13 +656,23 @@
 ## Фазы
 
 ### Фаза 0: Опасные тесты
-- **Статус:** [ ]
-- Удалить два живых теста `test_migration_startup.py` и `test_schema_integrity.py`.
+- **Статус:** [x] 25.10.2026, вместе с удалением остатков Render
+  (`plans/2026-10-25-chistka-repozitoriya.md`)
+- Удалены два живых теста `test_migration_startup.py` и `test_schema_integrity.py`.
+- Там же: удалён дубль `test_render_yaml_start_command_has_upgrade_head` и
+  `test_start_command_has_no_obsolete_fix_script` (скрипт `fix_production_db.py`
+  удалён); статические проверки переименованы `test_render_yaml_*` →
+  `test_start_command_*` (читают Dockerfile). Спорный пункт «Ф» закрыт: Render
+  погашен, `test_spa_routing.py` удалён вместе с `render.yaml`.
 - Гейт: полный pytest.
 
 ### Фаза 1: Удаление на бэкенде
 - **Статус:** [ ]
 - Раздел 1, Б1–Б8; переносы проверок «перенести туда …» делаются в этой же фазе.
+- Пункты по `test_estimate_migration_api.py`, `test_migrate_estimate_items.py` и
+  `estimateMigrationPanel.test.tsx` (удалить и переписать) закрыты 25.10.2026:
+  функция «Перевод смет» удалена вместе с тестами, `TestTotalsMatchFile` перенесён
+  в `test_estimate_single_source.py`.
 - Гейт: полный pytest (`cd backend && .venv/bin/python -m pytest`, в фоне, лог + `EXIT=`).
 
 ### Фаза 2: Удаление на фронте

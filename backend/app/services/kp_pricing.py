@@ -31,7 +31,7 @@ from __future__ import annotations
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Iterable, Optional
 
-from app.utils.unit_compat import STATUS_INCOMPATIBLE, compare_units
+from app.utils.unit_compat import compare_units
 
 VAT_WITH = "with_vat"
 VAT_WITHOUT = "without_vat"

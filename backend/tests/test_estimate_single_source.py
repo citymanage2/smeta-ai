@@ -28,7 +28,7 @@ from app.models.user import User
 from app.models.workflow_card import WorkflowCard
 from app.services import estimate_store, storage_service
 from app.utils.auth import create_access_token, hash_password
-from app.utils.estimate_rows import items_to_rows, items_signature, rows_to_items
+from app.utils.estimate_rows import items_to_rows, items_signature, items_total, rows_to_items
 
 
 def _auth(user_id: int, role: str) -> dict:
@@ -346,3 +346,27 @@ class TestLegacyEndpoint:
         assert version.rows[0]["price_work"] == 5000.0
         assert float(task.cost) == expected
         assert response.json()["grand_total"] == expected
+
+
+# ---------------------------------------------------------------------------
+# Итог по позициям совпадает с итогом файла (правило №4)
+# ---------------------------------------------------------------------------
+
+class TestTotalsMatchFile:
+    def test_items_total_matches_generator(self):
+        from app.utils.xlsx_exporter import generate_estimate_xlsx
+
+        _, grand_total = generate_estimate_xlsx(_items())
+
+        assert items_total(_items()) == grand_total
+
+    def test_items_total_ignores_negative_quantity(self):
+        from app.utils.xlsx_exporter import generate_estimate_xlsx
+
+        items = _items() + [{
+            "type": "Работа", "name": "Вычет", "unit": "м", "quantity": -5,
+            "work_price": 100.0, "material_price": None,
+        }]
+        _, grand_total = generate_estimate_xlsx(items)
+
+        assert items_total(items) == grand_total

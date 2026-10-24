@@ -15,8 +15,28 @@ Render, разовые скрипты, снимки данных.
 - **Статус:** [x] (25.10.2026, коммит c5d2368)
 - Удалены `.obsidian/` и пустой `Без названия.base`; `.obsidian/` в `.gitignore`.
 
-### Фаза 2: Кандидаты — ждут подтверждения пользователя
-- **Статус:** [ ]
+### Фаза 2: Кандидаты
+- **Статус:** частично (25.10.2026). Render погашен (подтвердил пользователь) —
+  удалены его остатки и тест `test_spa_routing.py`, проверявший `render.yaml`.
+  Удалены `skills/`, `progress/`, флаер, снимки прайсов, разовые скрипты. Хук
+  `.git/hooks/post-push` удалён локально. `docs/` не тронут (инструкция
+  пользователя). `tg_bot/` удалён — пользователь им не пользуется.
+
+### Фаза 2б: Функция «Перевод смет»
+- **Статус:** [x] 25.10.2026, решение пользователя
+- Разовый перевод смет выполнен 04.08.2026 (`plans/2026-08-03-migraciya-smet-iz-adminki.md`).
+  Кнопка «взять из расчёта» после этого затирала бы ручные правки сметы выводом ИИ
+  (правило №1: `progress_data['items']` заморожен как ответ модели).
+- Удалены: эндпоинты `/admin/estimates/migration*` (`routers/admin.py`),
+  `services/estimate_migration.py`, `scripts/migrate_estimate_items.py`, вкладка
+  и `EstimateMigrationPanel.tsx`, функции в `api/admin.ts`, тесты
+  `test_estimate_migration_api.py`, `test_migrate_estimate_items.py`,
+  `estimateMigrationPanel.test.tsx`.
+- Оставлено: `estimate_rows.items_total` — им пользуется сверка раздела сводной
+  со сметой; два теста «итог по позициям = итог файла» перенесены в
+  `test_estimate_single_source.py::TestTotalsMatchFile`. Записи истории
+  `estimate_migration` в БД остаются как есть.
+- Попутно: неиспользуемый импорт в `services/kp_pricing.py` (ruff по `app/` зелёный).
 
 | Что | Что это | Предложение |
 |---|---|---|
@@ -33,15 +53,16 @@ Render, разовые скрипты, снимки данных.
 пользователя вне git.
 
 ### Фаза 3: Найденное в коде
-- **Статус:** [ ]
-- Фронт при сборке без `VITE_API_BASE_URL` ходит на `smeta-ai-backend.onrender.com`
-  (5 мест: `api/client.ts:4`, `api/kpRequests.ts:188`, `api/tasks.ts:144`,
-  `api/workflowCards.ts:112,124`) → тот же адрес, с которого открыта страница.
+- **Статус:** частично
+- [x] Фронт при сборке без `VITE_API_BASE_URL` ходил на `smeta-ai-backend.onrender.com`
+  (5 мест) → общая `API_BASE_URL` в `api/client.ts`, по умолчанию тот же адрес,
+  с которого открыта страница.
 - `.claude/skills/bulletproof` записан в git ссылкой на чужой репозиторий
   (gitlink) без `.gitmodules`: в свежем клоне папка пустая, а навык обязателен по
   CLAUDE.md → положить файлами или оформить подмодулем.
-- CLAUDE.md: карта устарела — нет `.planning/`, `render.yaml` назван деплоем.
+- [x] CLAUDE.md: `render.yaml` убран из карты, прод — Timeweb.
 
 ## Итог
 
-Реализован частично: фаза 1. Фазы 2–3 ждут решения пользователя.
+Реализован почти целиком: фазы 1, 2, 2б. Осталось: `.claude/skills/bulletproof`
+(gitlink без `.gitmodules`).
