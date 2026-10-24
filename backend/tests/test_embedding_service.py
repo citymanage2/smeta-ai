@@ -1,24 +1,18 @@
-"""Unit tests for embedding_service: normalize_name и generate_embeddings_batch (FastEmbed)."""
+"""Unit tests for embedding_service: generate_embeddings_batch (FastEmbed).
+
+Нормализация имени (`normalize_name`) — в test_normalize_name_collisions.py.
+"""
 import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
 
 from app.services.embedding_service import (
-    normalize_name,
     generate_embeddings_batch,
     generate_embedding,
     EmbeddingUnavailableError,
 )
 
 DIM = 768
-
-
-# ---------------------------------------------------------------------------
-# normalize_name
-# ---------------------------------------------------------------------------
-
-def test_normalize_m100_not_equals_m50():
-    assert normalize_name("М100") != normalize_name("М50")
 
 
 # ---------------------------------------------------------------------------

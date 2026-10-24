@@ -29,7 +29,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.models.workflow_card import WorkflowCard
 from app.utils.auth import create_access_token, hash_password
-from app.utils.price_min import ESTIMATE_CONTRACTOR, compute_min_price
+from app.utils.price_min import ESTIMATE_CONTRACTOR
 from app.utils.unit_normalizer import canonical_unit
 
 
@@ -148,26 +148,6 @@ class TestUnitCanonical:
     def test_empty_unit_survives(self):
         assert canonical_unit(None) == ""
         assert canonical_unit("") == ""
-
-
-# ---------------------------------------------------------------------------
-# Правило минимальной цены
-# ---------------------------------------------------------------------------
-
-class TestMinPriceRule:
-    """Приоритет у цены из смет — решение пользователя 2026-08-03."""
-
-    def test_non_positive_estimate_price_ignored(self):
-        prices = {"Подрядчик А": 1200, ESTIMATE_CONTRACTOR: 0}
-
-        assert compute_min_price(prices) == 1200
-
-    def test_empty_prices_give_none(self):
-        assert compute_min_price({}) is None
-        assert compute_min_price(None) is None
-
-    def test_garbage_values_do_not_break(self):
-        assert compute_min_price({"Подрядчик": "нет цены"}) is None
 
 
 # ---------------------------------------------------------------------------

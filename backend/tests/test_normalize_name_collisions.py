@@ -46,6 +46,11 @@ def test_material_grade_still_collapses(written_as):
     assert normalize_name(written_as) == "м100"
 
 
+def test_different_grades_keep_different_keys():
+    """Склеивается написание марки, а не сами марки: М100 и М50 — разные материалы."""
+    assert normalize_name("М100") != normalize_name("М50")
+
+
 def test_grade_rule_does_not_eat_words():
     """Слова между буквой и числом остаются на месте.
 

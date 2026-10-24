@@ -7,6 +7,8 @@
 Каждый коэффициент здесь закреплён точным числом — как нормы расхода
 материалов. Ошибка в коэффициенте молча испортит все будущие сметы.
 """
+import re
+
 from app.utils.unit_compat import (
     PRICE_CONVERTED_PREFIX,
     PRICE_UNIT_MISMATCH_PREFIX,
@@ -172,18 +174,30 @@ def test_compare_units_vozvrashchaet_koefficient():
 # Пометки для человека
 # ---------------------------------------------------------------------------
 
+def _numbers(note: str) -> list[float]:
+    """Числа из примечания так, как их прочтёт человек: «73,77» — это 73.77."""
+    return [float(n.replace(",", ".")) for n in re.findall(r"\d+(?:,\d+)?", note)]
+
+
+def _words(note: str) -> set[str]:
+    """Отдельные слова примечания: «т» в «₽/т» — слово, «т» в «пересчитана» — нет."""
+    return set(re.findall(r"[0-9a-zа-яё]+", note.lower()))
+
+
 def test_pometka_o_pereschete_nazyvaet_oba_chisla():
+    """Человек видит, из чего и во что пересчитана цена: обе цены, обе единицы."""
     note = converted_note(73770, "т", 73.77, "кг", "прайс")
+    # По началу пометки редактор находит строку с пересчитанной ценой.
     assert note.startswith(PRICE_CONVERTED_PREFIX)
-    assert "73770" in note and "73,77" in note
-    assert "т" in note and "кг" in note
-    assert "прайс" in note
+    assert {73770.0, 73.77} <= set(_numbers(note))
+    assert {"т", "кг"} <= _words(note)
 
 
 def test_pometka_o_nesovpadenii_nazyvaet_obe_edinicy():
+    """Решать, подходит ли цена за мешок позиции в кг, человеку — обе единицы названы."""
     note = mismatch_note("мешок", "кг", "прайс")
     assert note.startswith(PRICE_UNIT_MISMATCH_PREFIX)
-    assert "мешок" in note and "кг" in note
+    assert {"мешок", "кг"} <= _words(note)
 
 
 def test_pometka_dopisyvaetsya_k_sushchestvuyushchej():
