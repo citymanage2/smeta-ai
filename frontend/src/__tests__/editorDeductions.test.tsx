@@ -36,6 +36,7 @@ import {
 } from '../components/editor/deductions';
 import { dropDeductionExportRows } from '../components/editor/exportBuilder';
 import { genericAdapter } from '../components/editor/adapters/genericAdapter';
+import { cellIn, getGridRow, parseScreenNumber } from './screenQueries';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 
 function meta(overrides: Partial<api.DocumentMeta> = {}): api.DocumentMeta {
@@ -189,8 +190,8 @@ describe('кнопка «Убрать минусы»', () => {
     fireEvent.click(minusButton());
     fireEvent.click(collapseButton());
     await waitFor(() => expect(grid()).toHaveAttribute('data-row-count', '1'));
-    expect(gridText()).toContain('20');
-    expect(gridText()).not.toContain('16');
+    const row = getGridRow('Кладка стен');
+    expect(parseScreenNumber(cellIn(row, 'Кол-во').textContent)).toBe(20);
   });
 
   it('снимает выделение: спрятанную строку нельзя удалить вслепую', async () => {

@@ -14,6 +14,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { calcEstimateTotals, rowCoefficient } from '../utils/estimateCalc';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 import { GridRow } from '../components/editor/adapters/types';
+import { numberNextTo } from './screenQueries';
 
 const STORED = [
   { id: 'r1', lineage_id: 'r1', type: 'work', name: 'Кладка', unit: 'м2',
@@ -214,10 +215,9 @@ describe('коэффициент в редакторе', () => {
     });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
 
-    await waitFor(() => expect(screen.getByText('Накладные расходы 20%:')).toBeInTheDocument());
-    // 4000 работ × 20% = 800; транспортные 0 → ИТОГО 9800.
-    // Итог с копейками — как и колонки стоимостей.
-    expect(screen.getByText('9 800,00 ₽')).toBeInTheDocument();
+    // 4000 работ × 20% = 800; транспортные 0 → ИТОГО 9800 (по ставкам проекта было бы 9270).
+    await waitFor(() => expect(numberNextTo('ИТОГО:')).toBe(9800));
+    expect(numberNextTo(/^Накладные расходы/)).toBe(800);
   });
 
   it('в перечне коэффициента нет — там нет цен', async () => {
