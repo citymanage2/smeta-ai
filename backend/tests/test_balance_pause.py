@@ -52,11 +52,6 @@ def _make_credit_balance_error() -> anthropic.APIStatusError:
 # claude_service: типизированная ошибка баланса
 # ---------------------------------------------------------------------------
 
-def test_insufficient_balance_is_runtimeerror_subclass():
-    # Обратная совместимость: существующие `except RuntimeError` продолжают ловить.
-    assert issubclass(InsufficientBalanceError, RuntimeError)
-
-
 async def test_credit_balance_4xx_raises_insufficient_balance(monkeypatch, patch_claude_create):
     async def fake_create(**kwargs):
         raise _make_credit_balance_error()

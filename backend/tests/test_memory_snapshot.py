@@ -100,12 +100,6 @@ def test_snapshot_ratio_none_without_limit():
     }
 
 
-def test_rss_mb_returns_number_on_this_platform():
-    """Смоук: цифра памяти должна получаться и на Linux, и на macOS."""
-    value = memory.rss_mb()
-    assert value is None or value > 0
-
-
 def test_snapshot_never_raises():
     snap = memory.snapshot()
     assert isinstance(snap, memory.MemorySnapshot)

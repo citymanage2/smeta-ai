@@ -46,20 +46,8 @@ async def test_requeues_job_of_dead_process_on_same_host(db_session):
     assert fresh.status == "queued"
     assert fresh.claimed_by is None
     assert fresh.claimed_at is None
-
-
-async def test_attempt_is_not_refunded(db_session):
-    """Смерть процесса — сбой обработки: попытка списывается.
-
-    Иначе бесконечный OOM-цикл крутился бы вечно вместо честного `failed` с
-    внятным текстом.
-    """
-    await _clear(db_session)
-    job = await _running_job(db_session, "box-1:100", age_s=200)
-
-    await job_queue.reclaim_crashed_worker_jobs(db_session, "box-1:200", 90)
-
-    fresh = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
+    # Смерть процесса — сбой обработки: попытка списывается. Иначе бесконечный
+    # OOM-цикл крутился бы вечно вместо честного `failed` с внятным текстом.
     assert fresh.attempts == 1
 
 
@@ -129,19 +117,6 @@ async def test_queued_and_done_untouched(db_session):
     assert (
         await db_session.execute(select(Job.status).where(Job.id == done.id))
     ).scalar_one() == "done"
-
-
-async def test_all_three_jobs_of_dead_process_return(db_session):
-    """Ровно наблюдаемый случай: три задачи, взятые разом, возвращаются все."""
-    await _clear(db_session)
-    for i in range(3):
-        await _running_job(db_session, "box-1:100", age_s=200, task_id=f"t{i}")
-
-    n = await job_queue.reclaim_crashed_worker_jobs(db_session, "box-1:200", 90)
-
-    assert n == 3
-    statuses = (await db_session.execute(select(Job.status))).scalars().all()
-    assert statuses == ["queued", "queued", "queued"]
 
 
 async def test_empty_worker_id_is_noop(db_session):

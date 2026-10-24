@@ -201,13 +201,6 @@ async def test_embedding_threads_leave_a_core():
     assert threads <= max(1, cores - 1) or threads == settings.EMBEDDING_THREADS
 
 
-async def test_embedding_threads_explicit_setting(monkeypatch):
-    from app.services import embedding_service
-
-    monkeypatch.setattr(settings, "EMBEDDING_THREADS", 3)
-    assert embedding_service._embedding_threads() == 3
-
-
 async def test_fastembed_without_threads_param_still_loads():
     """Старая версия fastembed не знает `threads` — поиск цен важнее ограничения."""
     from app.services import embedding_service

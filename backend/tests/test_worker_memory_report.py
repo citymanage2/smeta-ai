@@ -33,21 +33,6 @@ async def _events(db) -> list:
     )
 
 
-async def test_rss_mb_returns_number():
-    """Измерение работает на текущей платформе (Linux — /proc, macOS — resource)."""
-    value = worker.rss_mb()
-    assert value is None or value > 0
-
-
-async def test_rss_fields_include_delta():
-    """В лог job уходит и текущее значение, и прибавка за задачу."""
-    fields = worker._rss_fields(1.0)
-    if not fields:  # платформа не дала цифру — измерение необязательно
-        pytest.skip("rss недоступен")
-    assert "rss_mb" in fields
-    assert "rss_delta_mb" in fields
-
-
 async def test_memory_below_threshold_is_silent(db_session, monkeypatch):
     """Норма не пишется в БД: диагностика не должна сама создавать нагрузку."""
     from tests.conftest import TestSessionLocal

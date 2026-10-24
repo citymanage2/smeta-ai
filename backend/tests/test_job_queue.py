@@ -56,38 +56,6 @@ async def test_round_robin_by_owner(db_session):
     assert second.id != a2.id
 
 
-async def test_reclaim_requeues_stale(db_session):
-    await _clear(db_session)
-    job = await job_queue.enqueue(db_session, "task.process", {"n": "x"}, owner_id=1)
-    await job_queue.claim_one(db_session, "w1")
-
-    # Симулируем зависание: claimed_at далеко в прошлом.
-    old = datetime.now(timezone.utc) - timedelta(seconds=2000)
-    await db_session.execute(update(Job).where(Job.id == job.id).values(claimed_at=old))
-    await db_session.commit()
-
-    n = await job_queue.reclaim_stale(db_session, timeout_s=900, max_attempts=3)
-    assert n == 1
-    refreshed = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
-    assert refreshed.status == "queued"
-    assert refreshed.claimed_by is None
-
-
-async def test_reclaim_fails_after_max_attempts(db_session):
-    await _clear(db_session)
-    job = await job_queue.enqueue(db_session, "task.process", {"n": "y"}, owner_id=1)
-    old = datetime.now(timezone.utc) - timedelta(seconds=2000)
-    await db_session.execute(
-        update(Job).where(Job.id == job.id).values(status="running", attempts=3, claimed_at=old)
-    )
-    await db_session.commit()
-
-    n = await job_queue.reclaim_stale(db_session, timeout_s=900, max_attempts=3)
-    assert n == 1
-    refreshed = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
-    assert refreshed.status == "failed"
-
-
 async def test_reclaim_ignores_completed_job(db_session):
     """P0-A: reclaim не воскрешает job, которую параллельно успели завершить.
 

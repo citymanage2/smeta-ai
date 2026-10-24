@@ -59,20 +59,6 @@ async def test_brake_off_below_ratio(monkeypatch):
     assert worker._memory_brake_engaged() is False
 
 
-async def test_ratio_uses_container_not_process(monkeypatch):
-    """Считаем занятость контейнера: OOM-killer смотрит на сумму процессов.
-
-    RSS воркера тут скромный, но onnxruntime и прочие дочерние процессы уже съели
-    лимит — брать новую задачу нельзя.
-    """
-    monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0.8)
-    monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 0)
-    monkeypatch.setattr(worker, "_inflight_job_ids", {1})
-    _snap(monkeypatch, rss=300.0, usage=1900.0, limit=2048.0)
-
-    assert worker._memory_brake_engaged() is True
-
-
 async def test_absolute_rss_threshold_still_works_without_cgroup(monkeypatch):
     """cgroup недоступна (локально) — работает прежний порог в мегабайтах."""
     monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0.8)

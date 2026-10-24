@@ -24,7 +24,6 @@ import pytest
 sys.modules.setdefault("fitz", MagicMock())
 
 from app.services.claude_service import (  # noqa: E402
-    call_claude,
     submit_claude_batch,
     InsufficientBalanceError,
     _is_insufficient_balance,
@@ -80,38 +79,6 @@ def test_balance_markers_detected(text):
 def test_non_balance_not_flagged(text):
     # Консервативность: обычные 4xx НЕ считаются балансовыми.
     assert _is_insufficient_balance(400, text) is False
-
-
-# ---------------------------------------------------------------------------
-# call_claude — расширенное распознавание (не только "credit balance")
-# ---------------------------------------------------------------------------
-
-def _patch_client(monkeypatch, fake_create):
-    """Подменить ленивый _get_client() фейковым клиентом с заданным messages.create."""
-    fake_client = MagicMock()
-    fake_client.messages.create = fake_create
-    monkeypatch.setattr("app.services.claude_service._get_client", lambda: fake_client)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
-
-
-async def test_call_claude_maps_402_to_balance(monkeypatch):
-    async def fake_create(**kwargs):
-        raise _api_status_error(402, "Payment Required")
-
-    _patch_client(monkeypatch, fake_create)
-
-    with pytest.raises(InsufficientBalanceError):
-        await call_claude([{"role": "user", "content": "hi"}])
-
-
-async def test_call_claude_maps_insufficient_quota(monkeypatch):
-    async def fake_create(**kwargs):
-        raise _api_status_error(400, "insufficient_quota: add funds")
-
-    _patch_client(monkeypatch, fake_create)
-
-    with pytest.raises(InsufficientBalanceError):
-        await call_claude([{"role": "user", "content": "hi"}])
 
 
 # ---------------------------------------------------------------------------

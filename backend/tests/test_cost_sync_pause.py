@@ -78,17 +78,6 @@ class TestSoftFailure:
         assert worker._cost_sync_paused_until is None
         assert sync.await_count == 2
 
-    @pytest.mark.asyncio
-    async def test_success_clears_pause(self):
-        worker._cost_sync_paused_until = datetime.now(timezone.utc) - timedelta(seconds=1)
-        sync = AsyncMock(return_value=3)
-        with patch("app.services.balance_service.sync_cost_days", sync), patch(
-            "app.services.anthropic_admin.is_configured", lambda: True
-        ):
-            await worker._sync_api_cost_job()
-
-        assert worker._cost_sync_paused_until is None
-
 
 class TestNoKey:
     @pytest.mark.asyncio

@@ -32,21 +32,6 @@ async def _task(db, status: str = "processing") -> Task:
     return task
 
 
-async def test_retry_message_lands_in_task(db_session):
-    task = await _task(db_session)
-
-    assert await job_queue.note_retry_on_task(
-        db_session, task.id, 1, 3, "S3 get failed: connection reset"
-    ) is True
-    await db_session.commit()
-
-    fresh = (await db_session.execute(select(Task).where(Task.id == task.id))).scalar_one()
-    assert "попытка 1 из 3" in fresh.progress_message
-    assert "connection reset" in fresh.progress_message
-    # И в журнале шагов: пользователь видит историю, а не только последнюю строку.
-    assert any("попытка 1 из 3" in line for line in fresh.progress_log)
-
-
 async def test_finished_task_untouched(db_session):
     """Guard по статусу: в завершённую задачу сообщение о сбое не пишем."""
     task = await _task(db_session, status="completed")
@@ -110,13 +95,17 @@ async def test_worker_reports_retry_on_failure(db_session, monkeypatch):
         job_status = (
             await db.execute(select(Job.status).where(Job.id == job.id))
         ).scalar_one()
-        message = (
-            await db.execute(select(Task.progress_message).where(Task.id == task.id))
-        ).scalar_one()
+        message, log = (
+            await db.execute(
+                select(Task.progress_message, Task.progress_log).where(Task.id == task.id)
+            )
+        ).one()
 
     assert job_status == "queued"  # попытка ещё есть
     assert "прокси не ответил" in message
     assert "попытка 1 из 3" in message
+    # И в журнале шагов: пользователь видит историю, а не только последнюю строку.
+    assert any("попытка 1 из 3" in line for line in log)
 
 
 async def _noop():

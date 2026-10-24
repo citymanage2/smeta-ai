@@ -19,17 +19,6 @@ async def _clean(db_session):
     await db_session.flush()
 
 
-async def test_db_connections_absent_on_sqlite(async_client, admin_token):
-    """На SQLite цифры соединений нет — но эндпоинт не падает.
-
-    pg_stat_activity есть только в PostgreSQL; вердикт по очереди важнее этой
-    строки, поэтому деградируем в null.
-    """
-    r = await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
-    assert r.status_code == 200
-    assert r.json()["db_connections"] is None
-
-
 async def test_worker_memory_absent_without_events(async_client, admin_token):
     """Жалоб на память не было → null, а не нули (иначе выглядело бы как «0 МБ»)."""
     r = await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})

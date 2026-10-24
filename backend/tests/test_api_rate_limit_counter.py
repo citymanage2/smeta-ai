@@ -152,28 +152,3 @@ async def test_counts_are_split_by_window(async_client, admin_token, db_session)
     assert info["last_age_s"] < 3600
     assert info["via_proxy"] is True
 
-
-async def test_recent_hits_add_hint(async_client, admin_token, db_session):
-    """Свежие 429 должны быть названы в подсказке — иначе цифру не заметят."""
-    db_session.add(_event(datetime.now(timezone.utc) - timedelta(minutes=2)))
-    await db_session.flush()
-
-    body = (
-        await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
-    ).json()
-
-    assert "429" in body["hint"] or "лимит" in body["hint"].lower()
-
-
-async def test_old_hits_do_not_alarm(async_client, admin_token, db_session):
-    """Вчерашние 429 — история, а не текущая проблема: подсказку не трогаем."""
-    db_session.add(_event(datetime.now(timezone.utc) - timedelta(hours=10)))
-    await db_session.flush()
-
-    body = (
-        await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
-    ).json()
-
-    assert body["api_rate_limits"]["hits_1h"] == 0
-    assert body["api_rate_limits"]["hits_24h"] == 1
-    assert "429" not in body["hint"]

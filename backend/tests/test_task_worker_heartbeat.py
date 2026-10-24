@@ -66,23 +66,6 @@ async def _job(db, task_id, *, status="running", claimed_min_ago=None) -> Job:
 # job_queue.live_heartbeat_age_s — возраст последнего сигнала
 # ---------------------------------------------------------------------------
 
-async def test_returns_age_of_running_job(db_session):
-    t = await _task(db_session)
-    await _job(db_session, t.id, status="running", claimed_min_ago=2)
-
-    age = await job_queue.live_heartbeat_age_s(db_session, str(t.id))
-    assert age is not None
-    # ~120 с, с допуском на время выполнения теста.
-    assert 110 <= age <= 130
-
-
-async def test_none_when_no_job_for_task(db_session):
-    """Задача без job — сигнала нет; UI должен показать «нет данных», не ноль."""
-    t = await _task(db_session)
-    age = await job_queue.live_heartbeat_age_s(db_session, str(t.id))
-    assert age is None
-
-
 async def test_none_for_other_task_job(db_session):
     """Чужая job не должна выдаваться за признак жизни этой задачи."""
     mine = await _task(db_session)

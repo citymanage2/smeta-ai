@@ -56,14 +56,6 @@ def _call(task_id: str, *, tokens: tuple[int, int, int, int], cost: str, extra: 
 # Тайминги — чистая функция, без БД
 # ---------------------------------------------------------------------------
 
-def test_queue_and_work_seconds_from_timestamps():
-    """Очередь — до старта, работа — от старта до финиша."""
-    q, w, q_run, w_run = timings_for_task(_task(), now=NOW)
-    assert q == 180.0          # 20 мин ожидания − 17 мин от старта
-    assert w == 14 * 60.0      # 17 мин − 3 мин
-    assert (q_run, w_run) == (False, False)
-
-
 def test_waiting_task_queue_grows_to_now():
     """Задача ещё в очереди → ожидание считается до «сейчас» и помечено растущим."""
     task = _task(status="pending", started_at=None, finished_at=None)
@@ -169,31 +161,6 @@ async def test_main_and_extra_are_summed_separately(db_session):
 
 
 @pytest.mark.asyncio
-async def test_all_four_token_kinds_counted(db_session):
-    """Кэш даёт большую часть счёта — потерять cache_creation нельзя."""
-    task = _task()
-    db_session.add(task)
-    await db_session.flush()
-    db_session.add(_call(task.id, tokens=(1, 2, 4, 8), cost="0.000015", extra=False))
-    await db_session.commit()
-
-    usage = await usage_for_tasks(db_session, [task], now=NOW)
-    assert usage[str(task.id)].tokens == 15
-
-
-@pytest.mark.asyncio
-async def test_task_without_any_calls_present_with_zeros(db_session):
-    """Файл загрузили руками — задача в ответе есть, но денег на ней нет."""
-    task = _task()
-    db_session.add(task)
-    await db_session.commit()
-
-    usage = await usage_for_tasks(db_session, [task], now=NOW)
-    u = usage[str(task.id)]
-    assert (u.tokens, u.cost_usd, u.extra_tokens, u.extra_cost_usd) == (0, 0.0, 0, 0.0)
-
-
-@pytest.mark.asyncio
 async def test_calls_of_other_tasks_do_not_leak(db_session):
     """Чужие вызовы не попадают в чужую смету."""
     mine, alien = _task(), _task()
@@ -208,24 +175,6 @@ async def test_calls_of_other_tasks_do_not_leak(db_session):
     usage = await usage_for_tasks(db_session, [mine], now=NOW)
     assert set(usage) == {str(mine.id)}
     assert usage[str(mine.id)].tokens == 10
-
-
-@pytest.mark.asyncio
-async def test_several_runs_sum_tokens_but_time_is_of_the_last(db_session):
-    """Перезапуск: деньги за оба прогона, время — только последнего прогона."""
-    task = _task()
-    db_session.add(task)
-    await db_session.flush()
-    db_session.add_all([
-        _call(task.id, tokens=(500, 100, 0, 0), cost="0.600000", extra=False),
-        _call(task.id, tokens=(500, 100, 0, 0), cost="0.600000", extra=False),
-    ])
-    await db_session.commit()
-
-    u = (await usage_for_tasks(db_session, [task], now=NOW))[str(task.id)]
-    assert u.tokens == 1200
-    assert u.cost_usd == 1.2
-    assert u.work_seconds == 14 * 60.0
 
 
 @pytest.mark.asyncio

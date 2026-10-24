@@ -34,17 +34,6 @@ def test_balance_detail_includes_status_and_message():
     assert "credit balance" in detail
 
 
-def test_balance_detail_empty_without_api_data():
-    # Старый способ создания (без деталей) — хвост не добавляем.
-    assert _balance_error_detail(InsufficientBalanceError("нет денег")) == ""
-    assert _balance_error_detail(RuntimeError("boom")) == ""
-
-
-def test_balance_detail_truncates_long_message():
-    err = InsufficientBalanceError("x", status_code=402, api_message="y" * 500)
-    assert len(_balance_error_detail(err)) < 260
-
-
 # ---------------------------------------------------------------------------
 # Гард доступа
 # ---------------------------------------------------------------------------

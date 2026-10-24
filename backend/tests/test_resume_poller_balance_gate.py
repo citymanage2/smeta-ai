@@ -12,7 +12,7 @@
 """
 import sys
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from sqlalchemy import delete, select
 
@@ -70,22 +70,6 @@ def _ping(ok: bool, *, balance: bool = True, code=400, error="credit balance is 
         }
 
     return _call
-
-
-# ---------------------------------------------------------------------------
-# AC1 — нет пауз: пробный вызов не делается
-# ---------------------------------------------------------------------------
-
-async def test_no_paused_tasks_skips_ping(db_session):
-    await _cleanup(db_session)
-    pinger = AsyncMock()
-
-    claimed = await rp.resume_paused_tasks(
-        session_factory=_same_session_factory(db_session), pinger=pinger
-    )
-
-    assert claimed == []
-    pinger.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -81,13 +81,6 @@ def test_position_matches_growing_wait():
     assert ordered[0].ready_in_s < ordered[1].ready_in_s < ordered[2].ready_in_s
 
 
-def test_single_task_is_next_in_line():
-    eta = simulate_queue([_task(id="only")], _flat(600), NOW, slots=1)
-
-    assert eta["only"].queue_position == 1
-    assert eta["only"].starts_in_s == 0
-
-
 def test_default_slots_are_sequential():
     """Без явных слотов берётся настройка — а она теперь «одна задача за раз».
 

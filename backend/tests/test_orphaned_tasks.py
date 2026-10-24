@@ -107,6 +107,8 @@ async def test_reclaim_max_attempts_marks_task_failed(db_session):
     n = await job_queue.reclaim_stale(db_session, timeout_s=900, max_attempts=3)
 
     assert n == 1
+    refreshed_job = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
+    assert refreshed_job.status == "failed"
     assert (await _reload(db_session, t.id)).status == "failed"
 
 
@@ -116,12 +118,17 @@ async def test_reclaim_requeue_keeps_task_processing(db_session):
     job = await job_queue.enqueue(db_session, "task.process", {"task_id": t.id})
     old = datetime.now(timezone.utc) - timedelta(seconds=2000)
     await db_session.execute(
-        update(Job).where(Job.id == job.id).values(status="running", attempts=1, claimed_at=old)
+        update(Job)
+        .where(Job.id == job.id)
+        .values(status="running", attempts=1, claimed_at=old, claimed_by="w1")
     )
     await db_session.commit()
 
     await job_queue.reclaim_stale(db_session, timeout_s=900, max_attempts=3)
 
+    refreshed_job = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
+    assert refreshed_job.status == "queued"
+    assert refreshed_job.claimed_by is None
     assert (await _reload(db_session, t.id)).status == "processing"
 
 
@@ -250,7 +257,3 @@ async def test_requeue_after_shutdown_skips_finished_job(db_session):
     assert n == 0
     refreshed = (await db_session.execute(select(Job).where(Job.id == job.id))).scalar_one()
     assert refreshed.status == "done"
-
-
-async def test_requeue_after_shutdown_empty_list(db_session):
-    assert await job_queue.requeue_after_shutdown(db_session, [], "worker-A") == 0

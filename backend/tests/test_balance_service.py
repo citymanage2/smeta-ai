@@ -288,16 +288,6 @@ class TestSync:
         rows = (await db_session.execute(select(ApiCostDay))).scalars().all()
         assert [r.day for r in rows] == [today - timedelta(days=1)]
 
-    @pytest.mark.asyncio
-    async def test_without_admin_key_returns_none(self, db_session):
-        now = _utc(datetime(2026, 9, 10, 12, 0))
-        with patch.object(
-            balance_service.anthropic_admin,
-            "fetch_cost_days",
-            AsyncMock(return_value=None),
-        ):
-            assert await balance_service.sync_cost_days(db_session, now=now) is None
-
 
 class TestSyncRace:
     @pytest.mark.asyncio

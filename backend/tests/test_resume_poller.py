@@ -12,8 +12,9 @@
 План: plans/2026-07-21-resume-and-balance-pause.md, Фаза 4.
 """
 import sys
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 sys.modules.setdefault("fitz", MagicMock())
 
@@ -116,43 +117,23 @@ async def _ping_ok() -> dict:
     return {"ok": True, "is_balance_error": False, "status_code": 200, "error": None}
 
 
-async def test_resume_paused_tasks_claims_and_runs(db_session):
-    resumable = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
-    ids_to_cleanup = []
-
-    runner = AsyncMock(return_value=None)
-    try:
-        claimed = await rp.resume_paused_tasks(
-            session_factory=_same_session_factory(db_session),
-            runner=runner,
-            pinger=_ping_ok,
-        )
-        ids_to_cleanup = claimed
-
-        assert claimed == [resumable.id]
-        await db_session.refresh(resumable)
-        assert resumable.status == "pending"
-
-        # runner запущен fire-and-forget — даём циклу прокрутиться.
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        runner.assert_awaited_once_with(resumable.id)
-    finally:
-        # committed-строки чистим (in-memory БД живёт весь session-scope).
-        from sqlalchemy import delete
-        await db_session.execute(delete(Task).where(Task.id.in_([resumable.id] + ids_to_cleanup)))
-        await db_session.commit()
-
-
-async def test_resume_paused_tasks_enqueues_job(db_session):
+@pytest.mark.parametrize(
+    "progress_data",
+    [{"chunks_done": 1}, {}],
+    ids=["with_checkpoint", "without_checkpoint"],
+)
+async def test_resume_paused_tasks_enqueues_job(db_session, progress_data):
     """P1: прод-путь (без инъекции runner) АТОМАРНО ставит durable-job task.process,
-    а не запускает обработку напрямую мимо очереди."""
+    а не запускает обработку напрямую мимо очереди.
+
+    Фаза 8: чекпоинт не обязателен — paused без него (баланс кончился до первого
+    чекпоинта) тоже возвращается в очередь, иначе задача мертва."""
     from sqlalchemy import delete, select
     from app.models.job import Job
 
     await db_session.execute(delete(Job))
     await db_session.commit()
-    resumable = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
+    resumable = await _seed(db_session, status="paused", progress_data=progress_data)
     try:
         claimed = await rp.resume_paused_tasks(
             session_factory=_same_session_factory(db_session),

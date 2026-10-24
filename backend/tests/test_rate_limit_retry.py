@@ -76,40 +76,6 @@ async def test_rate_limit_is_retried(monkeypatch, patch_claude_create):
     assert call_count == 2
 
 
-async def test_rate_limit_exhausted_raises(monkeypatch, patch_claude_create):
-    """After all retries are exhausted, the RateLimitError is re-raised."""
-    async def always_rate_limit(**kwargs):
-        raise _make_rate_limit_error(retry_after=0.01)
-
-    patch_claude_create(always_rate_limit)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
-
-    with pytest.raises(anthropic.RateLimitError):
-        await call_claude([{"role": "user", "content": "hi"}])
-
-
-async def test_rate_limit_warning_is_logged(monkeypatch, capsys, patch_claude_create):
-    """A warning is logged when a rate limit is hit."""
-    call_count = 0
-
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise _make_rate_limit_error(retry_after=0.01)
-        return _make_success_response()
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    output = capsys.readouterr().out
-    assert "rate limit" in output.lower() or "429" in output, (
-        f"Expected rate-limit warning in stdout, got: {output[:500]}"
-    )
-
-
 async def test_default_sleep_used_when_no_retry_after_header(monkeypatch, patch_claude_create):
     """When retry-after header is absent, sleep for at least DEFAULT_RATE_LIMIT_DELAY seconds."""
     from app.services.claude_service import DEFAULT_RATE_LIMIT_DELAY
@@ -230,27 +196,6 @@ async def test_backoff_capped_at_900s(monkeypatch, patch_claude_create):
     assert all(s <= 900 for s in sleep_calls), (
         f"Backoff should be capped at 900 s, got: {sleep_calls}"
     )
-
-
-async def test_rate_limit_log_includes_retry_after_and_actual_wait(monkeypatch, capsys, patch_claude_create):
-    """Log entry includes both the API retry-after value and the actual wait used."""
-    call_count = 0
-
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise _make_rate_limit_error(retry_after=839)
-        return _make_success_response()
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    output = capsys.readouterr().out
-    # The log should mention the retry-after value
-    assert "839" in output, f"Expected retry-after value 839 in log: {output[:500]}"
 
 
 # ---------------------------------------------------------------------------

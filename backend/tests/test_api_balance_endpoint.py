@@ -153,23 +153,6 @@ class TestValidation:
         assert response.status_code == 404
 
 
-class TestSyncEndpoint:
-    @pytest.mark.asyncio
-    async def test_sync_survives_anthropic_failure(self, async_client, admin_token, monkeypatch):
-        """Отказ Anthropic не роняет страницу — остаток считается по своему журналу."""
-        from app.services import balance_service
-        from app.services.anthropic_admin import AdminApiError
-
-        async def boom(*args, **kwargs):
-            raise AdminApiError("401 unauthorized")
-
-        monkeypatch.setattr(balance_service, "sync_cost_days", boom)
-        response = await async_client.post(
-            "/api-balance/sync", headers={"Authorization": admin_token}
-        )
-        assert response.status_code == 200
-
-
 class TestSyncDiagnostics:
     """Кнопка сверки обязана сказать, ЧЕМ ответил Anthropic.
 

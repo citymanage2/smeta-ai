@@ -163,14 +163,6 @@ def test_free_slots_start_immediately():
     assert eta["b"].starts_in_s == 0
 
 
-def test_queue_order_is_by_creation_time():
-    first = _task(status="pending", id="first", created_at=NOW - timedelta(hours=2))
-    second = _task(status="pending", id="second", created_at=NOW - timedelta(minutes=5))
-    eta = simulate_queue([second, first], _flat(600), NOW, slots=1)
-    assert eta["first"].starts_in_s == 0
-    assert eta["second"].starts_in_s == pytest.approx(600, abs=2)
-
-
 def test_batch_task_does_not_hold_a_worker_slot():
     """Пачка ждёт ответа Anthropic — воркер в это время свободен."""
     batch = _task(

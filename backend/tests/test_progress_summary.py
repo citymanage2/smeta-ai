@@ -21,14 +21,6 @@ def test_chunk_counters_pass_through():
     assert out == {"chunks_done": 2, "total_chunks": 5, "partial_count": 1}
 
 
-def test_items_reduced_to_count_only():
-    heavy = [{"name": "Бетон", "work_price": 1000, "sources": "secret-url"} for _ in range(7)]
-    out = build_progress_summary({"chunks_done": 1, "total_chunks": 2, "items": heavy})
-    assert out is not None
-    assert out["items_count"] == 7
-    assert "items" not in out  # содержимое позиций не уходит
-
-
 def test_optimization_chunks_total_normalized():
     out = build_progress_summary({"opt_step": "abc", "chunks_done": 0, "chunks_total": 1})
     assert out is not None

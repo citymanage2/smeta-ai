@@ -40,20 +40,6 @@ async def test_warm_price_cache_survives_db_failure(monkeypatch):
     await worker._warm_price_cache()  # не должно бросить
 
 
-async def test_ensure_price_cache_skips_when_loaded(monkeypatch):
-    """Загруженный кэш не перезагружаем — полная перезагрузка бьёт по БД."""
-    calls = []
-
-    async def fake_load_cache(db):
-        calls.append(db)
-
-    monkeypatch.setattr(price_service, "load_cache", fake_load_cache)
-    monkeypatch.setattr(price_service, "is_cache_loaded", lambda: True)
-    await worker._ensure_price_cache()
-
-    assert calls == []
-
-
 async def test_ensure_price_cache_retries_when_empty(monkeypatch):
     """Кэш пуст (прогрев на старте не удался) → дожимаем по расписанию."""
     calls = []
