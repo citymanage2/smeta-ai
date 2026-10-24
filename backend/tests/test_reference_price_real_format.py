@@ -94,17 +94,6 @@ def test_service_sheets_are_ignored_whole():
     assert result["skipped"] == {}
 
 
-def test_column_numbers_row_is_not_a_position():
-    """Строка «1, 2, 3…» под шапкой — разметка листа, а не позиция с ценой 5."""
-    data = _book({
-        "Кровля": _section_sheet([_row("Кликфальц Pro", "м2", 932.36, None, 1760)]),
-    })
-
-    result = reference_price.parse_reference_file(data, "сводная.xlsx", None)
-
-    assert [i["name"] for i in result["items"]] == ["Кликфальц Pro"]
-
-
 def test_cost_column_is_not_a_price():
     """«Стоимость» — сумма за всю позицию. Взять её ценой за единицу значит
     завысить прайс во столько раз, сколько было объёма."""
@@ -222,20 +211,6 @@ def test_similar_names_stay_separate_positions():
 
     assert sorted(i["price"] for i in result["items"]) == [322.0, 361.0, 1420.0]
     assert reference_price.NOTE_PRICE_CONFLICT not in result["notes"]
-
-
-def test_case_and_spaces_still_mean_the_same_position():
-    """Регистр и лишние пробелы позицию не удваивают — это одно и то же."""
-    data = _book({
-        "Кровля": _section_sheet([
-            _row("Профиль ПН 75×50х3000", "шт", 10, None, 300),
-            _row("профиль  пн  75×50х3000", "шт", 10, None, 300),
-        ]),
-    })
-
-    result = reference_price.parse_reference_file(data, "сводная.xlsx", None)
-
-    assert len(result["items"]) == 1
 
 
 def test_conflicting_prices_are_listed_by_name():

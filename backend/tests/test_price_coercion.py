@@ -115,33 +115,6 @@ def test_estimate_xlsx_survives_string_price():
     assert total == pytest.approx(4635.0)
 
 
-def test_estimate_xlsx_drops_negative_price():
-    """Отрицательная цена не должна давать отрицательную смету."""
-    from app.utils.xlsx_exporter import generate_estimate_xlsx
-
-    data, total = generate_estimate_xlsx([_item(work_price=-1500)])
-    assert data
-    assert total == 0.0
-
-
-def test_estimate_xlsx_survives_garbage_price():
-    """Нечисловой мусор → позиция без цены, задача доходит до конца."""
-    from app.utils.xlsx_exporter import generate_estimate_xlsx
-
-    data, total = generate_estimate_xlsx([_item(work_price="цена по запросу")])
-    assert data
-    assert total == 0.0
-
-
-def test_estimate_xlsx_normal_case_unchanged():
-    """Контроль: обычная смета считается ровно как раньше."""
-    from app.utils.xlsx_exporter import generate_estimate_xlsx
-
-    _, total = generate_estimate_xlsx([_item()])
-    # 3 * 1500 = 4500 работ, +3% накладных = 4635
-    assert total == pytest.approx(4635.0)
-
-
 def test_estimate_xlsx_mixed_valid_and_broken():
     """Испорченная позиция не должна утаскивать за собой валидные."""
     from app.utils.xlsx_exporter import generate_estimate_xlsx

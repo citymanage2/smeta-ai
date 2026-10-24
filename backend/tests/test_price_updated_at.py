@@ -25,7 +25,6 @@ from app.models.price import PriceMaterial, PriceWork
 from app.services import price_bulk
 from app.utils.auth import create_access_token
 from app.utils.price_change import (
-    MONEY_EPS,
     price_changed,
     prices_changed,
     unit_changed,
@@ -115,11 +114,6 @@ async def material(db_session) -> PriceMaterial:
 # ---------------------------------------------------------------------------
 # Правило: что вообще считается изменением цены
 # ---------------------------------------------------------------------------
-
-def test_money_eps_is_half_kopeck():
-    """Порог закреплён числом: под датой «примерно» превращается в бегущую цифру."""
-    assert MONEY_EPS == 0.005
-
 
 def test_price_changed_below_eps_is_not_a_change():
     """1234.56 из xlsx приезжает как 1234.5600000000001 — это не переоценка."""

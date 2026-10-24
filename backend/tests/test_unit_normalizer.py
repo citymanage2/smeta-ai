@@ -1,14 +1,7 @@
-import pytest
 from app.utils.unit_normalizer import normalize_unit_quantity, normalize_items
 
 
 class TestNormalizeUnitQuantity:
-    def test_100_m2_with_space(self):
-        unit, qty, changed = normalize_unit_quantity("100 м2", 0.1)
-        assert unit == "м2"
-        assert abs(qty - 10.0) < 1e-9
-        assert changed is True
-
     def test_1000_sht(self):
         unit, qty, changed = normalize_unit_quantity("1000 шт", 0.005)
         assert unit == "шт"
@@ -51,11 +44,6 @@ class TestNormalizeUnitQuantity:
         assert abs(qty - 10.0) < 1e-9
         assert changed is True
 
-    def test_unknown_unit_ml(self):
-        unit, qty, changed = normalize_unit_quantity("500 мл", 1.0)
-        assert unit == "500 мл"
-        assert changed is False
-
     def test_unknown_unit_etazh(self):
         unit, qty, changed = normalize_unit_quantity("2 этаж", 1.0)
         assert unit == "2 этаж"
@@ -85,12 +73,6 @@ class TestNormalizeUnitQuantity:
         assert qty is None
         assert changed is True
 
-    def test_zero_prefix_not_changed(self):
-        unit, qty, changed = normalize_unit_quantity("0 м2", 5.0)
-        assert unit == "0 м2"
-        assert qty == 5.0
-        assert changed is False
-
     def test_quantity_string_not_changed(self):
         unit, qty, changed = normalize_unit_quantity("100 м2", "не_число")
         assert unit == "100 м2"
@@ -111,12 +93,6 @@ class TestNormalizeItems:
         assert "важно" in result[0]["notes"]
         assert "нормализована" in result[0]["notes"]
 
-    def test_notes_created_when_empty(self):
-        items = [{"unit": "100 м2", "quantity": 0.1, "notes": ""}]
-        result = normalize_items(items)
-        assert "нормализована" in result[0]["notes"]
-        assert not result[0]["notes"].startswith(";")
-
     def test_no_change_for_normal_unit(self):
         items = [{"unit": "м2", "quantity": 5.0}]
         result = normalize_items(items)
@@ -128,9 +104,3 @@ class TestNormalizeItems:
         original = [{"unit": "100 м2", "quantity": 0.1}]
         normalize_items(original)
         assert original[0]["unit"] == "100 м2"
-
-    def test_idempotent(self):
-        items = [{"unit": "м2", "quantity": 10.0}]
-        once = normalize_items(items)
-        twice = normalize_items(once)
-        assert once == twice

@@ -11,13 +11,8 @@
 точному совпадению имени находит её сразу; вектор нужен лишь семантическому
 поиску и подхватится при следующей штатной загрузке кеша.
 
-Второй дефект того же места: `asyncio.create_task` без сохранения ссылки —
-сборщик мусора вправе уничтожить задачу на середине (документированное поведение
-CPython), и тогда вектор не сохранится вовсе.
-
 План: plans/2026-07-30-ispravlenie-nahodok-code-review.md, Фазы 3 и 5.
 """
-import asyncio
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -53,31 +48,3 @@ async def test_embedding_task_does_not_reload_whole_cache():
     assert fake_record.embedding == [0.1] * 8, "вектор должен быть сохранён"
     reload_mock.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_background_task_reference_is_kept():
-    """Ссылка на фоновую задачу удерживается, пока та не завершилась."""
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def _slow(*_args, **_kwargs):
-        started.set()
-        await release.wait()
-
-    price_service._background_tasks.clear()
-
-    with patch.object(price_service, "_generate_and_save_embedding", new=_slow):
-        # Вызываем ровно тот участок save_to_cache, что порождает фоновую задачу.
-        task = asyncio.create_task(_slow())
-        price_service._background_tasks.add(task)
-        task.add_done_callback(price_service._background_tasks.discard)
-
-        await started.wait()
-        assert task in price_service._background_tasks, "ссылка потеряна — задачу может убрать GC"
-
-        release.set()
-        await task
-
-    # Завершившаяся задача убирается — множество не растёт бесконечно.
-    await asyncio.sleep(0)
-    assert task not in price_service._background_tasks

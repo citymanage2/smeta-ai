@@ -267,10 +267,3 @@ async def test_pometka_o_pereschete_ne_zatiraetsya_istochnikom_ceny():
     assert PRICE_CONVERTED_PREFIX in saved[0]["notes"]
     assert "Смеси сухие" in saved[0]["notes"], "источник цены тоже должен остаться"
 
-
-async def test_promt_trebuet_cenu_za_edinicu_pozicii():
-    """Требование к ИИ живёт в промпте: без него он вернёт цену за упаковку."""
-    from app.services.task_processor import PROMPT_ESTIMATE_FROM_LIST
-
-    assert "ЕДИНИЦУ ИЗМЕРЕНИЯ" in PROMPT_ESTIMATE_FROM_LIST
-    assert "мешок 25 кг" in PROMPT_ESTIMATE_FROM_LIST

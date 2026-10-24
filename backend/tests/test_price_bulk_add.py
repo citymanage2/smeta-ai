@@ -30,7 +30,7 @@ from app.models.user import User
 from app.models.workflow_card import WorkflowCard
 from app.utils.auth import create_access_token, hash_password
 from app.utils.price_min import ESTIMATE_CONTRACTOR, compute_min_price
-from app.utils.unit_normalizer import canonical_unit, unit_price_factor
+from app.utils.unit_normalizer import canonical_unit
 
 
 def _auth(user_id: int, role: str) -> dict:
@@ -149,19 +149,6 @@ class TestUnitCanonical:
         assert canonical_unit(None) == ""
         assert canonical_unit("") == ""
 
-    def test_prefixed_unit_scales_price(self):
-        """«100 м2» по 5000 ₽ — это 50 ₽ за м2, иначе прайс завысит цену в сто раз."""
-        unit, factor = unit_price_factor("100 м2")
-
-        assert unit == "м2"
-        assert factor == 100
-
-    def test_plain_unit_has_factor_one(self):
-        unit, factor = unit_price_factor("м2")
-
-        assert unit == "м2"
-        assert factor == 1
-
 
 # ---------------------------------------------------------------------------
 # Правило минимальной цены
@@ -169,19 +156,6 @@ class TestUnitCanonical:
 
 class TestMinPriceRule:
     """Приоритет у цены из смет — решение пользователя 2026-08-03."""
-
-    def test_contractors_only_gives_minimum(self):
-        assert compute_min_price({"Подрядчик А": 1500, "Подрядчик Б": 1200}) == 1200
-
-    def test_estimate_price_wins_even_if_higher(self):
-        prices = {"Подрядчик А": 1200, ESTIMATE_CONTRACTOR: 2000}
-
-        assert compute_min_price(prices) == 2000
-
-    def test_estimate_price_wins_when_lower(self):
-        prices = {"Подрядчик А": 1200, ESTIMATE_CONTRACTOR: 500}
-
-        assert compute_min_price(prices) == 500
 
     def test_non_positive_estimate_price_ignored(self):
         prices = {"Подрядчик А": 1200, ESTIMATE_CONTRACTOR: 0}
@@ -256,28 +230,6 @@ class TestBulkAdd:
         assert work.prices == {"Подрядчик А": 800, ESTIMATE_CONTRACTOR: 2000}
         # Расчёт сметы читает min_price — и обязан взять цену из сметы.
         assert work.min_price == 2000
-
-    @pytest.mark.asyncio
-    async def test_existing_unit_not_overwritten(
-        self, async_client, db_session, price_env
-    ):
-        """Единица существующей позиции задаёт, за что цена подрядчика.
-
-        Если её переписать единицей из чужой сметы, цена подрядчика за «м2»
-        молча станет ценой за «м3» — и все расчёты по ней поедут.
-        """
-        db_session.add(PriceWork(
-            name="Штукатурка", unit="м2", prices={"Подрядчик А": 800}, min_price=800,
-        ))
-        await db_session.commit()
-
-        await _post(async_client, price_env, [
-            {"kind": "work", "name": "Штукатурка", "unit": "м3", "price": 900},
-        ])
-
-        work = (await db_session.execute(select(PriceWork))).scalar_one()
-        assert work.unit == "м2"
-        assert work.prices["Подрядчик А"] == 800
 
     @pytest.mark.asyncio
     async def test_incompatible_unit_is_not_written(

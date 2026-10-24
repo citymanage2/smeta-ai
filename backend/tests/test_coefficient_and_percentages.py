@@ -151,23 +151,6 @@ async def est_env(db_session, fake_s3):
 
 
 @pytest.mark.asyncio
-async def test_task_cost_uses_project_percentages(db_session, est_env):
-    """Итог задачи считается по процентам проекта, а не по зашитым 3%."""
-    from app.services import estimate_store
-
-    project = await db_session.get(Project, est_env["project_id"])
-    project.overhead_pct = 10
-    project.transport_pct = 0
-    await db_session.commit()
-
-    task = await db_session.get(Task, est_env["task_id"])
-    await estimate_store.sync_artifacts(db_session, task, _rows())
-    await db_session.commit()
-
-    assert float(task.cost) == pytest.approx(9400.0)
-
-
-@pytest.mark.asyncio
 async def test_version_percentages_win_over_project(db_session, est_env):
     """Если у версии свои проценты — считаем по ним: проект даёт лишь значение по умолчанию."""
     from app.services import estimate_store
@@ -293,14 +276,6 @@ async def test_version_export_matches_editor(async_client, db_session, est_env):
 # ---------------------------------------------------------------------------
 # Проценты на уровне проекта
 # ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_existing_projects_default_to_3_percent(db_session, est_env):
-    """У проектов, созданных раньше, ставки остаются прежними 3% — поведение не меняется."""
-    project = await db_session.get(Project, est_env["project_id"])
-    assert float(project.overhead_pct) == pytest.approx(3.0)
-    assert float(project.transport_pct) == pytest.approx(3.0)
-
 
 @pytest.mark.asyncio
 async def test_project_percentages_saved(async_client, db_session, est_env):

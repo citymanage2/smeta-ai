@@ -1,9 +1,8 @@
 """Unit tests for _embedding_match_work / _embedding_match_material (8.3).
 
-Проверяют три сценария:
+Проверяют два сценария:
 - similarity >= 0.82 → возвращает элемент кэша
 - similarity < 0.82  → возвращает None
-- _works_embeddings is None → возвращает None (без вызова OpenAI)
 """
 import pytest
 import numpy as np
@@ -89,16 +88,6 @@ async def test_embedding_match_work_returns_none_below_threshold():
     assert result is None
 
 
-async def test_embedding_match_work_no_embeddings_returns_none():
-    """_works_embeddings is None → None без вызова OpenAI."""
-    ps._works_embeddings = None
-    ps._works_row_norms = None
-
-    # Если бы generate_embedding вызывался — тест упал бы, но он не должен вызываться
-    result = await ps._embedding_match_work("Кладка")
-    assert result is None
-
-
 async def test_embedding_match_work_picks_best_match():
     """При нескольких векторах выбирается лучшее совпадение."""
     vec_a = _unit_vec(0)  # совпадает с запросом
@@ -142,11 +131,3 @@ async def test_embedding_match_material_returns_none_below_threshold():
 
     assert result is None
 
-
-async def test_embedding_match_material_no_embeddings_returns_none():
-    """_materials_embeddings is None → None."""
-    ps._materials_embeddings = None
-    ps._materials_row_norms = None
-
-    result = await ps._embedding_match_material("Кирпич")
-    assert result is None

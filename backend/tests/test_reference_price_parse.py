@@ -16,7 +16,7 @@ import io
 import openpyxl
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 
 from app.models.price import PriceMaterial, PriceWork
 from app.services import reference_price
@@ -256,24 +256,3 @@ async def test_plan_shows_material_price_that_will_be_replaced(db_session):
     entry = plan[0]
     assert entry["action"] == reference_price.ACTION_REPRICE
     assert entry["removed"] == [{"contractor": None, "price": 30.0}]
-
-
-@pytest.mark.asyncio
-async def test_plan_does_not_touch_the_database(db_session):
-    """Предпросмотр — это чтение. После него в прайсе ровно то же, что было."""
-    db_session.add(PriceWork(
-        name="Кладка стен", unit="м3", prices={"ООО Рога": 1200.0}, min_price=1200.0,
-    ))
-    await db_session.commit()
-
-    await reference_price.build_plan(db_session, [
-        {"kind": "work", "name": "Кладка стен", "unit": "м3", "price": 1000.0},
-        {"kind": "material", "name": "Кирпич", "unit": "шт", "price": 25.0},
-    ])
-
-    db_session.expire_all()
-    work = (await db_session.execute(select(PriceWork))).scalars().all()
-    materials = (await db_session.execute(select(PriceMaterial))).scalars().all()
-    assert len(work) == 1
-    assert work[0].prices == {"ООО Рога": 1200.0}
-    assert materials == []

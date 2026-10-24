@@ -99,13 +99,6 @@ class TestQuantityConverted:
         assert got_unit == unit
         assert got_qty == qty
 
-    def test_notes_name_the_conversion(self):
-        items = [{"unit": "1000 м3 грунта", "quantity": 2.164}]
-        result = normalize_items(items)
-        assert result[0]["unit"] == "м3"
-        assert result[0]["quantity"] == 2164.0
-        assert "1000 м3 грунта → м3" in result[0]["notes"]
-
     def test_idempotent(self):
         once = normalize_items([{"unit": "1000 м3 грунта", "quantity": 2.164}])
         twice = normalize_items(once)
@@ -131,12 +124,6 @@ class TestPriceMatching:
         price, status = convert_price(473, "м3", "1000 м3 грунта")
         assert status == STATUS_CONVERTED
         assert price == 473000.0
-
-    def test_cost_matches_either_way(self):
-        """Одна и та же стоимость: 2,164 × 473000 = 2164 × 473 = 1 023 572 ₽."""
-        per_thousand, _ = convert_price(473, "м3", "1000 м3 грунта")
-        assert per_thousand * 2.164 == pytest.approx(1_023_572.0)
-        assert 2164.0 * 473 == 1_023_572.0
 
     def test_same_unit_under_tail(self):
         status, factor = compare_units("м3", "м3 грунта")

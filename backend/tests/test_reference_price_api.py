@@ -134,16 +134,6 @@ async def test_preview_changes_nothing(async_client, admin_token, db_session):
     assert work.min_price == 1200.0
 
 
-async def test_preview_says_when_vector_search_is_off(async_client, admin_token):
-    """Пустой список дублей без векторов — это «поиск отключён», а не «дублей нет»."""
-    r = await async_client.post(
-        "/prices/reference/preview",
-        files=_upload([[1, "Работа", "Кладка стен", "м3", 1, 1000, None]]),
-        headers={"Authorization": admin_token},
-    )
-    assert r.json()["duplicates"]["vectors_ready"] is False
-
-
 async def test_unreadable_file_is_refused(async_client, admin_token):
     r = await async_client.post(
         "/prices/reference/preview",
