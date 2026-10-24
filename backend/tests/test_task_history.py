@@ -1,8 +1,6 @@
 """Tests for GET /tasks/{task_id}/history and POST /tasks/{task_id}/history/{id}/revert."""
-import io
 import pytest
 import pytest_asyncio
-import openpyxl
 from datetime import datetime, timezone, timedelta
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,36 +11,6 @@ from app.models.result import TaskResult
 from app.models.history import TaskHistory
 from app.services import storage_service
 from tests.conftest import store_result_row
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_xlsx_bytes() -> bytes:
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Смета"
-    headers = [
-        "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
-        "Цена работы (за ед.)", "Цена материала (за ед.)",
-        "Стоимость работ", "Стоимость материалов",
-        "Итого без НДС", "НДС (20%)", "Итого с НДС",
-        "Наименование в прайсе", "Источники", "Примечание",
-    ]
-    for col, h in enumerate(headers, start=1):
-        ws.cell(row=1, column=col, value=h)
-    ws.cell(row=2, column=2, value="Материал")
-    ws.cell(row=2, column=3, value="Кирпич М150")
-    ws.cell(row=2, column=4, value="шт")
-    ws.cell(row=2, column=5, value=1000)
-    ws.cell(row=2, column=7, value=10.0)
-    ws.cell(row=2, column=10, value=10000.0)
-    ws.cell(row=2, column=11, value=2000.0)
-    ws.cell(row=2, column=12, value=12000.0)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
 
 
 TASK_ID = "d1000000-0000-0000-0000-000000000001"
@@ -214,17 +182,28 @@ async def seed_two_history_entries(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_revert_no_dependents_executes_immediately(
-    async_client: AsyncClient, user_token: str, seed_history_task
+    async_client: AsyncClient, user_token: str, db_session: AsyncSession, seed_history_task
 ):
-    """Revert with confirm=False and no dependents executes immediately."""
+    """Откат первой оптимизации без последующих записей выполняется сразу:
+    задача снова «посчитана», файла оптимизации больше нет."""
     resp = await async_client.post(
         f"/tasks/{TASK_ID}/history/{ENTRY_ID_1}/revert",
         json={"confirm": False},
         headers={"Authorization": user_token},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("reverted") is True
+
+    db_session.expire_all()
+    task = await db_session.get(Task, TASK_ID)
+    assert task.estimation_status == "estimated"
+    optimized = (
+        await db_session.execute(
+            select(TaskResult).where(
+                TaskResult.task_id == TASK_ID, TaskResult.slot == "optimized"
+            )
+        )
+    ).scalar_one_or_none()
+    assert optimized is None
 
 
 @pytest.mark.asyncio
