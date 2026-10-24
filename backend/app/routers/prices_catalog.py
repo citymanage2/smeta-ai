@@ -298,7 +298,9 @@ async def match_preview(
             name=c.get("text", ""),
             score=round(float(c.get("score") or 0.0), 3),
             unit=c.get("unit"),
-            price=c.get("min_price") if body.kind == "work" else c.get("price"),
+            # Кандидаты обоих видов несут цену в `min_price` (у материала это
+            # его единственная цена) — как и в остальных поисках price_service.
+            price=c.get("min_price"),
             would_match=float(c.get("score") or 0.0) >= threshold,
         )
         for c in raw

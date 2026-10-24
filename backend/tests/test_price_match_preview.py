@@ -86,3 +86,29 @@ async def test_answer_follows_similarity(
     if kind == "work":
         assert best["price"] == 350.0
     assert hint_word in data["hint"]
+
+
+@pytest.mark.parametrize("kind", ["work", "material"])
+async def test_candidate_shows_recorded_price(async_client, admin_token, price_db, kind):
+    """Цена кандидата — та, что записана в прайсе, и у работы, и у материала.
+
+    До 25.10.2026 у материала всегда стоял прочерк: поиск кладёт цену в
+    `min_price`, а эндпоинт читал у материала `price`.
+    """
+    if kind == "work":
+        price_db.work("Монтаж кабеля", unit="м", prices={"Подрядчик": 87.5}, vector=axis(0))
+    else:
+        price_db.material("Кабель ВВГнг 3х2,5", unit="м", price=87.5, vector=axis(0))
+    price_db.knows("Кабель", similar(0.95, to=0))
+    await price_db.load()
+
+    r = await async_client.post(
+        "/prices/match-preview",
+        json={"name": "Кабель", "kind": kind},
+        headers={"Authorization": admin_token},
+    )
+
+    assert r.status_code == 200, r.text
+    (best,) = r.json()["candidates"]
+    assert best["price"] == 87.5
+    assert best["unit"] == "м"
