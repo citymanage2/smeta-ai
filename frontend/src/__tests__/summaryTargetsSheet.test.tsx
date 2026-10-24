@@ -7,8 +7,9 @@
  * видны суммы раздела, отклонение считается само, а пустая цель остаётся
  * пустой — «цели нет» и «цель ноль» на экране выглядят по-разному.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import type { ComponentProps } from 'react';
 
 import SummarySheet from '../components/summary/SummarySheet';
 import { calcSummary } from '../stores/summaryEditorStore';
@@ -29,16 +30,19 @@ const OVERRIDES: SummaryOverrides = {
 const text = (needle: string) => (content: string) =>
   content.replace(/\u00A0/g, ' ').includes(needle);
 
+type SheetProps = ComponentProps<typeof SummarySheet>;
+
 function renderSheet(
   sections = SECTIONS,
   overrides = OVERRIDES,
   handlers: Partial<{
-    onUpdateOverride: ReturnType<typeof vi.fn>;
-    onUpdateSectionTarget: ReturnType<typeof vi.fn>;
+    onUpdateOverride: Mock<SheetProps['onUpdateOverride']>;
+    onUpdateSectionTarget: Mock<SheetProps['onUpdateSectionTarget']>;
   }> = {},
 ) {
-  const onUpdateOverride = handlers.onUpdateOverride ?? vi.fn();
-  const onUpdateSectionTarget = handlers.onUpdateSectionTarget ?? vi.fn();
+  const onUpdateOverride = handlers.onUpdateOverride ?? vi.fn<SheetProps['onUpdateOverride']>();
+  const onUpdateSectionTarget = handlers.onUpdateSectionTarget
+    ?? vi.fn<SheetProps['onUpdateSectionTarget']>();
   render(
     <SummarySheet
       calc={calcSummary(sections, overrides)}

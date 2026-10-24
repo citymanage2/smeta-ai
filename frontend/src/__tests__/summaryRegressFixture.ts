@@ -82,4 +82,7 @@ export const OVERRIDES: SummaryOverrides = {
     { id: 'c1', label: 'Аренда лесов', qty_pct: '1 шт', without_vat: 25000 },
   ],
   custom_rows_after: [],
+  // Цели оптимизации не заданы: регресс бланка считался без них.
+  target_basis: 'cost',
+  target_total_for_customer: null,
 };

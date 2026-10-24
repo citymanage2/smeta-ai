@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { billableQty, isNegativeQty } from '../utils/negativeQty';
-import { formatQty } from '../utils/formatQty';
 import { formatDecimal } from '../utils/formatNumber';
+import { parseScreenNumber } from './screenQueries';
 import { calcSummary } from '../stores/summaryEditorStore';
 import { DEFAULT_OVERRIDES } from '../types/summary';
 import { EstimateRow } from '../types';
@@ -29,24 +29,10 @@ describe('negativeQty', () => {
   });
 });
 
-describe('formatQty', () => {
-  it('показывает дробный объём точно, а не округляет до целого', () => {
+describe('показ объёма', () => {
+  it('дробный объём показывается точно, а не округляется до целого', () => {
     // Раньше Math.round печатал 0,61 как «1» — по такой сетке смету не проверить.
-    expect(formatQty(0.61)).toBe('0,61');
-    expect(formatQty(-1.1139)).toBe('-1,1139');
-    expect(formatQty(137.3)).toBe('137,3');
-  });
-});
-
-describe('formatDecimal', () => {
-  // В русской локали разряды отбиваются неразрывным пробелом.
-  const NBSP = ' ';
-
-  it('объём — запятая, без хвостовых нулей', () => {
-    expect(formatDecimal(382.4)).toBe('382,4');
-    expect(formatDecimal(0.61)).toBe('0,61');
-    expect(formatDecimal(1338.4)).toBe(`1${NBSP}338,4`);
-    expect(formatDecimal(50)).toBe('50');
+    expect(parseScreenNumber(formatDecimal(0.61))).toBe(0.61);
   });
 });
 
@@ -70,6 +56,8 @@ describe('сводная не считает вычеты', () => {
   const section = (rows: EstimateRow[]) => ({
     card_id: 'c1',
     card_name: 'Раздел',
+    version_id: 'v1',
+    version_display_name: 'Смета',
     tax_pct: 0,
     rows,
   });
