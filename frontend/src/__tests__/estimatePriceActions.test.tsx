@@ -40,6 +40,9 @@ import * as api from '../api/documents';
 import * as tasksApi from '../api/tasks';
 import { useDocumentEditorStore } from '../stores/documentEditor';
 import DocumentEditor from '../components/editor/DocumentEditor';
+import { hasEmptyPrice } from '../components/editor/actions/PriceActions';
+import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
+import { numberNextTo } from './screenQueries';
 
 function meta(overrides: Partial<api.DocumentMeta> = {}): api.DocumentMeta {
   return {
@@ -157,10 +160,9 @@ describe('панель цен доступна только смете', () => {
       .toHaveAttribute('data-row-count', '4'));
     expect(screen.queryByText(/Исправить пустые цены/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Цена/ })).not.toBeInTheDocument();
-    // Доп. расходы раздела считает бланк «Сводная» по своим ставкам: показывать
-    // рядом проценты проекта значило бы дать второе число за то же самое.
-    expect(screen.queryByText(/Накладные расходы/)).not.toBeInTheDocument();
-    expect(screen.getByText('ИТОГО по разделу:')).toBeInTheDocument();
+    // Доп. расходы раздела считает бланк «Сводная» по своим ставкам: итог
+    // раздела — 4 000 работ без накладных проекта (с ними было бы 4 120).
+    expect(numberNextTo(/^ИТОГО/)).toBe(4000);
     // Коэффициент у сводной свой — в бланке; второй, на уровне раздела, дал бы
     // в редакторе одно число, а в бланке другое.
     expect(screen.queryByRole('button', { name: /Коэффициент/ })).not.toBeInTheDocument();
@@ -176,11 +178,18 @@ describe('панель цен доступна только смете', () => {
 });
 
 describe('исправление пустых цен', () => {
-  it('счётчик считает пустые цены и не считает вычет', async () => {
-    mockEstimate();
-    render(<DocumentEditor cardId="card-1" kind="estimate" />);
+  it('пустой считается цена обычной позиции, а не вычета', () => {
+    const grid = estimateAdapter.toGrid([
+      ...ESTIMATE_ROWS,
+      { id: 'm1', lineage_id: 'm1', type: 'material', name: 'Раствор', unit: 'м3',
+        qty: 2, price_work: null, price_material: 3200 },
+      { id: 's1', lineage_id: 's1', type: 'section', name: 'Раздел 1', unit: '',
+        qty: null, price_work: null, price_material: null },
+    ]);
 
-    await waitFor(() => expect(screen.getByText('Исправить пустые цены (2)')).toBeInTheDocument());
+    // Работа и материал без цены — пустые; у вычета, раздела и позиций с ценой
+    // искать нечего.
+    expect(grid.filter(hasEmptyPrice).map((row) => row.__key)).toEqual(['r2', 'r3']);
   });
 
   it('кнопка запускает расчёт', async () => {

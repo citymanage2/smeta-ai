@@ -8,13 +8,13 @@
  * уже с коэффициентом — их показывает редактор, и в файл должно уйти ровно то,
  * что человек видел.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import ExportBuilderModal from '../components/editor/ExportBuilderModal';
 import {
-  ExportColumn, ExportRow, collapseExportRows, columnsFromEditor, dropDeductionExportRows,
-  rowsFromEditor,
+  ExportColumn, ExportPayload, ExportRow, collapseExportRows, columnsFromEditor,
+  dropDeductionExportRows, rowsFromEditor,
 } from '../components/editor/exportBuilder';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
 import { CollapseFields, GridRow } from '../components/editor/adapters/types';
@@ -49,7 +49,7 @@ const GENERIC_ROWS: ExportRow[] = [
   { _id: 'g1', _kind: null, 'Обоснование': 'ГЭСН 8-1-1', 'Объём работ': 12 },
 ];
 
-let onExport: ReturnType<typeof vi.fn>;
+let onExport: Mock<(payload: ExportPayload) => Promise<void>>;
 
 function renderModal(props: Partial<React.ComponentProps<typeof ExportBuilderModal>> = {}) {
   return render(
@@ -69,14 +69,14 @@ function goToPreview() {
   fireEvent.click(screen.getByRole('button', { name: /Далее/ }));
 }
 
-async function download() {
+async function download(): Promise<ExportPayload> {
   fireEvent.click(screen.getByRole('button', { name: /Скачать/ }));
   await waitFor(() => expect(onExport).toHaveBeenCalled());
   return onExport.mock.calls[0][0];
 }
 
 beforeEach(() => {
-  onExport = vi.fn().mockResolvedValue(undefined);
+  onExport = vi.fn<(payload: ExportPayload) => Promise<void>>().mockResolvedValue(undefined);
 });
 
 describe('пресеты', () => {
@@ -128,7 +128,18 @@ describe('настройка выгрузки', () => {
   });
 
   it('цены уходят с коэффициентом — ровно как на экране', async () => {
-    renderModal();
+    // Строки выгрузки собираются из строк таблицы — тем же путём, что в
+    // редакторе: в документе лежит исходная цена 1000, на экране — 1050.
+    const coefficient = { work: 1.05, material: 1, scope: 'all' };
+    const grid = estimateAdapter.toGrid([
+      { id: 'r1', lineage_id: 'r1', type: 'work', name: 'Кладка стен', unit: 'м3',
+        qty: 4, price_work: 1000, price_material: null },
+    ], { coefficient });
+    const columns = columnsFromEditor(estimateAdapter.columns(grid));
+    const rows = rowsFromEditor(
+      grid, columns, estimateAdapter.rowKind, estimateAdapter.sheetOf, coefficient,
+    );
+    renderModal({ columns, rows });
     goToPreview();
 
     const payload = await download();

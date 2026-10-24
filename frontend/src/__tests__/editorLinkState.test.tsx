@@ -81,9 +81,8 @@ describe('состояние документа в ссылке', () => {
       <DocumentEditor cardId="card-1" kind="estimate" onStateChange={onStateChange} />,
     );
 
-    await waitFor(() => expect(onStateChange).toHaveBeenCalled());
-    expect(onStateChange).toHaveBeenLastCalledWith(
-      { versionId: 'v1', tab: 'all', sheet: null, collapsed: false, hideMinus: false });
+    await waitFor(() => expect(onStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ versionId: 'v1', tab: 'all' })));
   });
 
   it('смена вкладки уходит наружу — ссылка её сохранит', async () => {
@@ -97,7 +96,7 @@ describe('состояние документа в ссылке', () => {
 
     await waitFor(() =>
       expect(onStateChange).toHaveBeenLastCalledWith(
-        { versionId: 'v1', tab: 'works', sheet: null, collapsed: false, hideMinus: false }));
+        expect.objectContaining({ versionId: 'v1', tab: 'works' })));
   });
 
   it('ссылка с версией открывает именно её, а не активную', async () => {

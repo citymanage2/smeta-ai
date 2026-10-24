@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../api/documents', async () => {
   const actual = await vi.importActual<typeof import('../api/documents')>('../api/documents');
@@ -25,6 +25,20 @@ import * as api from '../api/documents';
 import { useDocumentEditorStore } from '../stores/documentEditor';
 import DocumentEditor from '../components/editor/DocumentEditor';
 import { GridRow } from '../components/editor/adapters/types';
+import { withGridLayout } from './gridLayout';
+import { cellIn, getGridRow, parseScreenNumber } from './screenQueries';
+
+// Вставке и правке нужна ячейка под курсором — без подмены размеров jsdom
+// таблица ячеек не рисует.
+withGridLayout();
+
+/** Объём строки так, как его видно в таблице. */
+const qtyOf = (name: string) => parseScreenNumber(cellIn(getGridRow(name), 'Кол-во').textContent);
+/** Поле ввода внутри таблицы — открытый редактор ячейки (поиск в тулбаре не в счёт). */
+const cellInput = () => within(screen.getByRole('grid')).queryByRole('textbox');
+const paste = (text: string) => fireEvent.paste(screen.getByTestId('document-editor-grid'), {
+  clipboardData: { getData: () => text },
+});
 
 const REF = { cardId: 'card-1', kind: 'list' as const };
 
@@ -188,26 +202,27 @@ describe('вставка из буфера', () => {
   }
 
   it('после смены вкладки вставка не уходит в чужую строку', async () => {
-    // Регрессия: якорь хранился номером строки в отфильтрованном списке, и
-    // «Материалы» после «Все» сдвигали его — правка попадала не туда.
+    // Регрессия: якорь хранился номером строки в отфильтрованном списке. Курсор
+    // на первой строке «Материалов» после перехода на «Все» указывал на первую
+    // строку документа — работу, — и вставка правила её.
     mockTyped();
     render(<DocumentEditor cardId="card-1" kind="list" />);
     await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
       .toHaveAttribute('data-row-count', '2'));
 
-    const store = useDocumentEditorStore.getState();
-    const before = store.rows.map((r) => r['Кол-во']);
-
     fireEvent.click(screen.getByRole('tab', { name: /Материалы/ }));
     await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
       .toHaveAttribute('data-row-count', '1'));
+    fireEvent.click(cellIn(getGridRow('Материал Б'), 'Кол-во'));
 
-    fireEvent.paste(screen.getByTestId('document-editor-grid'), {
-      clipboardData: { getData: () => '777' },
-    });
+    fireEvent.click(screen.getByRole('tab', { name: /Все/ }));
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
+    paste('777');
 
-    // Без выбранной ячейки вставке некуда идти — строки обязаны остаться прежними.
-    expect(useDocumentEditorStore.getState().rows.map((r) => r['Кол-во'])).toEqual(before);
+    // Вставка попала в ту строку, где стоял курсор, а работа не тронута.
+    await waitFor(() => expect(qtyOf('Материал Б')).toBe(777));
+    expect(qtyOf('Работа A')).toBe(1);
   });
 
   it('вставка в документ только для чтения игнорируется', async () => {
@@ -220,11 +235,11 @@ describe('вставка из буфера', () => {
     await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
       .toHaveAttribute('data-row-count', '2'));
 
-    fireEvent.paste(screen.getByTestId('document-editor-grid'), {
-      clipboardData: { getData: () => '777' },
-    });
+    // Курсор в ячейке — иначе вставке некуда целиться и проверять нечего.
+    fireEvent.click(cellIn(getGridRow('Работа A'), 'Кол-во'));
+    paste('777');
 
-    expect(useDocumentEditorStore.getState().isDirty).toBe(false);
+    expect(qtyOf('Работа A')).toBe(1);
     expect(api.saveDraft).not.toHaveBeenCalled();
   });
 });
@@ -241,12 +256,18 @@ describe('режим просмотра', () => {
   });
 
   it('исходный файл заказчика открывается только на просмотр', async () => {
+    // Правило №2: входной файл заказчика не перезаписывается никогда.
     mockDocument({ can_write: false, readonly_reason: 'input_readonly', file_slot: 'input' });
     render(<DocumentEditor cardId="card-1" kind="list" fileSlot="input" />);
+    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+      .toHaveAttribute('data-row-count', '2'));
 
-    await waitFor(() => {
-      expect(screen.getByText(/никогда не перезаписывается/)).toBeInTheDocument();
-    });
+    // Записать нечем: кнопки «Применить» нет.
+    expect(screen.queryByRole('button', { name: 'Применить' })).toBeNull();
+    // И править нечего: двойной щелчок не открывает ввод, число на месте.
+    fireEvent.doubleClick(cellIn(getGridRow('Работа A'), 'Кол-во'));
+    expect(cellInput()).toBeNull();
+    expect(qtyOf('Работа A')).toBe(1);
   });
 
   it('предупреждение о чужом редактировании показывается с именем', async () => {
