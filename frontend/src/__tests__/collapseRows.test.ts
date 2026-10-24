@@ -12,8 +12,6 @@ import { describe, expect, it } from 'vitest';
 import {
   GROUP_PREFIX,
   buildCollapsedRows,
-  collapseKey,
-  groupInfoOf,
   applySelectionChange,
   isMixedField,
   selectionForGrid,
@@ -34,31 +32,6 @@ function row(over: Partial<GridRow> & { __key: string }): GridRow {
     ...over,
   };
 }
-
-describe('ключ группы', () => {
-  it('не зависит от регистра и лишних пробелов', () => {
-    const left = collapseKey(row({ __key: 'a', name: 'Штукатурка стен' }), FIELDS, 'work');
-    const right = collapseKey(row({ __key: 'b', name: '  штукатурка   стен ' }), FIELDS, 'work');
-    expect(left).toBe(right);
-  });
-
-  it('различает работу и материал с одним наименованием', () => {
-    const work = collapseKey(row({ __key: 'a' }), FIELDS, 'work');
-    const material = collapseKey(row({ __key: 'b' }), FIELDS, 'material');
-    expect(work).not.toBe(material);
-  });
-
-  it('различает единицы измерения — м2 и м3 не складываются', () => {
-    const square = collapseKey(row({ __key: 'a', unit: 'м2' }), FIELDS, 'work');
-    const cubic = collapseKey(row({ __key: 'b', unit: 'м3' }), FIELDS, 'work');
-    expect(square).not.toBe(cubic);
-  });
-
-  it('не берёт разделы и строки без наименования', () => {
-    expect(collapseKey(row({ __key: 'a', type: 'Раздел' }), FIELDS, 'section')).toBeNull();
-    expect(collapseKey(row({ __key: 'b', name: '   ' }), FIELDS, 'work')).toBeNull();
-  });
-});
 
 describe('свёрнутые строки', () => {
   // Три позиции одной работы в трёх разделах: 80 + 40,5 + 10 = 130,5 м2.

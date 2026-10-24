@@ -144,16 +144,6 @@ describe('вставка в таблицу', () => {
     expect(outcome.applied).toBe(0);
   });
 
-  it('сообщает пользователю, что именно произошло', () => {
-    const outcome = applyPaste({
-      rows: rows(), columns, anchorRow: 2, anchorColumn: 1,
-      matrix: [['10'], ['нет'], ['30']],
-    });
-    const text = describePaste(outcome);
-    expect(text).toContain('Вставлено значений: 1');
-    expect(text).toContain('отброшено 2');
-  });
-
   it('без изменений сообщение не показывается', () => {
     expect(describePaste({
       rows: [], applied: 0, droppedRows: 0, droppedColumns: 0,

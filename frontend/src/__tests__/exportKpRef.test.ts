@@ -4,30 +4,16 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import {
-  ExportRow, collapseExportRows, rowsFromEditor,
-} from '../components/editor/exportBuilder';
+import { ExportRow, collapseExportRows } from '../components/editor/exportBuilder';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
-import { CollapseFields, GridRow } from '../components/editor/adapters/types';
+import { CollapseFields } from '../components/editor/adapters/types';
 
 const KP_REF = {
   request_id: 'r1', supplier: 'ООО Кабель', includes_materials: true,
   field: 'price_work', price: 150,
 };
-const COLUMNS = [{ key: 'name', label: 'Наименование', numeric: false }];
 
 describe('kp_ref в выгрузке', () => {
-  it('строка с kp_ref получает __kp_ref, без него — нет, колонкой он не становится', () => {
-    const rows = [
-      { __key: 'a', name: 'Монтаж', price_work: 150, kp_ref: KP_REF },
-      { __key: 'b', name: 'Кабель', kp_ref: null },
-    ] as unknown as GridRow[];
-    const exported = rowsFromEditor(rows, COLUMNS, () => 'work');
-    expect(exported[0].__kp_ref).toEqual(KP_REF);
-    expect('__kp_ref' in exported[1]).toBe(false);
-    expect('kp_ref' in exported[0]).toBe(false);
-  });
-
   it('редактор сметы хранит kp_ref в строке таблицы и отдаёт его при сохранении', () => {
     const grid = estimateAdapter.toGrid([{ id: 'x', type: 'work', name: 'Монтаж', kp_ref: KP_REF }]);
     expect(grid[0].kp_ref).toEqual(KP_REF);

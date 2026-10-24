@@ -101,6 +101,22 @@ describe('данные строки не теряются в редакторе'
     expect(back[0].notes).toBe('с НДС');
     expect(back[0].price_work).toBe(2000);
   });
+
+  it('формат не трогает значение строки — в документ уходит число', async () => {
+    // Формат живёт только на показе: «196 171,20» в строке уехало бы в xlsx,
+    // и ячейка Excel стала бы текстовой.
+    const { estimateAdapter } = await import('../components/editor/adapters/estimateAdapter');
+    const grid = estimateAdapter.toGrid([
+      { id: 'r1', lineage_id: 'r1', type: 'work', name: 'Устройство потолков', unit: 'м2',
+        qty: 382.4, price_work: 513, price_material: null },
+      { id: 'r2', lineage_id: 'r2', type: 'material', name: 'Листы ГКЛ', unit: 'м2',
+        qty: 424.46, price_work: null, price_material: 195 },
+    ]);
+    const back = estimateAdapter.fromGrid(grid) as Array<Record<string, unknown>>;
+    expect(back[0].price_work).toBe(513);
+    expect(back[0].qty).toBe(382.4);
+    expect(typeof back[0].price_work).toBe('number');
+  });
 });
 
 describe('панель цен доступна только смете', () => {

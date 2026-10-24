@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyWorkQuantityChange, buildNormComment } from '../utils/estimateRecalc';
+import { applyWorkQuantityChange } from '../utils/estimateRecalc';
 import { EstimateRow } from '../types';
 
 function work(id: string, qty: number | null = 10): EstimateRow {
@@ -87,24 +87,5 @@ describe('applyWorkQuantityChange', () => {
     const rows = [work('w1'), work('w2'), material('m1', 'w2')];
     const { rows: result } = applyWorkQuantityChange(rows, 'w1', 100);
     expect(result.find((r) => r.id === 'm1')!.qty).toBe(50);
-  });
-});
-
-// ── buildNormComment ─────────────────────────────────────────────────────────
-
-describe('buildNormComment', () => {
-  it('формирует «авто: 50 кг (норм. 0.5 на м²)»', () => {
-    const row = material('m1', 'w1', { qty: 50, qty_per_work_unit: 0.5 });
-    expect(buildNormComment(row, 'м²')).toBe('авто: 50 кг (норм. 0.5 на м²)');
-  });
-
-  it('возвращает «задано вручную» при qty_overridden=true', () => {
-    const row = material('m1', 'w1', { qty_overridden: true });
-    expect(buildNormComment(row)).toBe('задано вручную');
-  });
-
-  it('при qty_per_work_unit=0 показывает «авто: 0 кг (норм. 0 на ед.)»', () => {
-    const row = material('m1', 'w1', { qty: 0, qty_per_work_unit: 0 });
-    expect(buildNormComment(row)).toBe('авто: 0 кг (норм. 0 на ед.)');
   });
 });

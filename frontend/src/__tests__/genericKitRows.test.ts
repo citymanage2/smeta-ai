@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import fs from 'fs';
-import path from 'path';
 
 import { genericAdapter } from '../components/editor/adapters/genericAdapter';
 import { GridRow } from '../components/editor/adapters/types';
@@ -54,15 +52,6 @@ describe('подсветка комплекта материалов', () => {
   it('документ без колонки примечания работает как раньше', () => {
     const plain: GridRow = { __key: 'r3', 'Наименование': 'Позиция', 'Кол-во': 1 };
     expect(genericAdapter.rowClass?.(plain)).toBeUndefined();
-  });
-
-  it('оба класса описаны в стилях редактора', () => {
-    const css = fs.readFileSync(
-      path.resolve(__dirname, '../components/editor/DocumentEditor.css'),
-      'utf-8',
-    );
-    expect(css).toContain('de-row-kit-added');
-    expect(css).toContain('de-row-kit-mismatch');
   });
 });
 

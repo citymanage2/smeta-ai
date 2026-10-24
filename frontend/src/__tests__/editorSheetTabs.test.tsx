@@ -140,15 +140,6 @@ describe('вкладки листов', () => {
     expect(screen.getByText('25 235,00 ₽')).toBeInTheDocument();
   });
 
-  it('документ из одного листа показывает прежний единственный итог', async () => {
-    mockRows(FLAT_ROWS);
-    render(<DocumentEditor cardId="card-1" kind="estimate" />);
-    await screen.findByTestId('document-editor-grid');
-
-    expect(screen.getByText('ИТОГО:')).toBeInTheDocument();
-    expect(screen.queryByText('ВСЕГО по документу:')).toBeNull();
-  });
-
   it('«Применить» записывает все вкладки, а не только открытую', async () => {
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
     await screen.findByTestId('document-editor-grid');

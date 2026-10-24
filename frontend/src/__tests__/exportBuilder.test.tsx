@@ -13,10 +13,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import ExportBuilderModal from '../components/editor/ExportBuilderModal';
 import {
-  ExportColumn, ExportRow, collapseExportRows, dropDeductionExportRows,
+  ExportColumn, ExportRow, collapseExportRows, columnsFromEditor, dropDeductionExportRows,
+  rowsFromEditor,
 } from '../components/editor/exportBuilder';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
-import { CollapseFields } from '../components/editor/adapters/types';
+import { CollapseFields, GridRow } from '../components/editor/adapters/types';
 
 const COLUMNS: ExportColumn[] = [
   { key: 'num', label: '№', numeric: true },
@@ -307,5 +308,26 @@ describe('строки с минусом в выгрузке', () => {
     const masonry = payload.rows.find((row) => row.name === 'Кладка стен')!;
     // 4 м3, а не 2,5: вычет убран до свёртки.
     expect(masonry.qty).toBe(4);
+  });
+});
+
+// --- Числа, а не текст -----------------------------------------------------
+//
+// Формат живёт только на показе: отформатированная строка «196 171,20» ушла бы
+// в xlsx, ячейка Excel стала бы текстовой, и колонку не просуммировать.
+
+describe('выгрузка получает числа, а не текст', () => {
+  it('в строках выгрузки остаются числа', () => {
+    const grid: GridRow[] = estimateAdapter.toGrid([
+      { id: 'r1', lineage_id: 'r1', type: 'work', name: 'Устройство потолков', unit: 'м2',
+        qty: 382.4, price_work: 513, price_material: null },
+      { id: 'r2', lineage_id: 'r2', type: 'material', name: 'Листы ГКЛ', unit: 'м2',
+        qty: 424.46, price_work: null, price_material: 195 },
+    ]);
+    const columns = columnsFromEditor(estimateAdapter.columns(grid));
+    const exported = rowsFromEditor(grid, columns, estimateAdapter.rowKind);
+
+    expect(exported[0].cost_work).toBe(196171.2);
+    expect(typeof exported[0].cost_work).toBe('number');
   });
 });

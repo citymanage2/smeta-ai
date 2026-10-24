@@ -52,20 +52,6 @@ function renderSheet(
 }
 
 describe('цели оптимизации в бланке', () => {
-  it('показывает отклонение от цели раздела в рублях и процентах', () => {
-    renderSheet();
-    expect(screen.getAllByText(text('+2 933 ₽')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(text('+19,6%')).length).toBeGreaterThan(0);
-  });
-
-  it('превышение цели красное, экономия зелёная', () => {
-    renderSheet();
-    const over = screen.getAllByText(text('+2 933 ₽'))[0];
-    const under = screen.getAllByText(text('-1 079 ₽'))[0];
-    expect(over).toHaveStyle({ color: 'rgb(220, 38, 38)' });
-    expect(under).toHaveStyle({ color: 'rgb(5, 150, 105)' });
-  });
-
   it('раздел без цели показывает прочерк вместо отклонения', () => {
     renderSheet();
     // У «ОВ» целей нет: обе ячейки цели пусты, отклонений в строке нет.

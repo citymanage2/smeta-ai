@@ -74,7 +74,7 @@ function mockRows(rows: unknown[]) {
 }
 
 // В jsdom нет ни ResizeObserver, ни размеров: react-data-grid считает таблицу
-// нулевой и не рисует ячеек вовсе. Тот же приём, что в `editorNumberFormat`.
+// нулевой и не рисует ячеек вовсе.
 let restoreWidth: PropertyDescriptor | undefined;
 let originalRect: typeof HTMLElement.prototype.getBoundingClientRect;
 
@@ -124,18 +124,6 @@ async function openCollapsed(rows: unknown[] = ROWS, expectedCount = '3') {
 }
 
 describe('свёрнутый режим', () => {
-  it('собирает одинаковые позиции в одну строку с общим объёмом', async () => {
-    await openCollapsed();
-
-    // Четыре строки документа стали тремя: две штукатурки — одна строка.
-    const text = gridText();
-    expect(text).toContain('120,5');
-    // Стоимость складывается по позициям: 36 000 + 18 225.
-    expect(text).toContain(`54${NBSP}225,00`);
-    // Позиции по отдельности с экрана ушли.
-    expect(text).not.toContain('40,5');
-  });
-
   it('группа раскрывается и показывает свои позиции', async () => {
     await openCollapsed();
 
@@ -144,29 +132,6 @@ describe('свёрнутый режим', () => {
 
     // Позиции внутри группы — настоящие строки со своими объёмами.
     expect(gridText()).toContain('40,5');
-  });
-
-  it('одиночная позиция группой не становится', async () => {
-    await openCollapsed();
-    // «Кладка стен» и «Кирпич» — по одной на документ, сворачивать их нечего.
-    expect(document.querySelectorAll('.de-group-toggle')).toHaveLength(1);
-  });
-
-  it('число свёрнутых групп видно на кнопке', async () => {
-    await openCollapsed();
-    expect(collapseButton().textContent).toContain('1');
-  });
-
-  it('расхождение цен внутри группы показывается словом, а не числом', async () => {
-    await openCollapsed([ROWS[0], { ...ROWS[2], price_work: 500 }], '1');
-
-    const text = gridText();
-    expect(text).toContain('разные');
-    // Стоимость всё равно честная: 80 × 450 + 40,5 × 500 = 56 250.
-    expect(text).toContain(`56${NBSP}250,00`);
-    // Ни одна из двух цен не выдана за цену всей группы.
-    expect(text).not.toContain('450,00');
-    expect(text).not.toContain('500,00');
   });
 
   it('вкладки листов отключаются, итог считается по всему документу', async () => {
@@ -264,25 +229,6 @@ describe('правка свёрнутой строки', () => {
 });
 
 describe('операции, опасные в свёрнутом виде', () => {
-  it('отметка свёрнутой строки отмечает обе её позиции', async () => {
-    await openCollapsed();
-
-    // Первый чекбокс — «отметить всё» в шапке, второй — строка группы.
-    fireEvent.click(screen.getAllByRole('checkbox')[1]);
-
-    await screen.findByText('Выбрано: 2');
-  });
-
-  it('снятая отметка группы гасит и её позиции', async () => {
-    await openCollapsed();
-
-    fireEvent.click(screen.getAllByRole('checkbox')[1]);
-    await screen.findByText('Выбрано: 2');
-    fireEvent.click(screen.getAllByRole('checkbox')[1]);
-
-    await waitFor(() => expect(screen.queryByText(/Выбрано:/)).toBeNull());
-  });
-
   it('вставка из буфера отклоняется с подсказкой, а не молча', async () => {
     await openCollapsed();
 

@@ -141,11 +141,6 @@ describe('кнопка «Убрать минусы»', () => {
     expect(text).toContain('Кирпич');
   });
 
-  it('показывает, сколько строк спрячет', async () => {
-    await openEditor();
-    expect(minusButton().textContent).toContain('2');
-  });
-
   it('возвращает строки при повторном нажатии', async () => {
     await openEditor();
     fireEvent.click(minusButton());

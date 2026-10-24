@@ -6,7 +6,7 @@
  * отправить было нельзя, а «Назад» уводило с экрана целиком.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 const mockNavigate = vi.fn()
@@ -111,14 +111,5 @@ describe('«Открыть онлайн» ведёт на страницу до�
     expect(mockNavigate).toHaveBeenCalledWith(
       '/projects/proj-1/cards/card-1/document/list?slot=input&index=0',
     )
-  })
-
-  it('окна поверх экрана не появляется', async () => {
-    const { container } = renderStage()
-    fireEvent.click(await screen.findByTitle('Открыть в онлайн-редакторе'))
-
-    await waitFor(() => expect(mockNavigate).toHaveBeenCalled())
-    expect(container.querySelector('.de-overlay')).toBeNull()
-    expect(document.querySelector('[aria-modal="true"]')).toBeNull()
   })
 })

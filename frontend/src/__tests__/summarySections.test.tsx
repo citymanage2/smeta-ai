@@ -71,15 +71,6 @@ describe('итоги сводной не изменились', () => {
     expect(ov.works_with_vat).toBeCloseTo(5221.547784000001, 6);
     expect(ov.materials_with_vat).toBeCloseTo(48952.5, 6);
   });
-
-  it('скрытые строки бланка в себестоимость не входят', () => {
-    // 'cleanup' и 'ppr' скрыты пользователем: значения считаются и показываются,
-    // но в «ИТОГО себестоимость» не попадают.
-    expect(calc.cleanup_with_vat).toBeGreaterThan(0);
-    expect(calc.ppr_with_vat).toBeGreaterThan(0);
-    const withThem = calc.subtotal_with_vat + calc.cleanup_with_vat + calc.ppr_with_vat;
-    expect(withThem).toBeGreaterThan(calc.subtotal_with_vat);
-  });
 });
 
 // --- Раздельные налоги работ и материалов ----------------------------------

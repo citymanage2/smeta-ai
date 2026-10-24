@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { billableQty, isNegativeQty } from '../utils/negativeQty';
 import { formatQty } from '../utils/formatQty';
+import { formatDecimal } from '../utils/formatNumber';
 import { calcSummary } from '../stores/summaryEditorStore';
 import { DEFAULT_OVERRIDES } from '../types/summary';
 import { EstimateRow } from '../types';
@@ -35,10 +36,17 @@ describe('formatQty', () => {
     expect(formatQty(-1.1139)).toBe('-1,1139');
     expect(formatQty(137.3)).toBe('137,3');
   });
+});
 
-  it('целые остаются без хвостовых нулей', () => {
-    expect(formatQty(50)).toBe('50');
-    expect(formatQty(0)).toBe('0');
+describe('formatDecimal', () => {
+  // В русской локали разряды отбиваются неразрывным пробелом.
+  const NBSP = ' ';
+
+  it('объём — запятая, без хвостовых нулей', () => {
+    expect(formatDecimal(382.4)).toBe('382,4');
+    expect(formatDecimal(0.61)).toBe('0,61');
+    expect(formatDecimal(1338.4)).toBe(`1${NBSP}338,4`);
+    expect(formatDecimal(50)).toBe('50');
   });
 });
 

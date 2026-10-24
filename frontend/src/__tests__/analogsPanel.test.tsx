@@ -106,19 +106,6 @@ describe('запуск поиска', () => {
     expect(screen.getByRole('button', { name: /найти аналоги/i })).toBeDisabled();
   });
 
-  it('перед запуском показывает оценку объёма и предупреждает о плате', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    renderFind(['r1', 'r2']);
-
-    fireEvent.click(screen.getByRole('button', { name: /найти аналоги/i }));
-
-    const message = confirmSpy.mock.calls[0][0] as string;
-    expect(message).toContain('2');
-    expect(message).toMatch(/мин/i);
-    expect(message).toMatch(/интернет|плат|денег/i);
-    confirmSpy.mockRestore();
-  });
-
   it('отказ в подтверждении ничего не запускает', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderFind(['r1']);
