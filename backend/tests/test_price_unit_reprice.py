@@ -7,15 +7,10 @@
 
 Спека: specs/2026-08-06-edinica-izmereniya-v-podbore-ceny.md
 """
-import sys
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.task_processor import TaskProcessor  # noqa: E402
-from app.utils.unit_compat import (  # noqa: E402
+from app.services import estimate_store
+from app.utils.unit_compat import (
     PRICE_CONVERTED_PREFIX,
     PRICE_UNIT_MISMATCH_PREFIX,
     prices_for_unit,
@@ -53,84 +48,89 @@ def test_ii_ne_ukazal_edinicu_cena_beretsya():
 
 
 # ---------------------------------------------------------------------------
-# Добор пустых цен
+# Добор пустых цен и кнопка «Цена» — на готовой смете в БД
 # ---------------------------------------------------------------------------
 
-def _proc(items: list[dict]) -> TaskProcessor:
-    db = MagicMock()
-    db.commit = AsyncMock()
-    task = MagicMock()
-    task.status = "processing"
-    task.processing_mode = "sync"
-    db.execute = AsyncMock(
-        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=task))
+SMES_KG = {"type": "Материал", "name": "Смеси сухие", "unit": "кг",
+           "quantity": 30, "material_price": None}
+OKRASKA_M2 = {"type": "Работа", "name": "Окраска", "unit": "м2",
+              "quantity": 1061, "work_price": None}
+
+
+async def _estimate(processor_env, items: list[dict]):
+    """Готовая смета: рабочая версия с этими позициями (как после расчёта)."""
+    task = await processor_env.task("ESTIMATE_FROM_LIST", status="completed")
+    await estimate_store.write_items(processor_env.db, task, [dict(it) for it in items])
+    return task
+
+
+# (позиция, ответ ИИ, цена работ, цена материала, пометка, стоимость сметы)
+CASES = [
+    pytest.param(
+        SMES_KG, {"unit": "мешок", "material_price": 500.0},
+        None, None, PRICE_UNIT_MISMATCH_PREFIX, 0.0,
+        id="cena-za-meshok-ne-pishetsya",
+    ),
+    pytest.param(
+        # 1061 м2 × 180 = 190 980 + 3 % накладных = 196 709,40.
+        OKRASKA_M2, {"unit": "100 м2", "work_price": 18000.0},
+        180.0, None, PRICE_CONVERTED_PREFIX, 196709.4,
+        id="cena-za-100-m2-pereschityvaetsya",
+    ),
+    pytest.param(
+        # 30 кг × 73,77 = 2 213,10 + 3 % транспортных = 2 279,49.
+        SMES_KG, {"unit": "т", "material_price": 73770.0},
+        None, 73.77, PRICE_CONVERTED_PREFIX, 2279.49,
+        id="cena-za-tonnu-pereschityvaetsya",
+    ),
+]
+
+
+@pytest.mark.parametrize("item, answer, work_price, material_price, note, cost", CASES)
+async def test_dobor_pustyh_cen_sveryaet_edinicu(
+    processor_env, claude_api, item, answer, work_price, material_price, note, cost,
+):
+    """«Исправить пустые цены»: цена ИИ приводится к единице строки или не берётся."""
+    task = await _estimate(processor_env, [item])
+    claude_api({"items": [{"id": 0, "type": item["type"], **answer}]})
+
+    await processor_env.processor(task).fix_empty_prices()
+
+    task = await processor_env.reload(task)
+    assert task.status == "completed"
+    (row,) = await processor_env.estimate_items(task)
+    assert row["work_price"] == work_price
+    assert row["material_price"] == material_price
+    assert row["unit"] == item["unit"]
+    assert note in row["notes"]
+    assert float(task.cost) == cost
+
+
+@pytest.mark.parametrize("item, answer, work_price, material_price, note, cost", CASES)
+async def test_knopka_cena_sveryaet_edinicu(
+    async_client, user_token, processor_env, claude_api,
+    item, answer, work_price, material_price, note, cost,
+):
+    """Кнопка «Цена» (одна строка): то же правило единиц, что и в расчёте сметы.
+
+    Цена за мешок в строке с килограммами — пусто и причина; сводимая единица —
+    пересчёт, и цена встаёт в смету.
+    """
+    task = await _estimate(processor_env, [item])
+    claude_api({"sources": "источник", "notes": "", **answer})
+
+    r = await async_client.post(
+        f"/tasks/{task.id}/estimate-items/0/reprice",
+        headers={"Authorization": user_token},
     )
-    p = TaskProcessor("tid-fix", db=db)
-    p.update_progress = AsyncMock(return_value=None)
-    p._check_cancelled = AsyncMock(return_value=None)
-    return p
 
-
-async def _run_fix(monkeypatch, items, ai_answer) -> list[dict]:
-    """Прогнать добор пустых цен с заданным ответом ИИ, вернуть позиции после."""
-    from app.services import estimate_store, task_processor as tp
-
-    saved: dict = {}
-
-    async def _read_items(db, task):
-        return items
-
-    async def _write_items(db, task, new_items, commit=True):
-        saved["items"] = new_items
-        return (new_items, 0.0)
-
-    monkeypatch.setattr(estimate_store, "read_items", _read_items)
-    monkeypatch.setattr(estimate_store, "write_items", _write_items)
-
-    async def _run_all(workers, **kwargs):
-        return [await worker() for worker in workers]
-
-    p = _proc(items)
-    p._call_claude_json_with_retry = AsyncMock(return_value={"items": ai_answer})
-    p._run_chunks_parallel = _run_all
-
-    await tp.TaskProcessor.fix_empty_prices(p)
-    assert "items" in saved, "смета не была пересохранена — добор не дошёл до слияния"
-    return saved["items"]
-
-
-async def test_dobor_ne_pishet_cenu_za_meshok(monkeypatch):
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг",
-              "quantity": 30, "material_price": None}]
-    ai = [{"id": 0, "type": "Материал", "unit": "мешок", "material_price": 500.0}]
-
-    result = await _run_fix(monkeypatch, items, ai)
-
-    assert result[0]["material_price"] is None
-    assert PRICE_UNIT_MISMATCH_PREFIX in result[0]["notes"]
-
-
-async def test_dobor_pereschityvaet_svodimuyu_edinicu(monkeypatch):
-    items = [{"type": "Работа", "name": "Окраска", "unit": "м2",
-              "quantity": 1061, "work_price": None}]
-    ai = [{"id": 0, "type": "Работа", "unit": "100 м2", "work_price": 18000.0}]
-
-    result = await _run_fix(monkeypatch, items, ai)
-
-    assert result[0]["work_price"] == 180.0
-    assert PRICE_CONVERTED_PREFIX in result[0]["notes"]
-
-
-# ---------------------------------------------------------------------------
-# Промпт пересчёта одной строки
-# ---------------------------------------------------------------------------
-
-def test_promt_pereschyota_trebuet_edinicu_pozicii():
-    """Требование живёт в тексте запроса — без него ИИ вернёт цену за упаковку."""
-    import inspect
-
-    from app.routers import tasks as tasks_router
-
-    source = inspect.getsource(tasks_router.reprice_estimate_item)
-    assert "за 1 (одну) единицу измерения позиции" in source
-    assert '"unit"' in source
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["work_price"] == work_price
+    assert data["material_price"] == material_price
+    assert note in data["notes"]
+    task = await processor_env.reload(task)
+    (row,) = await processor_env.estimate_items(task)
+    assert row["work_price"] == work_price
+    assert row["material_price"] == material_price
+    assert float(task.cost) == cost
