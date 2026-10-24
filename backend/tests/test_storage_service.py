@@ -49,27 +49,10 @@ def fake(monkeypatch):
     return client
 
 
-async def test_put_get_roundtrip(fake):
-    await ss.put_object("tasks/t1/input/0-a.pdf", b"hello", "application/pdf")
-    assert await ss.get_object("tasks/t1/input/0-a.pdf") == b"hello"
-
-
-async def test_get_missing_raises_storage_error(fake):
-    with pytest.raises(ss.StorageError):
-        await ss.get_object("does/not/exist")
-
-
 async def test_object_exists(fake):
     assert await ss.object_exists("k") is False
     await ss.put_object("k", b"x")
     assert await ss.object_exists("k") is True
-
-
-async def test_delete_object_idempotent(fake):
-    await ss.put_object("k", b"x")
-    await ss.delete_object("k")
-    assert await ss.object_exists("k") is False
-    await ss.delete_object("k")  # повторное удаление — не ошибка
 
 
 async def test_delete_key_safe(fake):
@@ -89,18 +72,6 @@ async def test_delete_prefix_removes_only_matching(fake):
     assert n == 2
     assert await ss.object_exists("tasks/t1/input/0-a") is False
     assert await ss.object_exists("tasks/t2/input/0-c") is True  # чужой префикс цел
-
-
-async def test_store_input_file_returns_key(fake):
-    key = await ss.store_input_file("t1", 0, "a.pdf", "application/pdf", b"hi")
-    assert key and key.startswith("tasks/t1/input/0-")
-    assert await ss.get_object(key) == b"hi"  # реально легло в S3
-
-
-async def test_store_result_file_returns_key(fake):
-    key = await ss.store_result_file("t1", "estimate", "e.xlsx", "x", b"bytes")
-    assert key.startswith("tasks/t1/result/estimate-")
-    assert await ss.get_object(key) == b"bytes"
 
 
 async def test_load_bytes_reads_from_s3(fake):

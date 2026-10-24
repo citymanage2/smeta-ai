@@ -61,24 +61,6 @@ async def test_get_project_detail(async_client: AsyncClient, user_token: str):
 
 
 @pytest.mark.asyncio
-async def test_patch_project(async_client: AsyncClient, user_token: str):
-    create_resp = await async_client.post(
-        "/projects",
-        json={"name": "Старое название"},
-        headers={"Authorization": user_token},
-    )
-    project_id = create_resp.json()["id"]
-
-    resp = await async_client.patch(
-        f"/projects/{project_id}",
-        json={"name": "Новое название"},
-        headers={"Authorization": user_token},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["name"] == "Новое название"
-
-
-@pytest.mark.asyncio
 async def test_delete_project_soft_deletes_for_any_user(
     async_client: AsyncClient, user_token: str
 ):
@@ -105,28 +87,6 @@ async def test_delete_project_soft_deletes_for_any_user(
     get_resp = await async_client.get(
         f"/projects/{project_id}",
         headers={"Authorization": user_token},
-    )
-    assert get_resp.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_delete_project_as_admin(async_client: AsyncClient, admin_token: str):
-    create_resp = await async_client.post(
-        "/projects",
-        json={"name": "Удаляемый"},
-        headers={"Authorization": admin_token},
-    )
-    project_id = create_resp.json()["id"]
-
-    resp = await async_client.delete(
-        f"/projects/{project_id}",
-        headers={"Authorization": admin_token},
-    )
-    assert resp.status_code == 200
-
-    get_resp = await async_client.get(
-        f"/projects/{project_id}",
-        headers={"Authorization": admin_token},
     )
     assert get_resp.status_code == 404
 

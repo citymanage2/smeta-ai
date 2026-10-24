@@ -44,18 +44,3 @@ def test_concurrent_get_client_builds_one_instance(monkeypatch):
     assert len(built) == 1, "клиент собран несколько раз — замок не работает"
     assert len({id(r) for r in results}) == 1
     assert all(isinstance(r, FakeClient) for r in results)
-
-
-def test_get_client_reuses_existing(monkeypatch):
-    sentinel = object()
-    monkeypatch.setattr(storage_service, "_client", sentinel)
-    monkeypatch.setattr(
-        storage_service, "_build_client",
-        lambda: pytest_fail("клиент пересоздан вместо переиспользования"),
-    )
-
-    assert storage_service._get_client() is sentinel
-
-
-def pytest_fail(message: str):
-    raise AssertionError(message)

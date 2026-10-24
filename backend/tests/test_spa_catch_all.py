@@ -25,20 +25,13 @@ SPA_PATHS = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", SPA_PATHS)
-async def test_spa_path_returns_200(async_client: AsyncClient, path: str):
-    """Unknown frontend routes must return 200 with HTML (not 404)."""
+async def test_spa_path_returns_html(async_client: AsyncClient, path: str):
+    """Catch-all route must return HTML content (the React app shell)."""
     resp = await async_client.get(path)
     assert resp.status_code == 200, (
         f"GET {path} returned {resp.status_code}, expected 200. "
         "FastAPI must have a catch-all route serving index.html."
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("path", SPA_PATHS)
-async def test_spa_path_returns_html(async_client: AsyncClient, path: str):
-    """Catch-all route must return HTML content (the React app shell)."""
-    resp = await async_client.get(path)
     content_type = resp.headers.get("content-type", "")
     assert "text/html" in content_type, (
         f"GET {path} returned Content-Type: {content_type!r}, expected text/html."
