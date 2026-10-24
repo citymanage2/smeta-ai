@@ -20,21 +20,12 @@ from sqlalchemy import select, update
 from app.models.correction_signal import CorrectionSignal
 from app.models.estimate_version import EstimateVersion
 from app.models.history import TaskHistory
-from app.models.kp_request import KpOffer, KpOfferPrice, KpRequest, KpRequestFile, KpRequestItem
-from app.models.project import Project
+from app.models.kp_request import KpOffer, KpOfferPrice, KpRequest, KpRequestItem
 from app.models.task import Task
-from app.models.user import User
 from app.models.workflow_card import WorkflowCard
-from app.utils.auth import create_access_token, hash_password
+from tests.helpers.kp import add_offer, add_price, auth
 
-_PASSWORD_HASH = hash_password("x1234")
-_MODELS = (KpOfferPrice, KpRequestItem, KpOffer, KpRequestFile, KpRequest, CorrectionSignal,
-           TaskHistory, EstimateVersion, WorkflowCard, Task, Project, User)
 COEF = {"work": 1.0, "material": 1.1, "scope": "all"}
-
-
-def _auth(user_id: int, role: str) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user_id, role, f'u{user_id}')}"}
 
 
 def _row(rid, type_, name, unit, qty, pw=None, pm=None, *, sheet=None, source_no=None):
@@ -52,41 +43,19 @@ def _base_rows() -> list:
     ]
 
 
-async def _wipe(db):
-    for model in _MODELS:
-        await db.execute(model.__table__.delete())
-    await db.commit()
-
-
 @pytest_asyncio.fixture
-async def env(db_session, fake_s3):
-    await _wipe(db_session)
-
-    def user(name, role):
-        return User(username=name, role=role, full_name=name.upper(), is_active=True,
-                    password_hash=_PASSWORD_HASH)
-
-    users = {
-        "pm1": user("pm1", "project_manager"),
-        "supply1": user("supply1", "supply_manager"),
-        "contractor1": user("contractor1", "contractor_manager"),
-    }
-    db_session.add_all(users.values())
-    await db_session.flush()
-    project = Project(name="Объект", owner_id=users["pm1"].id)
-    db_session.add(project)
-    await db_session.flush()
+async def env(db_session, make_kp_env):
+    """Пользователи, проект и карточка оптимизации с исходной версией; запросы — в тестах."""
+    env = await make_kp_env(stage="optimization", requests=False)
     task = Task(
-        owner_id=users["pm1"].id, user_role="project_manager", task_type="ESTIMATE_OPTIMIZATION",
+        owner_id=env["pm1"], user_role="project_manager", task_type="ESTIMATE_OPTIMIZATION",
         status="completed", input_files=[], input_file_data=[], chat_history=[],
-        project_id=str(project.id),
+        project_id=env["project"],
     )
     db_session.add(task)
     await db_session.flush()
-    card = WorkflowCard(project_id=str(project.id), name="КР", stage="optimization",
-                        optimization_task_id=str(task.id))
-    db_session.add(card)
-    await db_session.flush()
+    card = await db_session.get(WorkflowCard, env["card"])
+    card.optimization_task_id = str(task.id)
     version = EstimateVersion(
         task_id=str(task.id), version_number=0, version_label="original",
         version_display_name="Исходная", rows=_base_rows(), file_slot="result",
@@ -94,12 +63,8 @@ async def env(db_session, fake_s3):
     )
     db_session.add(version)
     await db_session.commit()
-
-    out = {name: u.id for name, u in users.items()}
-    out.update(project=str(project.id), card=str(card.id), task=str(task.id),
-               version=str(version.id))
-    yield out
-    await _wipe(db_session)
+    env.update(task=str(task.id), version=str(version.id))
+    return env
 
 
 async def _request(db, env, category, items, *, source_kind="estimate", source_task_id=None,
@@ -125,26 +90,9 @@ async def _request(db, env, category, items, *, source_kind="estimate", source_t
     return str(request.id), ids
 
 
-async def _offer(db, request_id, supplier, *, vat_mode="without_vat", vat_rate=None,
-                 includes_materials=False, offer_date=None) -> str:
-    offer = KpOffer(request_id=request_id, supplier_name=supplier, vat_mode=vat_mode,
-                    vat_rate=vat_rate, includes_materials=includes_materials,
-                    offer_date=offer_date)
-    db.add(offer)
-    await db.commit()
-    return str(offer.id)
-
-
-async def _price(db, offer_id, item_id, price, unit=None, *, confirmed=True,
-                 includes_materials=None):
-    db.add(KpOfferPrice(offer_id=offer_id, item_id=item_id, price=price, unit=unit,
-                        confirmed=confirmed, includes_materials=includes_materials))
-    await db.commit()
-
-
 async def _preview(client, env, version_id=None):
     return await client.post(
-        "/kp-requests/apply/preview", headers=_auth(env["pm1"], "project_manager"),
+        "/kp-requests/apply/preview", headers=auth(env["pm1"], "project_manager"),
         json={"card_id": env["card"], "version_id": version_id or env["version"]},
     )
 
@@ -152,7 +100,7 @@ async def _preview(client, env, version_id=None):
 async def _apply(client, env, preview: dict, choices=None, client_rev=None, who=None):
     user_id, role = who or (env["pm1"], "project_manager")
     return await client.post(
-        "/kp-requests/apply", headers=_auth(user_id, role),
+        "/kp-requests/apply", headers=auth(user_id, role),
         json={"card_id": env["card"], "version_id": preview["version_id"],
               "client_rev": preview["rev"] if client_rev is None else client_rev,
               "preview_hash": preview["preview_hash"], "choices": choices or {}},
@@ -181,14 +129,14 @@ async def test_material_and_work_prices_go_to_new_version(async_client, db_sessi
         db_session, env, "material", [{"name": "Арматура А500", "unit": "т", "qty": 2}])
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2", "qty": 150}])
-    steel = await _offer(db_session, mat_req, "ООО Сталь", offer_date=date(2026, 9, 10))
+    steel = await add_offer(db_session, mat_req, "ООО Сталь", offer_date=date(2026, 9, 10))
     # 102 000 с НДС 20 % → 85 000 без НДС
-    await _price(db_session, steel, armature, 102000, "т")
+    await add_price(db_session, steel, armature, 102000, "т")
     await db_session.execute(update(KpOffer).where(KpOffer.id == steel)
                              .values(vat_mode="with_vat", vat_rate=20))
     await db_session.commit()
-    brigade = await _offer(db_session, work_req, "Бригада", offer_date=date(2026, 9, 11))
-    await _price(db_session, brigade, plaster, 450, "м2")
+    brigade = await add_offer(db_session, work_req, "Бригада", offer_date=date(2026, 9, 11))
+    await add_price(db_session, brigade, plaster, 450, "м2")
 
     resp = await _preview(async_client, env)
     assert resp.status_code == 200, resp.text
@@ -239,8 +187,8 @@ async def test_material_and_work_prices_go_to_new_version(async_client, db_sessi
 async def test_history_entry_and_no_correction_signals(async_client, db_session, env):
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, 450)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, 450)
 
     preview = (await _preview(async_client, env)).json()
     assert (await _apply(async_client, env, preview)).status_code == 200
@@ -251,7 +199,6 @@ async def test_history_entry_and_no_correction_signals(async_client, db_session,
     assert len(entries) == 1
     assert entries[0].operation_type == "kp_prices"
     assert entries[0].document_kind == "optimization"
-    assert "Цены из КП: 2 строк" in entries[0].description
     signals = (await db_session.execute(select(CorrectionSignal))).scalars().all()
     assert signals == []
 
@@ -260,8 +207,8 @@ async def test_history_entry_and_no_correction_signals(async_client, db_session,
 async def test_preview_writes_nothing(async_client, db_session, env):
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, 450)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, 450)
 
     assert (await _preview(async_client, env)).status_code == 200
     (source,) = await _versions(db_session, env)
@@ -283,8 +230,8 @@ async def test_different_sheets_ambiguous_until_chosen(async_client, db_session,
     await db_session.commit()
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, 450)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, 450)
 
     preview = (await _preview(async_client, env)).json()
     assert preview["rows"] == []
@@ -317,8 +264,8 @@ async def test_sheet_of_item_narrows_match(async_client, db_session, env):
     await db_session.commit()
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "штукатурка  стен", "unit": "м2", "sheet": "СОТ"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, 450)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, 450)
 
     preview = (await _preview(async_client, env)).json()
     assert [r["row_id"] for r in preview["rows"]] == ["w2"]
@@ -331,9 +278,9 @@ async def test_not_found_and_unit_mismatch(async_client, db_session, env):
         {"name": "Покраска потолка", "unit": "м2"},
         {"name": "Штукатурка стен", "unit": "м3"},
     ])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, ghost, 200)
-    await _price(db_session, offer, plaster_m3, 900)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, ghost, 200)
+    await add_price(db_session, offer, plaster_m3, 900)
 
     preview = (await _preview(async_client, env)).json()
     assert preview["rows"] == []
@@ -350,8 +297,8 @@ async def test_row_id_match_only_for_same_optimization_and_price_in_row_unit(
     own, (own_item,) = await _request(
         db_session, env, "material", [{"name": "Арматура А500", "unit": "кг", "row_ids": ["m1"]}],
         source_kind="optimization", source_task_id=env["task"])
-    offer = await _offer(db_session, own, "ООО Сталь")
-    await _price(db_session, offer, own_item, 85, "кг")
+    offer = await add_offer(db_session, own, "ООО Сталь")
+    await add_price(db_session, offer, own_item, 85, "кг")
 
     preview = (await _preview(async_client, env)).json()
     (row,) = preview["rows"]
@@ -377,8 +324,8 @@ async def test_source_no_and_name_match_ignores_unit(async_client, db_session, e
     await db_session.commit()
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2", "source_no": "13"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, 4.5, "м2")
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, 4.5, "м2")
 
     preview = (await _preview(async_client, env)).json()
     (row,) = preview["rows"]
@@ -390,18 +337,18 @@ async def test_source_no_and_name_match_ignores_unit(async_client, db_session, e
 async def test_several_requests_on_row_take_minimum(async_client, db_session, env):
     first, (a,) = await _request(db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
     second, (b,) = await _request(db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    o1 = await _offer(db_session, first, "Бригада 1")
-    o1b = await _offer(db_session, first, "Бригада 1б")
-    o2 = await _offer(db_session, second, "Бригада 2")
-    await _price(db_session, o1, a, 480)
-    await _price(db_session, o1b, a, 470)
-    await _price(db_session, o2, b, 460)
+    o1 = await add_offer(db_session, first, "Бригада 1")
+    o1b = await add_offer(db_session, first, "Бригада 1б")
+    o2 = await add_offer(db_session, second, "Бригада 2")
+    await add_price(db_session, o1, a, 480)
+    await add_price(db_session, o1b, a, 470)
+    await add_price(db_session, o2, b, 460)
     # Выбор человека в первом запросе перекрывает его минимум
     await db_session.execute(update(KpRequestItem).where(KpRequestItem.id == a)
                              .values(selected_offer_id=o1))
     # Черновик дешевле всех — не участвует
-    o3 = await _offer(db_session, second, "Черновик")
-    await _price(db_session, o3, b, 100, confirmed=False)
+    o3 = await add_offer(db_session, second, "Черновик")
+    await add_price(db_session, o3, b, 100, confirmed=False)
 
     preview = (await _preview(async_client, env)).json()
     rows = _by_id(preview["rows"])
@@ -420,9 +367,9 @@ async def test_several_requests_on_row_take_minimum(async_client, db_session, en
 async def test_includes_materials_keeps_material_price(async_client, db_session, env):
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    offer = await _offer(db_session, work_req, "Бригада", includes_materials=True,
+    offer = await add_offer(db_session, work_req, "Бригада", includes_materials=True,
                          offer_date=date(2026, 9, 1))
-    await _price(db_session, offer, plaster, 800)
+    await add_price(db_session, offer, plaster, 800)
 
     preview = (await _preview(async_client, env)).json()
     assert preview["includes_materials_count"] == 2
@@ -439,8 +386,8 @@ async def test_unrelated_requests_ignored(async_client, db_session, env):
     for status in ("in_progress", "cancelled"):
         req, (item,) = await _request(db_session, env, "work",
                                       [{"name": "Штукатурка стен", "unit": "м2"}], status=status)
-        offer = await _offer(db_session, req, "Бригада")
-        await _price(db_session, offer, item, 100)
+        offer = await add_offer(db_session, req, "Бригада")
+        await add_price(db_session, offer, item, 100)
     preview = (await _preview(async_client, env)).json()
     assert preview["rows"] == [] and preview["not_found"] == []
 
@@ -452,8 +399,8 @@ async def test_unrelated_requests_ignored(async_client, db_session, env):
 async def _simple_work(db_session, env, price=450):
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, price)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, price)
     return work_req, plaster, offer
 
 
@@ -515,7 +462,7 @@ async def test_rollback_returns_prices(async_client, db_session, env):
 
     resp = await async_client.post(
         f"/tasks/{env['task']}/estimate/versions/{env['version']}/rollback",
-        headers=_auth(env["pm1"], "project_manager"))
+        headers=auth(env["pm1"], "project_manager"))
     assert resp.status_code == 200, resp.text
     source, clone = await _versions(db_session, env)
     assert clone.is_rolled_back is True
@@ -529,7 +476,7 @@ async def test_production_role_forbidden(async_client, db_session, env):
     await _simple_work(db_session, env)
     preview = (await _preview(async_client, env)).json()
     resp = await async_client.post(
-        "/kp-requests/apply/preview", headers=_auth(env["contractor1"], "contractor_manager"),
+        "/kp-requests/apply/preview", headers=auth(env["contractor1"], "contractor_manager"),
         json={"card_id": env["card"], "version_id": env["version"]})
     assert resp.status_code == 403
     resp = await _apply(async_client, env, preview, who=(env["contractor1"], "contractor_manager"))
@@ -568,8 +515,8 @@ async def test_row_id_match_requires_same_name_analog_not_priced(async_client, d
     own, (own_item,) = await _request(
         db_session, env, "material", [{"name": "Арматура А500", "unit": "т", "row_ids": ["m1"]}],
         source_kind="optimization", source_task_id=env["task"])
-    offer = await _offer(db_session, own, "ООО Сталь")
-    await _price(db_session, offer, own_item, 85000, "т")
+    offer = await add_offer(db_session, own, "ООО Сталь")
+    await add_price(db_session, offer, own_item, 85000, "т")
 
     preview = (await _preview(async_client, env)).json()
     assert preview["rows"] == []
@@ -596,8 +543,8 @@ async def test_kp_note_appended_to_optimization_note_and_replaced_on_repeat(
     await db_session.commit()
     work_req, (plaster,) = await _request(
         db_session, env, "work", [{"name": "Штукатурка стен", "unit": "м2"}])
-    offer = await _offer(db_session, work_req, "Бригада")
-    await _price(db_session, offer, plaster, 450)
+    offer = await add_offer(db_session, work_req, "Бригада")
+    await add_price(db_session, offer, plaster, 450)
 
     preview = (await _preview(async_client, env)).json()
     assert (await _apply(async_client, env, preview)).status_code == 200

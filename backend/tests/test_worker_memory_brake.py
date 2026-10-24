@@ -51,33 +51,3 @@ async def test_brake_off_when_rss_unknown(monkeypatch):
     monkeypatch.setattr(worker, "_inflight_job_ids", {1})
 
     assert worker._memory_brake_engaged() is False
-
-
-async def test_poll_loop_skips_claim_when_braked(monkeypatch):
-    """Под тормозом claim не вызывается, слот освобождается, задачи не теряются."""
-    import asyncio
-
-    monkeypatch.setattr(worker, "_memory_brake_engaged", lambda: True)
-
-    claims = []
-
-    async def fake_claim(db, worker_id):  # pragma: no cover — не должен вызваться
-        claims.append(worker_id)
-        return None
-
-    monkeypatch.setattr(worker.job_queue, "claim_one", fake_claim)
-    monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_S", 0.01)
-
-    # Событие остановки создаём в ЭТОМ цикле: модульное привязано к циклу импорта
-    # (Python 3.9), и ожидание из другого цикла падает RuntimeError.
-    shutdown = asyncio.Event()
-    monkeypatch.setattr(worker, "_shutdown", shutdown)
-
-    sem = asyncio.Semaphore(2)
-    loop_task = asyncio.create_task(worker._poll_loop(sem, set()))
-    await asyncio.sleep(0.05)
-    shutdown.set()
-    await asyncio.wait_for(loop_task, timeout=2)
-
-    assert claims == []
-    assert sem._value == 2  # слот возвращён, а не утёк

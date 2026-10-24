@@ -1,133 +1,43 @@
-"""Unit tests for _embedding_match_work / _embedding_match_material (8.3).
+"""Подбор цены по смыслу: позиция находится выше порога похожести и не находится ниже.
 
-Проверяют два сценария:
-- similarity >= 0.82 → возвращает элемент кэша
-- similarity < 0.82  → возвращает None
+Прайс и векторы лежат в тестовой БД, кеш подбора собирает `load_cache` — как в
+проде; подменена только модель эмбеддингов (фикстура `price_db`).
 """
-import pytest
-import numpy as np
-from unittest.mock import patch
-import app.services.price_service as ps
-
-DIM = 1024
+from app.services import price_service
+from tests.helpers.prices import axis, similar
 
 
-def _unit_vec(idx: int) -> list[float]:
-    """Единичный вектор с 1 в позиции idx — все остальные 0."""
-    v = [0.0] * DIM
-    v[idx] = 1.0
-    return v
+async def test_works_found_above_threshold_and_best_wins(price_db):
+    threshold = price_service.SIMILARITY_THRESHOLD
+    price_db.work("Кладка кирпичная", unit="м3", prices={"Подрядчик": 5200.0}, vector=axis(0))
+    price_db.work("Штукатурка стен", unit="м2", prices={"Подрядчик": 450.0}, vector=axis(1))
+    # Ближе к кладке (0,9), но похож и на штукатурку (0,44) — берётся лучшее.
+    price_db.knows("Кладка стен из кирпича", similar(0.9, to=0, via=1))
+    price_db.knows("Устройство стяжки", similar(threshold - 0.01, to=1))
+    price_db.knows("Монтаж окон", axis(5))
+    await price_db.load()
 
-
-@pytest.fixture(autouse=True)
-def restore_price_service_state():
-    """Сохранить и восстановить глобальные переменные price_service после каждого теста."""
-    we = ps._works_embeddings
-    me = ps._materials_embeddings
-    wrn = ps._works_row_norms
-    mrn = ps._materials_row_norms
-    wc = ps._works_cache[:]
-    mc = ps._materials_cache[:]
-    wim = ps._works_index_map[:]
-    mim = ps._materials_index_map[:]
-    yield
-    ps._works_embeddings = we
-    ps._materials_embeddings = me
-    ps._works_row_norms = wrn
-    ps._materials_row_norms = mrn
-    ps._works_cache[:] = wc
-    ps._materials_cache[:] = mc
-    ps._works_index_map[:] = wim
-    ps._materials_index_map[:] = mim
-
-
-def _inject_works(vectors: list[list[float]], items: list[dict]) -> None:
-    """Вставить тестовые данные в кэш работ вместе с маппингом строк матрицы → индексов кэша."""
-    matrix = np.array(vectors, dtype=np.float32)
-    ps._works_embeddings = matrix
-    ps._works_row_norms = np.linalg.norm(matrix, axis=1)
-    ps._works_cache[:] = items
-    # Маппинг: каждая строка матрицы соответствует элементу кэша с тем же индексом
-    ps._works_index_map[:] = list(range(len(items)))
-
-
-def _inject_materials(vectors: list[list[float]], items: list[dict]) -> None:
-    """Вставить тестовые данные в кэш материалов вместе с маппингом строк матрицы → индексов кэша."""
-    matrix = np.array(vectors, dtype=np.float32)
-    ps._materials_embeddings = matrix
-    ps._materials_row_norms = np.linalg.norm(matrix, axis=1)
-    ps._materials_cache[:] = items
-    # Маппинг: каждая строка матрицы соответствует элементу кэша с тем же индексом
-    ps._materials_index_map[:] = list(range(len(items)))
-
-
-# ---------------------------------------------------------------------------
-# _embedding_match_work
-# ---------------------------------------------------------------------------
-
-async def test_embedding_match_work_returns_item_above_threshold():
-    """similarity=1.0 (одинаковые векторы) → возвращает элемент кэша."""
-    vec = _unit_vec(0)
-    _inject_works([vec], [{"name": "Кладка кирпичная", "min_price": 500.0, "source": "Прайс"}])
-
-    with patch("app.services.embedding_service.generate_embedding", return_value=vec):
-        result = await ps._embedding_match_work("Кладка кирпичная")
-
-    assert result is not None
-    assert result["name"] == "Кладка кирпичная"
-
-
-async def test_embedding_match_work_returns_none_below_threshold():
-    """Ортогональные векторы (similarity=0) → None."""
-    _inject_works([_unit_vec(0)], [{"name": "Кладка", "min_price": 500.0}])
-
-    # Вектор в другом направлении → similarity = 0 < 0.82
-    with patch("app.services.embedding_service.generate_embedding", return_value=_unit_vec(1)):
-        result = await ps._embedding_match_work("Бетонирование")
-
-    assert result is None
-
-
-async def test_embedding_match_work_picks_best_match():
-    """При нескольких векторах выбирается лучшее совпадение."""
-    vec_a = _unit_vec(0)  # совпадает с запросом
-    vec_b = _unit_vec(1)  # не совпадает
-    _inject_works(
-        [vec_b, vec_a],
-        [
-            {"name": "Штукатурка", "min_price": 200.0},
-            {"name": "Кладка кирпичная", "min_price": 500.0},
-        ],
+    found = await price_service.batch_embedding_match_works(
+        ["Кладка стен из кирпича", "Устройство стяжки", "Монтаж окон"]
     )
 
-    with patch("app.services.embedding_service.generate_embedding", return_value=vec_a):
-        result = await ps._embedding_match_work("Кладка кирпичная")
-
-    assert result is not None
-    assert result["name"] == "Кладка кирпичная"
-
-
-# ---------------------------------------------------------------------------
-# _embedding_match_material
-# ---------------------------------------------------------------------------
-
-async def test_embedding_match_material_returns_price_above_threshold():
-    """similarity=1.0 → возвращает цену материала."""
-    vec = _unit_vec(5)
-    _inject_materials([vec], [{"name": "Кирпич М150", "price": 12.5}])
-
-    with patch("app.services.embedding_service.generate_embedding", return_value=vec):
-        result = await ps._embedding_match_material("Кирпич М150")
-
-    assert result == 12.5
+    assert found[0]["name"] == "Кладка кирпичная"
+    assert found[0]["min_price"] == 5200.0
+    assert found[0]["unit"] == "м3"
+    assert found[1] is None, "похожесть чуть ниже порога — позиция не найдена"
+    assert found[2] is None
 
 
-async def test_embedding_match_material_returns_none_below_threshold():
-    """Ортогональные векторы → None."""
-    _inject_materials([_unit_vec(5)], [{"name": "Кирпич М150", "price": 12.5}])
+async def test_materials_found_by_mark_spelling_and_not_below_threshold(price_db):
+    threshold = price_service.SIMILARITY_THRESHOLD
+    price_db.material("Кирпич М150", unit="шт", price=12.5, vector=axis(5))
+    price_db.knows("Цемент М400", similar(threshold - 0.01, to=5))
+    await price_db.load()
 
-    with patch("app.services.embedding_service.generate_embedding", return_value=_unit_vec(6)):
-        result = await ps._embedding_match_material("Цемент М400")
+    # «М-150» и «М150» — одна марка: запрос получает вектор той же позиции.
+    found = await price_service.batch_embedding_match_material_rows(["Кирпич М-150", "Цемент М400"])
 
-    assert result is None
-
+    assert found[0]["name"] == "Кирпич М150"
+    assert found[0]["price"] == 12.5
+    assert found[0]["unit"] == "шт"
+    assert found[1] is None

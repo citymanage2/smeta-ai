@@ -16,10 +16,8 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx2
 import anthropic
 import pytest
-from sqlalchemy import select
 
 sys.modules.setdefault("fitz", MagicMock())
 
@@ -29,55 +27,23 @@ from app.services.claude_service import (  # noqa: E402
 )
 from app.services.task_processor import TaskProcessor  # noqa: E402
 from app.models.task import Task  # noqa: E402
-
-
-def _make_credit_balance_error() -> anthropic.APIStatusError:
-    """Fake 4xx APIStatusError with a 'credit balance' message (как у Anthropic)."""
-    body = {
-        "error": {
-            "type": "invalid_request_error",
-            "message": "Your credit balance is too low to access the Anthropic API.",
-        }
-    }
-    raw = httpx2.Response(
-        status_code=400,
-        headers={"x-request-id": "test-req"},
-        content=b'{"error": {"message": "Your credit balance is too low"}}',
-        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
-    )
-    return anthropic.APIStatusError("credit balance too low", response=raw, body=body)
+from tests.helpers.anthropic_api import api_error, balance_error  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # claude_service: типизированная ошибка баланса
 # ---------------------------------------------------------------------------
 
-async def test_credit_balance_4xx_raises_insufficient_balance(monkeypatch, patch_claude_create):
-    async def fake_create(**kwargs):
-        raise _make_credit_balance_error()
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
+async def test_credit_balance_4xx_raises_insufficient_balance(claude_api, api_sleeps):
+    claude_api(balance_error())
 
     with pytest.raises(InsufficientBalanceError):
         await call_claude([{"role": "user", "content": "hi"}])
 
 
-async def test_non_balance_4xx_not_wrapped(monkeypatch, patch_claude_create):
+async def test_non_balance_4xx_not_wrapped(claude_api, api_sleeps):
     """Прочие 4xx (не про баланс) НЕ превращаются в InsufficientBalanceError."""
-    body = {"error": {"type": "invalid_request_error", "message": "bad request"}}
-    raw = httpx2.Response(
-        status_code=400,
-        headers={},
-        content=b'{"error": {"message": "bad request"}}',
-        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
-    )
-
-    async def fake_create(**kwargs):
-        raise anthropic.APIStatusError("bad request", response=raw, body=body)
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
+    claude_api(api_error(400, "bad request"))
 
     with pytest.raises(anthropic.APIStatusError):
         await call_claude([{"role": "user", "content": "hi"}])
@@ -87,19 +53,19 @@ async def test_non_balance_4xx_not_wrapped(monkeypatch, patch_claude_create):
 # Чанковые retry-обёртки: баланс пробрасывается сразу, без ретраев
 # ---------------------------------------------------------------------------
 
-async def test_chunk_retry_reraises_balance_immediately(monkeypatch):
-    p = TaskProcessor("tid-bal", db=MagicMock())
-    inner = AsyncMock(side_effect=InsufficientBalanceError("no money"))
-    p._call_claude_json = inner  # type: ignore[assignment]
-    sleep_mock = AsyncMock()
-    monkeypatch.setattr("app.services.task_processor.asyncio.sleep", sleep_mock)
+async def test_chunk_retry_reraises_balance_immediately(db_session, claude_api, api_sleeps):
+    """Пустой счёт — один запрос к API и сразу пауза: повтор денег не вернёт."""
+    ai = claude_api(balance_error())
+    p = TaskProcessor("tid-bal", db=db_session)
 
     with pytest.raises(InsufficientBalanceError):
-        await p._call_claude_json_with_retry([{"role": "user", "content": "x"}], system_prompt="s")
+        await p._call_claude_json_with_retry(
+            [{"role": "user", "content": "x"}], system_prompt="s",
+            chunk_retry_delays=(0.0, 0.0, 0.0),
+        )
 
-    # Ровно один вызов — ретраев не было; и sleep не вызывался.
-    assert inner.await_count == 1
-    assert sleep_mock.await_count == 0
+    assert len(ai.calls) == 1
+    assert api_sleeps == []
 
 
 # ---------------------------------------------------------------------------

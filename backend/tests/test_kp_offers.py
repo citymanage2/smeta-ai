@@ -13,131 +13,21 @@
 import json
 from datetime import datetime, timezone
 
-import fitz
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
 
-from app.models.estimate_version import EstimateVersion
-from app.models.job import Job
-from app.models.kp_request import (
-    KpOffer, KpOfferPrice, KpRequest, KpRequestFile, KpRequestItem,
-)
-from app.models.price import PriceMaterial, PriceWork
-from app.models.project import Project
-from app.models.task import Task
-from app.models.user import User
-from app.models.workflow_card import WorkflowCard
+from app.models.kp_request import KpOffer, KpOfferPrice, KpRequest, KpRequestItem
 from app.services import kp_offers
-from app.utils.auth import create_access_token, hash_password
-
-_PASSWORD_HASH = hash_password("x1234")
-
-
-def _auth(user_id: int, role: str) -> dict:
-    return {"Authorization": f"Bearer {create_access_token(user_id, role, f'u{user_id}')}"}
-
-
-def _pdf(pages: int = 1) -> bytes:
-    doc = fitz.open()
-    for _ in range(pages):
-        doc.new_page()
-    data = doc.tobytes()
-    doc.close()
-    return data
-
-
-_MODELS = (KpOfferPrice, KpRequestItem, KpOffer, KpRequestFile, KpRequest,
-           EstimateVersion, WorkflowCard, Task, Project, User, Job, PriceWork, PriceMaterial)
-
-
-async def _wipe(db):
-    for model in _MODELS:
-        await db.execute(model.__table__.delete())
-    await db.commit()
+from app.utils.auth import create_access_token
+from tests.helpers.kp import (
+    CONTRACTOR, PM, SUPPLY, SUPPLY2, create_offer, headers, pdf, upload_offer,
+)
 
 
 @pytest_asyncio.fixture
-async def env(db_session, fake_s3, monkeypatch):
-    # «Завершить» пишет цены в прайс (фаза 7): векторы не считаем, прайс чистим.
-    async def _no_embedding(_name):
-        return None
-
-    monkeypatch.setattr("app.services.price_bulk._generate_embedding_safe", _no_embedding)
-    await _wipe(db_session)
-
-    def user(name, role):
-        return User(username=name, role=role, full_name=name.upper(), is_active=True,
-                    password_hash=_PASSWORD_HASH)
-
-    users = {
-        "pm1": user("pm1", "project_manager"),
-        "pm2": user("pm2", "project_manager"),
-        "supply1": user("supply1", "supply_manager"),
-        "supply2": user("supply2", "supply_manager"),
-        "contractor1": user("contractor1", "contractor_manager"),
-    }
-    db_session.add_all(users.values())
-    await db_session.flush()
-
-    project = Project(name="Объект", owner_id=users["pm1"].id)
-    db_session.add(project)
-    await db_session.flush()
-    card = WorkflowCard(project_id=str(project.id), name="КР", stage="list")
-    db_session.add(card)
-    await db_session.flush()
-
-    def request(category, role):
-        return KpRequest(
-            project_id=str(project.id), card_id=str(card.id), source_kind="list",
-            category=category, target_role=role, status="new", author_id=users["pm1"].id,
-        )
-
-    material = request("material", "supply_manager")
-    work = request("work", "contractor_manager")
-    db_session.add_all([material, work])
-    await db_session.flush()
-    items = {
-        "armature": KpRequestItem(request_id=material.id, position=0, item_type="material",
-                                  name="Арматура А500", unit="кг", qty=2000, source_row_ids=["r1"]),
-        "cement": KpRequestItem(request_id=material.id, position=1, item_type="material",
-                                name="Цемент М500", unit="кг", qty=500, source_row_ids=["r2"]),
-        "plaster": KpRequestItem(request_id=work.id, position=0, item_type="work",
-                                 name="Штукатурка стен", unit="м2", qty=100, source_row_ids=["r3"]),
-    }
-    db_session.add_all(items.values())
-    await db_session.commit()
-
-    out = {name: u.id for name, u in users.items()}
-    out.update(material=str(material.id), work=str(work.id),
-               **{name: str(i.id) for name, i in items.items()})
-    yield out
-    await _wipe(db_session)
-
-
-SUPPLY = ("supply1", "supply_manager")
-SUPPLY2 = ("supply2", "supply_manager")
-CONTRACTOR = ("contractor1", "contractor_manager")
-PM = ("pm1", "project_manager")
-
-
-def _h(env, who):
-    return _auth(env[who[0]], who[1])
-
-
-async def _upload(client, env, request_key="material", who=SUPPLY, file=None, **fields):
-    data = {"supplier_name": "ООО Металл", "vat_mode": "with_vat", "vat_rate": "22"}
-    data.update({k: v for k, v in fields.items() if v is not None})
-    files = [("file", file)] if file else []
-    return await client.post(
-        f"/kp-requests/{env[request_key]}/offers", headers=_h(env, who), data=data, files=files,
-    )
-
-
-async def _offer(client, env, **kw):
-    resp = await _upload(client, env, file=("kp.pdf", _pdf(), "application/pdf"), **kw)
-    assert resp.status_code == 201, resp.text
-    return resp.json()
+async def env(make_kp_env):
+    return await make_kp_env()
 
 
 async def _parsed(db, offer: dict) -> dict:
@@ -151,12 +41,12 @@ async def _parsed(db, offer: dict) -> dict:
 async def _put_price(client, env, offer_id, item_key, price, unit=None, who=SUPPLY, **extra):
     body = {"price": price, "unit": unit, **extra}
     return await client.put(
-        f"/kp-offers/{offer_id}/prices/{env[item_key]}", headers=_h(env, who), json=body,
+        f"/kp-offers/{offer_id}/prices/{env[item_key]}", headers=headers(env, who), json=body,
     )
 
 
 async def _detail(client, env, request_key="material", who=SUPPLY):
-    resp = await client.get(f"/kp-requests/{env[request_key]}", headers=_h(env, who))
+    resp = await client.get(f"/kp-requests/{env[request_key]}", headers=headers(env, who))
     assert resp.status_code == 200, resp.text
     return resp.json()
 
@@ -167,7 +57,7 @@ async def _detail(client, env, request_key="material", who=SUPPLY):
 
 @pytest.mark.asyncio
 async def test_upload_offer_takes_new_request_and_stores_file(async_client, db_session, env, fake_s3):
-    resp = await _upload(async_client, env, file=("КП металл.pdf", _pdf(), "application/pdf"),
+    resp = await upload_offer(async_client, env, file=("КП металл.pdf", pdf(), "application/pdf"),
                          offer_date="2026-09-10")
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -193,8 +83,8 @@ async def test_upload_offer_takes_new_request_and_stores_file(async_client, db_s
 
 @pytest.mark.asyncio
 async def test_upload_to_request_in_progress_keeps_taker(async_client, db_session, env):
-    await async_client.post(f"/kp-requests/{env['material']}/take", headers=_h(env, SUPPLY2))
-    await _offer(async_client, env)
+    await async_client.post(f"/kp-requests/{env['material']}/take", headers=headers(env, SUPPLY2))
+    await create_offer(async_client, env)
     db_session.expire_all()
     request = await db_session.get(KpRequest, env["material"])
     assert request.status == "in_progress"
@@ -203,41 +93,41 @@ async def test_upload_to_request_in_progress_keeps_taker(async_client, db_sessio
 
 @pytest.mark.asyncio
 async def test_default_vat_rate_22_and_without_vat_has_no_rate(async_client, env):
-    body = (await _upload(async_client, env, vat_rate="", file=("a.xlsx", b"PK", "application/octet-stream"))).json()
+    body = (await upload_offer(async_client, env, vat_rate="", file=("a.xlsx", b"PK", "application/octet-stream"))).json()
     assert body["vat_mode"] == "with_vat" and body["vat_rate"] == 22
-    body = (await _upload(async_client, env, vat_mode="without_vat", vat_rate="20")).json()
+    body = (await upload_offer(async_client, env, vat_mode="without_vat", vat_rate="20")).json()
     assert body["vat_mode"] == "without_vat" and body["vat_rate"] is None
 
 
 @pytest.mark.asyncio
 async def test_vat_mode_required_and_validated(async_client, env):
     resp = await async_client.post(
-        f"/kp-requests/{env['material']}/offers", headers=_h(env, SUPPLY),
+        f"/kp-requests/{env['material']}/offers", headers=headers(env, SUPPLY),
         data={"supplier_name": "Х"},
     )
     assert resp.status_code == 422
-    assert (await _upload(async_client, env, vat_mode="maybe")).status_code == 422
-    assert (await _upload(async_client, env, vat_rate="-1")).status_code == 422
-    assert (await _upload(async_client, env, vat_rate="100")).status_code == 422
-    assert (await _upload(async_client, env, vat_rate="abc")).status_code == 422
-    assert (await _upload(async_client, env, offer_date="10.09.2026")).status_code == 422
+    assert (await upload_offer(async_client, env, vat_mode="maybe")).status_code == 422
+    assert (await upload_offer(async_client, env, vat_rate="-1")).status_code == 422
+    assert (await upload_offer(async_client, env, vat_rate="100")).status_code == 422
+    assert (await upload_offer(async_client, env, vat_rate="abc")).status_code == 422
+    assert (await upload_offer(async_client, env, offer_date="10.09.2026")).status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_offer_needs_file_or_supplier(async_client, env):
-    resp = await _upload(async_client, env, supplier_name="  ")
+    resp = await upload_offer(async_client, env, supplier_name="  ")
     assert resp.status_code == 422
     # Без файла, но с поставщиком — можно: цены вводятся руками.
-    resp = await _upload(async_client, env)
+    resp = await upload_offer(async_client, env)
     assert resp.status_code == 201
     assert resp.json()["has_file"] is False
 
 
 @pytest.mark.asyncio
 async def test_includes_materials_only_for_work(async_client, env):
-    resp = await _upload(async_client, env, includes_materials="true")
+    resp = await upload_offer(async_client, env, includes_materials="true")
     assert resp.status_code == 422
-    resp = await _upload(async_client, env, request_key="work", who=CONTRACTOR,
+    resp = await upload_offer(async_client, env, request_key="work", who=CONTRACTOR,
                          includes_materials="true", supplier_name="Бригада")
     assert resp.status_code == 201, resp.text
     assert resp.json()["includes_materials"] is True
@@ -245,29 +135,29 @@ async def test_includes_materials_only_for_work(async_client, env):
 
 @pytest.mark.asyncio
 async def test_offer_file_types_and_limits(async_client, env, monkeypatch):
-    resp = await _upload(async_client, env, file=("kp.docx", b"PK", "application/octet-stream"))
+    resp = await upload_offer(async_client, env, file=("kp.docx", b"PK", "application/octet-stream"))
     assert resp.status_code == 415
     for name in ("kp.xls", "kp.jpg", "kp.jpeg", "kp.png"):
-        assert (await _upload(async_client, env, file=(name, b"x", "application/octet-stream"))).status_code == 201, name
+        assert (await upload_offer(async_client, env, file=(name, b"x", "application/octet-stream"))).status_code == 201, name
     monkeypatch.setattr(kp_offers, "MAX_FILE_BYTES", 10)
-    resp = await _upload(async_client, env, file=("big.xlsx", b"x" * 11, "application/octet-stream"))
+    resp = await upload_offer(async_client, env, file=("big.xlsx", b"x" * 11, "application/octet-stream"))
     assert resp.status_code == 413
 
 
 @pytest.mark.asyncio
 async def test_pdf_page_limit_and_broken_pdf(async_client, env, monkeypatch):
     monkeypatch.setattr(kp_offers, "MAX_PDF_PAGES", 2)
-    resp = await _upload(async_client, env, file=("kp.pdf", _pdf(3), "application/pdf"))
+    resp = await upload_offer(async_client, env, file=("kp.pdf", pdf(3), "application/pdf"))
     assert resp.status_code == 422
     assert "3" in resp.json()["detail"]
-    resp = await _upload(async_client, env, file=("kp.pdf", b"not a pdf", "application/pdf"))
+    resp = await upload_offer(async_client, env, file=("kp.pdf", b"not a pdf", "application/pdf"))
     assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_upload_forbidden_for_sales_and_foreign_role(async_client, db_session, env):
-    assert (await _upload(async_client, env, who=PM)).status_code == 403
-    assert (await _upload(async_client, env, who=CONTRACTOR)).status_code == 404
+    assert (await upload_offer(async_client, env, who=PM)).status_code == 403
+    assert (await upload_offer(async_client, env, who=CONTRACTOR)).status_code == 404
     count = (await db_session.execute(select(func.count()).select_from(KpOffer))).scalar()
     assert count == 0
 
@@ -279,18 +169,18 @@ async def test_upload_to_done_or_cancelled_is_409(async_client, db_session, env)
             KpRequest.__table__.update().where(KpRequest.id == env["material"]).values(status=st)
         )
         await db_session.commit()
-        assert (await _upload(async_client, env)).status_code == 409, st
+        assert (await upload_offer(async_client, env)).status_code == 409, st
 
 
 @pytest.mark.asyncio
 async def test_download_offer_by_role(async_client, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     url = f"/kp-offers/{offer['id']}/download"
     for who in (SUPPLY2, PM):
-        resp = await async_client.get(url, headers=_h(env, who))
+        resp = await async_client.get(url, headers=headers(env, who))
         assert resp.status_code == 200, who
         assert resp.content.startswith(b"%PDF")
-    resp = await async_client.get(url, headers=_h(env, CONTRACTOR))
+    resp = await async_client.get(url, headers=headers(env, CONTRACTOR))
     assert resp.status_code == 404
     token = create_access_token(env["supply2"], "supply_manager", "u")
     assert (await async_client.get(f"{url}?token={token}")).status_code == 200
@@ -299,8 +189,8 @@ async def test_download_offer_by_role(async_client, env):
 
 @pytest.mark.asyncio
 async def test_download_offer_without_file_404(async_client, env):
-    offer = (await _upload(async_client, env)).json()
-    resp = await async_client.get(f"/kp-offers/{offer['id']}/download", headers=_h(env, SUPPLY))
+    offer = (await upload_offer(async_client, env)).json()
+    resp = await async_client.get(f"/kp-offers/{offer['id']}/download", headers=headers(env, SUPPLY))
     assert resp.status_code == 404
 
 
@@ -310,9 +200,9 @@ async def test_download_offer_without_file_404(async_client, env):
 
 @pytest.mark.asyncio
 async def test_patch_offer(async_client, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     url = f"/kp-offers/{offer['id']}"
-    resp = await async_client.patch(url, headers=_h(env, SUPPLY2),
+    resp = await async_client.patch(url, headers=headers(env, SUPPLY2),
                                     json={"supplier_name": "ООО Сталь", "vat_rate": 20})
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -320,34 +210,34 @@ async def test_patch_offer(async_client, env):
     assert body["vat_rate"] == 20
     assert body["offer_date"] is None
 
-    body = (await async_client.patch(url, headers=_h(env, SUPPLY), json={"vat_mode": "without_vat"})).json()
+    body = (await async_client.patch(url, headers=headers(env, SUPPLY), json={"vat_mode": "without_vat"})).json()
     assert body["vat_mode"] == "without_vat" and body["vat_rate"] is None
-    body = (await async_client.patch(url, headers=_h(env, SUPPLY), json={"vat_mode": "with_vat"})).json()
+    body = (await async_client.patch(url, headers=headers(env, SUPPLY), json={"vat_mode": "with_vat"})).json()
     assert body["vat_rate"] == 22
-    body = (await async_client.patch(url, headers=_h(env, SUPPLY), json={"offer_date": "2026-09-01"})).json()
+    body = (await async_client.patch(url, headers=headers(env, SUPPLY), json={"offer_date": "2026-09-01"})).json()
     assert body["offer_date"] == "2026-09-01" and body["supplier_name"] == "ООО Сталь"
 
-    assert (await async_client.patch(url, headers=_h(env, SUPPLY), json={"vat_rate": 150})).status_code == 422
+    assert (await async_client.patch(url, headers=headers(env, SUPPLY), json={"vat_rate": 150})).status_code == 422
     # КП с файлом может остаться без поставщика (его подскажет разбор), без файла — нет.
-    assert (await async_client.patch(url, headers=_h(env, SUPPLY), json={"supplier_name": ""})).status_code == 200
-    manual = (await _upload(async_client, env, supplier_name="Звонок")).json()
-    resp = await async_client.patch(f"/kp-offers/{manual['id']}", headers=_h(env, SUPPLY), json={"supplier_name": " "})
+    assert (await async_client.patch(url, headers=headers(env, SUPPLY), json={"supplier_name": ""})).status_code == 200
+    manual = (await upload_offer(async_client, env, supplier_name="Звонок")).json()
+    resp = await async_client.patch(f"/kp-offers/{manual['id']}", headers=headers(env, SUPPLY), json={"supplier_name": " "})
     assert resp.status_code == 422
-    assert (await async_client.patch(url, headers=_h(env, SUPPLY), json={"includes_materials": True})).status_code == 422
-    assert (await async_client.patch(url, headers=_h(env, PM), json={"supplier_name": "Х"})).status_code == 403
-    assert (await async_client.patch(url, headers=_h(env, CONTRACTOR), json={"supplier_name": "Х"})).status_code == 404
+    assert (await async_client.patch(url, headers=headers(env, SUPPLY), json={"includes_materials": True})).status_code == 422
+    assert (await async_client.patch(url, headers=headers(env, PM), json={"supplier_name": "Х"})).status_code == 403
+    assert (await async_client.patch(url, headers=headers(env, CONTRACTOR), json={"supplier_name": "Х"})).status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_delete_offer_removes_prices_selection_and_file(async_client, db_session, env, fake_s3):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     await _put_price(async_client, env, offer["id"], "armature", 50000, "т")
     resp = await async_client.put(f"/kp-request-items/{env['armature']}/selected-offer",
-                                  headers=_h(env, SUPPLY), json={"offer_id": offer["id"]})
+                                  headers=headers(env, SUPPLY), json={"offer_id": offer["id"]})
     assert resp.status_code == 200, resp.text
     key = (await db_session.get(KpOffer, offer["id"])).storage_key
 
-    resp = await async_client.delete(f"/kp-offers/{offer['id']}", headers=_h(env, SUPPLY2))
+    resp = await async_client.delete(f"/kp-offers/{offer['id']}", headers=headers(env, SUPPLY2))
     assert resp.status_code == 204
     db_session.expire_all()
     assert await db_session.get(KpOffer, offer["id"]) is None
@@ -362,7 +252,7 @@ async def test_delete_offer_removes_prices_selection_and_file(async_client, db_s
 
 @pytest.mark.asyncio
 async def test_manual_price_confirmed_and_matrix(async_client, env):
-    offer = await _offer(async_client, env)  # с НДС 22 %
+    offer = await create_offer(async_client, env)  # с НДС 22 %
     resp = await _put_price(async_client, env, offer["id"], "armature", 54900, "т")
     assert resp.status_code == 200, resp.text
     cell = resp.json()
@@ -384,7 +274,7 @@ async def test_manual_price_confirmed_and_matrix(async_client, env):
 
 @pytest.mark.asyncio
 async def test_price_edit_replaces_ai_draft(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     db_session.add(KpOfferPrice(offer_id=offer["id"], item_id=env["cement"], price=9.5, unit="кг",
                                 name_in_offer="ЦЕМ I 42,5", source="ai", confidence="low", confirmed=False))
     await db_session.commit()
@@ -398,23 +288,23 @@ async def test_price_edit_replaces_ai_draft(async_client, db_session, env):
 
 @pytest.mark.asyncio
 async def test_confirm_and_delete_price(async_client, db_session, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     db_session.add(KpOfferPrice(offer_id=offer["id"], item_id=env["cement"], price=9.5, unit="кг",
                                 source="ai", confidence="high", confirmed=False))
     await db_session.commit()
     url = f"/kp-offers/{offer['id']}/prices/{env['cement']}"
-    resp = await async_client.post(f"{url}/confirm", headers=_h(env, SUPPLY2))
+    resp = await async_client.post(f"{url}/confirm", headers=headers(env, SUPPLY2))
     assert resp.status_code == 200, resp.text
     assert resp.json()["confirmed"] is True and resp.json()["source"] == "ai"
 
-    assert (await async_client.delete(url, headers=_h(env, SUPPLY))).status_code == 204
-    assert (await async_client.delete(url, headers=_h(env, SUPPLY))).status_code == 404
-    assert (await async_client.post(f"{url}/confirm", headers=_h(env, SUPPLY))).status_code == 404
+    assert (await async_client.delete(url, headers=headers(env, SUPPLY))).status_code == 204
+    assert (await async_client.delete(url, headers=headers(env, SUPPLY))).status_code == 404
+    assert (await async_client.post(f"{url}/confirm", headers=headers(env, SUPPLY))).status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_price_validation(async_client, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     for price in (0, -5, "abc", None):
         resp = await _put_price(async_client, env, offer["id"], "cement", price)
         assert resp.status_code == 422, price
@@ -428,7 +318,7 @@ async def test_price_validation(async_client, env):
 
 @pytest.mark.asyncio
 async def test_work_price_includes_materials_overrides_offer(async_client, env):
-    offer = (await _upload(async_client, env, request_key="work", who=CONTRACTOR,
+    offer = (await upload_offer(async_client, env, request_key="work", who=CONTRACTOR,
                            supplier_name="Бригада", vat_mode="without_vat",
                            includes_materials="true")).json()
     resp = await _put_price(async_client, env, offer["id"], "plaster", 700, "м2", who=CONTRACTOR,
@@ -442,7 +332,7 @@ async def test_work_price_includes_materials_overrides_offer(async_client, env):
 
 @pytest.mark.asyncio
 async def test_incompatible_unit_reason_in_matrix(async_client, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     await _put_price(async_client, env, offer["id"], "cement", 350, "мешок")
     body = await _detail(async_client, env)
     cement = next(i for i in body["items"] if i["id"] == env["cement"])
@@ -453,7 +343,7 @@ async def test_incompatible_unit_reason_in_matrix(async_client, env):
 
 @pytest.mark.asyncio
 async def test_sales_cannot_edit_prices(async_client, env):
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     assert (await _put_price(async_client, env, offer["id"], "cement", 10, who=PM)).status_code == 403
     assert (await _put_price(async_client, env, offer["id"], "cement", 10, who=CONTRACTOR)).status_code == 404
 
@@ -464,8 +354,8 @@ async def test_sales_cannot_edit_prices(async_client, env):
 
 @pytest.mark.asyncio
 async def test_selected_offer_overrides_minimum(async_client, env):
-    a = await _offer(async_client, env, supplier_name="А", vat_mode="without_vat")
-    b = await _offer(async_client, env, supplier_name="Б", vat_mode="without_vat")
+    a = await create_offer(async_client, env, supplier_name="А", vat_mode="without_vat")
+    b = await create_offer(async_client, env, supplier_name="Б", vat_mode="without_vat")
     await _put_price(async_client, env, a["id"], "cement", 9, "кг")
     await _put_price(async_client, env, b["id"], "cement", 10, "кг")
     url = f"/kp-request-items/{env['cement']}/selected-offer"
@@ -474,42 +364,42 @@ async def test_selected_offer_overrides_minimum(async_client, env):
     cement = next(i for i in body["items"] if i["id"] == env["cement"])
     assert cement["best"]["offer_id"] == a["id"] and cement["min_offer_id"] == a["id"]
 
-    resp = await async_client.put(url, headers=_h(env, PM), json={"offer_id": b["id"]})
+    resp = await async_client.put(url, headers=headers(env, PM), json={"offer_id": b["id"]})
     assert resp.status_code == 200, resp.text
     cement = next(i for i in resp.json()["items"] if i["id"] == env["cement"])
     assert cement["selected_offer_id"] == b["id"]
     assert cement["best"]["offer_id"] == b["id"] and cement["best"]["selected"] is True
     assert cement["min_offer_id"] == a["id"]
 
-    resp = await async_client.put(url, headers=_h(env, SUPPLY), json={"offer_id": None})
+    resp = await async_client.put(url, headers=headers(env, SUPPLY), json={"offer_id": None})
     cement = next(i for i in resp.json()["items"] if i["id"] == env["cement"])
     assert cement["selected_offer_id"] is None and cement["best"]["offer_id"] == a["id"]
 
 
 @pytest.mark.asyncio
 async def test_selected_offer_validation_and_access(async_client, env):
-    a = await _offer(async_client, env)
-    work_offer = (await _upload(async_client, env, request_key="work", who=CONTRACTOR,
+    a = await create_offer(async_client, env)
+    work_offer = (await upload_offer(async_client, env, request_key="work", who=CONTRACTOR,
                                 supplier_name="Бригада")).json()
     url = f"/kp-request-items/{env['cement']}/selected-offer"
-    resp = await async_client.put(url, headers=_h(env, SUPPLY), json={"offer_id": work_offer["id"]})
+    resp = await async_client.put(url, headers=headers(env, SUPPLY), json={"offer_id": work_offer["id"]})
     assert resp.status_code == 422
-    resp = await async_client.put(url, headers=_h(env, SUPPLY), json={"offer_id": "не-uuid"})
+    resp = await async_client.put(url, headers=headers(env, SUPPLY), json={"offer_id": "не-uuid"})
     assert resp.status_code == 422
-    resp = await async_client.put(url, headers=_h(env, CONTRACTOR), json={"offer_id": a["id"]})
+    resp = await async_client.put(url, headers=headers(env, CONTRACTOR), json={"offer_id": a["id"]})
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_sales_can_select_after_done_production_cannot(async_client, db_session, env):
-    a = await _parsed(db_session, await _offer(async_client, env))
+    a = await _parsed(db_session, await create_offer(async_client, env))
     await _put_price(async_client, env, a["id"], "cement", 10, "кг")
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                   headers=_h(env, SUPPLY), json={"report": "Ответил один"})
+                                   headers=headers(env, SUPPLY), json={"report": "Ответил один"})
     assert resp.status_code == 200, resp.text
     url = f"/kp-request-items/{env['cement']}/selected-offer"
-    assert (await async_client.put(url, headers=_h(env, SUPPLY), json={"offer_id": a["id"]})).status_code == 409
-    assert (await async_client.put(url, headers=_h(env, PM), json={"offer_id": a["id"]})).status_code == 200
+    assert (await async_client.put(url, headers=headers(env, SUPPLY), json={"offer_id": a["id"]})).status_code == 409
+    assert (await async_client.put(url, headers=headers(env, PM), json={"offer_id": a["id"]})).status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -518,22 +408,22 @@ async def test_sales_can_select_after_done_production_cannot(async_client, db_se
 
 @pytest.mark.asyncio
 async def test_complete_requires_report(async_client, env):
-    await _offer(async_client, env)
+    await create_offer(async_client, env)
     for report in (None, "", "   "):
         resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                       headers=_h(env, SUPPLY), json={"report": report})
+                                       headers=headers(env, SUPPLY), json={"report": report})
         assert resp.status_code == 422, report
         assert "отчёт" in json.dumps(resp.json(), ensure_ascii=False).lower()
 
 
 @pytest.mark.asyncio
 async def test_complete_with_draft_price_is_422_with_list(async_client, db_session, env):
-    offer = await _parsed(db_session, await _offer(async_client, env))
+    offer = await _parsed(db_session, await create_offer(async_client, env))
     db_session.add(KpOfferPrice(offer_id=offer["id"], item_id=env["cement"], price=9.5, unit="кг",
                                 source="ai", confirmed=False))
     await db_session.commit()
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                   headers=_h(env, SUPPLY), json={"report": "Готово"})
+                                   headers=headers(env, SUPPLY), json={"report": "Готово"})
     assert resp.status_code == 422
     detail = resp.json()["detail"]
     assert "Цемент М500" in detail and "ООО Металл" in detail
@@ -548,15 +438,18 @@ async def test_complete_waits_for_running_parse(async_client, db_session, env):
 
     from sqlalchemy import update
 
-    offer = await _offer(async_client, env)  # файл → разбор в очереди
-    manual = await _upload(async_client, env, supplier_name="Без файла")
+    offer = await create_offer(async_client, env)  # файл → разбор в очереди
+    manual = await upload_offer(async_client, env, supplier_name="Без файла")
     assert manual.status_code == 201, manual.text
     await _put_price(async_client, env, offer["id"], "cement", 10, "кг")
     url = f"/kp-requests/{env['material']}/complete"
 
-    resp = await async_client.post(url, headers=_h(env, SUPPLY), json={"report": "Готово"})
+    resp = await async_client.post(url, headers=headers(env, SUPPLY), json={"report": "Готово"})
     assert resp.status_code == 422
-    assert resp.json()["detail"] == "Дождитесь разбора КП: ООО Металл"
+    # Назван тот КП, чей файл ещё разбирается; КП без файла ждать нечего.
+    detail = resp.json()["detail"]
+    assert "ООО Металл" in detail
+    assert "Без файла" not in detail
     db_session.expire_all()
     assert (await db_session.get(KpRequest, env["material"])).status == "in_progress"
 
@@ -564,7 +457,7 @@ async def test_complete_waits_for_running_parse(async_client, db_session, env):
     await db_session.execute(update(KpOffer).where(KpOffer.id == offer["id"])
                              .values(parse_status="processing", parse_started_at=now))
     await db_session.commit()
-    resp = await async_client.post(url, headers=_h(env, SUPPLY), json={"report": "Готово"})
+    resp = await async_client.post(url, headers=headers(env, SUPPLY), json={"report": "Готово"})
     assert resp.status_code == 422
     assert "ООО Металл" in resp.json()["detail"]
 
@@ -572,23 +465,23 @@ async def test_complete_waits_for_running_parse(async_client, db_session, env):
     await db_session.execute(update(KpOffer).where(KpOffer.id == offer["id"])
                              .values(parse_started_at=now - timedelta(minutes=16)))
     await db_session.commit()
-    resp = await async_client.post(url, headers=_h(env, SUPPLY), json={"report": "Готово"})
+    resp = await async_client.post(url, headers=headers(env, SUPPLY), json={"report": "Готово"})
     assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
 async def test_complete_ignores_parse_of_deleted_offer(async_client, db_session, env):
-    offer = await _offer(async_client, env)
-    assert (await async_client.delete(f"/kp-offers/{offer['id']}", headers=_h(env, SUPPLY))).status_code == 204
+    offer = await create_offer(async_client, env)
+    assert (await async_client.delete(f"/kp-offers/{offer['id']}", headers=headers(env, SUPPLY))).status_code == 204
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                   headers=_h(env, SUPPLY), json={"report": "Готово"})
+                                   headers=headers(env, SUPPLY), json={"report": "Готово"})
     assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.asyncio
 async def test_complete_without_offers_with_report(async_client, db_session, env):
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                   headers=_h(env, SUPPLY), json={"report": "Никто не ответил"})
+                                   headers=headers(env, SUPPLY), json={"report": "Никто не ответил"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "done"
@@ -600,26 +493,26 @@ async def test_complete_without_offers_with_report(async_client, db_session, env
 
 @pytest.mark.asyncio
 async def test_after_done_production_edits_409(async_client, db_session, env):
-    offer = await _parsed(db_session, await _offer(async_client, env))
+    offer = await _parsed(db_session, await create_offer(async_client, env))
     await _put_price(async_client, env, offer["id"], "cement", 10, "кг")
     resp = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                   headers=_h(env, SUPPLY), json={"report": "Готово"})
+                                   headers=headers(env, SUPPLY), json={"report": "Готово"})
     assert resp.status_code == 200
     price_url = f"/kp-offers/{offer['id']}/prices/{env['cement']}"
     assert (await _put_price(async_client, env, offer["id"], "cement", 11, "кг")).status_code == 409
-    assert (await async_client.post(f"{price_url}/confirm", headers=_h(env, SUPPLY))).status_code == 409
-    assert (await async_client.delete(price_url, headers=_h(env, SUPPLY))).status_code == 409
-    assert (await async_client.patch(f"/kp-offers/{offer['id']}", headers=_h(env, SUPPLY),
+    assert (await async_client.post(f"{price_url}/confirm", headers=headers(env, SUPPLY))).status_code == 409
+    assert (await async_client.delete(price_url, headers=headers(env, SUPPLY))).status_code == 409
+    assert (await async_client.patch(f"/kp-offers/{offer['id']}", headers=headers(env, SUPPLY),
                                      json={"supplier_name": "Х"})).status_code == 409
-    assert (await async_client.delete(f"/kp-offers/{offer['id']}", headers=_h(env, SUPPLY))).status_code == 409
-    assert (await _upload(async_client, env)).status_code == 409
+    assert (await async_client.delete(f"/kp-offers/{offer['id']}", headers=headers(env, SUPPLY))).status_code == 409
+    assert (await upload_offer(async_client, env)).status_code == 409
     second = await async_client.post(f"/kp-requests/{env['material']}/complete",
-                                     headers=_h(env, SUPPLY2), json={"report": "Ещё раз"})
+                                     headers=headers(env, SUPPLY2), json={"report": "Ещё раз"})
     assert second.status_code == 409
     db_session.expire_all()
     assert (await db_session.get(KpRequest, env["material"])).report == "Готово"
     # Файл завершённого КП по-прежнему скачивается.
-    assert (await async_client.get(f"/kp-offers/{offer['id']}/download", headers=_h(env, PM))).status_code == 200
+    assert (await async_client.get(f"/kp-offers/{offer['id']}/download", headers=headers(env, PM))).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -651,16 +544,16 @@ async def test_complete_is_atomic_against_stale_state(db_session, env):
 @pytest.mark.asyncio
 async def test_complete_forbidden_for_sales_and_foreign_role(async_client, env):
     url = f"/kp-requests/{env['material']}/complete"
-    assert (await async_client.post(url, headers=_h(env, PM), json={"report": "x"})).status_code == 403
-    assert (await async_client.post(url, headers=_h(env, CONTRACTOR), json={"report": "x"})).status_code == 404
+    assert (await async_client.post(url, headers=headers(env, PM), json={"report": "x"})).status_code == 403
+    assert (await async_client.post(url, headers=headers(env, CONTRACTOR), json={"report": "x"})).status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_reopen_after_complete_allows_edits_again(async_client, db_session, env):
-    offer = await _parsed(db_session, await _offer(async_client, env))
+    offer = await _parsed(db_session, await create_offer(async_client, env))
     await async_client.post(f"/kp-requests/{env['material']}/complete",
-                            headers=_h(env, SUPPLY), json={"report": "Готово"})
-    resp = await async_client.post(f"/kp-requests/{env['material']}/reopen", headers=_h(env, PM))
+                            headers=headers(env, SUPPLY), json={"report": "Готово"})
+    resp = await async_client.post(f"/kp-requests/{env['material']}/reopen", headers=headers(env, PM))
     assert resp.status_code == 200
     assert (await _put_price(async_client, env, offer["id"], "cement", 11, "кг")).status_code == 200
 
@@ -672,7 +565,7 @@ async def test_detail_permissions_for_editing(async_client, db_session, env):
     assert body["permissions"]["can_edit_offers"] is True
     assert body["permissions"]["can_complete"] is True
     assert body["permissions"]["can_select_offer"] is False
-    await _offer(async_client, env)
+    await create_offer(async_client, env)
     body = await _detail(async_client, env, who=SUPPLY)
     assert body["permissions"]["can_select_offer"] is True
     body = await _detail(async_client, env, who=PM)
@@ -695,7 +588,7 @@ async def test_detail_permissions_for_editing(async_client, db_session, env):
 @pytest.mark.asyncio
 async def test_price_on_offer_deleted_meanwhile_is_404(async_client, db_session, env):
     """Коллега удалил КП, пока цена ждала строку запроса: 404, а не цена без КП."""
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     stale = await db_session.get(KpOffer, offer["id"])
     assert stale is not None
     real_get = kp_offers.get_offer
@@ -720,12 +613,12 @@ async def test_confirmed_prices_count_in_brief_and_detail(async_client, db_sessi
     Черновик ИИ не в счёт, цена удалённого КП — тоже.
     """
     async def mine_count():
-        resp = await async_client.get("/kp-requests/mine", headers=_h(env, SUPPLY))
+        resp = await async_client.get("/kp-requests/mine", headers=headers(env, SUPPLY))
         assert resp.status_code == 200, resp.text
         return next(r for r in resp.json() if r["id"] == env["material"])["confirmed_prices_count"]
 
     assert await mine_count() == 0
-    offer = await _offer(async_client, env)
+    offer = await create_offer(async_client, env)
     db_session.add(KpOfferPrice(offer_id=offer["id"], item_id=env["cement"], price=9.5, unit="кг",
                                 source="ai", confidence="low", confirmed=False))
     await db_session.commit()

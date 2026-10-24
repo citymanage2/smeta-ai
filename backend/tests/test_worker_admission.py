@@ -8,6 +8,8 @@ OOM-kill. Лечится двумя вещами: доля от реальног
 
 План: plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 3.
 """
+import asyncio
+
 import pytest
 
 from app import worker
@@ -193,76 +195,50 @@ async def test_stagger_disabled_by_zero(monkeypatch):
     assert worker._claim_stagger_blocked() is False
 
 
-async def test_poll_loop_skips_claim_when_staggered(monkeypatch):
-    """Под разносом claim не вызывается, слот возвращается, задачи ждут в очереди."""
-    import asyncio
+@pytest.mark.parametrize("closed_by", ["stagger", "memory"])
+async def test_second_job_waits_in_queue_while_admission_closed(worker_loop, monkeypatch, closed_by):
+    """Первая задача ещё молодая (разнос) или памяти мало (тормоз) — вторая ждёт.
 
-    monkeypatch.setattr(worker, "_memory_brake_engaged", lambda: False)
-    monkeypatch.setattr(worker, "_claim_stagger_blocked", lambda: True)
-
-    claims = []
-
-    async def fake_claim(db, worker_id):  # pragma: no cover — не должен вызваться
-        claims.append(worker_id)
-        return None
-
-    monkeypatch.setattr(worker.job_queue, "claim_one", fake_claim)
-    monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_S", 0.01)
-
-    shutdown = asyncio.Event()
-    monkeypatch.setattr(worker, "_shutdown", shutdown)
-
-    sem = asyncio.Semaphore(2)
-    loop_task = asyncio.create_task(worker._poll_loop(sem, set()))
-    await asyncio.sleep(0.05)
-    shutdown.set()
-    await asyncio.wait_for(loop_task, timeout=2)
-
-    assert claims == []
-    assert sem._value == 2
-
-
-async def test_started_at_recorded_and_cleaned(monkeypatch):
-    """Время старта job пишется при захвате и убирается по завершении.
-
-    Иначе разнос захватов либо не сработает, либо запрёт очередь навсегда.
+    Ждёт в очереди и не теряется: как только первая доиграла, вторую берут.
     """
-    import asyncio
+    if closed_by == "stagger":
+        monkeypatch.setattr(settings, "WORKER_CLAIM_STAGGER_S", 60)
+    else:
+        # Личный лимит 2 ГБ, занято 1,9 ГБ — запас меньше WORKER_MEM_MIN_FREE_MB.
+        worker_loop.memory(usage=1900.0, limit=2048.0)
+    held = worker_loop.hold("test.slow")
+    await worker_loop.enqueue("test.slow", {"task_id": "A"})
+    await worker_loop.enqueue("test.slow", {"task_id": "B"})
 
-    from app.models.job import Job
+    async with worker_loop.running(slots=2):
+        await held.wait_started(1)
+        await asyncio.sleep(0.2)  # два десятка опросов очереди
+        assert sorted((await worker_loop.statuses()).values()) == ["queued", "running"]
 
-    job = Job(id=77, kind="task.process", payload={}, status="running", attempts=1)
-    seen: dict = {}
+        held.release()
+        for job_id in await worker_loop.statuses():
+            await worker_loop.wait_status(job_id, "done")
 
-    async def fake_claim(db, worker_id):
-        if job.id in worker._inflight_job_ids or seen.get("claimed"):
-            return None
-        seen["claimed"] = True
-        return job
+    assert len(held.started) == 2
 
-    async def fake_run(j):
-        seen["during"] = dict(worker._inflight_started_at)
 
-    monkeypatch.setattr(worker, "_memory_brake_engaged", lambda: False)
-    monkeypatch.setattr(worker, "_claim_stagger_blocked", lambda: False)
-    monkeypatch.setattr(worker.job_queue, "claim_one", fake_claim)
-    monkeypatch.setattr(worker, "run_job", fake_run)
-    monkeypatch.setattr(worker, "_inflight_started_at", {})
-    monkeypatch.setattr(worker, "_inflight_job_ids", set())
-    monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_S", 0.01)
+async def test_next_job_of_same_task_is_taken_right_away(worker_loop, monkeypatch):
+    """Доигравшая job не числится за процессом: следующую job той же задачи берут сразу.
 
-    shutdown = asyncio.Event()
-    monkeypatch.setattr(worker, "_shutdown", shutdown)
+    Иначе разнос захватов ждал бы «молодую» задачу, которой уже нет, а проверка
+    дублей сняла бы новый прогон как второй прогон живой задачи.
+    """
+    monkeypatch.setattr(settings, "WORKER_CLAIM_STAGGER_S", 60)
+    held = worker_loop.hold("task.process")
+    held.release()  # обработчик отрабатывает сразу
 
-    inflight: set = set()
-    loop_task = asyncio.create_task(worker._poll_loop(asyncio.Semaphore(2), inflight))
-    await asyncio.sleep(0.05)
-    shutdown.set()
-    await asyncio.wait_for(loop_task, timeout=2)
-    await asyncio.gather(*list(inflight), return_exceptions=True)
+    async with worker_loop.running(slots=2):
+        first = await worker_loop.enqueue("task.process", {"task_id": "task-Z"})
+        await worker_loop.wait_status(first, "done")
+        second = await worker_loop.enqueue("task.process", {"task_id": "task-Z"})
+        await worker_loop.wait_status(second, "done")
 
-    assert 77 in seen["during"]
-    assert worker._inflight_started_at == {}
+    assert [p["task_id"] for p in held.started] == ["task-Z", "task-Z"]
 
 
 # ---------------------------------------------------------------------------

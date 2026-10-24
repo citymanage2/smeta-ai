@@ -13,7 +13,6 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 sys.modules.setdefault("fitz", MagicMock())
 
@@ -104,15 +103,23 @@ async def _run_lookup(monkeypatch, fake, items) -> tuple[dict, list[dict]]:
 # Прайс
 # ---------------------------------------------------------------------------
 
-async def test_cena_za_tonnu_v_pozicii_v_kg_pereschityvaetsya(monkeypatch):
-    """Случай 405: 73 770 ₽/т в позиции в кг → 73,77 ₽/кг."""
-    fake = _FakePriceSvc(material={"name": "Смеси сухие", "price": 73770.0, "unit": "т"})
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
+async def test_cena_za_tonnu_v_pozicii_v_kg_pereschityvaetsya(processor_env, price_db, claude_api):
+    """Случай 405: 73 770 ₽/т в позиции в кг → 73,77 ₽/кг, а не 2 213 100 ₽ стоимости."""
+    price_db.material("Смеси сухие", unit="т", price=73770.0)
+    ai = claude_api()  # цена нашлась в прайсе — в ИИ позиция не уходит
+    task = await processor_env.estimate_task(
+        [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
+    )
 
-    matched, _ = await _run_lookup(monkeypatch, fake, items)
+    task = await processor_env.run(task)
 
-    assert matched[0]["material_price"] == 73.77
-    assert PRICE_CONVERTED_PREFIX in matched[0][UNIT_NOTE_KEY]
+    assert task.status == "completed"
+    (item,) = await processor_env.estimate_items(task)
+    assert item["material_price"] == 73.77
+    assert PRICE_CONVERTED_PREFIX in item["notes"]
+    # 30 кг × 73,77 = 2 213,10 + 3 % транспортных = 2 279,49.
+    assert float(task.cost) == 2279.49
+    assert ai.calls == []
 
 
 async def test_cena_za_sto_kvadratov_v_pozicii_v_kvadrate(monkeypatch):
@@ -206,15 +213,24 @@ async def _step3(items, matched, claude_results) -> list[dict]:
     return p._save_progress_data.await_args.args[0]["items"]
 
 
-async def test_ii_vernul_cenu_za_meshok_cena_ne_zapisyvaetsya():
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
-    claude = {0: {"id": 0, "type": "Материал", "unit": "мешок",
-                  "material_price": 500.0, "sources": "источник"}}
+async def test_ii_vernul_cenu_za_meshok_cena_ne_zapisyvaetsya(processor_env, claude_api):
+    """Прайс цены не знает, ИИ нашёл цену за мешок — в смету она не идёт."""
+    ai = claude_api({"items": [{
+        "id": 0, "type": "Материал", "name": "Смеси сухие", "unit": "мешок",
+        "material_price": 500.0, "sources": "источник",
+    }]})
+    task = await processor_env.estimate_task(
+        [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
+    )
 
-    saved = await _step3(items, {}, claude)
+    task = await processor_env.run(task)
 
-    assert saved[0]["material_price"] is None
-    assert PRICE_UNIT_MISMATCH_PREFIX in saved[0]["notes"]
+    assert task.status == "completed"
+    (item,) = await processor_env.estimate_items(task)
+    assert item["material_price"] is None
+    assert item["unit"] == "кг"
+    assert PRICE_UNIT_MISMATCH_PREFIX in item["notes"]
+    assert len(ai.calls) == 1, "цена за мешок — ответ, а не пропуск: повторного запроса нет"
 
 
 async def test_ii_vernul_cenu_za_sto_kvadratov_pereschityvaem():

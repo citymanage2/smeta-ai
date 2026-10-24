@@ -12,8 +12,6 @@
 
 План: plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 7.
 """
-import asyncio
-
 import pytest
 from sqlalchemy import delete, select
 
@@ -77,84 +75,21 @@ async def test_drop_duplicate_ignores_not_running(db_session):
     assert fresh.status == "queued"
 
 
-async def test_poll_loop_drops_duplicate_and_does_not_run_it(monkeypatch):
+async def test_poll_loop_drops_duplicate_and_does_not_run_it(worker_loop):
     """Главный сценарий: реклейм выдал вторую job живой задачи — прогона не будет."""
-    monkeypatch.setattr(worker, "_inflight_task_ids", {1: "task-A"})
-    monkeypatch.setattr(worker, "_inflight_job_ids", {1})
-    monkeypatch.setattr(worker, "_inflight_started_at", {1: 0.0})
-    monkeypatch.setattr(worker, "_memory_brake_engaged", lambda: False)
-    monkeypatch.setattr(worker, "_claim_stagger_blocked", lambda: False)
-    monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_S", 0.01)
+    held = worker_loop.hold("task.process")
+    first = await worker_loop.enqueue("task.process", {"task_id": "task-A"})
 
-    runs = []
-    dropped = []
-    handed = {"n": 0}
+    async with worker_loop.running(slots=2):
+        await held.wait_started(1)
+        duplicate = await worker_loop.enqueue("task.process", {"task_id": "task-A"})
 
-    async def fake_claim(db, worker_id):
-        handed["n"] += 1
-        if handed["n"] > 1:
-            return None
-        return _job(2, "task-A")
+        await worker_loop.wait_status(duplicate, "superseded")
+        assert len(held.started) == 1, "дубль всё равно ушёл в обработку"
+        assert await worker_loop.status(first) == "running"
 
-    async def fake_drop(db, job_id, task_id):
-        dropped.append((job_id, task_id))
-        return True
-
-    async def fake_run(j):  # pragma: no cover — не должен вызваться
-        runs.append(j.id)
-
-    monkeypatch.setattr(worker.job_queue, "claim_one", fake_claim)
-    monkeypatch.setattr(worker.job_queue, "drop_duplicate_job", fake_drop)
-    monkeypatch.setattr(worker, "run_job", fake_run)
-
-    shutdown = asyncio.Event()
-    monkeypatch.setattr(worker, "_shutdown", shutdown)
-
-    sem = asyncio.Semaphore(2)
-    loop_task = asyncio.create_task(worker._poll_loop(sem, set()))
-    await asyncio.sleep(0.05)
-    shutdown.set()
-    await asyncio.wait_for(loop_task, timeout=2)
-
-    assert dropped == [(2, "task-A")]
-    assert runs == [], "дубль всё равно ушёл в обработку"
-    assert sem._value == 2  # слот возвращён
-
-
-async def test_inflight_task_ids_cleaned_after_run(monkeypatch):
-    """После задачи её id уходит из карты — иначе повторный запуск станет невозможен."""
-    monkeypatch.setattr(worker, "_inflight_task_ids", {})
-    monkeypatch.setattr(worker, "_inflight_job_ids", set())
-    monkeypatch.setattr(worker, "_inflight_started_at", {})
-    monkeypatch.setattr(worker, "_memory_brake_engaged", lambda: False)
-    monkeypatch.setattr(worker, "_claim_stagger_blocked", lambda: False)
-    monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_S", 0.01)
-
-    seen = {}
-    handed = {"n": 0}
-
-    async def fake_claim(db, worker_id):
-        handed["n"] += 1
-        return _job(3, "task-Z") if handed["n"] == 1 else None
-
-    async def fake_run(j):
-        seen["during"] = dict(worker._inflight_task_ids)
-
-    monkeypatch.setattr(worker.job_queue, "claim_one", fake_claim)
-    monkeypatch.setattr(worker, "run_job", fake_run)
-
-    shutdown = asyncio.Event()
-    monkeypatch.setattr(worker, "_shutdown", shutdown)
-
-    inflight: set = set()
-    loop_task = asyncio.create_task(worker._poll_loop(asyncio.Semaphore(2), inflight))
-    await asyncio.sleep(0.05)
-    shutdown.set()
-    await asyncio.wait_for(loop_task, timeout=2)
-    await asyncio.gather(*list(inflight), return_exceptions=True)
-
-    assert seen["during"] == {3: "task-Z"}
-    assert worker._inflight_task_ids == {}
+        held.release()
+        await worker_loop.wait_status(first, "done")
 
 
 # ---------------------------------------------------------------------------

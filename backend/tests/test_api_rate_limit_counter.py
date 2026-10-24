@@ -10,10 +10,7 @@
 План: plans/2026-08-04-schetchik-429-v-adminke.md, Фаза 1.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-import anthropic
-import httpx2
 import pytest
 from sqlalchemy import delete, select
 
@@ -21,6 +18,9 @@ from app.models.job import Job  # регистрирует таблицу jobs
 from app.models.workflow_card import WorkflowCard  # noqa: F401 — на неё ссылается document_locks
 from app.models.system_event import KIND_API_RATE_LIMITED, SystemEvent
 from app.services import claude_service
+from tests.helpers.anthropic_api import (
+    PROXY_URL, balance_error, claude_message, rate_limit_error,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -28,18 +28,6 @@ async def _clean(db_session):
     await db_session.execute(delete(Job))
     await db_session.execute(delete(SystemEvent))
     await db_session.flush()
-
-
-def _rate_limit_error(retry_after: Optional[str] = "30") -> anthropic.RateLimitError:
-    """Настоящий RateLimitError SDK — чтобы ловился именно тот except, что в коде."""
-    headers = {"retry-after": retry_after} if retry_after is not None else {}
-    response = httpx2.Response(
-        429,
-        headers=headers,
-        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages"),
-        json={"error": {"type": "rate_limit_error", "message": "rate limit"}},
-    )
-    return anthropic.RateLimitError("rate limit", response=response, body=None)
 
 
 def _event(created_at: datetime, **payload) -> SystemEvent:
@@ -51,28 +39,26 @@ def _event(created_at: datetime, **payload) -> SystemEvent:
 # --- запись события -------------------------------------------------------
 
 
-async def test_rate_limit_is_recorded(db_session, test_app):
-    """429 пишет строку с цифрами, по которым видно масштаб ожидания.
+async def test_rate_limit_is_recorded(async_client, admin_token, claude_api, api_sleeps):
+    """Один 429 — одна строка в диагностике: сколько раз и сколько ждали.
 
-    `test_app` здесь не ради HTTP: эта фикстура подменяет `AsyncSessionLocal` на
-    тестовую, а событие пишется в своей сессии (как и лог вызовов API).
+    Событие пишется своей сессией (как и журнал вызовов API); `async_client`
+    направляет её в тестовую БД.
     """
-    await claude_service._record_rate_limit(
-        _rate_limit_error(), wait_s=60.0, attempt=2, rate_limit_count=1
-    )
+    ai = claude_api(rate_limit_error(retry_after=30), claude_message("ok"))
 
-    row = (
-        await db_session.execute(
-            select(SystemEvent).where(SystemEvent.kind == KIND_API_RATE_LIMITED)
-        )
-    ).scalars().one()
-    assert row.payload["wait_s"] == 60.0
-    assert row.payload["attempt"] == 2
-    assert row.payload["retry_after_s"] == 30.0
-    assert "via_proxy" in row.payload
+    assert await claude_service.call_claude([{"role": "user", "content": "привет"}]) == "ok"
+
+    assert len(ai.calls) == 2
+    # retry-after 30 с меньше минимального шага бэкоффа — ждём 60.
+    assert api_sleeps == [60]
+    r = await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
+    info = r.json()["api_rate_limits"]
+    assert info["hits_1h"] == 1
+    assert info["max_wait_s_24h"] == 60
 
 
-async def test_recording_failure_never_raises(monkeypatch):
+async def test_recording_failure_never_raises(monkeypatch, claude_api, api_sleeps):
     """Диагностика не важнее работы: упавшая запись не должна ронять вызов Claude."""
     import app.database
 
@@ -80,38 +66,25 @@ async def test_recording_failure_never_raises(monkeypatch):
         raise RuntimeError("БД недоступна")
 
     monkeypatch.setattr(app.database, "AsyncSessionLocal", _boom)
+    claude_api(rate_limit_error(retry_after=30), claude_message("ok"))
 
-    # Ровно то, что проверяем: исключение не выходит наружу.
-    await claude_service._record_rate_limit(
-        _rate_limit_error(), wait_s=60.0, attempt=1, rate_limit_count=1
-    )
+    assert await claude_service.call_claude([{"role": "user", "content": "привет"}]) == "ok"
 
 
-async def test_balance_error_is_not_counted(db_session, test_app, monkeypatch):
+async def test_balance_error_is_not_counted(db_session, test_app, claude_api, api_sleeps):
     """«Нет денег» приходит от посредника под видом 429 — это не лимит запросов.
 
     Если бы такие ответы попадали в счётчик, он показывал бы упор в лимит там, где
     на самом деле кончились деньги, и увёл бы разбор в сторону.
     """
-    balance_error = _rate_limit_error()
-    monkeypatch.setattr(
-        claude_service,
-        "_raise_if_insufficient_balance",
-        lambda e: (_ for _ in ()).throw(claude_service.InsufficientBalanceError("нет средств")),
-    )
-
-    async def _fake_create(**_kwargs):
-        raise balance_error
-
-    monkeypatch.setattr(
-        claude_service, "_get_client", lambda: type("C", (), {
-            "messages": type("M", (), {"create": staticmethod(_fake_create)})()
-        })()
-    )
+    ai = claude_api(balance_error(429, url=PROXY_URL))
 
     with pytest.raises(claude_service.InsufficientBalanceError):
         await claude_service.call_claude([{"role": "user", "content": "привет"}])
 
+    assert len(ai.calls) == 1
+    assert api_sleeps == []
+    db_session.expire_all()
     count = (
         await db_session.execute(
             select(SystemEvent).where(SystemEvent.kind == KIND_API_RATE_LIMITED)
