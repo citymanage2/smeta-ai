@@ -25,6 +25,9 @@ from app.utils.price_min import ESTIMATE_CONTRACTOR
 
 pytestmark = pytest.mark.asyncio
 
+# Настоящая загрузка кеша — до подмены в `clean_price` (тест перезагрузки зовёт её сам).
+_REAL_LOAD_CACHE = price_service.load_cache
+
 _HEADERS = [
     "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
     "Цена работы (за ед.)", "Цена материала (за ед.)",
@@ -346,25 +349,30 @@ async def test_position_just_written_is_never_deleted(async_client, admin_token,
     assert work.prices == {ESTIMATE_CONTRACTOR: 1000.0}
 
 
-async def test_apply_reloads_price_cache(async_client, admin_token, monkeypatch):
-    """Без перезагрузки кэша расчёт увидел бы новую цену только после рестарта."""
-    called = {"n": 0}
+async def test_apply_reloads_price_cache(async_client, admin_token, price_db, monkeypatch):
+    """Расчёт сметы видит эталонную цену сразу, а не после рестарта.
 
-    async def _spy(db):
-        called["n"] += 1
+    Подбор цены читает прайс из памяти процесса — эталон обязан её обновить.
+    """
+    monkeypatch.setattr(price_service, "load_cache", _REAL_LOAD_CACHE)
+    price_db.work("Кладка стен", unit="м3", prices={"ООО Рога": 1200.0})
+    await price_db.load()
 
-    monkeypatch.setattr(price_service, "load_cache", _spy)
-
-    await async_client.post(
+    r = await async_client.post(
         "/prices/reference/apply",
         json={
-            "items": [{"kind": "work", "name": "Новая работа", "unit": "м2", "price": 500.0}],
+            "items": [
+                {"kind": "work", "name": "Кладка стен", "unit": "м3", "price": 1000.0},
+                {"kind": "work", "name": "Новая работа", "unit": "м2", "price": 500.0},
+            ],
             "remove": [],
         },
         headers={"Authorization": admin_token},
     )
 
-    assert called["n"] == 1
+    assert r.status_code == 200, r.text
+    assert price_service._exact_match_work("Кладка стен")["min_price"] == 1000.0
+    assert price_service._exact_match_work("Новая работа")["min_price"] == 500.0
 
 
 # ---------------------------------------------------------------------------
