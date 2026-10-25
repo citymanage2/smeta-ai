@@ -2,8 +2,9 @@
 
 Правило проекта — «экран и скачиваемый файл считают по одной формуле» — при
 разбивке на листы становится главным местом ошибки: сумм становится не одна, а
-N+1. Здесь она закреплена точными числами: итог каждого листа, «ВСЕГО» и то,
-что посчитает формула фронта (`frontend/src/utils/estimateCalc.ts`).
+N+1. Здесь она закреплена точными числами: итог каждого листа и «ВСЕГО». Те же
+позиции и те же итоги (13 390 / 19 055 / 32 445) на экране закреплены во
+фронтовом тесте `frontend/src/__tests__/multisheetEstimateTotals.test.ts`.
 """
 import io
 
@@ -50,21 +51,6 @@ def _totals_of(ws) -> dict:
         if isinstance(label, str) and label.strip().endswith(":"):
             found[label.strip()] = row[9].value
     return found
-
-
-def _screen_total(items: list, sheet: str = None) -> float:
-    """Тот же расчёт, что делает `calcEstimateTotals` на экране."""
-    sum_work = 0.0
-    sum_mat = 0.0
-    for item in items:
-        if sheet is not None and item.get("sheet") != sheet:
-            continue
-        qty = max(float(item.get("quantity") or 0), 0.0)
-        sum_work += round(qty * float(item.get("work_price") or 0), 2)
-        sum_mat += round(qty * float(item.get("material_price") or 0), 2)
-    overhead = sum_work * OVERHEAD_PCT / 100
-    transport = sum_mat * TRANSPORT_PCT / 100
-    return round(sum_work + overhead + sum_mat + transport, 2)
 
 
 @pytest.fixture
@@ -122,13 +108,6 @@ class TestExactNumbers:
         data, _ = built
         assert float(extract_total_cost(data)) == GRAND_TOTAL
 
-    def test_screen_formula_agrees_per_sheet_and_overall(self, built):
-        _, grand = built
-
-        assert _screen_total(ITEMS, "Раздел 1") == SHEET1_TOTAL
-        assert _screen_total(ITEMS, "Раздел 2") == SHEET2_TOTAL
-        assert _screen_total(ITEMS) == grand == GRAND_TOTAL
-
 
 class TestRoundTrip:
     def test_generated_estimate_reopens_with_the_same_tabs(self, built):
@@ -144,15 +123,31 @@ class TestRoundTrip:
         data, _ = built
         assert SUMMARY_SHEET_TITLE not in {r["sheet"] for r in parse_estimate_excel(data)}
 
-    def test_material_is_not_linked_to_a_work_from_another_sheet(self, built):
-        data, _ = built
-        rows = parse_estimate_excel(data)
-        by_id = {r["id"]: r for r in rows}
+    def test_material_is_not_linked_to_a_work_from_another_sheet(self):
+        """Материал в начале листа — не материал последней работы прошлого листа.
 
-        for row in rows:
-            parent = row.get("work_row_id")
-            if parent:
-                assert by_id[parent]["sheet"] == row["sheet"]
+        Внутри листа материал привязывается к работе над ним; на границе листа
+        работы над ним нет, и привязка к чужому разделу была бы ошибкой.
+        """
+        items = [
+            {"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12,
+             "work_price": 1000, "material_price": None, "sheet": "Раздел 1"},
+            {"type": "Материал", "name": "Кирпич", "unit": "шт", "quantity": 5,
+             "work_price": None, "material_price": 200, "sheet": "Раздел 1"},
+            {"type": "Материал", "name": "Раствор", "unit": "кг", "quantity": 10,
+             "work_price": None, "material_price": 350, "sheet": "Раздел 2"},
+            {"type": "Работа", "name": "Кладка", "unit": "м3", "quantity": 3,
+             "work_price": 5000, "material_price": None, "sheet": "Раздел 2"},
+        ]
+        data, _ = generate_estimate_xlsx(items)
+        rows = parse_estimate_excel(data)
+        name_of = {r["id"]: r["name"] for r in rows}
+
+        parents = {
+            r["name"]: name_of.get(r.get("work_row_id"))
+            for r in rows if r["type"] == "material"
+        }
+        assert parents == {"Кирпич": "Демонтаж стен", "Раствор": None}
 
     def test_rows_survive_the_editor_round_trip_with_the_same_total(self, built):
         data, grand = built
@@ -173,24 +168,17 @@ class TestStep3KeepsSheets:
     полей, и забытый там лист унёс бы позицию с её раздела в «Прочее».
     """
 
-    @pytest.mark.asyncio
-    async def test_every_branch_keeps_the_sheet(self):
-        from unittest.mock import AsyncMock, MagicMock
+    async def test_every_branch_keeps_the_sheet(self, processor_env, price_db, claude_api):
+        from app.services import storage_service
 
-        from app.services.task_processor import TaskProcessor
-
-        db = MagicMock()
-        db.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+        price_db.work("Демонтаж", unit="м2", prices={"Подрядчик": 1000})
+        claude_api(
+            # Кладку ИИ оценил, раствор — нет (и при повторе тоже).
+            {"items": [{"id": 1, "type": "Работа", "name": "Кладка", "unit": "м3",
+                        "work_price": 500, "sources": "src"}]},
+            {"items": []},
         )
-        db.commit = AsyncMock()
-        processor = TaskProcessor("tid-sheets", db=db)
-        processor.update_progress = AsyncMock(return_value=None)
-        processor.save_result = AsyncMock(return_value=None)
-        processor._save_progress_data = AsyncMock(return_value=None)
-        processor._result_filename = MagicMock(return_value="Смета.xlsx")
-
-        items = [
+        task = await processor_env.estimate_task([
             # из прайса
             {"type": "Работа", "name": "Демонтаж", "unit": "м2", "quantity": 2,
              "sheet": "Раздел 1"},
@@ -203,19 +191,26 @@ class TestStep3KeepsSheets:
             # вычет
             {"type": "Работа", "name": "Добавка", "unit": "м2", "quantity": -1,
              "sheet": "Раздел 3"},
+        ])
+
+        task = await processor_env.run(task)
+
+        assert task.status == "completed", task.error_message
+        items = await processor_env.estimate_items(task)
+        # Ветки и правда разные: цена прайса, цена ИИ, цены нет, вычет.
+        assert [(it["name"], it["work_price"]) for it in items] == [
+            ("Демонтаж", 1000), ("Кладка", 500), ("Раствор", None), ("Добавка", None),
         ]
-        matched = {0: {**items[0], "work_price": 1000, "price_list_name": "Прайс"}}
-        claude_results = {1: {"id": 1, "type": "Работа", "work_price": 500, "sources": "src"}}
-
-        await processor._run_estimate_step3(MagicMock(), items, matched, claude_results)
-
-        saved = processor._save_progress_data.await_args.args[0]["items"]
-        assert [it.get("sheet") for it in saved] == [
+        assert [it.get("sheet") for it in items] == [
+            "Раздел 1", "Раздел 2", "Раздел 2", "Раздел 3",
+        ]
+        assert [it.get("sheet") for it in task.progress_data["items"]] == [
             "Раздел 1", "Раздел 2", "Раздел 2", "Раздел 3",
         ]
 
         # И в файле позиции легли по своим листам, а не в «Прочее».
-        data = processor.save_result.await_args.args[2]
+        (result,) = await processor_env.results(task, slot="estimate")
+        data = await storage_service.load_bytes(result.storage_key)
         assert _wb(data).sheetnames == [
             "Раздел 1", "Раздел 2", "Раздел 3", SUMMARY_SHEET_TITLE,
         ]

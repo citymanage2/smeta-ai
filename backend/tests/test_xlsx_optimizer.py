@@ -1,7 +1,11 @@
 """Tests for xlsx_optimizer utility."""
 import io
-import openpyxl
 
+import openpyxl
+import pytest
+
+from app.config import settings
+from app.utils.xlsx_exporter import generate_estimate_xlsx
 from app.utils.xlsx_optimizer import (
     parse_estimate_xlsx,
     get_top_items,
@@ -9,62 +13,47 @@ from app.utils.xlsx_optimizer import (
 )
 
 
+@pytest.fixture(autouse=True)
+def vat_22(monkeypatch):
+    """Ставка НДС — настройка окружения; числа ниже посчитаны при 22 %."""
+    monkeypatch.setattr(settings, "VAT_RATE", 0.22)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _make_smeta_xlsx(items: list[dict]) -> bytes:
-    """Build a minimal smeta xlsx in the format excel_service.generate_smeta() produces."""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Смета"
-    headers = [
-        "№", "Тип", "Наименование", "Ед. изм.", "Кол-во",
-        "Цена работы (за ед.)", "Цена материала (за ед.)",
-        "Стоимость работ", "Стоимость материалов",
-        "Итого без НДС", "НДС (22%)", "Итого с НДС",
-        "Наименование в прайсе", "Источники", "Примечание",
-    ]
-    for col, h in enumerate(headers, start=1):
-        ws.cell(row=1, column=col, value=h)
-    VAT = 0.22
-    for i, item in enumerate(items, start=1):
-        row = i + 1
-        qty = item.get("quantity", 1)
-        wp = item.get("work_price", 0)
-        mp = item.get("material_price", 0)
-        subtotal = qty * (wp + mp)
-        vat = subtotal * VAT
-        total = subtotal + vat
-        ws.cell(row=row, column=1, value=i)
-        ws.cell(row=row, column=2, value=item.get("type", "Материал"))
-        ws.cell(row=row, column=3, value=item["name"])
-        ws.cell(row=row, column=4, value=item.get("unit", "шт"))
-        ws.cell(row=row, column=5, value=qty)
-        ws.cell(row=row, column=6, value=wp or None)
-        ws.cell(row=row, column=7, value=mp or None)
-        ws.cell(row=row, column=8, value=qty * wp or None)
-        ws.cell(row=row, column=9, value=qty * mp or None)
-        ws.cell(row=row, column=10, value=subtotal or None)
-        ws.cell(row=row, column=11, value=vat or None)
-        ws.cell(row=row, column=12, value=total or None)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    """Смета в том виде, в каком её кладёт в слот «estimate» расчёт сметы.
+
+    Оптимизация разбирает именно этот файл (`POST /tasks/{id}/optimize/analyze`
+    читает слот «estimate»). Колонки «Тип» в нём нет — тип определяется по
+    наименованию. Накладные и транспортные обнулены: они идут строками итогов,
+    а не в цену позиции.
+    """
+    data, _ = generate_estimate_xlsx(
+        [
+            {"type": it.get("type", "Материал"), "name": it["name"],
+             "unit": it.get("unit", "шт"), "quantity": it.get("quantity", 1),
+             "work_price": it.get("work_price"), "material_price": it.get("material_price")}
+            for it in items
+        ],
+        overhead_pct=0, transport_pct=0,
+    )
+    return data
 
 
 def _make_smeta_items():
     """Return 5 test items with varying total costs."""
     return [
-        {"name": "Кирпич М150", "type": "Материал", "unit": "шт", "quantity": 1000, "material_price": 10.0},   # total=12000
-        {"name": "Монтаж трубы", "type": "Работа", "unit": "м", "quantity": 50, "work_price": 500.0},           # total=30000
-        {"name": "Цемент М400", "type": "Материал", "unit": "кг", "quantity": 200, "material_price": 20.0},    # total=4800
-        {"name": "Устройство стяжки", "type": "Работа", "unit": "м2", "quantity": 100, "work_price": 300.0},   # total=36000
-        {"name": "Гвозди 100мм", "type": "Материал", "unit": "кг", "quantity": 10, "material_price": 50.0},   # total=600
+        {"name": "Кирпич М150", "type": "Материал", "unit": "шт", "quantity": 1000, "material_price": 10.0},   # с НДС 12 200
+        {"name": "Монтаж трубы", "type": "Работа", "unit": "м", "quantity": 50, "work_price": 500.0},           # с НДС 30 500
+        {"name": "Цемент М400", "type": "Материал", "unit": "кг", "quantity": 200, "material_price": 20.0},    # с НДС 4 880
+        {"name": "Устройство стяжки", "type": "Работа", "unit": "м2", "quantity": 100, "work_price": 300.0},   # с НДС 36 600
+        {"name": "Гвозди 100мм", "type": "Материал", "unit": "кг", "quantity": 10, "material_price": 50.0},   # с НДС 610
     ]
-    # Sorted by total desc: Устройство стяжки(36k), Монтаж трубы(30k), Кирпич М150(12k), Цемент М400(4.8k), Гвозди(600)
-    # Grand total = 83400
-    # 70% threshold = 58380 → need Устройство(36k) + Монтаж(30k) = 66k > 58380 → first 2 items
+    # По убыванию: стяжка 36 600, монтаж 30 500, кирпич 12 200, цемент 4 880, гвозди 610.
+    # Всего 84 790; 70 % = 59 353 → стяжка + монтаж = 67 100 — первые две позиции.
 
 
 # ---------------------------------------------------------------------------
@@ -72,21 +61,20 @@ def _make_smeta_items():
 # ---------------------------------------------------------------------------
 
 def test_parse_estimate_xlsx_returns_items():
-    """Parsing a well-formed smeta xlsx returns list of items with correct fields."""
+    """Позиции сметы: цена за единицу без НДС и с НДС, стоимость с НДС."""
     items = _make_smeta_items()[:3]
     file_bytes = _make_smeta_xlsx(items)
     result = parse_estimate_xlsx(file_bytes)
-    assert len(result) == 3
-    first = result[0]
-    assert first["name"] == "Кирпич М150"
-    assert first["type"] == "material"
-    assert first["unit"] == "шт"
-    assert first["quantity"] == 1000
-    assert isinstance(first["row_index"], int)
-    assert isinstance(first["price_excl_vat"], float)
-    assert isinstance(first["price_incl_vat"], float)
-    assert isinstance(first["total"], float)
-    assert first["price_incl_vat"] > first["price_excl_vat"]
+    assert [
+        (it["name"], it["type"], it["unit"], it["quantity"],
+         it["price_excl_vat"], it["price_incl_vat"], it["total"])
+        for it in result
+    ] == [
+        ("Кирпич М150", "material", "шт", 1000, 10.0, 12.2, 12200.0),
+        ("Монтаж трубы", "work", "м", 50, 500.0, 610.0, 30500.0),
+        ("Цемент М400", "material", "кг", 200, 20.0, 24.4, 4880.0),
+    ]
+    assert [it["row_index"] for it in result] == [2, 3, 4]
 
 
 def test_parse_estimate_xlsx_skips_empty_rows():
@@ -118,24 +106,20 @@ def test_parse_estimate_xlsx_skips_empty_rows():
 # ---------------------------------------------------------------------------
 
 def test_get_top_items_covers_threshold():
-    """Selected items' cumulative total covers at least 70% of grand total."""
-    items = _make_smeta_items()
-    file_bytes = _make_smeta_xlsx(items)
-    parsed = parse_estimate_xlsx(file_bytes)
+    """Самые дорогие позиции, пока их сумма не перекроет 70 % сметы."""
+    parsed = parse_estimate_xlsx(_make_smeta_xlsx(_make_smeta_items()))
     selected = get_top_items(parsed, categories=["work", "material"], threshold=0.7)
-    grand_total = sum(it["total"] for it in parsed)
-    selected_total = sum(it["total"] for it in selected)
-    assert selected_total >= 0.7 * grand_total
+    assert [it["name"] for it in selected] == ["Устройство стяжки", "Монтаж трубы"]
 
 
 def test_get_top_items_filters_categories():
-    """Only items matching the requested categories are returned."""
-    items = _make_smeta_items()
-    file_bytes = _make_smeta_xlsx(items)
-    parsed = parse_estimate_xlsx(file_bytes)
-    # Ask only for materials
-    selected = get_top_items(parsed, categories=["material"], threshold=0.99)
-    assert all(it["type"] == "material" for it in selected)
+    """Только материалы, и порог — от суммы материалов, а не всей сметы.
+
+    Материалы: 12 200 + 4 880 + 610 = 17 690; 70 % = 12 383 → кирпич и цемент.
+    """
+    parsed = parse_estimate_xlsx(_make_smeta_xlsx(_make_smeta_items()))
+    selected = get_top_items(parsed, categories=["material"], threshold=0.7)
+    assert [it["name"] for it in selected] == ["Кирпич М150", "Цемент М400"]
 
 
 # ---------------------------------------------------------------------------
@@ -171,29 +155,51 @@ def _make_optimization_results(items_parsed: list[dict]) -> list[dict]:
     return results
 
 
+def _column(ws, header: str) -> int:
+    for col in range(1, ws.max_column + 1):
+        if ws.cell(row=1, column=col).value == header:
+            return col
+    raise AssertionError(f"колонка «{header}» не найдена")
+
+
 def test_generate_optimized_xlsx_adds_columns():
-    """Optimized xlsx has 4 extra columns after original columns."""
+    """Найденный аналог: новая цена и стоимость в строке позиции; не найден — стоимости нет.
+
+    Кирпич: 12,2 × 0,8 = 9,76 за шт, × 1000 шт = 9 760.
+    """
     items = _make_smeta_items()[:3]
     original_bytes = _make_smeta_xlsx(items)
     parsed = parse_estimate_xlsx(original_bytes)
     opt_results = _make_optimization_results(parsed)
     result_bytes = generate_optimized_xlsx(original_bytes, opt_results)
-    wb = openpyxl.load_workbook(io.BytesIO(result_bytes))
-    ws = wb.active
-    # Original has 15 columns; optimized adds 4 more
-    header_row = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-    assert "Цена сниженная" in header_row
-    assert "Стоимость сниженная" in header_row
-    assert "Источник" in header_row
-    assert "Примечание" in header_row
+    ws = openpyxl.load_workbook(io.BytesIO(result_bytes)).active
+
+    price, cost, source = (_column(ws, h) for h in ("Цена сниженная", "Стоимость сниженная", "Источник"))
+    brick, pipe = 2, 3
+    assert ws.cell(row=brick, column=price).value == 9.76
+    assert ws.cell(row=brick, column=cost).value == 9760.0
+    assert ws.cell(row=brick, column=source).value == "https://example.com/price"
+    assert not isinstance(ws.cell(row=pipe, column=price).value, (int, float))
+    assert ws.cell(row=pipe, column=cost).value is None
+    # Исходные колонки не тронуты: наименование, кол-во, цена материала.
+    assert [ws.cell(row=brick, column=c).value for c in (2, 4, 7)] == ["Кирпич М150", 1000, 10]
 
 
 def test_generate_optimized_xlsx_has_comparison_sheet():
-    """Result workbook contains a second sheet named 'Сравнение'."""
+    """Лист «Сравнение»: было / стало / экономия по позициям и итог экономии.
+
+    Экономия 2,44 ₽ на единице кирпича при исходных ценах 12,2 + 610 = 622,2 —
+    это 0,39 %.
+    """
     items = _make_smeta_items()[:2]
     original_bytes = _make_smeta_xlsx(items)
     parsed = parse_estimate_xlsx(original_bytes)
     opt_results = _make_optimization_results(parsed)
     result_bytes = generate_optimized_xlsx(original_bytes, opt_results)
-    wb = openpyxl.load_workbook(io.BytesIO(result_bytes))
-    assert "Сравнение" in wb.sheetnames
+    ws = openpyxl.load_workbook(io.BytesIO(result_bytes))["Сравнение"]
+
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    brick, pipe, total = rows
+    assert brick == ("Кирпич М150", 12.2, 9.76, 2.44, 20.0, "https://example.com/price")
+    assert (pipe[0], pipe[1], pipe[3], pipe[4]) == ("Монтаж трубы", 610.0, None, None)
+    assert (total[3], total[4]) == (2.44, 0.39)

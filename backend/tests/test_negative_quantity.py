@@ -12,16 +12,15 @@
 
 План: plans/2026-07-30-otricatelnyy-obyom-bez-rascheta.md
 """
-import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.utils.price_coercion import coerce_qty_signed, is_negative_qty  # noqa: E402
-from app.utils.xlsx_exporter import generate_estimate_xlsx  # noqa: E402
-from app.services.task_processor import NEGATIVE_QTY_NOTE, TaskProcessor  # noqa: E402
+from app.services import storage_service
+from app.services.task_processor import NEGATIVE_QTY_NOTE
+from app.utils.price_coercion import coerce_qty_signed, is_negative_qty
+from app.utils.xlsx_cost_parser import extract_total_cost
+from app.utils.xlsx_exporter import generate_estimate_xlsx
 
 
 # ---------------------------------------------------------------------------
@@ -122,94 +121,74 @@ def test_summary_xlsx_ignores_negative_qty():
 # Шаг 3: строка собирается без цен и с примечанием
 # ---------------------------------------------------------------------------
 
-def _proc() -> TaskProcessor:
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-    db.commit = AsyncMock()
-    p = TaskProcessor("tid-neg", db=db)
-    p.update_progress = AsyncMock(return_value=None)
-    p.save_result = AsyncMock(return_value=None)
-    p._save_progress_data = AsyncMock(return_value=None)
-    p._result_filename = MagicMock(return_value="Смета.xlsx")
-    return p
+async def test_step3_negative_item_has_no_prices(processor_env, claude_api):
+    """Цена у вычета в чекпоинте есть, а в смету она не идёт.
 
-
-async def test_step3_negative_item_has_no_prices():
-    p = _proc()
+    Шаг 3 общий для обычного прогона, возобновления из чекпоинта и достройки
+    после batch: даже если цена по вычету откуда-то нашлась (старый чекпоинт,
+    ручная правка) — стоимости у строки нет. Здесь задача возобновляется из
+    чекпоинта «pre_excel», где у вычета записана цена 1393.
+    """
+    ai = claude_api()  # всё уже посчитано — в ИИ ничего не уходит
     items = [
         {"type": "Работа", "name": "Сверление", "unit": "100 отв.", "quantity": 0.61},
         {"type": "Работа", "name": "Добавка на глубину", "unit": "100 отв.", "quantity": -0.61},
     ]
-    # Даже если цена по вычету откуда-то нашлась (старый чекпоинт, ручная
-    # правка) — в смету она не идёт: шаг 3 общий для всех путей.
-    matched = {1: {"type": "Работа", "name": "Добавка на глубину", "unit": "100 отв.",
-                   "quantity": -0.61, "work_price": 1393, "price_list_name": "Прайс"}}
-    claude_results = {0: {"id": 0, "type": "Работа", "work_price": 25410, "sources": "src"}}
+    task = await processor_env.estimate_task(items, progress_data={
+        "_stage": "pre_excel",
+        "items": items,
+        "matched": {"1": {**items[1], "work_price": 1393, "price_list_name": "Прайс"}},
+        "claude_results": {"0": {"id": 0, "type": "Работа", "work_price": 25410,
+                                 "sources": "src"}},
+    })
 
-    await p._run_estimate_step3(MagicMock(), items, matched, claude_results)
+    task = await processor_env.run(task)
 
-    saved = p._save_progress_data.await_args.args[0]["items"]
-    negative = saved[1]
+    assert task.status == "completed", task.error_message
+    regular, negative = await processor_env.estimate_items(task)
     assert negative["quantity"] == -0.61
     assert negative["work_price"] is None
     assert negative["material_price"] is None
     assert negative["price_list_name"] is None
     assert negative["notes"] == NEGATIVE_QTY_NOTE
     # Обычная позиция считается как раньше.
-    assert saved[0]["work_price"] == pytest.approx(25410)
+    assert regular["work_price"] == pytest.approx(25410)
+    assert [it["work_price"] for it in task.progress_data["items"]] == [25410, None]
+
+    # Итог — только обычная позиция: 0,61 × 25 410 = 15 500,10 + 3 % накладных.
+    assert float(task.cost) == 15965.10
+    (result,) = await processor_env.results(task, slot="estimate")
+    data = await storage_service.load_bytes(result.storage_key)
+    assert float(extract_total_cost(data)) == 15965.10
+    assert ai.calls == []
 
 
 # ---------------------------------------------------------------------------
 # Поиск цен: вычет не попадает ни в прайс, ни в кеш, ни в ИИ
 # ---------------------------------------------------------------------------
 
-class _FakePriceSvc:
-    """Прайс, в котором находится всё, — чтобы unmatched остался пустым."""
+async def test_price_lookup_skips_negative_qty(processor_env, price_db, claude_api):
+    """Вычет не ищет цену нигде — и не уходит в платный ИИ-поиск.
 
-    def __init__(self):
-        self.asked: list[str] = []
-
-    def _exact_match_work(self, name):
-        self.asked.append(name)
-        return {"min_price": 100.0, "name": name}
-
-    def _exact_match_material(self, name):
-        self.asked.append(name)
-        return 50.0
-
-    def is_cache_loaded(self):
-        return True
-
-
-async def test_price_lookup_skips_negative_qty(monkeypatch):
-    from app.services import task_processor as tp
-
-    fake = _FakePriceSvc()
-    monkeypatch.setattr(tp, "_price_svc", fake)
-
-    p = _proc()
-    p._check_cancelled = AsyncMock(return_value=None)
-    p._run_estimate_step3 = AsyncMock(return_value=None)
-
-    source_task = MagicMock()
-    source_task.status = "completed"
-    source_task.progress_data = {"items": [
+    Положительная позиция находится в прайсе; вычетов в прайсе нет, и при
+    поиске они ушли бы в ИИ с web-поиском — сценарий ИИ пуст, лишний вызов
+    был бы виден.
+    """
+    price_db.work("Сверление", unit="100 отв.", prices={"Подрядчик": 100})
+    ai = claude_api()
+    task = await processor_env.estimate_task([
         {"type": "Работа", "name": "Сверление", "unit": "100 отв.", "quantity": 0.61},
         {"type": "Работа", "name": "Добавка на глубину", "unit": "100 отв.", "quantity": -0.61},
         {"type": "Материал", "name": "Сверло", "unit": "шт", "quantity": -2},
-    ]}
-    p.db.execute = AsyncMock(
-        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=source_task))
-    )
+    ])
 
-    task = MagicMock()
-    task.user_prompt = '{"path": "B", "source_task_id": "src-1", "source_stage": 1}'
-    task.progress_data = {}
-    task.processing_mode = "fast"
+    task = await processor_env.run(task)
 
-    await p._handle_estimate_from_list(task)
-
-    assert fake.asked == ["Сверление"], "цену искали только для положительного объёма"
-    # Шаг 3 вызван, вычеты не попали в matched → цены им не проставлены.
-    matched = p._run_estimate_step3.await_args.args[2]
-    assert list(matched.keys()) == [0]
+    assert task.status == "completed", task.error_message
+    assert ai.calls == [], "цену искали только для положительного объёма"
+    items = await processor_env.estimate_items(task)
+    assert [(it["name"], it["work_price"], it["material_price"]) for it in items] == [
+        ("Сверление", 100, None),
+        ("Добавка на глубину", None, None),
+        ("Сверло", None, None),
+    ]

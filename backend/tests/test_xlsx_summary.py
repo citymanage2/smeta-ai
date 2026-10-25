@@ -44,16 +44,29 @@ def _find(ws, label: str) -> int:
     raise AssertionError(f"строка «{label}» не найдена в листе")
 
 
-def test_fixed_row_has_both_costs(sheet, calc):
-    row = _find(sheet, "Работы")
-    assert sheet.cell(row=row, column=4).value == round(calc["works_with_vat"], 2)
-    assert sheet.cell(row=row, column=5).value == round(calc["works_without_vat"], 2)
+# Строка бланка → суммы, которые показывает экран (с НДС, без НДС). У строк
+# с одной суммой второй нет: она стоит в первой денежной колонке.
+COST_ROWS = [
+    ("Работы", "works_with_vat", "works_without_vat"),
+    ("Банковская гарантия", "bank_guarantee_with_vat", "bank_guarantee_without_vat"),
+    ("Непредвиденные расходы", "contingency_with_vat", "contingency_without_vat"),
+    ("ИТОГО себестоимость объекта", "subtotal_with_vat", "subtotal_without_vat"),
+    ("Плановая прибыль (без НДС)", "profit", None),
+    ("Полная себестоимость с учётом прибыли и непредвиденных (без НДС)",
+     "full_cost_without_vat", None),
+    ("НДС от полной себестоимости", "vat", None),
+    ("Др. налоги от полной себестоимости", "other_tax", None),
+    ("ИТОГО по смете для Заказчика с учётом налогов", "total_for_customer", None),
+]
 
 
-def test_manual_row_has_both_costs(sheet, calc):
-    row = _find(sheet, "Банковская гарантия")
-    assert sheet.cell(row=row, column=4).value == round(calc["bank_guarantee_with_vat"], 2)
-    assert sheet.cell(row=row, column=5).value == round(calc["bank_guarantee_without_vat"], 2)
+@pytest.mark.parametrize("label, first, second", COST_ROWS, ids=[r[1] for r in COST_ROWS])
+def test_row_costs_match_screen(sheet, calc, label, first, second):
+    """Суммы строки в файле — те же, что на экране (`calc_summary`), до копейки."""
+    row = _find(sheet, label)
+    assert sheet.cell(row=row, column=4).value == round(calc[first], 2)
+    if second is not None:
+        assert sheet.cell(row=row, column=5).value == round(calc[second], 2)
 
 
 def test_human_inputs_are_exported(sheet):
@@ -87,34 +100,6 @@ def test_rows_are_numbered_like_on_screen(sheet):
     assert sheet.cell(row=_find(sheet, "Транспортные расходы"), column=1).value == 3
     assert sheet.cell(row=_find(sheet, "Накладные"), column=1).value == 4
     assert sheet.cell(row=_find(sheet, "Аренда лесов"), column=1).value == 17
-
-
-def test_contingency_has_both_costs(sheet, calc):
-    row = _find(sheet, "Непредвиденные расходы")
-    assert sheet.cell(row=row, column=4).value == round(calc["contingency_with_vat"], 2)
-    assert sheet.cell(row=row, column=5).value == round(calc["contingency_without_vat"], 2)
-
-
-def test_subtotal_has_both_costs(sheet, calc):
-    row = _find(sheet, "ИТОГО себестоимость объекта")
-    assert sheet.cell(row=row, column=4).value == round(calc["subtotal_with_vat"], 2)
-    assert sheet.cell(row=row, column=5).value == round(calc["subtotal_without_vat"], 2)
-
-
-def test_single_value_rows_are_merged(sheet, calc):
-    """У строк с одной суммой обе денежные колонки объединены, как на экране."""
-    merged = {str(rng) for rng in sheet.merged_cells.ranges}
-    for label, value in (
-        ("Плановая прибыль (без НДС)", calc["profit"]),
-        ("Полная себестоимость с учётом прибыли и непредвиденных (без НДС)",
-         calc["full_cost_without_vat"]),
-        ("НДС от полной себестоимости", calc["vat"]),
-        ("Др. налоги от полной себестоимости", calc["other_tax"]),
-        ("ИТОГО по смете для Заказчика с учётом налогов", calc["total_for_customer"]),
-    ):
-        row = _find(sheet, label)
-        assert f"D{row}:E{row}" in merged, label
-        assert sheet.cell(row=row, column=4).value == round(value, 2), label
 
 
 def test_total_for_customer_matches_screen(sheet):
