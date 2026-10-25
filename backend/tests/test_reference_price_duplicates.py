@@ -12,70 +12,38 @@
 (без него нечего удалять), с источником (прайс или кеш) и без самой позиции,
 которая и так будет переоценена.
 """
-import numpy as np
 import pytest
 
 from app.services import price_service, reference_price
+from tests.helpers.prices import axis
 
 pytestmark = pytest.mark.asyncio
 
 
-def _vec(*values: float) -> list[float]:
-    return list(values)
-
-
-def _install_price_vectors(monkeypatch, rows: list[dict], vectors: list[list[float]]):
-    """Подсунуть прайсу работ готовые векторы вместо настоящей модели."""
-    matrix = np.array(vectors, dtype=np.float32)
-    monkeypatch.setattr(price_service, "_works_cache", rows)
-    monkeypatch.setattr(price_service, "_works_embeddings", matrix)
-    monkeypatch.setattr(price_service, "_works_row_norms", np.linalg.norm(matrix, axis=1))
-    monkeypatch.setattr(price_service, "_works_index_map", list(range(len(rows))))
-
-
-def _install_cache_vectors(monkeypatch, rows: list[dict], vectors: list[list[float]]):
-    matrix = np.array(vectors, dtype=np.float32)
-    monkeypatch.setattr(price_service, "_cache_works_cache", rows)
-    monkeypatch.setattr(price_service, "_cache_works_embeddings", matrix)
-    monkeypatch.setattr(price_service, "_cache_works_row_norms", np.linalg.norm(matrix, axis=1))
-    monkeypatch.setattr(price_service, "_cache_works_index_map", list(range(len(rows))))
-
-
-def _fake_query_vector(monkeypatch, vector: list[float]):
-    from app.services import embedding_service
-
-    monkeypatch.setattr(
-        embedding_service, "generate_embedding", lambda text, input_type="search_document": vector
-    )
-
-
-async def test_candidates_carry_id_and_source(monkeypatch):
+async def test_candidates_carry_id_and_source(price_db):
     """Кандидат без id бесполезен: удалять нечего. Источник решает, откуда удалять."""
-    _install_price_vectors(
-        monkeypatch,
-        [{"id": 7, "name": "Кладка стен из кирпича", "unit": "м3", "min_price": 1200.0}],
-        [_vec(1.0, 0.0)],
-    )
-    _install_cache_vectors(
-        monkeypatch,
-        [{"id": "c-1", "name": "Кладка кирпичных стен", "unit": "м3", "price": 1500.0}],
-        [_vec(1.0, 0.0)],
-    )
-    _fake_query_vector(monkeypatch, _vec(1.0, 0.0))
+    work = price_db.work("Кладка стен из кирпича", unit="м3",
+                         prices={"Подрядчик": 1200.0}, vector=axis(0))
+    cached = price_db.cache_work("Кладка кирпичных стен", unit="м3", price=1500.0,
+                                 vector=axis(0))
+    price_db.knows("Кладка стен", axis(0))
+    await price_db.load()
 
     found = await price_service.find_duplicate_candidates("Кладка стен", "work", n=5)
 
-    assert [(c["source"], c["id"], c["price"]) for c in found] == [
-        ("price", 7, 1200.0),
-        ("cache", "c-1", 1500.0),
+    assert sorted((c["source"], str(c["id"]), c["price"]) for c in found) == [
+        ("cache", str(cached.id), 1500.0),
+        ("price", str(work.id), 1200.0),
     ]
     assert all(c["score"] > 0.99 for c in found)
 
 
-async def test_no_vectors_gives_empty_list(monkeypatch):
+async def test_no_vectors_gives_empty_list(price_db):
     """Векторов нет — поиск по смыслу отключён, но операция не падает."""
-    monkeypatch.setattr(price_service, "_works_embeddings", None)
-    monkeypatch.setattr(price_service, "_cache_works_embeddings", None)
+    price_db.work("Кладка стен из кирпича", unit="м3", prices={"Подрядчик": 1200.0})
+    price_db.cache_work("Кладка кирпичных стен", unit="м3", price=1500.0)
+    price_db.knows("Кладка стен", axis(0))
+    await price_db.load()
 
     assert await price_service.find_duplicate_candidates("Кладка стен", "work") == []
     assert price_service.duplicate_vectors_ready("work") is False
@@ -160,41 +128,34 @@ async def test_same_candidate_shown_once(monkeypatch):
     assert len(result["candidates"]) == 1
 
 
-async def test_batch_search_asks_the_model_once(monkeypatch):
+async def test_batch_search_asks_the_model_once(price_db, monkeypatch):
     """Файл на сотни позиций — одна прогонка модели, а не сотня.
 
     Модель локальная и денег не стоит, но по вызову на позицию превращает
     предпросмотр в минуты ожидания на ровном месте.
     """
-    calls = {"n": 0}
-
-    def fake_batch(texts, input_type="search_document"):
-        calls["n"] += 1
-        return [[1.0, 0.0] for _ in texts]
-
-    from app.services import embedding_service
-
-    monkeypatch.setattr(embedding_service, "generate_embeddings_batch", fake_batch)
-    _install_price_vectors(
-        monkeypatch,
-        [{"id": 1, "name": "Кладка стен из кирпича", "unit": "м3", "min_price": 1200.0}],
-        [_vec(1.0, 0.0)],
-    )
-    monkeypatch.setattr(price_service, "_cache_works_embeddings", None)
+    work = price_db.work("Кладка стен из кирпича", unit="м3",
+                         prices={"Подрядчик": 1200.0}, vector=axis(0))
+    price_db.knows("Кладка стен", axis(0))
+    await price_db.load()
+    runs = []
+    embed = price_db.model.embed
+    monkeypatch.setattr(price_db.model, "embed", lambda texts: runs.append(1) or embed(texts))
 
     found = await price_service.find_duplicate_candidates_batch(
         ["Кладка стен", "Кладка перегородок", "Штукатурка"], "work", n=3,
     )
 
-    assert calls["n"] == 1
-    assert len(found) == 3
-    assert found[0][0]["id"] == 1
+    assert len(runs) == 1
+    assert len(found) == 3, "ответ — строка на каждое имя, в том же порядке"
+    assert [c["id"] for c in found[0]] == [work.id]
 
 
-async def test_batch_without_vectors_gives_empty_row_per_name(monkeypatch):
+async def test_batch_without_vectors_gives_empty_row_per_name(price_db):
     """Без векторов ответ по форме тот же — иначе вызывающий код разъедется."""
-    monkeypatch.setattr(price_service, "_works_embeddings", None)
-    monkeypatch.setattr(price_service, "_cache_works_embeddings", None)
+    price_db.work("Кладка стен из кирпича", unit="м3", prices={"Подрядчик": 1200.0})
+    price_db.knows("Кладка стен", axis(0))
+    await price_db.load()
 
     assert await price_service.find_duplicate_candidates_batch(
         ["Кладка стен", "Штукатурка"], "work",

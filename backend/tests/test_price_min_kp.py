@@ -22,7 +22,6 @@ from app.services import price_service
 from app.utils.auth import create_access_token
 from app.utils.price_min import (
     ESTIMATE_CONTRACTOR,
-    KP_CONTRACTOR_PREFIX,
     compute_min_price,
     is_reserved_contractor,
     kp_contractor,
@@ -36,7 +35,6 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # ---------------------------------------------------------------------------
 
 def test_prefix_is_fixed():
-    assert KP_CONTRACTOR_PREFIX == "КП: "
     assert kp_contractor("  ООО Стройка ") == "КП: ООО Стройка"
 
 
@@ -56,6 +54,20 @@ def test_without_kp_old_rule_stays():
 def test_empty_kp_price_does_not_count():
     """Ноль и мусор у «КП: …» ценой не считаются — правило идёт дальше."""
     assert compute_min_price({"КП: А": 0, "КП: Б": None, ESTIMATE_CONTRACTOR: 900}) == 900
+
+
+def test_non_positive_estimate_price_ignored():
+    """Ноль «Из смет» ценой не считается — берётся минимум по подрядчикам."""
+    assert compute_min_price({"Подрядчик А": 1200, ESTIMATE_CONTRACTOR: 0}) == 1200
+
+
+def test_empty_prices_give_none():
+    assert compute_min_price({}) is None
+    assert compute_min_price(None) is None
+
+
+def test_garbage_values_do_not_break():
+    assert compute_min_price({"Подрядчик": "нет цены"}) is None
 
 
 def test_reserved_names():

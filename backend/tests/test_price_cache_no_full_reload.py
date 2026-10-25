@@ -7,44 +7,67 @@
 КАЖДУЮ закешированную позицию, поэтому смета на 458 позиций давала до 458 полных
 перезагрузок прайса.
 
-Терять нечего: запись добавляется в in-memory кеш точечно, поэтому поиск по
-точному совпадению имени находит её сразу; вектор нужен лишь семантическому
-поиску и подхватится при следующей штатной загрузке кеша.
+Терять нечего: вектор новой записи нужен лишь семантическому поиску и
+подхватится при следующей штатной загрузке кеша.
 
 План: plans/2026-07-30-ispravlenie-nahodok-code-review.md, Фазы 3 и 5.
 """
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import contextmanager
 
-import pytest
+from sqlalchemy import event, select
 
-sys.modules.setdefault("fitz", MagicMock())
+from app.models.price_cache import PriceCacheWork
+from app.services import price_service
+from tests.conftest import test_engine
+from tests.helpers.prices import axis, drain_background_embeddings
 
-from app.services import price_service  # noqa: E402
+PRICE_TABLES = ("price_works", "price_materials", "price_cache_works", "price_cache_materials")
 
 
-@pytest.mark.asyncio
-async def test_embedding_task_does_not_reload_whole_cache():
-    """Фоновая задача сохраняет вектор, но не перезагружает прайс целиком."""
-    fake_record = MagicMock()
-    fake_db = MagicMock()
-    fake_db.execute = AsyncMock(
-        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=fake_record))
-    )
-    fake_db.commit = AsyncMock()
+@contextmanager
+def _sql_log():
+    """Все запросы к тестовой БД за время блока (их тексты)."""
+    statements: list[str] = []
 
-    class _Ctx:
-        async def __aenter__(self):
-            return fake_db
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
 
-        async def __aexit__(self, *a):
-            return False
+    event.listen(test_engine.sync_engine, "before_cursor_execute", _record)
+    try:
+        yield statements
+    finally:
+        event.remove(test_engine.sync_engine, "before_cursor_execute", _record)
 
-    with patch("app.database.AsyncSessionLocal", return_value=_Ctx()), \
-         patch("app.services.embedding_service.generate_embedding", return_value=[0.1] * 8), \
-         patch.object(price_service, "load_cache", new=AsyncMock()) as reload_mock:
-        await price_service._generate_and_save_embedding("rec-1", "Кладка", "work")
 
-    assert fake_record.embedding == [0.1] * 8, "вектор должен быть сохранён"
-    reload_mock.assert_not_awaited()
+def _full_reads(statements: list[str]) -> list[str]:
+    """SELECT по таблице прайса или кеша без условия — то есть чтение таблицы целиком."""
+    found = []
+    for statement in statements:
+        text = " ".join(statement.split()).lower()
+        if not text.startswith("select") or " where " in text:
+            continue
+        if any(f"from {table}" in text for table in PRICE_TABLES):
+            found.append(text)
+    return found
 
+
+async def test_embedding_task_does_not_reload_whole_cache(db_session, app_sessions, price_db):
+    """Фоновая задача сохраняет вектор в строку кеша, но прайс целиком не читает."""
+    price_db.work("Кладка стен", unit="м3", prices={"Подрядчик": 5000.0}, vector=axis(1))
+    price_db.material("Кирпич М150", unit="шт", price=12.5, vector=axis(2))
+    await price_db.load()
+    price_db.knows("Устройство стяжки", axis(0))
+
+    with _sql_log() as statements:
+        await price_service.save_to_cache(
+            db_session, "work", "Устройство стяжки", "м2", 350.0, "источник",
+        )
+        await drain_background_embeddings()
+
+    db_session.expire_all()
+    row = (await db_session.execute(
+        select(PriceCacheWork).where(PriceCacheWork.name == "Устройство стяжки")
+    )).scalar_one()
+    assert row.price == 350.0
+    assert row.embedding == axis(0), "вектор должен быть сохранён"
+    assert _full_reads(statements) == [], "прайс и кеш перечитаны целиком"

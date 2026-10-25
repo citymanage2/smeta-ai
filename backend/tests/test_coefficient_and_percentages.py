@@ -11,6 +11,9 @@
     зашиты в генераторе файла, и смета проекта с другими ставками считалась
     неверно в скачанном файле, хотя на экране была права.
 """
+import io
+
+import openpyxl
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -55,6 +58,34 @@ def _rows() -> list:
     ]
 
 
+def _sheet_rows(data: bytes) -> tuple[list[list], int]:
+    """Строки первого листа и номер строки-шапки (той, где «Наименование»)."""
+    ws = openpyxl.load_workbook(io.BytesIO(data)).active
+    rows = [list(row) for row in ws.iter_rows(values_only=True)]
+    return rows, next(i for i, row in enumerate(rows) if "Наименование" in row)
+
+
+def _cell(data: bytes, name: str, column: str):
+    """Ячейка позиции `name` в колонке, чей заголовок начинается с `column`.
+
+    Колонка ищется по заголовку, а не по номеру: файл сметы и выгрузка версии
+    раскладывают колонки по-разному, и номер говорит о вёрстке, а не о числе.
+    """
+    rows, head = _sheet_rows(data)
+    titles = [str(title or "").lower() for title in rows[head]]
+    col = next(i for i, title in enumerate(titles) if title.startswith(column.lower()))
+    name_col = rows[head].index("Наименование")
+    return next(row for row in rows[head + 1:] if row[name_col] == name)[col]
+
+
+def _total_line(data: bytes, word: str) -> float:
+    """Число в строке итогов, подпись которой содержит `word`."""
+    rows, _ = _sheet_rows(data)
+    line = next(row for row in rows
+                if any(isinstance(c, str) and word in c.lower() for c in row))
+    return [c for c in line if isinstance(c, (int, float))][-1]
+
+
 # ---------------------------------------------------------------------------
 # Генератор файла сметы
 # ---------------------------------------------------------------------------
@@ -75,17 +106,12 @@ def test_xlsx_uses_project_percentages():
 
 def test_xlsx_applies_coefficient_to_prices():
     """Коэффициент множит цены, а не только итог: в файле цены уже с ним."""
-    import io
-
-    import openpyxl
-
     data, total = generate_estimate_xlsx(
         _items(), coefficient={"work": 1.05, "material": 1.0, "scope": "all"},
     )
-    ws = openpyxl.load_workbook(io.BytesIO(data)).active
-    assert ws.cell(row=2, column=5).value == pytest.approx(1050.0)   # цена работ
-    assert ws.cell(row=2, column=6).value == pytest.approx(4200.0)   # стоимость работ
-    assert ws.cell(row=3, column=7).value == pytest.approx(500.0)    # материал не тронут
+    assert _cell(data, "Позиция r1", "Цена работ") == pytest.approx(1050.0)
+    assert _cell(data, "Позиция r1", "Стоимость работ") == pytest.approx(4200.0)
+    assert _cell(data, "Позиция r2", "Цена матер") == pytest.approx(500.0), "материал не тронут"
     # 4200 + 3% + 5000 + 3% = 9476
     assert total == pytest.approx(9476.0)
 
@@ -244,10 +270,6 @@ async def test_version_export_matches_editor(async_client, db_session, est_env):
     Раньше она брала проценты только из самой версии (у неоверрайженной это 0%)
     и считала накладные от общего базиса — файл расходился с экраном.
     """
-    import io
-
-    import openpyxl
-
     project = await db_session.get(Project, est_env["project_id"])
     project.overhead_pct = 10
     project.transport_pct = 0
@@ -260,17 +282,10 @@ async def test_version_export_matches_editor(async_client, db_session, est_env):
         headers=_auth(est_env["pm1"], "project_manager"))
     assert resp.status_code == 200, resp.text
 
-    ws = openpyxl.load_workbook(io.BytesIO(resp.content)).active
     # Цена работ — с коэффициентом.
-    assert ws.cell(row=2, column=6).value == pytest.approx(2000.0)
-
-    labels = {}
-    for row in ws.iter_rows(min_col=3, max_col=8):
-        if row[0].value:
-            labels[str(row[0].value)] = row[-1].value
-    overhead = next(v for k, v in labels.items() if "акладн" in k)
+    assert _cell(resp.content, "Кладка", "Цена работ") == pytest.approx(2000.0)
     # Накладные = работы (8000 с коэффициентом) × 10%
-    assert overhead == pytest.approx(800.0)
+    assert _total_line(resp.content, "накладн") == pytest.approx(800.0)
 
 
 # ---------------------------------------------------------------------------

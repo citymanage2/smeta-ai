@@ -8,95 +8,29 @@
 Название совпадало, единицу не сверял никто: ни прайс, ни кеш прошлых задач,
 ни ИИ. Здесь закреплено, что теперь сверяют все трое.
 
+Каждый тест — настоящий расчёт сметы из перечня (`processor_env`): прайс и кеш
+лежат в БД, подменён только ИИ, результат читается из рабочей версии сметы.
+
 Спека: specs/2026-08-06-edinica-izmereniya-v-podbore-ceny.md
 """
-import sys
-from unittest.mock import AsyncMock, MagicMock
+import json
 
+import pytest
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.task_processor import TaskProcessor, UNIT_NOTE_KEY  # noqa: E402
-from app.utils.unit_compat import (  # noqa: E402
+from app.models.task import Task
+from app.utils.unit_compat import (
     PRICE_CONVERTED_PREFIX,
     PRICE_UNIT_MISMATCH_PREFIX,
 )
+from tests.helpers.prices import axis, similar
+
+SMES_KG = {"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}
 
 
-def _proc() -> TaskProcessor:
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
-    db.commit = AsyncMock()
-    p = TaskProcessor("tid-unit", db=db)
-    p.update_progress = AsyncMock(return_value=None)
-    p.save_result = AsyncMock(return_value=None)
-    p._save_progress_data = AsyncMock(return_value=None)
-    p._result_filename = MagicMock(return_value="Смета.xlsx")
-    p._check_cancelled = AsyncMock(return_value=None)
-    return p
-
-
-class _FakePriceSvc:
-    """Прайс из одной позиции: чем ответит подбор, задаёт тест."""
-
-    def __init__(self, work=None, material=None):
-        self._work = work
-        self._material = material
-
-    def _exact_match_work(self, name):
-        return self._work
-
-    def _exact_match_material_row(self, name):
-        return self._material
-
-    def _exact_match_cache_work(self, name):
-        return None
-
-    def _exact_match_cache_material(self, name):
-        return None
-
-    # Поиск по эмбеддингам в тестах не нужен: подбор задаётся точным совпадением.
-    async def batch_embedding_match_works(self, names):
-        return [None] * len(names)
-
-    async def batch_embedding_match_material_rows(self, names):
-        return [None] * len(names)
-
-    async def batch_embedding_match_cache_works(self, names):
-        return [None] * len(names)
-
-    async def batch_embedding_match_cache_materials(self, names):
-        return [None] * len(names)
-
-    def is_cache_loaded(self):
-        return True
-
-
-async def _run_lookup(monkeypatch, fake, items) -> tuple[dict, list[dict]]:
-    """Прогнать шаг «поиск цен» и вернуть (найденное по индексу, позиции)."""
-    from app.services import task_processor as tp
-
-    monkeypatch.setattr(tp, "_price_svc", fake)
-
-    p = _proc()
-    p._run_estimate_step3 = AsyncMock(return_value=None)
-
-    source_task = MagicMock()
-    source_task.status = "completed"
-    source_task.progress_data = {"items": items}
-    p.db.execute = AsyncMock(
-        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=source_task))
-    )
-
-    task = MagicMock()
-    task.user_prompt = '{"path": "B", "source_task_id": "src-1", "source_stage": 1}'
-    task.progress_data = {}
-    task.processing_mode = "fast"
-
-    await p._handle_estimate_from_list(task)
-
-    call = p._run_estimate_step3.await_args.args
-    return (call[2], call[1])
+def _no_price_from_ai(kwargs: dict) -> dict:
+    """ИИ цены не нашёл: позиция вернулась без цены (и в доборе — тоже)."""
+    return {"items": [{"id": 0, "type": "Материал", "name": "Смеси сухие", "unit": "кг",
+                       "material_price": None}]}
 
 
 # ---------------------------------------------------------------------------
@@ -122,96 +56,155 @@ async def test_cena_za_tonnu_v_pozicii_v_kg_pereschityvaetsya(processor_env, pri
     assert ai.calls == []
 
 
-async def test_cena_za_sto_kvadratov_v_pozicii_v_kvadrate(monkeypatch):
+async def test_cena_za_sto_kvadratov_v_pozicii_v_kvadrate(processor_env, price_db, claude_api):
     """Случай 531: 18 000 ₽ за «100 м2» в позиции в м2 → 180 ₽/м2."""
-    fake = _FakePriceSvc(work={"name": "Вторая окраска стен", "min_price": 18000.0, "unit": "100 м2"})
-    items = [{"type": "Работа", "name": "Вторая окраска стен", "unit": "м2", "quantity": 1061}]
+    price_db.work("Вторая окраска стен", unit="100 м2", prices={"Подрядчик": 18000.0})
+    ai = claude_api()
+    task = await processor_env.estimate_task(
+        [{"type": "Работа", "name": "Вторая окраска стен", "unit": "м2", "quantity": 1061}]
+    )
 
-    matched, _ = await _run_lookup(monkeypatch, fake, items)
+    task = await processor_env.run(task)
 
-    assert matched[0]["work_price"] == 180.0
-    assert PRICE_CONVERTED_PREFIX in matched[0][UNIT_NOTE_KEY]
-
-
-async def test_nesvodimaya_edinica_cenu_ne_daet(monkeypatch):
-    """Цена за мешок в позиции в кг не берётся: вес мешка неизвестен."""
-    fake = _FakePriceSvc(material={"name": "Смеси сухие", "price": 500.0, "unit": "мешок"})
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
-
-    matched, out_items = await _run_lookup(monkeypatch, fake, items)
-
-    assert matched == {}, "позиция не должна считаться найденной"
-    assert PRICE_UNIT_MISMATCH_PREFIX in out_items[0][UNIT_NOTE_KEY]
+    assert task.status == "completed"
+    (item,) = await processor_env.estimate_items(task)
+    assert item["work_price"] == 180.0
+    assert item["unit"] == "м2"
+    assert PRICE_CONVERTED_PREFIX in item["notes"]
+    # 1061 м2 × 180 = 190 980 + 3 % накладных = 196 709,40 — а не 19 млн.
+    assert float(task.cost) == 196709.4
+    assert ai.calls == []
 
 
-async def test_sovpavshaya_edinica_beretsya_kak_ran_she(monkeypatch):
-    """Единицы совпали — поведение прежнее, без пометок."""
-    fake = _FakePriceSvc(work={"name": "Окраска", "min_price": 180.0, "unit": "м2"})
-    items = [{"type": "Работа", "name": "Окраска", "unit": "м2", "quantity": 10}]
+@pytest.mark.parametrize("price_unit", ["м2", None], ids=["edinica-sovpala", "v-prayse-bez-edinicy"])
+async def test_sovpavshaya_ili_pustaya_edinica_beretsya_kak_ran_she(
+    processor_env, price_db, claude_api, price_unit,
+):
+    """Единицы совпали — цена берётся без пометок.
 
-    matched, _ = await _run_lookup(monkeypatch, fake, items)
-
-    assert matched[0]["work_price"] == 180.0
-    assert UNIT_NOTE_KEY not in matched[0]
-
-
-async def test_prays_bez_edinicy_ne_lomaet_podbor(monkeypatch):
-    """В прайсе единицу не заполнили → цена берётся, как и раньше.
-
-    Иначе весь старый прайс без единиц уехал бы в платный поиск через ИИ.
+    Единицу в прайсе не заполнили — тоже берётся, как и раньше: иначе весь
+    старый прайс без единиц уехал бы в платный поиск через ИИ.
     """
-    fake = _FakePriceSvc(work={"name": "Окраска", "min_price": 180.0, "unit": None})
-    items = [{"type": "Работа", "name": "Окраска", "unit": "м2", "quantity": 10}]
+    price_db.work("Окраска", unit=price_unit, prices={"Подрядчик": 180.0})
+    ai = claude_api()
+    task = await processor_env.estimate_task(
+        [{"type": "Работа", "name": "Окраска", "unit": "м2", "quantity": 10}]
+    )
 
-    matched, _ = await _run_lookup(monkeypatch, fake, items)
+    task = await processor_env.run(task)
 
-    assert matched[0]["work_price"] == 180.0
-    assert UNIT_NOTE_KEY not in matched[0]
+    (item,) = await processor_env.estimate_items(task)
+    assert item["work_price"] == 180.0
+    assert item["price_list_name"] == "Прайс"
+    assert PRICE_CONVERTED_PREFIX not in (item["notes"] or "")
+    assert PRICE_UNIT_MISMATCH_PREFIX not in (item["notes"] or "")
+    assert ai.calls == []
+
+
+async def test_pometka_o_pereschete_ne_zatiraetsya_istochnikom_ceny(
+    processor_env, price_db, claude_api,
+):
+    """Примечание строки называет позицию прайса — пометка о пересчёте рядом уцелела.
+
+    Шаг сборки сметы пишет в примечание источник цены заново; пометка о
+    пересчёте дописывается после и не должна им затираться.
+    """
+    price_db.work("Окраска стен вторая", unit="100 м2", prices={"Подрядчик": 18000.0},
+                  vector=axis(0))
+    price_db.knows("Вторая окраска стен", similar(0.97, to=0))
+    claude_api()
+    task = await processor_env.estimate_task(
+        [{"type": "Работа", "name": "Вторая окраска стен", "unit": "м2", "quantity": 10}]
+    )
+
+    task = await processor_env.run(task)
+
+    (item,) = await processor_env.estimate_items(task)
+    assert item["work_price"] == 180.0
+    assert "Окраска стен вторая" in item["notes"], "источник цены остался в примечании"
+    assert PRICE_CONVERTED_PREFIX in item["notes"]
 
 
 # ---------------------------------------------------------------------------
-# Кеш прошлых задач
+# Несводимая единица: прайс и кеш прошлых задач
 # ---------------------------------------------------------------------------
 
-async def test_pozicii_ishodnoy_zadachi_ne_pravyatsya(monkeypatch):
+def _put_price_per_bag(price_db, source: str) -> None:
+    if source == "прайс":
+        price_db.material("Смеси сухие", unit="мешок", price=500.0)
+    else:
+        price_db.cache_material("Смеси сухие", unit="мешок", price=500.0)
+
+
+@pytest.mark.parametrize("source", ["прайс", "кеш"])
+async def test_nesvodimaya_edinica_cenu_ne_daet(processor_env, price_db, claude_api, source):
+    """Цена за мешок в позиции в кг не берётся: вес мешка неизвестен.
+
+    Позиция идёт к следующему источнику — ИИ, — и в смету встаёт его цена за кг.
+    """
+    _put_price_per_bag(price_db, source)
+    ai = claude_api({"items": [{
+        "id": 0, "type": "Материал", "name": "Смеси сухие", "unit": "кг",
+        "material_price": 75.0, "sources": "источник",
+    }]})
+    task = await processor_env.estimate_task([dict(SMES_KG)])
+
+    task = await processor_env.run(task)
+
+    assert task.status == "completed"
+    assert "Смеси сухие" in ai.prompt(0), "позиция ушла в ИИ, а не взята из прайса"
+    (item,) = await processor_env.estimate_items(task)
+    assert item["material_price"] == 75.0
+    assert item["price_list_name"] == "Интернет"
+    # 30 кг × 75 = 2 250 + 3 % транспортных = 2 317,50 (с ценой за мешок было бы 15 450).
+    assert float(task.cost) == 2317.5
+
+
+@pytest.mark.parametrize("source", ["прайс", "кеш"])
+async def test_prichina_otkaza_vidna_kogda_ceny_ne_nashlos(
+    processor_env, price_db, claude_api, source,
+):
+    """Ни один источник цену не дал — в примечании причина, а не «не определена»."""
+    _put_price_per_bag(price_db, source)
+    claude_api(_no_price_from_ai, repeat=True)
+    task = await processor_env.estimate_task([dict(SMES_KG)])
+
+    task = await processor_env.run(task)
+
+    assert task.status == "completed"
+    (item,) = await processor_env.estimate_items(task)
+    assert item["material_price"] is None
+    assert PRICE_UNIT_MISMATCH_PREFIX in item["notes"]
+    assert "мешок" in item["notes"] and "кг" in item["notes"], "названы обе единицы"
+
+
+async def test_pozicii_ishodnoy_zadachi_ne_pravyatsya(processor_env, price_db, claude_api):
     """Причина отказа пишется в позиции сметы, а не в задачу-перечень.
 
     По Path B список приходит прямо из progress_data перечня — общий объект.
-    Правка в нём означала бы, что расчёт сметы молча меняет чужую задачу.
+    Правка в нём означала бы, что расчёт сметы молча меняет чужую задачу: в
+    сессии расчёта лежит тот же объект перечня, и любая его запись (или
+    следующая смета из того же перечня в этой сессии) унесла бы чужую пометку.
     """
-    fake = _FakePriceSvc(material={"name": "Смеси сухие", "price": 500.0, "unit": "мешок"})
-    source_items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
+    price_db.material("Смеси сухие", unit="мешок", price=500.0)
+    claude_api(_no_price_from_ai, repeat=True)
+    task = await processor_env.estimate_task([dict(SMES_KG)])
+    source = await processor_env.db.get(
+        Task, json.loads(task.user_prompt)["source_task_id"],
+    )
+    await price_db.load()
 
-    matched, out_items = await _run_lookup(monkeypatch, fake, source_items)
+    # Без `run()`: он перечитывает всё из БД, а смотреть надо на объект в сессии.
+    await processor_env.processor(task).process()
 
-    assert PRICE_UNIT_MISMATCH_PREFIX in out_items[0][UNIT_NOTE_KEY]
-    assert UNIT_NOTE_KEY not in source_items[0], "позиция перечня осталась нетронутой"
-
-
-async def test_kesh_tozhe_sveryaet_edinicu(monkeypatch):
-    class _CacheSvc(_FakePriceSvc):
-        def _exact_match_cache_material(self, name):
-            return {"name": name, "price": 500.0, "unit": "мешок", "updated_at": None,
-                    "sources": "src"}
-
-    fake = _CacheSvc()
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
-
-    matched, out_items = await _run_lookup(monkeypatch, fake, items)
-
-    assert matched == {}
-    assert PRICE_UNIT_MISMATCH_PREFIX in out_items[0][UNIT_NOTE_KEY]
+    assert source.progress_data["items"] == [SMES_KG], "позиция перечня осталась нетронутой"
+    (item,) = await processor_env.estimate_items(task)
+    assert PRICE_UNIT_MISMATCH_PREFIX in item["notes"], "пометка — в позиции сметы"
 
 
 # ---------------------------------------------------------------------------
-# Ответ ИИ (шаг 3 — общий для обычного прогона, batch и возобновления)
+# Ответ ИИ
 # ---------------------------------------------------------------------------
-
-async def _step3(items, matched, claude_results) -> list[dict]:
-    p = _proc()
-    await p._run_estimate_step3(MagicMock(), items, matched, claude_results)
-    return p._save_progress_data.await_args.args[0]["items"]
-
 
 async def test_ii_vernul_cenu_za_meshok_cena_ne_zapisyvaetsya(processor_env, claude_api):
     """Прайс цены не знает, ИИ нашёл цену за мешок — в смету она не идёт."""
@@ -233,53 +226,22 @@ async def test_ii_vernul_cenu_za_meshok_cena_ne_zapisyvaetsya(processor_env, cla
     assert len(ai.calls) == 1, "цена за мешок — ответ, а не пропуск: повторного запроса нет"
 
 
-async def test_ii_vernul_cenu_za_sto_kvadratov_pereschityvaem():
-    items = [{"type": "Работа", "name": "Окраска", "unit": "м2", "quantity": 1061}]
-    claude = {0: {"id": 0, "type": "Работа", "unit": "100 м2",
-                  "work_price": 18000.0, "sources": "источник"}}
+async def test_ii_vernul_cenu_za_sto_kvadratov_pereschityvaem(processor_env, claude_api):
+    """ИИ ответил ценой за «100 м2» — в строке м2 цена за м2, единица и объём перечня."""
+    claude_api({"items": [{
+        "id": 0, "type": "Работа", "name": "Окраска", "unit": "100 м2",
+        "work_price": 18000.0, "sources": "источник",
+    }]})
+    task = await processor_env.estimate_task(
+        [{"type": "Работа", "name": "Окраска", "unit": "м2", "quantity": 1061}]
+    )
 
-    saved = await _step3(items, {}, claude)
+    task = await processor_env.run(task)
 
-    assert saved[0]["work_price"] == 180.0
-    assert PRICE_CONVERTED_PREFIX in saved[0]["notes"]
-
-
-async def test_edinica_stroki_beretsya_iz_perechnya_a_ne_ot_ii():
-    """Объём посчитан в единице перечня — подменять её ответом ИИ нельзя."""
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
-    claude = {0: {"id": 0, "type": "Материал", "unit": "мешок", "material_price": 500.0}}
-
-    saved = await _step3(items, {}, claude)
-
-    assert saved[0]["unit"] == "кг"
-
-
-async def test_prichina_otkaza_vidna_kogda_ceny_ne_nashlos():
-    """Ни один источник цену не дал — в примечании причина, а не «не определена»."""
-    items = [{
-        "type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30,
-        UNIT_NOTE_KEY: f"{PRICE_UNIT_MISMATCH_PREFIX} — прайс: «мешок», позиция: «кг».",
-    }]
-
-    saved = await _step3(items, {}, {})
-
-    assert PRICE_UNIT_MISMATCH_PREFIX in saved[0]["notes"]
-    assert saved[0]["notes"] != "Цена не определена"
-
-
-async def test_pometka_o_pereschete_ne_zatiraetsya_istochnikom_ceny():
-    """Шаг 3 пересобирает notes под источник цены — пометка должна уцелеть."""
-    items = [{"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}]
-    matched = {0: {
-        "type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30,
-        "material_price": 73.77, "price_list_name": "Прайс",
-        "_price_source_name": "Смеси сухие",
-        UNIT_NOTE_KEY: f"{PRICE_CONVERTED_PREFIX}: 73770 ₽/т → 73,77 ₽/кг (прайс).",
-    }}
-
-    saved = await _step3(items, matched, {})
-
-    assert saved[0]["material_price"] == 73.77
-    assert PRICE_CONVERTED_PREFIX in saved[0]["notes"]
-    assert "Смеси сухие" in saved[0]["notes"], "источник цены тоже должен остаться"
-
+    (item,) = await processor_env.estimate_items(task)
+    assert item["work_price"] == 180.0
+    # Объём посчитан в единице перечня — подменять её ответом ИИ нельзя.
+    assert item["unit"] == "м2"
+    assert item["quantity"] == 1061
+    assert PRICE_CONVERTED_PREFIX in item["notes"]
+    assert float(task.cost) == 196709.4
