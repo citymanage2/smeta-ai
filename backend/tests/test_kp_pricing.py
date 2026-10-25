@@ -33,7 +33,6 @@ def test_net_price_without_vat_is_as_is():
 
 
 def test_with_vat_without_rate_uses_default_22():
-    assert kpp.DEFAULT_VAT_RATE == 22
     assert kpp.normalized(1220, None, None, "with_vat", None)[0] == 1000.00
 
 

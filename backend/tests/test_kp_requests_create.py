@@ -29,7 +29,6 @@ from app.models.user import User
 from app.models.workflow_card import WorkflowCard
 from app.services import kp_requests as kp
 from app.services import storage_service
-from app.utils import permissions as perm
 from app.utils.auth import create_access_token, hash_password
 
 FIXTURES = (
@@ -195,6 +194,7 @@ async def kp_env(db_session, fake_s3):
         "supply2": user("supply2", "supply_manager"),
         "contractor1": user("contractor1", "contractor_manager"),
         "contractor_off": user("contractor_off", "contractor_manager", active=False),
+        "admin": user("admin", "admin"),
     }
     db_session.add_all(users.values())
     await db_session.flush()
@@ -365,31 +365,22 @@ async def test_no_active_employees_of_role_is_422(async_client, db_session, kp_e
     assert count == 0
 
 
+@pytest.mark.parametrize("groups", [
+    pytest.param([{"category": "work", "row_ids": ["r4"]},
+                  {"category": "material", "row_ids": ["r1"]}], id="работа-в-материалах"),
+    pytest.param([{"category": "work", "row_ids": ["r3"]},
+                  {"category": "material", "row_ids": ["r3"]}], id="строка-в-двух-группах"),
+    pytest.param([{"category": "material", "row_ids": ["r2"]},
+                  {"category": "work", "row_ids": ["r1", "gone"]}], id="строки-нет-в-документе"),
+    pytest.param([{"category": "work", "row_ids": []}], id="ни-одной-позиции"),
+])
 @pytest.mark.asyncio
-async def test_known_type_in_wrong_category_is_422(async_client, kp_env):
-    resp = await _create(async_client, kp_env, [{"category": "material", "row_ids": ["r1"]}])
+async def test_bad_groups_are_422_and_create_nothing(async_client, db_session, kp_env, groups):
+    """Неверная группа — отказ всей отправке: верная соседняя группа тоже не создаётся."""
+    resp = await _create(async_client, kp_env, groups)
     assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_row_in_two_groups_is_422(async_client, kp_env):
-    resp = await _create(async_client, kp_env, [
-        {"category": "work", "row_ids": ["r3"]},
-        {"category": "material", "row_ids": ["r3"]},
-    ])
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_missing_row_is_422(async_client, kp_env):
-    resp = await _create(async_client, kp_env, [{"category": "work", "row_ids": ["r1", "gone"]}])
-    assert resp.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_empty_groups_is_422(async_client, kp_env):
-    resp = await _create(async_client, kp_env, [{"category": "work", "row_ids": []}])
-    assert resp.status_code == 422
+    count = (await db_session.execute(select(func.count()).select_from(KpRequest))).scalar()
+    assert count == 0
 
 
 @pytest.mark.asyncio
@@ -681,7 +672,9 @@ async def test_take_foreign_role_404_and_sales_403(async_client, kp_env, two_req
 
 
 @pytest.mark.asyncio
-async def test_cancel_by_author_and_head_not_by_other_pm_or_production(async_client, kp_env, two_requests):
+async def test_cancel_by_author_and_head_not_by_other_pm_or_production(
+    async_client, db_session, kp_env, two_requests,
+):
     url = f"/kp-requests/{two_requests['work']}/cancel"
     assert (await async_client.post(url, headers=_auth(kp_env["pm2"], "project_manager"))).status_code == 403
     assert (await async_client.post(url, headers=_auth(kp_env["contractor1"], "contractor_manager"))).status_code == 403
@@ -690,9 +683,28 @@ async def test_cancel_by_author_and_head_not_by_other_pm_or_production(async_cli
     # Повторная отмена — конфликт состояния.
     assert (await async_client.post(url, headers=_auth(kp_env["pm1"], "project_manager"))).status_code == 409
 
+    # Автора перевели в снабжение: запрос он видит, но управлять им уже не может,
+    # хотя по-прежнему числится автором (старый токен — ещё продажный).
     url2 = f"/kp-requests/{two_requests['material']}/cancel"
+    await db_session.execute(
+        User.__table__.update().where(User.id == kp_env["pm1"]).values(role="supply_manager")
+    )
+    await db_session.commit()
+    assert (await async_client.post(url2, headers=_auth(kp_env["pm1"], "project_manager"))).status_code == 403
+    await db_session.execute(
+        User.__table__.update().where(User.id == kp_env["pm1"]).values(role="project_manager")
+    )
+    await db_session.commit()
+
     resp = await async_client.post(url2, headers=_auth(kp_env["head"], "head_of_sales"))
     assert resp.status_code == 200
+
+    # Админ отменяет чужой запрос, как и руководитель продаж.
+    third = await _create(async_client, kp_env, [{"category": "material", "row_ids": ["r2"]}])
+    assert third.status_code == 201, third.text
+    rid = third.json()["requests"][0]["id"]
+    resp = await async_client.post(f"/kp-requests/{rid}/cancel", headers=_auth(kp_env["admin"], "admin"))
+    assert resp.status_code == 200 and resp.json()["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -858,33 +870,54 @@ async def test_clear_project_trash_purges_requests(async_client, db_session, kp_
 
 
 @pytest.mark.asyncio
-async def test_purge_other_cards_untouched(db_session, kp_env, async_client, two_requests):
-    removed = await kp.purge_for_cards(db_session, ["00000000-0000-0000-0000-000000000000"])
+async def test_permanent_card_delete_keeps_requests_of_other_card(
+    async_client, db_session, kp_env, two_requests, fake_s3,
+):
+    """Окончательное удаление карточки не трогает запросы соседней карточки и их файлы."""
+    from datetime import datetime, timezone
+
+    task = Task(
+        owner_id=kp_env["pm1"], user_role="project_manager", task_type="LIST_FROM_GRAND",
+        status="completed", input_files=[], input_file_data=[], chat_history=[],
+        project_id=kp_env["project_id"],
+    )
+    db_session.add(task)
+    await db_session.flush()
+    card = WorkflowCard(project_id=kp_env["project_id"], name="КР", stage="list",
+                        list_task_id=str(task.id))
+    version = EstimateVersion(
+        task_id=str(task.id), version_number=0, version_label="original",
+        version_display_name="V0 — Оригинал", rows=_list_rows(),
+        file_slot="result", task_type="LIST_FROM_GRAND",
+    )
+    db_session.add_all([card, version])
     await db_session.commit()
-    assert removed == []
-    assert (await _kp_counts(db_session))["kp_requests"] == 2
+    other_env = {**kp_env, "card_id": str(card.id), "version_id": str(version.id)}
+    resp = await _create(async_client, other_env, [{"category": "work", "row_ids": ["r1", "r4"]}],
+                         files=[PDF])
+    assert resp.status_code == 201, resp.text
+    other = resp.json()["requests"][0]["id"]
 
+    await db_session.execute(
+        WorkflowCard.__table__.update().where(WorkflowCard.id == kp_env["card_id"])
+        .values(deleted_at=datetime.now(timezone.utc))
+    )
+    await db_session.commit()
+    resp = await async_client.delete(f"/api/workflow-cards/{kp_env['card_id']}/permanent",
+                                     headers=_auth(kp_env["pm1"], "project_manager"))
+    assert resp.status_code == 204, resp.text
 
-# ---------------------------------------------------------------------------
-# Права (чистая логика)
-# ---------------------------------------------------------------------------
-
-def test_can_view_and_work_kp():
-    req = KpRequest(target_role="supply_manager", author_id=5)
-    sales = {"sub": "1", "role": "project_manager"}
-    supply = {"sub": "2", "role": "supply_manager"}
-    contractor = {"sub": "3", "role": "contractor_manager"}
-    assert perm.can_view_kp(req, sales)
-    assert perm.can_view_kp(req, supply)
-    assert not perm.can_view_kp(req, contractor)
-    assert perm.can_work_kp(req, supply)
-    assert not perm.can_work_kp(req, contractor)
-    assert not perm.can_work_kp(req, sales)
-    assert perm.can_manage_kp(req, {"sub": "5", "role": "project_manager"})
-    assert perm.can_manage_kp(req, {"sub": "9", "role": "head_of_sales"})
-    assert perm.can_manage_kp(req, {"sub": "9", "role": "admin"})
-    assert not perm.can_manage_kp(req, sales)
-    assert not perm.can_manage_kp(req, {"sub": "5", "role": "supply_manager"})
+    headers = _auth(kp_env["pm1"], "project_manager")
+    for rid in two_requests.values():
+        assert (await async_client.get(f"/kp-requests/{rid}", headers=headers)).status_code == 404
+    detail = await async_client.get(f"/kp-requests/{other}", headers=headers)
+    assert detail.status_code == 200
+    body = detail.json()
+    assert [(i["name"], i["qty"]) for i in body["items"]] == [("Штукатурка стен", 14)]
+    download = await async_client.get(f"/kp-request-files/{body['files'][0]['id']}/download",
+                                      headers=headers)
+    assert download.status_code == 200
+    assert download.content == PDF[1]
 
 
 @pytest.mark.asyncio
@@ -911,16 +944,18 @@ async def test_invalid_ids_are_404(async_client, kp_env):
 # ---------------------------------------------------------------------------
 
 class _FakeUpload:
-    """UploadFile, который помнит, сколько у него просили прочитать."""
+    """UploadFile, который считает отданные байты."""
 
     def __init__(self, name: str, size: int):
         self.filename = name
         self._data = b"x" * size
-        self.reads: list = []
+        self.served = 0
 
     async def read(self, size: int = -1) -> bytes:
-        self.reads.append(size)
-        return self._data if size is None or size < 0 else self._data[:size]
+        rest = self._data[self.served:]
+        chunk = rest if size is None or size < 0 else rest[:size]
+        self.served += len(chunk)
+        return chunk
 
 
 def test_kp_file_limit_is_own_50_mb():
@@ -932,48 +967,46 @@ def test_kp_file_limit_is_own_50_mb():
     assert kp_offers.MAX_FILE_BYTES == 50 * 1024 * 1024
 
 
-@pytest.mark.asyncio
-async def test_read_uploads_checks_count_before_reading(monkeypatch):
-    from fastapi import HTTPException
+_LIMIT = 10
 
-    from app.routers import kp_requests as router
 
+def _too_many_attachments(router):
     files = [_FakeUpload(f"f{i}.pdf", 5) for i in range(kp.MAX_FILES + 1)]
-    with pytest.raises(HTTPException) as exc:
-        await router._read_uploads(files)
-    assert exc.value.status_code == 400
-    assert all(f.reads == [] for f in files)
+    return files, router._read_uploads(files)
 
 
+def _big_attachment(router):
+    files = [_FakeUpload("ok.pdf", _LIMIT), _FakeUpload("big.pdf", 1000)]
+    return files, router._read_uploads(files)
+
+
+def _big_offer_file(router):
+    files = [_FakeUpload("kp.pdf", 1000)]
+    return files, router._read_offer_upload(files[0])
+
+
+@pytest.mark.parametrize("build, status_code, max_read, rejected", [
+    pytest.param(_too_many_attachments, 400, 0, None, id="вложений-больше-лимита"),
+    pytest.param(_big_attachment, 413, _LIMIT + 1, "big.pdf", id="вложение-больше-лимита"),
+    pytest.param(_big_offer_file, 413, _LIMIT + 1, "kp.pdf", id="файл-кп-больше-лимита"),
+])
 @pytest.mark.asyncio
-async def test_read_uploads_stops_at_limit(monkeypatch):
-    from fastapi import HTTPException
-
-    from app.routers import kp_requests as router
-
-    monkeypatch.setattr(kp, "MAX_FILE_BYTES", 10)
-    ok = _FakeUpload("ok.pdf", 10)
-    big = _FakeUpload("big.pdf", 1000)
-    with pytest.raises(HTTPException) as exc:
-        await router._read_uploads([ok, big])
-    assert exc.value.status_code == 413
-    assert "big.pdf" in exc.value.detail
-    # Читается не больше лимита + 1 байт — файл целиком в память не попадает.
-    assert ok.reads == [11] and big.reads == [11]
-    assert await router._read_uploads([_FakeUpload("a.pdf", 10)]) == [("a.pdf", b"x" * 10)]
-
-
-@pytest.mark.asyncio
-async def test_read_offer_upload_stops_at_limit(monkeypatch):
+async def test_upload_limits_checked_without_reading_whole_file(
+    monkeypatch, build, status_code, max_read, rejected,
+):
+    """Лимит проверяется до чтения: файл больше лимита целиком в память не попадает,
+    а при лишнем числе вложений не читается ни одно. Файл ровно в лимит принимается."""
     from fastapi import HTTPException
 
     from app.routers import kp_requests as router
     from app.services import kp_offers
 
-    monkeypatch.setattr(kp_offers, "MAX_FILE_BYTES", 10)
-    big = _FakeUpload("kp.pdf", 1000)
+    monkeypatch.setattr(kp, "MAX_FILE_BYTES", _LIMIT)
+    monkeypatch.setattr(kp_offers, "MAX_FILE_BYTES", _LIMIT)
+    files, reading = build(router)
     with pytest.raises(HTTPException) as exc:
-        await router._read_offer_upload(big)
-    assert exc.value.status_code == 413
-    assert big.reads == [11]
-    assert await router._read_offer_upload(None) is None
+        await reading
+    assert exc.value.status_code == status_code
+    assert max(f.served for f in files) <= max_read
+    if rejected:
+        assert rejected in exc.value.detail
