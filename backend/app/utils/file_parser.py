@@ -70,8 +70,8 @@ def _col_score(header: str, keywords: list[str]) -> int:
 def _find_header_row(all_rows) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], Optional[int]]:
     """
     Сканируем первые 40 строк листа в поиске строки с заголовками колонок.
-    Также сканируем следующие строки после найденного заголовка, чтобы найти
-    колонку «всего с учётом коэффициентов» (в Гранд-Смете она в строке подзаголовков).
+    Колонку «всего с учётом коэффициентов» ищем в самой строке шапки и в 1–4
+    строках под ней (в Гранд-Смете она в строке подзаголовков).
     Возвращает (header_row_idx, name_col, unit_col, qty_col, qty_total_col) — 0-based.
     qty_total_col — колонка итогового количества (или None если не найдена).
 
@@ -124,10 +124,13 @@ def _find_header_row(all_rows) -> Tuple[Optional[int], Optional[int], Optional[i
 
     name_col, unit_col, qty_col = best_cols
 
-    # Ищем колонку итогового количества в строках подзаголовков после основного заголовка
-    # В Гранд-Смете строка подзаголовков содержит «всего с учётом коэффициентов»
+    # Колонка итогового количества «всего с учётом коэффициентов». В Гранд-Смете
+    # она в строке подзаголовков под «Количеством», но шапку присылают и
+    # однострочной — тогда колонка стоит в самой строке шапки. Ищем в обеих: без
+    # этого однострочная шапка теряла коэффициенты, и объём брался из
+    # «Количества» (plans/2026-10-25-chistka-testov.md, «Найдено по пути», п. 1).
     qty_total_col = None
-    for sub_idx in range(best_row_idx + 1, min(best_row_idx + 5, len(all_rows))):
+    for sub_idx in range(best_row_idx, min(best_row_idx + 5, len(all_rows))):
         sub_cells = [str(c).strip().lower() if c is not None else "" for c in all_rows[sub_idx]]
         for col_idx, cell in enumerate(sub_cells):
             if any(kw in cell for kw in _QTY_TOTAL_KEYWORDS):
