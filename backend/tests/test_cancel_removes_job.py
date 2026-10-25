@@ -21,20 +21,31 @@ async def _clear_jobs(db):
     await db.commit()
 
 
-async def test_cancel_pending_jobs_removes_queued(db_session):
-    """queued-job отменённой задачи уходит из очереди."""
+async def test_cancel_endpoint_takes_task_off_the_queue(async_client, admin_token, db_session):
+    """«Стоп» снимает queued-job задачи: worker её больше не возьмёт.
+
+    Регресс был именно в эндпоинте — он красил только `tasks.status`.
+    """
     await _clear_jobs(db_session)
-    job = await job_queue.enqueue(db_session, "task.process", {"task_id": "T-1"}, owner_id=1)
-    job_id = job.id  # id до commit'а внутри cancel: после него атрибут истекает
+    task_id = "c0000000-0000-0000-0000-000000000003"
+    db_session.add(
+        Task(id=task_id, task_type="LIST_FROM_GRAND", status="pending", owner_id=1, user_role="admin")
+    )
+    await db_session.commit()
+    job = await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
+    job_id = job.id
+    try:
+        r = await async_client.post(f"/tasks/{task_id}/cancel", headers={"Authorization": admin_token})
+        assert r.status_code == 200
 
-    n = await job_queue.cancel_pending_jobs_for_task(db_session, "T-1")
-
-    assert n == 1
-    db_session.expire_all()
-    status = (await db_session.execute(select(Job.status).where(Job.id == job_id))).scalar_one()
-    assert status == "cancelled"
-    # Снятую job worker больше не возьмёт.
-    assert await job_queue.claim_one(db_session, "w1") is None
+        db_session.expire_all()
+        status = (await db_session.execute(select(Job.status).where(Job.id == job_id))).scalar_one()
+        assert status == "cancelled"
+        assert await job_queue.claim_one(db_session, "w1") is None
+    finally:
+        await _clear_jobs(db_session)
+        await db_session.execute(delete(Task).where(Task.id == task_id))
+        await db_session.commit()
 
 
 async def test_cancel_leaves_other_tasks_alone(db_session):

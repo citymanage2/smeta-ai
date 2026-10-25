@@ -11,21 +11,34 @@ import pytest
 
 from app import worker
 from app.services import price_service
+from tests.helpers.prices import axis, similar
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_warm_price_cache_loads(monkeypatch):
-    """Прогрев зовёт load_cache — ровно один раз."""
-    calls = []
+@pytest.mark.parametrize(
+    "warmup",
+    [worker._warm_price_cache, worker._ensure_price_cache],
+    ids=["on_start", "scheduled_retry"],
+)
+async def test_warmup_makes_price_list_searchable(price_db, app_sessions, warmup):
+    """После прогрева (на старте или добором по расписанию, если старт не удался)
+    позиция сметы находит цену в корпоративном прайсе; до него — нет.
 
-    async def fake_load_cache(db):
-        calls.append(db)
+    Ровно это и ломалось: с пустым кэшем поиск по смыслу молча отвечал «не
+    найдено», и позиция уходила в ИИ с платным веб-поиском.
+    """
+    price_db.work("Кладка стен из кирпича", unit="м3", prices={"Подрядчик": 5000}, vector=axis(0))
+    price_db.knows("Кладка кирпичных стен", similar(0.95, to=0))
+    await price_db.db.commit()
+    assert await price_service.batch_embedding_match_works(["Кладка кирпичных стен"]) == [None]
 
-    monkeypatch.setattr(price_service, "load_cache", fake_load_cache)
-    await worker._warm_price_cache()
+    await warmup()
 
-    assert len(calls) == 1
+    assert price_service.is_cache_loaded() is True
+    [found] = await price_service.batch_embedding_match_works(["Кладка кирпичных стен"])
+    assert found["name"] == "Кладка стен из кирпича"
+    assert found["min_price"] == 5000
 
 
 async def test_warm_price_cache_survives_db_failure(monkeypatch):
@@ -38,20 +51,6 @@ async def test_warm_price_cache_survives_db_failure(monkeypatch):
 
     monkeypatch.setattr(price_service, "load_cache", boom)
     await worker._warm_price_cache()  # не должно бросить
-
-
-async def test_ensure_price_cache_retries_when_empty(monkeypatch):
-    """Кэш пуст (прогрев на старте не удался) → дожимаем по расписанию."""
-    calls = []
-
-    async def fake_load_cache(db):
-        calls.append(db)
-
-    monkeypatch.setattr(price_service, "load_cache", fake_load_cache)
-    monkeypatch.setattr(price_service, "is_cache_loaded", lambda: False)
-    await worker._ensure_price_cache()
-
-    assert len(calls) == 1
 
 
 async def test_ensure_price_cache_is_scheduled():

@@ -81,19 +81,23 @@ def test_position_matches_growing_wait():
     assert ordered[0].ready_in_s < ordered[1].ready_in_s < ordered[2].ready_in_s
 
 
-def test_default_slots_are_sequential():
-    """Без явных слотов берётся настройка — а она теперь «одна задача за раз».
-
-    Если web разойдётся с обработчиком, прогноз соврёт: покажет «старт вот-вот»
-    там, где на самом деле час ожидания.
+def test_default_slots_come_from_settings(monkeypatch):
+    """Без явных слотов берётся настройка обработчика — та же цифра, по которой он
+    берёт задачи. Разойдутся — прогноз соврёт: покажет «старт вот-вот» там, где на
+    самом деле час ожидания, или наоборот.
     """
     from app.config import settings
 
-    assert settings.WORKER_CONCURRENCY == 1
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 2)
+    tasks = [
+        _task(id="a", created_at=NOW - timedelta(minutes=10)),
+        _task(id="b", created_at=NOW - timedelta(minutes=5)),
+        _task(id="c"),
+    ]
 
-    tasks = [_task(id="a", created_at=NOW - timedelta(minutes=5)), _task(id="b")]
     eta = simulate_queue(tasks, _flat(600), NOW)
 
-    assert eta["a"].queue_position == 1
-    assert eta["b"].queue_position == 2
-    assert eta["b"].starts_in_s == pytest.approx(600, abs=2)
+    # Два слота: первые две стартуют сразу, третья ждёт освобождения слота.
+    assert eta["a"].starts_in_s == 0
+    assert eta["b"].starts_in_s == 0
+    assert eta["c"].starts_in_s == pytest.approx(600, abs=2)

@@ -25,25 +25,6 @@ async def test_worker_memory_absent_without_events(async_client, admin_token):
     assert r.json()["worker_memory"] is None
 
 
-async def test_worker_memory_reported(async_client, admin_token, db_session):
-    """Жалоба обработчика доезжает до админки с цифрой, порогом и числом слотов."""
-    db_session.add(
-        SystemEvent(
-            kind=KIND_WORKER_MEMORY_HIGH,
-            payload={"rss_mb": 1712.5, "threshold_mb": 1024, "concurrency": 4},
-        )
-    )
-    await db_session.flush()
-
-    r = await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
-    mem = r.json()["worker_memory"]
-    assert mem is not None
-    assert mem["rss_mb"] == 1712.5
-    assert mem["threshold_mb"] == 1024
-    assert mem["concurrency"] == 4
-    assert mem["age_s"] is not None
-
-
 async def test_worker_memory_takes_latest(async_client, admin_token, db_session):
     """Показываем последнюю жалобу, а не первую: важно текущее состояние."""
     db_session.add(

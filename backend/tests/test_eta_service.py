@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.config import settings
 from app.models.task import Task
 from app.services import eta_service
 from app.services.eta_service import (
@@ -68,17 +69,6 @@ def test_duration_without_volume_falls_back_and_is_rough():
     total_s, rough = estimate_duration_s(_task(), Rates())
     assert total_s > 0
     assert rough is True
-
-
-def test_duration_is_rough_until_calibrated():
-    task = _task(volume_units=100, volume_kind=UNIT_ITEMS)
-    _, rough_default = estimate_duration_s(task, Rates())
-    assert rough_default is True
-
-    calibrated = Rates(per_unit={("ESTIMATE_FROM_LIST", "fast", UNIT_ITEMS): 12.0})
-    total_s, rough = estimate_duration_s(task, calibrated)
-    assert rough is False
-    assert total_s == pytest.approx(240 + 12.0 * 100)
 
 
 def test_batch_mode_uses_its_own_rate():
@@ -231,35 +221,51 @@ async def test_too_little_history_keeps_defaults(db_session):
     assert rough is True
 
 
-@pytest.mark.asyncio
-async def test_history_calibrates_the_rate(db_session):
-    # 100 позиций за 1240 с при базе 240 ⇒ 10 с/позиция (дефолт — 18).
-    await _seed_completed(db_session, 4, units=100, seconds=1240)
-    rates = await eta_service.load_rates(db_session, now=NOW)
-
-    rate, calibrated = rates.rate_for("ESTIMATE_FROM_LIST", "fast", UNIT_ITEMS)
-    assert calibrated is True
-    assert rate == pytest.approx(10.0, rel=0.01)
+async def _waiting_estimate(db, units: int = 100) -> Task:
+    """Новая смета из перечня на `units` позиций — одна в очереди."""
+    task = _task(status="pending", volume_units=units, volume_kind=UNIT_ITEMS)
+    db.add(task)
+    await db.commit()
+    return task
 
 
 @pytest.mark.asyncio
-async def test_outlier_does_not_break_the_median(db_session):
+async def test_history_calibrates_the_forecast(db_session):
+    """Сметы на 100 позиций считались по 1240 с — новую такую же прогноз ждёт
+    через ≈1240 с и больше не помечает грубой."""
+    waiting = await _waiting_estimate(db_session)
+    before = (await eta_service.queue_forecast(db_session, now=NOW))[waiting.id]
+    assert before.rough is True  # истории нет — оценка честно грубая
+
     await _seed_completed(db_session, 4, units=100, seconds=1240)
-    # Одна задача «висела» 20 часов из-за сбоя API.
+    after = (await eta_service.queue_forecast(db_session, now=NOW))[waiting.id]
+
+    assert after.rough is False
+    assert after.ready_in_s == pytest.approx(1240, abs=30)  # прогноз — с точностью до минуты
+
+
+@pytest.mark.asyncio
+async def test_outlier_does_not_break_the_forecast(db_session):
+    """Одна задача «висела» 20 часов из-за сбоя API — прогноз остаётся ≈1240 с."""
+    await _seed_completed(db_session, 4, units=100, seconds=1240)
     await _seed_completed(db_session, 1, units=100, seconds=72000)
+    waiting = await _waiting_estimate(db_session)
 
-    rates = await eta_service.load_rates(db_session, now=NOW)
-    rate, _ = rates.rate_for("ESTIMATE_FROM_LIST", "fast", UNIT_ITEMS)
-    assert rate == pytest.approx(10.0, rel=0.05)
+    eta = (await eta_service.queue_forecast(db_session, now=NOW))[waiting.id]
+
+    assert eta.ready_in_s == pytest.approx(1240, abs=30)
 
 
 @pytest.mark.asyncio
-async def test_calibrated_rate_is_clamped_to_sane_range(db_session):
-    """Даже если ВСЯ выборка мусорная, прогноз не улетает в космос."""
+async def test_garbage_history_does_not_send_forecast_to_space(db_session):
+    """Даже если ВСЯ выборка мусорная (позиция за 22 часа), смета на 100 позиций
+    ждёт часы, а не месяцы."""
     await _seed_completed(db_session, 5, units=1, seconds=80000)
-    rates = await eta_service.load_rates(db_session, now=NOW)
-    rate, _ = rates.rate_for("ESTIMATE_FROM_LIST", "fast", UNIT_ITEMS)
-    assert rate <= 18.0 * 5
+    waiting = await _waiting_estimate(db_session)
+
+    eta = (await eta_service.queue_forecast(db_session, now=NOW))[waiting.id]
+
+    assert eta.ready_in_s < 24 * 3600
 
 
 @pytest.mark.asyncio
@@ -288,13 +294,14 @@ async def test_old_history_is_ignored(db_session):
 
 
 @pytest.mark.asyncio
-async def test_forecast_reads_progress_scalars_without_loading_the_whole_json(db_session):
-    """Из progress_data берутся только счётчики: сам документ (позиции, OCR)
-    в прогноз не тянется, но и не теряется по дороге."""
+async def test_forecast_reads_progress_of_running_batch(db_session, monkeypatch):
+    """Из progress_data прогноз берёт счётчики чанков и признак пачки, даже когда
+    рядом лежит тяжёлый документ (позиции, OCR)."""
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 1)
     heavy = {
         "_stage": "batch_pending",
         "batch_id": "msgbatch_1",
-        "chunks_done": 5,
+        "chunks_done": 8,
         "total_chunks": 10,
         "ocr_pages": ["очень много текста"] * 50,
     }
@@ -308,26 +315,33 @@ async def test_forecast_reads_progress_scalars_without_loading_the_whole_json(db
     db_session.add_all([batch, waiting])
     await db_session.commit()
 
-    snapshots = await eta_service._load_active_snapshots(db_session)
-    snap = next(s for s in snapshots if s.id == batch.id)
+    forecast = await eta_service.queue_forecast(db_session, now=NOW)
 
-    assert snap.batch_pending is True
-    assert (snap.chunks_done, snap.chunks_total) == (5, 10)
-
-    # Пачка слот не держит — ожидающая задача стартует сразу.
-    forecast = eta_service.simulate_queue(snapshots, Rates(), NOW, slots=1)
+    # 8 из 10 чанков за час — осталась четверть часа, что бы ни думала модель.
+    assert forecast[batch.id].ready_in_s == pytest.approx(900, abs=60)
+    # Пачка слот не держит — ожидающая задача стартует сразу, хотя слот один.
     assert forecast[waiting.id].starts_in_s == 0
 
 
 @pytest.mark.asyncio
-async def test_queue_forecast_covers_active_tasks_only(db_session):
+@pytest.mark.parametrize(
+    "status", ["completed", "failed", "cancelled", "paused", "not_started"]
+)
+async def test_queue_forecast_covers_active_tasks_only(db_session, monkeypatch, status):
+    """В прогнозе — только очередь и работа. Незапущенная оптимизация
+    (`not_started`, правило №20) ждёт кнопки: в прогнозе её нет, и очередь перед
+    ней не стоит — задача, поставленная позже, идёт первой."""
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 1)
+    inactive = _task(
+        status=status, task_type="ESTIMATE_OPTIMIZATION", created_at=NOW - timedelta(minutes=30)
+    )
     active = _task(status="pending", volume_units=100, volume_kind=UNIT_ROWS)
-    done = _task(status="completed")
-    db_session.add_all([active, done])
+    db_session.add_all([inactive, active])
     await db_session.commit()
 
     forecast = await eta_service.queue_forecast(db_session, now=NOW)
 
-    assert active.id in forecast
-    assert done.id not in forecast
+    assert inactive.id not in forecast
     assert forecast[active.id].units == 100
+    assert forecast[active.id].queue_position == 1
+    assert forecast[active.id].starts_in_s == 0

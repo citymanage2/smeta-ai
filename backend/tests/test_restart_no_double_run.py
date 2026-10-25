@@ -24,26 +24,6 @@ async def _clear_jobs(db):
     await db.commit()
 
 
-async def test_supersede_removes_queued_and_running(db_session):
-    """Перед новым прогоном снимаются и queued, и running — иначе прогонов два."""
-    await _clear_jobs(db_session)
-    await job_queue.enqueue(db_session, "task.process", {"task_id": "T-9"}, owner_id=1)
-    claimed = await job_queue.claim_one(db_session, "w1")
-    assert claimed is not None
-    await job_queue.enqueue(db_session, "task.process", {"task_id": "T-9"}, owner_id=1)
-
-    n = await job_queue.supersede_jobs_for_task(db_session, "T-9")
-
-    assert n == 2
-    db_session.expire_all()
-    statuses = (
-        (await db_session.execute(select(Job.status))).scalars().all()
-    )
-    assert set(statuses) == {"superseded"}
-    # Снятую job worker не возьмёт.
-    assert await job_queue.claim_one(db_session, "w2") is None
-
-
 async def test_supersede_spares_other_tasks(db_session):
     """Чужие job рестарт не трогает."""
     await _clear_jobs(db_session)
@@ -202,7 +182,7 @@ async def test_restart_keeps_created_at_and_resets_run(async_client, db_session,
 
 
 async def test_restart_supersedes_old_job(async_client, db_session, admin_token):
-    """После рестарта в очереди ровно один живой прогон, а не два."""
+    """После рестарта в очереди ровно один живой прогон — новый; прежние сняты."""
     await _clear_jobs(db_session)
     task = Task(
         id="d0000000-0000-0000-0000-000000000005",
@@ -214,8 +194,10 @@ async def test_restart_supersedes_old_job(async_client, db_session, admin_token)
     db_session.add(task)
     await db_session.commit()
     task_id = str(task.id)
+    # Один прогон уже идёт, второй ждёт в очереди: снять надо оба.
     await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
     await job_queue.claim_one(db_session, "w1")
+    await job_queue.enqueue(db_session, "task.process", {"task_id": task_id}, owner_id=1)
 
     r = await async_client.post(
         f"/tasks/{task_id}/restart", headers={"Authorization": admin_token}
@@ -223,13 +205,5 @@ async def test_restart_supersedes_old_job(async_client, db_session, admin_token)
     assert r.status_code == 200
 
     db_session.expire_all()
-    alive = (
-        (
-            await db_session.execute(
-                select(Job.status).where(Job.status.in_(("queued", "running")))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert alive == ["queued"]
+    statuses = (await db_session.execute(select(Job.status).order_by(Job.id))).scalars().all()
+    assert statuses == ["superseded", "superseded", "queued"]

@@ -4,10 +4,9 @@
 Контракт:
 - _has_checkpoint: предикат «есть чекпоинт» (тот же, что у ручного resume-
   эндпоинта); для paused он больше НЕ обязателен — см. Фазу 8.
-- _find_resumable_paused_ids: выбирает все paused-задачи.
-- _claim: атомарно paused→pending; повторный захват уже перехваченной задачи
-  возвращает False (гард от двойного запуска).
-- resume_paused_tasks: захватывает кандидатов и запускает runner для каждого.
+- resume_paused_tasks берёт ВСЕ paused-задачи и только их, атомарно переводит
+  paused→pending и ставит durable-job; уже перехваченную задачу второй раз не
+  берёт (гард от двойного запуска).
 
 План: plans/2026-07-21-resume-and-balance-pause.md, Фаза 4.
 """
@@ -15,10 +14,12 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import delete, select
 
 sys.modules.setdefault("fitz", MagicMock())
 
 import app.services.resume_poller as rp  # noqa: E402
+from app.models.job import Job  # noqa: E402
 from app.models.task import Task  # noqa: E402
 
 
@@ -56,45 +57,7 @@ def test_has_checkpoint_variants():
 
 
 # ---------------------------------------------------------------------------
-# _find_resumable_paused_ids — все paused (Фаза 8: чекпоинт не обязателен)
-# ---------------------------------------------------------------------------
-
-async def test_find_resumable_paused_ids_filters(db_session):
-    """Фаза 8: берём ВСЕ paused, включая без чекпоинта (баланс кончился до первого
-    чекпоинта — такую задачу надо перезапустить с нуля, иначе она мертва)."""
-    ok = await _seed(db_session, status="paused", progress_data={"chunks_done": 2})
-    no_cp = await _seed(db_session, status="paused", progress_data={})     # нет чекпоинта
-    await _seed(db_session, status="failed", progress_data={"chunks_done": 1})  # не paused
-    partial = await _seed(db_session, status="paused", progress_data={"_stage": "claude_partial"})
-
-    ids = await rp._find_resumable_paused_ids(db_session)
-
-    assert ok.id in ids
-    assert no_cp.id in ids
-    assert partial.id in ids
-    assert len(ids) == 3  # failed — исключён
-
-
-# ---------------------------------------------------------------------------
-# _claim — атомарный захват paused→pending, гард от двойного
-# ---------------------------------------------------------------------------
-
-async def test_claim_flips_paused_to_pending_once(db_session):
-    t = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
-
-    first = await rp._claim(db_session, t.id)
-    assert first is True
-    await db_session.refresh(t)
-    assert t.status == "pending"
-    assert t.error_message is None
-
-    # повторный захват — уже не paused → False (гард от двойного запуска)
-    second = await rp._claim(db_session, t.id)
-    assert second is False
-
-
-# ---------------------------------------------------------------------------
-# resume_paused_tasks — оркестрация: захват + запуск runner
+# resume_paused_tasks — захват paused-задач и постановка job
 # ---------------------------------------------------------------------------
 
 def _same_session_factory(session):
@@ -117,20 +80,83 @@ async def _ping_ok() -> dict:
     return {"ok": True, "is_balance_error": False, "status_code": 200, "error": None}
 
 
+async def _task_jobs(db) -> list[dict]:
+    return (
+        await db.execute(select(Job.payload).where(Job.kind == "task.process").order_by(Job.id))
+    ).scalars().all()
+
+
+async def test_resume_takes_every_paused_task_and_only_paused(db_session):
+    """Фаза 8: берём ВСЕ paused, включая без чекпоинта (баланс кончился до первого
+    чекпоинта — такую задачу надо перезапустить с нуля, иначе она мертва).
+    failed с чекпоинтом поллер не трогает: её продолжают кнопкой."""
+    await db_session.execute(delete(Job))
+    await db_session.commit()
+    ok = await _seed(db_session, status="paused", progress_data={"chunks_done": 2})
+    no_cp = await _seed(db_session, status="paused", progress_data={})
+    failed = await _seed(db_session, status="failed", progress_data={"chunks_done": 1})
+    partial = await _seed(db_session, status="paused", progress_data={"_stage": "claude_partial"})
+    ids = [ok.id, no_cp.id, failed.id, partial.id]
+    try:
+        claimed = await rp.resume_paused_tasks(
+            session_factory=_same_session_factory(db_session), pinger=_ping_ok
+        )
+
+        assert sorted(claimed) == sorted([ok.id, no_cp.id, partial.id])
+        assert sorted(p["task_id"] for p in await _task_jobs(db_session)) == sorted(claimed)
+        await db_session.refresh(failed)
+        assert failed.status == "failed"
+    finally:
+        await db_session.execute(delete(Job))
+        await db_session.execute(delete(Task).where(Task.id.in_(ids)))
+        await db_session.commit()
+
+
+async def test_overlapping_ticks_take_task_once(db_session):
+    """Гард от двойного запуска: пока один тик проверял баланс, задачу уже взял
+    другой тик — второй раз её не берут, job в очереди одна.
+
+    Второй тик проходит целиком внутри пробного вызова API первого: первый к
+    этому моменту уже выбрал задачу кандидатом, но захват у него не проходит.
+    """
+    await db_session.execute(delete(Job))
+    await db_session.commit()
+    t = await _seed(db_session, status="paused", progress_data={"chunks_done": 1})
+    task_id = t.id  # неудачный захват делает rollback, и атрибуты строки истекают
+    factory = _same_session_factory(db_session)
+    second_tick: list[str] = []
+
+    async def ping_while_second_tick_runs() -> dict:
+        second_tick.extend(await rp.resume_paused_tasks(session_factory=factory, pinger=_ping_ok))
+        return await _ping_ok()
+
+    try:
+        first_tick = await rp.resume_paused_tasks(
+            session_factory=factory, pinger=ping_while_second_tick_runs
+        )
+
+        assert second_tick == [task_id]
+        assert first_tick == []
+        assert await _task_jobs(db_session) == [{"task_id": task_id}]
+        status = (await db_session.execute(select(Task.status).where(Task.id == task_id))).scalar_one()
+        assert status == "pending"
+    finally:
+        await db_session.execute(delete(Job))
+        await db_session.execute(delete(Task).where(Task.id == task_id))
+        await db_session.commit()
+
+
 @pytest.mark.parametrize(
     "progress_data",
     [{"chunks_done": 1}, {}],
     ids=["with_checkpoint", "without_checkpoint"],
 )
 async def test_resume_paused_tasks_enqueues_job(db_session, progress_data):
-    """P1: прод-путь (без инъекции runner) АТОМАРНО ставит durable-job task.process,
+    """P1: поллер АТОМАРНО ставит durable-job task.process,
     а не запускает обработку напрямую мимо очереди.
 
     Фаза 8: чекпоинт не обязателен — paused без него (баланс кончился до первого
     чекпоинта) тоже возвращается в очередь, иначе задача мертва."""
-    from sqlalchemy import delete, select
-    from app.models.job import Job
-
     await db_session.execute(delete(Job))
     await db_session.commit()
     resumable = await _seed(db_session, status="paused", progress_data=progress_data)
@@ -156,14 +182,11 @@ async def test_resume_paused_tasks_enqueues_job(db_session, progress_data):
 
 
 async def test_resume_paused_tasks_noop_when_none(db_session):
-    runner = AsyncMock()
     pinger = AsyncMock()
     claimed = await rp.resume_paused_tasks(
         session_factory=_same_session_factory(db_session),
-        runner=runner,
         pinger=pinger,
     )
     assert claimed == []
-    runner.assert_not_called()
     # AC1: нет пауз → пробный вызов API не делается вовсе (тик бесплатен).
     pinger.assert_not_called()

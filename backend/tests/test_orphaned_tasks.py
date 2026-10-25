@@ -180,9 +180,10 @@ async def test_sweep_respects_grace(db_session):
     assert (await _reload(db_session, t.id)).status == "processing"
 
 
-@pytest.mark.parametrize("status", ["paused", "completed", "failed", "cancelled"])
+@pytest.mark.parametrize("status", ["paused", "not_started", "completed", "failed", "cancelled"])
 async def test_sweep_ignores_non_active_statuses(db_session, status):
-    """paused ждёт пополнения баланса, остальные уже терминальны."""
+    """paused ждёт пополнения баланса, not_started — кнопки «Начать оптимизацию»
+    (job у неё нет по построению, правило №20), остальные уже терминальны."""
     t = await _task(db_session, status=status)
 
     n = await job_queue.sweep_orphaned_tasks(db_session, grace_s=1800)
