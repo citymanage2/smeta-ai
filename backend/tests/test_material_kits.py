@@ -5,6 +5,7 @@
 «Устройство перегородок из ГВЛ с одинарным металлическим каркасом и двухслойной
 обшивкой с обеих сторон», м², 5,475 → листов ГВЛ 5,475 × 2 слоя × 2 стороны = 21,9 м².
 """
+import re
 import sys
 from unittest.mock import MagicMock
 
@@ -145,19 +146,46 @@ def test_screws_second_layer_only_when_two_layers():
     assert "TN 35" not in " ".join(one), "второй слой не обшивается — шурупов TN 35 быть не должно"
 
 
+def _quantities(note: str) -> list[tuple[float, str]]:
+    """Числа примечания со словом-единицей после них: «2 слоя» → (2.0, "слоя").
+
+    Проверяем числа и единицы, а не формулировку: её можно переписать, а
+    объём, слои и стороны должны остаться видны человеку.
+    """
+    return [
+        (float(number.replace(",", ".")), unit.lower())
+        for number, unit in re.findall(r"(\d+(?:,\d+)?)\s*([^\W\d_]+\d?)?", note)
+    ]
+
+
 def test_added_note_shows_the_formula():
+    """Примечание показывает расчёт: 5,475 м² × 2 слоя × 2 стороны = 21,9 м²."""
     result = expand_completeness_items([_work(PARTITION_2X2)])
     note = _find(result.items, "ГВЛ")["notes"]
     assert note.startswith(KIT_ADDED_PREFIX)
-    assert "21,9" in note and "5,475" in note
-    assert "2 слоя" in note and "2 стороны" in note
+    found = _quantities(note)
+    numbers = [number for number, _ in found]
+    assert 5.475 in numbers
+    assert (21.9, "м2") in found
+    assert any(n == 2 and u.startswith("сло") for n, u in found)
+    assert any(n == 2 and u.startswith("сторон") for n, u in found)
 
 
 def test_default_params_are_stated_in_the_note():
-    """Приняли конструкцию за человека — человек должен это увидеть в строке."""
+    """Приняли конструкцию за человека — человек должен это увидеть в строке.
+
+    В наименовании «Устройство перегородок из ГКЛ» нет ни слоёв, ни сторон;
+    принятые 1 слой × 2 стороны видны и у профиля, в чьей норме слоёв нет.
+    """
     result = expand_completeness_items([_work("Устройство перегородок из ГКЛ")])
-    note = _find(result.items, "ГКЛ")["notes"]
-    assert "по умолчанию" in note.lower()
+    found = _quantities(_find(result.items, "Профиль стоечный")["notes"])
+    assert any(n == 1 and u.startswith("сло") for n, u in found)
+    assert any(n == 2 and u.startswith("сторон") for n, u in found)
+
+    # Конструкция названа в работе — у профиля про слои ничего не дописано.
+    explicit = expand_completeness_items([_work(PARTITION_2X2)])
+    found = _quantities(_find(explicit.items, "Профиль стоечный")["notes"])
+    assert not any(u.startswith("сло") for _, u in found)
 
 
 def test_gvl_work_gets_gvl_sheets_and_gkl_work_gets_gkl():

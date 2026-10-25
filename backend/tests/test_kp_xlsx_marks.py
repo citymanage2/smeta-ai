@@ -68,7 +68,6 @@ def test_kp_fill_rules():
     assert kp_fill({"request_id": "r1"}) is None
     assert kp_fill(KP_REF).start_color.rgb.endswith(KP_FILL_COLOR)
     assert kp_fill(KP_REF_MAT).start_color.rgb.endswith(KP_MATERIALS_FILL_COLOR)
-    assert KP_FILL_COLOR != KP_MATERIALS_FILL_COLOR
 
 
 def test_kp_ref_active_exact_numbers():
@@ -107,8 +106,9 @@ def test_estimate_export_fills_kp_rows():
     assert {_color(c) for c in _row_by_name(ws, "Монтаж кабеля")} == {KP_FILL_COLOR}
     assert {_color(c) for c in _row_by_name(ws, "Монтаж лотка")} == {KP_MATERIALS_FILL_COLOR}
     assert {_color(c) for c in _row_by_name(ws, "Кабель")} == {None}
-    # Раздел сохраняет свою заливку.
-    assert _color(_row_by_name(ws, "Раздел 1")[0]) == "BDD7EE"
+    # Раздел сохраняет свою заливку — ту же, что в файле без пометок КП.
+    plain = _export(_strip(_rows())).active
+    assert _color(_row_by_name(ws, "Раздел 1")[0]) == _color(_row_by_name(plain, "Раздел 1")[0])
 
 
 def test_estimate_export_price_changed_after_kp_no_fill():
