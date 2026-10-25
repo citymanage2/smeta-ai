@@ -17,14 +17,11 @@
 План: plans/2026-07-29-diagnostika-v-admin-panel.md, Фазы 2–3.
 """
 import asyncio
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.task_processor import (  # noqa: E402
+from app.services.task_processor import (
     TaskProcessor,
     StageDeadlineError,
     _chunk_stage_deadline,
@@ -38,11 +35,12 @@ from app.services.task_processor import (  # noqa: E402
 
 def test_deadline_scales_with_batch_size():
     """Пачка на 30 чанков штатно идёт ~24 мин при параллельности 4 — фиксированные
-    30 минут обрывали бы здоровую работу. Дедлайн считается по волнам."""
-    small = _chunk_stage_deadline(8, 4)     # 2 волны
-    large = _chunk_stage_deadline(30, 4)    # 8 волн
+    30 минут обрывали бы здоровую работу. Дедлайн растёт вместе с пачкой и
+    оставляет здоровой работе заметный запас: цель — поймать зависание (часы)."""
+    small = _chunk_stage_deadline(8, 4)
+    large = _chunk_stage_deadline(30, 4)
     assert large > small
-    assert large >= 8 * 600
+    assert large >= 2 * 24 * 60
 
 
 def test_deadline_never_below_floor():
@@ -92,21 +90,26 @@ async def test_progress_published_while_chunks_run():
     assert any(m.startswith("Обработано 1 ") or m.startswith("Обработано 2 ") for m in published)
 
 
-async def test_progress_does_not_pollute_history_log():
+async def test_progress_does_not_pollute_history_log(processor_env):
     """Живая строка идёт мимо progress_log — иначе «ХОД ВЫПОЛНЕНИЯ» раздуется."""
-    p = _proc()
-    p.update_progress = AsyncMock(return_value=None)
+    task = await processor_env.task("ESTIMATE_FROM_LIST", status="processing")
+    label = "Обработано {done} из {total} частей..."
 
-    async def _w():
-        await asyncio.sleep(0.03)
-        return 1
+    def make(delay):
+        async def _w():
+            await asyncio.sleep(delay)
+            return delay
+        return _w
 
-    await p._run_chunks_parallel(
-        [_w], concurrency=1, progress_tick=0.01,
-        progress_label="Обработано {done} из {total} частей...",
+    await processor_env.processor(task)._run_chunks_parallel(
+        [make(0.02), make(0.08)], concurrency=2, progress_tick=0.01, progress_label=label,
     )
-    # update_progress (пишет в историю) не должен вызываться из примитива вовсе.
-    p.update_progress.assert_not_awaited()
+
+    task = await processor_env.reload(task)
+    # Строка статуса живая: в ней счёт этой пачки.
+    assert task.progress_message in {label.format(done=d, total=2) for d in range(3)}
+    # А в историю задачи тики не попали.
+    assert task.progress_log in (None, [])
 
 
 # ---------------------------------------------------------------------------

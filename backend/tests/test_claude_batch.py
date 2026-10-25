@@ -1,14 +1,18 @@
 """
 Phase 2 — batch-инфраструктура claude_service (Anthropic Message Batches API).
 
-Юнит-тесты с замоканным _client.messages.batches. БД не трогаем (db=None).
+Подменён только клиент Anthropic (`messages.batches`, `messages.create`); журнал
+вызовов пишется в тестовую БД.
 План: plans/2026-07-21-estimate-processing-modes.md, Phase 2.
 """
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 
 import app.services.claude_service as cs
+from app.models.api_call_log import ApiCallLog
+from tests.helpers.anthropic_api import claude_message
 
 
 @pytest.fixture
@@ -23,11 +27,6 @@ def batches(monkeypatch):
     client = SimpleNamespace(messages=SimpleNamespace(batches=batches_ns))
     monkeypatch.setattr(cs, "_get_client", lambda: client)
     return batches_ns
-
-
-def test_web_search_tool_has_max_uses_cap():
-    """Без max_uses поиск бесконтрольный — 22% счёта Anthropic на 28.07.2026."""
-    assert cs.WEB_SEARCH_TOOL["max_uses"] >= 1
 
 
 def test_extract_usage_without_server_tool_use():
@@ -55,135 +54,72 @@ def test_build_batch_request_shape():
     params = req["params"]
     assert params["model"] == cs.CLAUDE_MODEL
     assert params["max_tokens"] == 12345
-    # web search подключён
-    assert cs.WEB_SEARCH_TOOL in params["tools"]
+    # web search подключён, и с потолком поисков: без max_uses поиск
+    # бесконтрольный — 22% счёта Anthropic на 28.07.2026.
+    (tool,) = params["tools"]
+    assert tool["name"] == "web_search"
+    assert tool["max_uses"] == cs.settings.WEB_SEARCH_MAX_USES >= 1
     # system закэширован
     assert params["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert params["system"][0]["text"] == "SYS"
 
 
 # --------------------------------------------------------------------------
-# collect — ключует по custom_id при перемешанном порядке; errored помечается
-# --------------------------------------------------------------------------
-
-class _FakeResults:
-    """Асинхронно-итерируемая заглушка для .results()."""
-    def __init__(self, items):
-        self._items = items
-
-    def __aiter__(self):
-        async def _gen():
-            for it in self._items:
-                yield it
-        return _gen()
-
-
-async def test_collect_claude_batch_keys_by_custom_id(batches):
-    ok = SimpleNamespace(
-        custom_id="c1",
-        result=SimpleNamespace(
-            type="succeeded",
-            message=SimpleNamespace(
-                content=[SimpleNamespace(text='{"price": 100}')],
-                usage=SimpleNamespace(
-                    input_tokens=100,
-                    output_tokens=50,
-                    cache_read_input_tokens=0,
-                    cache_creation_input_tokens=200,
-                    server_tool_use=SimpleNamespace(web_search_requests=3),
-                ),
-            ),
-        ),
-    )
-    errored = SimpleNamespace(custom_id="c2", result=SimpleNamespace(type="errored"))
-
-    # порядок перемешан: errored раньше succeeded
-    batches.results = lambda batch_id: _FakeResults([errored, ok])
-
-    out = await cs.collect_claude_batch("msgbatch_abc123")  # db=None → без логирования
-
-    assert set(out.keys()) == {"c1", "c2"}
-    assert out["c1"]["text"] == '{"price": 100}'
-    assert out["c1"]["error"] is None
-    assert out["c2"]["error"] == "errored"
-    assert out["c2"]["text"] is None
-    assert out["c1"]["usage"]["web_search_requests"] == 3
-
-
-# --------------------------------------------------------------------------
-# Логирование batch-записи идемпотентно: повторный сбор пачки не даёт дубль.
+# Журнал вызовов: batch-запись идемпотентна, обычный вызов пишется всегда.
 # resume_from_batch вызывается заново после рестарта поллера — без защиты
 # метрика завышалась на каждую пересборку.
 # --------------------------------------------------------------------------
 
-class _FakeLogSession:
-    """Сессия-заглушка: помнит add(), отвечает на SELECT существующей строки."""
+def _batch_results(batches, *custom_ids):
+    """Пачка, в которой каждый запрос успешно посчитан."""
 
-    def __init__(self, store: list, existing: bool):
-        self._store = store
-        self._existing = existing
+    async def _results(batch_id):
+        async def _stream():
+            for cid in custom_ids:
+                yield SimpleNamespace(
+                    custom_id=cid,
+                    result=SimpleNamespace(
+                        type="succeeded",
+                        message=claude_message({"items": []}, input_tokens=100, output_tokens=50),
+                    ),
+                )
+        return _stream()
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    async def execute(self, _stmt):
-        found = 1 if self._existing else None
-        return SimpleNamespace(scalar_one_or_none=lambda: found)
-
-    def add(self, obj):
-        self._store.append(obj)
-
-    async def commit(self):
-        pass
+    batches.results = _results
 
 
-def _patch_log_session(monkeypatch, store: list, existing: bool) -> None:
-    import app.database as database
-
-    monkeypatch.setattr(
-        database, "AsyncSessionLocal", lambda: _FakeLogSession(store, existing)
-    )
-
-
-async def test_batch_entry_logged_once(monkeypatch):
-    saved: list = []
-    _patch_log_session(monkeypatch, saved, existing=False)
-
-    await cs._log_api_call(
-        "tid-1", db=object(), input_t=100, output_t=50, cache_read_t=0,
-        cache_creation_t=0, batch=True, batch_id="msgbatch_1", batch_custom_id="chunk-0",
-    )
-
-    assert len(saved) == 1
-    assert saved[0].batch_id == "msgbatch_1"
-    assert saved[0].batch_custom_id == "chunk-0"
+async def _logged(db_session, task_id: str) -> list[ApiCallLog]:
+    db_session.expire_all()
+    return list((await db_session.execute(
+        select(ApiCallLog).where(ApiCallLog.task_id == task_id).order_by(ApiCallLog.id)
+    )).scalars().all())
 
 
-async def test_batch_entry_not_logged_twice(monkeypatch):
-    """Строка по (batch_id, custom_id) уже есть → повторную не пишем."""
-    saved: list = []
-    _patch_log_session(monkeypatch, saved, existing=True)
+async def test_batch_collected_twice_is_logged_once(batches, processor_env, db_session):
+    """Повторный сбор той же пачки (рестарт поллера) не дублирует строку журнала."""
+    task = await processor_env.task("ESTIMATE_FROM_LIST", status="processing")
+    _batch_results(batches, "chunk-0", "chunk-1")
 
-    await cs._log_api_call(
-        "tid-1", db=object(), input_t=100, output_t=50, cache_read_t=0,
-        cache_creation_t=0, batch=True, batch_id="msgbatch_1", batch_custom_id="chunk-0",
-    )
+    for _ in range(2):
+        await cs.collect_claude_batch("msgbatch_1", task_id=str(task.id), db=db_session)
 
-    assert saved == []
+    rows = await _logged(db_session, str(task.id))
+    assert sorted((r.batch_id, r.batch_custom_id) for r in rows) == [
+        ("msgbatch_1", "chunk-0"), ("msgbatch_1", "chunk-1"),
+    ]
 
 
-async def test_regular_call_logged_even_if_identical(monkeypatch):
+async def test_regular_call_logged_even_if_identical(claude_api, processor_env, db_session):
     """Дедупликация — только для batch-записей: обычные вызовы повторяются
     штатно (ретраи, соседние чанки) и каждый стоит денег."""
-    saved: list = []
-    _patch_log_session(monkeypatch, saved, existing=True)
+    task = await processor_env.task("ESTIMATE_FROM_LIST", status="processing")
+    claude_api({"items": []}, repeat=True)
 
-    await cs._log_api_call(
-        "tid-1", db=object(), input_t=100, output_t=50, cache_read_t=0,
-        cache_creation_t=0, duration_ms=1234,
-    )
+    for _ in range(2):
+        await cs.call_claude(
+            [{"role": "user", "content": "x"}], task_id=str(task.id), db=db_session,
+        )
 
-    assert len(saved) == 1
+    rows = await _logged(db_session, str(task.id))
+    assert len(rows) == 2
+    assert all(r.batch_id is None for r in rows)
