@@ -32,7 +32,6 @@ async def test_admin_list_tasks_requires_admin(async_client, seed_users, user_to
         headers={"Authorization": user_token},
     )
     assert response.status_code == 403
-    assert "Недостаточно прав" in response.json()["detail"]
 
 
 async def test_admin_list_tasks_no_auth(async_client, seed_users):

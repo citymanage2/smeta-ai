@@ -1,5 +1,11 @@
+from datetime import datetime, timezone
+from decimal import Decimal
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import delete
+
+from app.models.task import Task
 
 
 @pytest.mark.asyncio
@@ -16,29 +22,53 @@ async def test_create_project(async_client: AsyncClient, user_token: str):
     assert "id" in data
 
 
+def _task(project_id: str, estimation_status: str, cost=None, **over) -> Task:
+    return Task(
+        owner_id=1, user_role="user", task_type="ESTIMATE_FROM_LIST", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+        project_id=project_id, estimation_status=estimation_status, cost=cost, **over,
+    )
+
+
 @pytest.mark.asyncio
-async def test_list_projects(async_client: AsyncClient, user_token: str):
-    await async_client.post(
+async def test_list_projects(async_client: AsyncClient, user_token: str, db_session):
+    """Карточка проекта в списке: счётчики смет по статусу и сумма посчитанных.
+
+    В сумму идут только посчитанные и оптимизированные сметы; удалённая в
+    корзину задача не считается нигде.
+    """
+    created = await async_client.post(
         "/projects",
         json={"name": "Проект А"},
         headers={"Authorization": user_token},
     )
-    resp = await async_client.get(
-        "/projects",
-        headers={"Authorization": user_token},
-    )
-    assert resp.status_code == 200
-    items = resp.json()
-    assert isinstance(items, list)
-    assert len(items) >= 1
-    item = items[0]
-    assert "id" in item
-    assert "name" in item
-    assert "unestimated" in item
-    assert "estimated" in item
-    assert "optimized" in item
-    assert "other" in item
-    assert "total_cost" in item
+    project_id = created.json()["id"]
+    tasks = [
+        _task(project_id, "unestimated"),
+        _task(project_id, "estimated", cost=Decimal("1000.50")),
+        _task(project_id, "optimized", cost=Decimal("2500.00")),
+        _task(project_id, "not_applicable"),
+        _task(project_id, "estimated", cost=Decimal("99999.00"),
+              deleted_at=datetime.now(timezone.utc)),
+    ]
+    db_session.add_all(tasks)
+    await db_session.commit()
+    try:
+        resp = await async_client.get(
+            "/projects",
+            headers={"Authorization": user_token},
+        )
+
+        assert resp.status_code == 200
+        card = next(p for p in resp.json() if p["id"] == project_id)
+        assert card["unestimated"] == 1
+        assert card["estimated"] == 1
+        assert card["optimized"] == 1
+        assert card["other"] == 1
+        assert card["total_cost"] == 3500.5
+    finally:
+        await db_session.execute(delete(Task).where(Task.project_id == project_id))
+        await db_session.commit()
 
 
 @pytest.mark.asyncio

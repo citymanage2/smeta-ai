@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import event
 
 from app.models.api_call_log import ApiCallLog
 from app.models.project import Project
@@ -20,6 +21,7 @@ from app.models.task import Task
 from app.models.user import User
 from app.models.workflow_card import WorkflowCard
 from app.utils.auth import create_access_token, hash_password
+from tests.conftest import test_engine
 
 NOW = datetime(2026, 8, 6, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -145,36 +147,39 @@ async def test_card_list_carries_estimate_sum(async_client, db_session, project,
     assert resp.json()[0]["estimate_task"]["cost"] == 1234567.89
 
 
-@pytest.mark.asyncio
-async def test_queries_do_not_grow_with_card_count(async_client, db_session, project, owner):
-    """AC-9: пять смет стоят столько же запросов к журналу затрат, сколько одна."""
-    from app.services import usage_metrics
+async def _count_list_queries(async_client, project, owner) -> int:
+    """Сколько SQL-запросов уходит в БД на один запрос списка карточек."""
+    statements: list[str] = []
 
-    for i in range(5):
-        card = await _make_card(db_session, project, owner, name=f"Смета {i}")
-        db_session.add(_log(card.estimate_task_id, tokens=100, cost="0.100000", extra=False))
-    await db_session.commit()
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
 
-    calls: list[int] = []
-    original = usage_metrics.usage_for_tasks
-
-    async def counting(db, tasks, now=None):
-        tasks = list(tasks)
-        calls.append(len(tasks))
-        return await original(db, tasks, now=now)
-
-    usage_metrics.usage_for_tasks = counting
+    event.listen(test_engine.sync_engine, "before_cursor_execute", _count)
     try:
         resp = await async_client.get(
             f"/api/projects/{project.id}/workflow-cards", headers=_auth(owner.id)
         )
     finally:
-        usage_metrics.usage_for_tasks = original
-
+        event.remove(test_engine.sync_engine, "before_cursor_execute", _count)
     assert resp.status_code == 200
-    assert len(resp.json()) == 5
-    # Один вызов агрегатора на весь список, а не по карточке.
-    assert calls == [5]
+    return len(statements)
+
+
+@pytest.mark.asyncio
+async def test_queries_do_not_grow_with_card_count(async_client, db_session, project, owner):
+    """AC-9: пять смет стоят столько же запросов к БД, сколько одна."""
+    first = await _make_card(db_session, project, owner, name="Смета 0")
+    db_session.add(_log(first.estimate_task_id, tokens=100, cost="0.100000", extra=False))
+    await db_session.commit()
+    one_card = await _count_list_queries(async_client, project, owner)
+
+    for i in range(1, 5):
+        card = await _make_card(db_session, project, owner, name=f"Смета {i}")
+        db_session.add(_log(card.estimate_task_id, tokens=100, cost="0.100000", extra=False))
+    await db_session.commit()
+    five_cards = await _count_list_queries(async_client, project, owner)
+
+    assert five_cards == one_card
 
 
 @pytest.mark.asyncio

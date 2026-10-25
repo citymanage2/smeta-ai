@@ -15,21 +15,7 @@ from sqlalchemy import delete
 sys.modules.setdefault("fitz", MagicMock())
 
 from app.models.task import Task  # noqa: E402
-from app.services.claude_service import InsufficientBalanceError  # noqa: E402
-from app.services.task_processor import _balance_error_detail  # noqa: E402
-
-
-# ---------------------------------------------------------------------------
-# _balance_error_detail — сырой ответ API в шаге прогресса
-# ---------------------------------------------------------------------------
-
-def test_balance_detail_includes_status_and_message():
-    err = InsufficientBalanceError(
-        "нет денег", status_code=402, api_message="Your credit balance is too low"
-    )
-    detail = _balance_error_detail(err)
-    assert "402" in detail
-    assert "credit balance" in detail
+from tests.helpers.anthropic_api import PROXY_URL, balance_error  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -82,24 +68,24 @@ async def test_api_health_ok(async_client, admin_token, seed_users, db_session, 
 
 
 async def test_api_health_no_balance_names_the_proxy(
-    async_client, admin_token, seed_users, monkeypatch
+    async_client, admin_token, seed_users, monkeypatch, claude_api
 ):
-    """Если base_url задан, «баланс исчерпан» относится к агрегатору — так и пишем."""
-    monkeypatch.setattr(
-        "app.services.claude_service.api_ping",
-        AsyncMock(return_value=_ping(
-            ok=False, status_code=402, error="Your credit balance is too low",
-            is_balance_error=True,
-        )),
-    )
+    """Запросы идут через агрегатор, и пустой счёт — его: вердикт «нет денег», и
+    ответ говорит, что маршрут — через посредника (пополнять надо его счёт)."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ANTHROPIC_BASE_URL", "https://proxy.example")
+    claude_api(balance_error(402, "Insufficient funds", url=PROXY_URL))
+
     resp = await async_client.get(
         "/admin/api-health", headers={"Authorization": admin_token}
     )
+
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["verdict"] == "no_balance"
-    assert "агрегатора" in body["hint"]
-    assert "402" in body["hint"]
+    assert body["via_proxy"] is True
+    assert body["status_code"] == 402
 
 
 async def test_api_health_auth_error(async_client, admin_token, seed_users, monkeypatch):

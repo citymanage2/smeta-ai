@@ -17,9 +17,26 @@ from app.models.api_call_log import ApiCallLog
 from app.models.project import Project
 from app.models.task import Task
 
-NOW = datetime.now(timezone.utc)
+# Время фиксированное, и часы дашборда стоят на нём же (`frozen_clock`): «сегодня»
+# теста и «сегодня» эндпоинта не разъедутся, даже если прогон идёт через полночь UTC.
+NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
 TODAY_START = NOW.replace(hour=0, minute=0, second=0, microsecond=0)
 YESTERDAY = TODAY_START - timedelta(hours=5)
+
+
+class _FrozenDatetime(datetime):
+    """`datetime` модуля дашборда: `now()` всегда отдаёт NOW."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is None else NOW.astimezone(tz)
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch):
+    from app.routers import dashboard
+
+    monkeypatch.setattr(dashboard, "datetime", _FrozenDatetime)
 
 
 def _task(**over) -> Task:

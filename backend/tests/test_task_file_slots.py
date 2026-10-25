@@ -117,7 +117,8 @@ async def test_upload_estimate_slot_damaged_xlsx_returns_warning(
     data = resp.json()
     assert data["estimation_status"] == "unestimated"
     assert data["cost"] is None
-    assert "warning" in data
+    # Стоимость не определена — человек должен это увидеть, а не молчаливый null.
+    assert data["warning"]
 
 
 @pytest.mark.asyncio
@@ -250,13 +251,31 @@ async def test_detach_task_from_project(
     seed_users,
     db_session: AsyncSession,
 ):
+    """Привязанная к проекту задача отвязывается: в БД `project_id` снова пуст."""
+    proj_resp = await async_client.post(
+        "/projects",
+        json={"name": "Проект для отвязки"},
+        headers={"Authorization": user_token},
+    )
+    project_id = proj_resp.json()["id"]
+    attach = await async_client.patch(
+        f"/tasks/{SEEDED_TASK_ID}/project",
+        json={"project_id": project_id},
+        headers={"Authorization": user_token},
+    )
+    assert attach.status_code == 200
+    db_session.expire_all()
+    assert (await db_session.get(Task, SEEDED_TASK_ID)).project_id == project_id
+
     resp = await async_client.patch(
         f"/tasks/{SEEDED_TASK_ID}/project",
         json={"project_id": None},
         headers={"Authorization": user_token},
     )
+
     assert resp.status_code == 200
-    assert resp.json()["project_id"] is None
+    db_session.expire_all()
+    assert (await db_session.get(Task, SEEDED_TASK_ID)).project_id is None
 
 
 # ---------------------------------------------------------------------------

@@ -5,15 +5,17 @@ Required behaviour:
 - If the response includes a 'retry-after' header AND it exceeds the backoff
   minimum for this attempt, that many seconds are waited.
 - Exponential backoff minimums: 1st 429 → 60 s, 2nd → 120 s, 3rd → 240 s, cap 900 s.
-- 'processing_timeout' wraps ONLY _client.messages.create, not the rate-limit sleep.
-- Rate-limit sleep therefore does NOT consume the processing_timeout budget.
-- After all retries are exhausted the original RateLimitError is re-raised.
+- 'processing_timeout' — общий бюджет вызова: сон после 429 тоже его расходует,
+  и попытка, на которую бюджета не осталось, не отправляется.
 """
 import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
+from sqlalchemy import delete
 
+from app.models.system_event import SystemEvent
 from app.services.claude_service import call_claude
 from tests.helpers.anthropic_api import claude_message, rate_limit_error
 
@@ -45,126 +47,31 @@ async def test_rate_limit_is_retried(monkeypatch, patch_claude_create):
     assert call_count == 2
 
 
-async def test_default_sleep_used_when_no_retry_after_header(monkeypatch, patch_claude_create):
-    """When retry-after header is absent, sleep for at least DEFAULT_RATE_LIMIT_DELAY seconds."""
-    from app.services.claude_service import DEFAULT_RATE_LIMIT_DELAY
-
-    sleep_mock = AsyncMock()
-    call_count = 0
-
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise rate_limit_error(retry_after=None)  # no header
-        return claude_message("ok")
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    sleep_calls = [c.args[0] for c in sleep_mock.call_args_list]
-    assert any(s >= DEFAULT_RATE_LIMIT_DELAY for s in sleep_calls), (
-        f"Expected sleep >= {DEFAULT_RATE_LIMIT_DELAY} s (default), got: {sleep_calls}"
-    )
+@pytest_asyncio.fixture
+async def rate_limit_events(db_session, app_sessions):
+    """Каждый 429 пишет строку в `system_events` своей сессией: она идёт в
+    тестовую БД, а не мимо неё, и после теста убирается."""
+    yield
+    await db_session.execute(delete(SystemEvent))
+    await db_session.commit()
 
 
-# ---------------------------------------------------------------------------
-# Change 4: Exponential backoff tests
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("retry_after, sleeps", [
+    pytest.param([None], [60], id="no-header-default-60"),
+    pytest.param([5], [60], id="below-minimum-waits-60"),
+    pytest.param([300], [300], id="header-above-minimum"),
+    pytest.param([1, 1, 1], [60, 120, 240], id="backoff-doubles-per-429"),
+    pytest.param([9999], [900], id="capped-at-900"),
+])
+async def test_rate_limit_wait(claude_api, api_sleeps, rate_limit_events, retry_after, sleeps):
+    """Ожидание после 429: заголовок retry-after, но не меньше ступени бэкоффа
+    (60 → 120 → 240 с на каждый подряд идущий 429) и не больше 900 с."""
+    ai = claude_api(*[rate_limit_error(retry_after=r) for r in retry_after], claude_message("ok"))
 
-async def test_retry_after_above_minimum_uses_header_value(monkeypatch, patch_claude_create):
-    """When retry-after > backoff minimum (60 s), the API header value is used."""
-    sleep_mock = AsyncMock()
-    call_count = 0
+    assert await call_claude([{"role": "user", "content": "hi"}]) == "ok"
 
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise rate_limit_error(retry_after=300)  # well above 60 s minimum
-        return claude_message("ok")
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    sleep_calls = [c.args[0] for c in sleep_mock.call_args_list]
-    assert any(abs(s - 300) < 1 for s in sleep_calls), (
-        f"Expected sleep ~300 s from retry-after header, got: {sleep_calls}"
-    )
-
-
-async def test_backoff_minimum_60s_for_first_429(monkeypatch, patch_claude_create):
-    """First 429: sleep at least 60 s even if retry-after is smaller."""
-    sleep_mock = AsyncMock()
-    call_count = 0
-
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise rate_limit_error(retry_after=5)  # below 60 s minimum
-        return claude_message("ok")
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    sleep_calls = [c.args[0] for c in sleep_mock.call_args_list]
-    assert any(s >= 60 for s in sleep_calls), (
-        f"Expected at least one sleep >= 60 s for first 429, got: {sleep_calls}"
-    )
-
-
-async def test_exponential_backoff_increases_per_consecutive_429(monkeypatch, patch_claude_create):
-    """Backoff minimum escalates: 1st 429 >= 60 s, 2nd >= 120 s, 3rd >= 240 s."""
-    sleep_mock = AsyncMock()
-    call_count = 0
-
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 3:
-            raise rate_limit_error(retry_after=1)  # always below minimums
-        return claude_message("ok")
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    sleep_calls = [c.args[0] for c in sleep_mock.call_args_list]
-    assert len(sleep_calls) >= 3, f"Expected >= 3 sleep calls, got: {sleep_calls}"
-    assert sleep_calls[0] >= 60, f"1st 429 should wait >= 60 s, got {sleep_calls[0]}"
-    assert sleep_calls[1] >= 120, f"2nd 429 should wait >= 120 s, got {sleep_calls[1]}"
-    assert sleep_calls[2] >= 240, f"3rd 429 should wait >= 240 s, got {sleep_calls[2]}"
-
-
-async def test_backoff_capped_at_900s(monkeypatch, patch_claude_create):
-    """Backoff is capped at 900 s even if retry-after is larger."""
-    sleep_mock = AsyncMock()
-    call_count = 0
-
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise rate_limit_error(retry_after=9999)  # absurdly large
-        return claude_message("ok")
-
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", sleep_mock)
-
-    await call_claude([{"role": "user", "content": "hi"}])
-
-    sleep_calls = [c.args[0] for c in sleep_mock.call_args_list]
-    assert all(s <= 900 for s in sleep_calls), (
-        f"Backoff should be capped at 900 s, got: {sleep_calls}"
-    )
+    assert api_sleeps == sleeps
+    assert len(ai.calls) == len(retry_after) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -187,29 +94,30 @@ async def test_slow_api_call_triggers_processing_timeout(monkeypatch, patch_clau
         )
 
 
-async def test_rate_limit_sleep_counted_in_cumulative_timeout(monkeypatch, patch_claude_create):
-    """Rate-limit sleep вычитается из cumulative processing_timeout.
+async def test_rate_limit_sleep_counted_in_cumulative_timeout(
+    monkeypatch, claude_api, rate_limit_events
+):
+    """Сон после 429 съедает бюджет processing_timeout: проспали больше бюджета —
+    TimeoutError, второго запроса к API нет."""
+    from app.services import claude_service
 
-    При замоканном sleep (= мгновенный, elapsed ≈ 0) и достаточном бюджете
-    второй attempt проходит успешно — оставшийся бюджет почти равен исходному.
-    """
-    call_count = 0
+    class _SleepsTenthOfSecond:
+        """`asyncio` для claude_service: любая пауза длится 0,1 с по-настоящему."""
 
-    async def fake_create(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise rate_limit_error(retry_after=0.01)
-        return claude_message("ok")
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
 
-    # Мокаем sleep — мгновенный, elapsed остаётся близким к 0
-    patch_claude_create(fake_create)
-    monkeypatch.setattr("app.services.claude_service.asyncio.sleep", AsyncMock())
+        async def sleep(self, delay, result=None):
+            await asyncio.sleep(0.1)
+            return result
 
-    # При большом бюджете (30 с) и мгновенном sleep — second attempt успешен
-    result = await call_claude(
-        [{"role": "user", "content": "hi"}],
-        processing_timeout=30.0,
-    )
-    assert result == "ok"
-    assert call_count == 2
+    monkeypatch.setattr(claude_service, "asyncio", _SleepsTenthOfSecond())
+    ai = claude_api(rate_limit_error(retry_after=1))
+
+    with pytest.raises(asyncio.TimeoutError):
+        await call_claude(
+            [{"role": "user", "content": "hi"}],
+            processing_timeout=0.05,
+        )
+
+    assert len(ai.calls) == 1

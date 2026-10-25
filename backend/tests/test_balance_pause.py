@@ -72,36 +72,26 @@ async def test_chunk_retry_reraises_balance_immediately(db_session, claude_api, 
 # process(): баланс → paused, чекпоинт сохранён
 # ---------------------------------------------------------------------------
 
-PAUSE_TASK_ID = "d3000000-0000-0000-0000-000000000001"
+async def test_process_pauses_on_insufficient_balance(processor_env, claude_api, api_sleeps):
+    """Счёт пуст на первом же запросе сметы: задача на паузе, а не упала, и в ходе
+    выполнения виден сырой ответ API — код и текст.
 
-
-async def test_process_pauses_on_insufficient_balance(seed_users, db_session):
-    task = Task(owner_id=1, 
-        id=PAUSE_TASK_ID,
-        user_role="user",
-        task_type="LIST_FROM_GRAND",
-        status="processing",
-        estimation_status="not_applicable",
-        input_files=[],
-        input_file_data=[],
-        chat_history=[],
-        progress_data={"chunks_done": 3},
-    )
-    db_session.add(task)
-    await db_session.commit()
-
-    processor = TaskProcessor(PAUSE_TASK_ID, db_session)
-    processor._handle_list_from_grand = AsyncMock(
-        side_effect=InsufficientBalanceError("Баланс API Anthropic меньше 0.")
+    Без сырого ответа нельзя понять, чей счёт пуст: на сервере запросы идут через
+    агрегатор, и «баланс исчерпан» может относиться к нему, а не к Anthropic.
+    """
+    api_text = "Insufficient funds on aggregator account"
+    ai = claude_api(balance_error(402, api_text))
+    task = await processor_env.estimate_task(
+        [{"type": "Работа", "name": "Кладка стен", "unit": "м3", "quantity": 12}]
     )
 
-    await processor.process()
+    task = await processor_env.run(task)
 
-    await db_session.refresh(task)
     assert task.status == "paused", f"Ожидался paused, получено {task.status!r}"
-    # Чекпоинт не потерян — resume продолжит с него.
-    assert task.progress_data == {"chunks_done": 3}
-    assert "баланс" in (task.error_message or "").lower()
+    assert len(ai.calls) == 1, "пустой счёт не повторяют"
+    assert "402" in task.progress_message
+    assert api_text in task.progress_message
+    assert task.progress_log[-1] == task.progress_message
 
 
 async def test_process_generic_error_still_fails(seed_users, db_session):

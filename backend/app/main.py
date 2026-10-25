@@ -286,11 +286,9 @@ def create_app() -> FastAPI:
 
     # SPA catch-all: serve index.html for all unknown GET paths so that
     # React Router works on hard refresh (F5) for /projects, /tasks/<id>, etc.
-    _spa_index = Path(__file__).parent.parent.parent / "frontend" / "dist" / "index.html"
-
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
-        return FileResponse(str(_spa_index))
+        return FileResponse(str(Path(settings.FRONTEND_DIST_DIR) / "index.html"))
 
     return app
 

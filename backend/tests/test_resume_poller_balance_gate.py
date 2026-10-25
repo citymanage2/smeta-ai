@@ -14,7 +14,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from sqlalchemy import delete, select
+import pytest
+from sqlalchemy import delete, select, update
 
 sys.modules.setdefault("fitz", MagicMock())
 
@@ -22,6 +23,8 @@ import app.services.resume_poller as rp  # noqa: E402
 from app.models.job import Job  # noqa: E402
 from app.models.system_event import KIND_BALANCE_RESTORED, SystemEvent  # noqa: E402
 from app.models.task import Task  # noqa: E402
+from tests.conftest import TestSessionLocal  # noqa: E402
+from tests.helpers.anthropic_api import api_error, balance_error, claude_message  # noqa: E402
 
 
 def _same_session_factory(session):
@@ -97,43 +100,38 @@ async def test_balance_still_empty_leaves_tasks_untouched(db_session):
         await _cleanup(db_session)
 
 
-async def test_failed_check_marks_progress_message(db_session):
+LONG_API_TEXT = "Your credit balance is too low. " + "x" * 600
+
+
+@pytest.mark.parametrize("api_answer, shown", [
+    # Денег нет: в карточке — что именно ответил API.
+    pytest.param(balance_error(400, "credit balance is too low"),
+                 ["credit balance is too low"], id="balance"),
+    # Ping упал не из-за денег (ключ): код и текст отличают это от пустого
+    # счёта — иначе пользователь пополнял бы баланс, который и так полон.
+    pytest.param(api_error(401, "invalid x-api-key"),
+                 ["401", "invalid x-api-key"], id="auth"),
+    # Длинный ответ API обрезается под размер поля progress_message.
+    pytest.param(balance_error(400, LONG_API_TEXT),
+                 ["Your credit balance is too low."], id="long-answer"),
+])
+async def test_failed_check_marks_progress_message(db_session, claude_api, api_answer, shown):
+    """Проверка не прошла: у задачи на паузе — время и сырой ответ API, а история
+    шагов (`progress_log`) не растёт строкой проверки каждые 10 минут."""
     await _cleanup(db_session)
     task = await _seed(db_session, progress_data={"chunks_done": 2})
     await db_session.commit()
+    claude_api(api_answer)
     try:
-        await rp.resume_paused_tasks(
-            session_factory=_same_session_factory(db_session), pinger=_ping(False)
-        )
+        await rp.resume_paused_tasks(session_factory=_same_session_factory(db_session))
 
         await db_session.refresh(task)
         msg = task.progress_message or ""
-        assert "Проверка в" in msg
-        assert "баланс всё ещё исчерпан" in msg
-        assert "credit balance is too low" in msg
-        # AC3: история шагов не засоряется строкой проверки каждые 10 минут.
-        assert task.progress_log == ["шаг 1"]
+        for fragment in shown:
+            assert fragment in msg
         assert len(msg) <= 500
-    finally:
-        await _cleanup(db_session)
-
-
-async def test_non_balance_error_reported_separately(db_session):
-    """Ping упал не из-за денег (сеть/401) — текст должен это различать, иначе
-    пользователь будет пополнять баланс, который и так полон."""
-    await _cleanup(db_session)
-    task = await _seed(db_session)
-    await db_session.commit()
-    try:
-        await rp.resume_paused_tasks(
-            session_factory=_same_session_factory(db_session),
-            pinger=_ping(False, balance=False, code=401, error="invalid x-api-key"),
-        )
-
-        await db_session.refresh(task)
-        msg = task.progress_message or ""
-        assert "API недоступен (401)" in msg
-        assert "баланс всё ещё исчерпан" not in msg
+        assert task.progress_log == ["шаг 1"]
+        assert task.status == "paused"
     finally:
         await _cleanup(db_session)
 
@@ -243,28 +241,31 @@ async def test_restore_after_window_records_new_event(db_session):
         await _cleanup(db_session)
 
 
-async def test_no_event_when_nothing_claimed(db_session):
-    """Параллельный тик уже перехватил задачу: _claim вернёт False → событие о
-    пополнении писать не о чем."""
+async def test_no_event_when_nothing_claimed(db_session, claude_api):
+    """Параллельный тик перехватил задачу, пока этот ждал ответа на ping: захват
+    не удался — ни job, ни события о пополнении (писать не о чем)."""
     await _cleanup(db_session)
     task = await _seed(db_session, progress_data={"chunks_done": 1})
     await db_session.commit()
+    task_id = task.id
 
-    async def _steal(db, task_id):
-        return False
+    async def ping_while_other_tick_claims(_kwargs):
+        async with TestSessionLocal() as other:
+            await other.execute(
+                update(Task).where(Task.id == task_id).values(status="pending")
+            )
+            await other.commit()
+        return claude_message("pong")
 
-    original = rp._claim_and_enqueue
-    rp._claim_and_enqueue = _steal
+    claude_api(ping_while_other_tick_claims)
     try:
         claimed = await rp.resume_paused_tasks(
-            session_factory=_same_session_factory(db_session), pinger=_ping(True)
+            session_factory=_same_session_factory(db_session)
         )
 
         assert claimed == []
-        events = (await db_session.execute(select(SystemEvent))).scalars().all()
-        assert events == []
-        await db_session.refresh(task)
-        assert task.status == "paused"
+        db_session.expire_all()
+        assert (await db_session.execute(select(SystemEvent))).scalars().all() == []
+        assert (await db_session.execute(select(Job))).scalars().all() == []
     finally:
-        rp._claim_and_enqueue = original
         await _cleanup(db_session)

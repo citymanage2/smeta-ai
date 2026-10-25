@@ -40,9 +40,23 @@ def test_parse_xlsx_empty():
 
 
 def test_parse_xml():
-    """Test XML parser."""
+    """XML сметы с пространством имён: в текст для ИИ идут теги без URI
+    пространства, атрибуты и текст позиции — как есть, вложенность — отступом."""
     from app.utils.file_parser import parse_xml
 
-    xml_data = '<?xml version="1.0" encoding="UTF-8"?><smeta><item name="test" unit="m2" qty="100" price="500"/></smeta>'.encode("utf-8")
-    result = parse_xml(xml_data)
-    assert "smeta" in result or "item" in result
+    xml_data = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Smeta xmlns="urn:grandsmeta:2.0">'
+        '<Position Number="12" Unit="м3" Quantity="2.164">Разработка грунта</Position>'
+        '</Smeta>'
+    ).encode("utf-8")
+
+    lines = parse_xml(xml_data).splitlines()
+
+    assert lines[0] == "<Smeta>"
+    assert lines[1].startswith("  <Position ")
+    assert 'Number="12"' in lines[1]
+    assert 'Unit="м3"' in lines[1]
+    assert 'Quantity="2.164"' in lines[1]
+    assert lines[1].endswith("> Разработка грунта")
+    assert len(lines) == 2

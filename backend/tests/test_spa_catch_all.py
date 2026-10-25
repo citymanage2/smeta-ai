@@ -5,12 +5,14 @@ Bug: GET /projects, /tasks/<uuid>, etc. returned 404 because FastAPI has no
 catch-all route — React Router only works client-side, so a hard refresh (F5)
 sends the path to the server which has no handler for it.
 
-Fix: add catch-all @app.get("/{full_path:path}") after all API routers that
-returns FileResponse("../frontend/dist/index.html").
+Fix: catch-all @app.get("/{full_path:path}") after all API routers that returns
+index.html из собранного фронта (`settings.FRONTEND_DIST_DIR`). Тест подкладывает
+свой index.html: собранного `frontend/dist` на чистом клоне нет (он в .gitignore).
 """
 import pytest
 from httpx import AsyncClient
 
+from app.config import settings
 
 # These are React Router paths that have NO corresponding API GET endpoint.
 # /projects and /projects/{id} are real API routes (return 401 without auth)
@@ -22,17 +24,23 @@ SPA_PATHS = [
     "/deep/nested/route",
 ]
 
+INDEX_HTML = '<!doctype html><html><body><div id="root"></div></body></html>'
+
+
+@pytest.fixture
+def spa_dist(tmp_path, monkeypatch):
+    (tmp_path / "index.html").write_text(INDEX_HTML, encoding="utf-8")
+    monkeypatch.setattr(settings, "FRONTEND_DIST_DIR", str(tmp_path))
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", SPA_PATHS)
-async def test_spa_path_returns_html(async_client: AsyncClient, path: str):
-    """Catch-all route must return HTML content (the React app shell)."""
+async def test_spa_path_returns_html(spa_dist, async_client: AsyncClient, path: str):
+    """Catch-all route must return the React app shell itself."""
     resp = await async_client.get(path)
     assert resp.status_code == 200, (
         f"GET {path} returned {resp.status_code}, expected 200. "
         "FastAPI must have a catch-all route serving index.html."
     )
-    content_type = resp.headers.get("content-type", "")
-    assert "text/html" in content_type, (
-        f"GET {path} returned Content-Type: {content_type!r}, expected text/html."
-    )
+    assert "text/html" in resp.headers.get("content-type", "")
+    assert resp.text == INDEX_HTML

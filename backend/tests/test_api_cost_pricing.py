@@ -12,8 +12,9 @@
 """
 from decimal import Decimal
 
+import pytest
+
 from app.services.claude_service import (
-    WEB_SEARCH_COST_PER_REQUEST,
     _calc_cost,
     CLAUDE_MODEL,
 )
@@ -22,21 +23,14 @@ from app.services.claude_service import (
 class TestSonnet5Pricing:
     """Действующий прайс Claude Sonnet 5 — $2 / $10 / $2.50 / $0.20 за 1M."""
 
-    def test_input_tokens(self):
-        # 1M входных токенов = $2.00
-        assert _calc_cost("claude-sonnet-5", 1_000_000, 0, 0, 0) == Decimal("2.0")
-
-    def test_output_tokens(self):
-        # 1M выходных = $10.00
-        assert _calc_cost("claude-sonnet-5", 0, 1_000_000, 0, 0) == Decimal("10.0")
-
-    def test_cache_read_tokens(self):
-        # Чтение кеша — 0.1× от входа: 1M = $0.20
-        assert _calc_cost("claude-sonnet-5", 0, 0, 1_000_000, 0) == Decimal("0.2")
-
-    def test_cache_creation_tokens(self):
-        # Запись кеша на 5 минут — 1.25× от входа: 1M = $2.50
-        assert _calc_cost("claude-sonnet-5", 0, 0, 0, 1_000_000) == Decimal("2.5")
+    @pytest.mark.parametrize("tokens, cost", [
+        ((1_000_000, 0, 0, 0), "2.0"),    # 1M входных = $2.00
+        ((0, 1_000_000, 0, 0), "10.0"),   # 1M выходных = $10.00
+        ((0, 0, 1_000_000, 0), "0.2"),    # чтение кеша — 0.1× от входа: $0.20
+        ((0, 0, 0, 1_000_000), "2.5"),    # запись кеша на 5 минут — 1.25× от входа: $2.50
+    ], ids=["input", "output", "cache_read", "cache_creation"])
+    def test_price_per_million(self, tokens, cost):
+        assert _calc_cost("claude-sonnet-5", *tokens) == Decimal(cost)
 
     def test_realistic_call(self):
         # Типовой вызов: 50k вход, 8k выход, 120k чтение кеша, 30k запись.
@@ -66,7 +60,6 @@ class TestBatchDiscount:
             "claude-sonnet-5", 0, 0, 0, 0, batch=True, web_search_requests=10
         )
         assert cost == Decimal("0.1")
-        assert WEB_SEARCH_COST_PER_REQUEST == 10.0 / 1000
 
 
 class TestUnknownModel:

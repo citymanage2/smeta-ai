@@ -9,125 +9,119 @@
 
 До этой фичи шесть из семи таких мест не писали вызов в журнал вовсе — не было
 `task_id`/`db`, и `_log_api_call` молча выходил. Здесь проверяется, что вызов
-доезжает до журнала и приходит с верным признаком.
+доезжает до журнала (`api_call_log`) с верной задачей и верным признаком. Подменён
+только Claude API; журнал пишется своей сессией приложения в тестовую БД.
 """
-import pytest
+import uuid
 
+import pytest
+import pytest_asyncio
+from sqlalchemy import delete, select
+
+from app.models.analog_run import AnalogRun
+from app.models.api_call_log import ApiCallLog
+from app.models.task import Task
 # document_locks ссылается на workflow_cards — без этого импорта метаданные
 # таблиц неполны, и фикстура create_tables падает при запуске файла отдельно.
 from app.models.workflow_card import WorkflowCard  # noqa: F401
-from app.services import analogs_service, price_service
+from app.services import analogs_service, claude_service, price_service
+
+# Найдено при переписывании 25.10.2026: с 4f14718 (06.08.2026) веб-поиск цены в
+# `price_service` передаёт `task_id/db/is_extra` своей обёртке `call_claude`, а
+# она их не принимает — TypeError глотается, поиск возвращает None. Цена с рынка
+# не находится вовсе (оптимизация `_process_single_item`), и в журнал ничего не
+# пишется. Старые тесты подменяли саму обёртку и этого не видели. Строгий xfail:
+# починят обёртку — тесты пройдут, и маркер надо будет снять.
+WEB_SEARCH_WRAPPER_BUG = pytest.mark.xfail(
+    strict=True,
+    reason="price_service.call_claude не принимает task_id/db/is_extra — веб-поиск цены мёртв",
+)
 
 
-class _Spy:
-    """Подменяет call_claude и запоминает kwargs каждого вызова."""
+@pytest_asyncio.fixture
+async def task_id(db_session, app_sessions):
+    """Посчитанная смета, к которой относятся вызовы; журнал и задача — после теста долой."""
+    task = Task(
+        id=str(uuid.uuid4()), owner_id=1, user_role="project_manager",
+        task_type="ESTIMATE_FROM_LIST", status="completed",
+        input_files=[], input_file_data=[], chat_history=[],
+    )
+    db_session.add(task)
+    await db_session.commit()
+    tid = str(task.id)
+    yield tid
+    await db_session.rollback()
+    await db_session.execute(delete(ApiCallLog).where(ApiCallLog.task_id == tid))
+    await db_session.execute(delete(AnalogRun).where(AnalogRun.task_id == tid))
+    await db_session.execute(delete(Task).where(Task.id == tid))
+    await db_session.commit()
 
-    def __init__(self, reply: str = "{}"):
-        self.reply = reply
-        self.calls: list[dict] = []
 
-    async def __call__(self, *args, **kwargs):
-        self.calls.append(kwargs)
-        return self.reply
+async def _journal(db_session, task_id: str) -> list[tuple[str, bool]]:
+    """Строки журнала затрат задачи: (task_id, is_extra)."""
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(select(ApiCallLog).where(ApiCallLog.task_id == task_id))
+    ).scalars().all()
+    return [(str(r.task_id), r.is_extra) for r in rows]
 
 
 @pytest.mark.asyncio
-async def test_analogs_search_logged_as_extra(monkeypatch):
+async def test_analogs_search_logged_as_extra(db_session, task_id, claude_api):
     """Поиск аналогов идёт по уже сформированному документу → доп."""
-    spy = _Spy('{"items": []}')
-    monkeypatch.setattr(analogs_service, "call_claude", spy)
-
-    await analogs_service._ask_batch(
-        [{"row_id": "r1", "name": "Кирпич", "unit": "шт", "price": 25}],
-        task_id="task-1",
-        db=object(),
+    claude_api({"items": []})
+    run = AnalogRun(
+        task_id=task_id, document_kind="estimate", status="queued",
+        requested=analogs_service.prepare_positions(
+            [{"row_id": "r1", "name": "Кирпич", "unit": "шт", "price": 25}]
+        ),
+        results=[], processed=0, total=1,
     )
+    db_session.add(run)
+    await db_session.commit()
 
-    assert len(spy.calls) == 1
-    assert spy.calls[0]["is_extra"] is True
-    # Без task_id/db запись в журнал не создаётся вовсе — проверяем, что они едут.
-    assert spy.calls[0]["task_id"] == "task-1"
-    assert spy.calls[0]["db"] is not None
+    await analogs_service.process_run(db_session, str(run.id))  # так его зовёт воркер
+
+    assert await _journal(db_session, task_id) == [(task_id, True)]
 
 
+@WEB_SEARCH_WRAPPER_BUG
 @pytest.mark.asyncio
-async def test_web_search_work_price_logged_as_extra(monkeypatch):
-    """Веб-поиск цены работы — доп, и задача, к которой он относится, известна."""
-    spy = _Spy('{"price": 900, "unit": "м3", "source": "example.ru"}')
-    monkeypatch.setattr(price_service, "call_claude", spy)
-    sentinel_db = object()
+async def test_web_search_work_price_logged_as_extra(db_session, task_id, claude_api, price_db):
+    """Цены работы нет в прайсе — веб-поиск платный, это доп этой задачи."""
+    await price_db.load()  # прайс пуст: ни точного, ни похожего совпадения
+    claude_api({"price": 900, "unit": "м3", "source": "example.ru"})
 
-    result = await price_service._web_search_work_price(
-        "Кладка стен", task_id="task-2", db=sentinel_db
-    )
+    found = await price_service.find_work_price("Кладка стен", task_id=task_id, db=db_session)
 
-    assert result is not None and result["min_price"] == 900
-    assert spy.calls[0]["is_extra"] is True
-    assert spy.calls[0]["task_id"] == "task-2"
-    assert spy.calls[0]["db"] is sentinel_db
+    assert found is not None and found["min_price"] == 900
+    assert await _journal(db_session, task_id) == [(task_id, True)]
 
 
+@WEB_SEARCH_WRAPPER_BUG
 @pytest.mark.asyncio
-async def test_find_material_price_threads_task_through(monkeypatch):
-    """Прайс-лист и эмбеддинги бесплатны — task_id доезжает только до веб-поиска."""
-    spy = _Spy('{"price": 20, "unit": "шт", "source": "example.ru"}')
-    monkeypatch.setattr(price_service, "call_claude", spy)
-    monkeypatch.setattr(price_service, "_exact_match_material", lambda name: None)
-
-    async def _no_embedding(name):
-        return None
-
-    monkeypatch.setattr(price_service, "_embedding_match_material", _no_embedding)
+async def test_find_material_price_threads_task_through(db_session, task_id, claude_api, price_db):
+    """Прайс-лист и эмбеддинги бесплатны — task_id доезжает до веб-поиска."""
+    await price_db.load()
+    claude_api({"price": 20, "unit": "шт", "source": "example.ru"})
 
     price = await price_service.find_material_price(
-        "Кирпич керамический", task_id="task-3", db=object()
+        "Кирпич керамический", task_id=task_id, db=db_session
     )
 
     assert price == 20
-    assert spy.calls[0]["task_id"] == "task-3"
-    assert spy.calls[0]["is_extra"] is True
+    assert await _journal(db_session, task_id) == [(task_id, True)]
 
 
 @pytest.mark.asyncio
-async def test_main_processing_is_not_extra(monkeypatch):
+async def test_main_processing_is_not_extra(db_session, task_id, claude_api):
     """Обработчик задачи по умолчанию пишет вызов как основной, а не как доп."""
-    from app.services import claude_service
-
-    logged: list[dict] = []
-
-    async def _fake_log(*args, **kwargs):
-        logged.append(kwargs)
-
-    monkeypatch.setattr(claude_service, "_log_api_call", _fake_log)
-
-    class _Usage:
-        input_tokens = 10
-        output_tokens = 5
-        cache_read_input_tokens = 0
-        cache_creation_input_tokens = 0
-        server_tool_use = None
-
-    class _Block:
-        text = "{}"
-
-    class _Response:
-        content = [_Block()]
-        usage = _Usage()
-        stop_reason = "end_turn"
-
-    class _Messages:
-        async def create(self, **kwargs):
-            return _Response()
-
-    class _Client:
-        messages = _Messages()
-
-    monkeypatch.setattr(claude_service, "_get_client", lambda: _Client())
+    claude_api({})
 
     await claude_service.call_claude(
         messages=[{"role": "user", "content": "привет"}],
-        task_id="task-4",
-        db=object(),
+        task_id=task_id,
+        db=db_session,
     )
 
-    assert logged and logged[0]["is_extra"] is False
+    assert await _journal(db_session, task_id) == [(task_id, False)]

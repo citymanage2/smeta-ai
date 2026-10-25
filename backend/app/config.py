@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -49,6 +50,10 @@ class Settings(BaseSettings):
     MAX_FILES_PER_REQUEST: int = 10
     TASK_TIMEOUT_SECONDS: int = 600
     CORS_ORIGINS: str = "*"
+    # Собранный фронт (`npm run build`), из которого SPA catch-all отдаёт
+    # index.html на любой неизвестный GET-путь (F5 на /tasks/<id>). Вынесено в
+    # настройку, чтобы тест подкладывал свой файл и не зависел от сборки фронта.
+    FRONTEND_DIST_DIR: str = str(Path(__file__).parent.parent.parent / "frontend" / "dist")
     VAT_RATE: float = 0.22
     # Наблюдаемость: включает вывод всех SQL-запросов SQLAlchemy в лог (только для отладки).
     SQL_ECHO: bool = False
