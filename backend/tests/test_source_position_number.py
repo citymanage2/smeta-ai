@@ -10,7 +10,7 @@ import pytest
 from app.services.excel_service import generate_list
 from app.utils.file_parser import chunk_rows, parse_xlsx_grand, rows_to_text
 from app.utils.generic_items import generic_rows_to_items
-from app.utils.source_numbers import attach_source_numbers
+from app.utils.source_numbers import SOURCE_NO_HEADER, attach_source_numbers
 from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
 
 _HEADER = ["№ п/п", "Обоснование", "Наименование работ и затрат", "Единица измерения", "Количество"]
@@ -169,10 +169,12 @@ def test_generate_list_adds_source_column_first():
 
 
 def test_generate_list_keeps_six_columns_without_numbers():
+    """Номеров нет — нет и колонки: первой идёт порядковый номер, как до функции."""
     items = [{"type": "Работа", "name": "Пробивка гнезд", "unit": "100 шт",
               "quantity": 0.02, "notes": ""}]
     values = _sheet_values(generate_list(items), "Перечень")
-    assert values[0] == ["№ п/п", "Тип", "Наименование", "Ед. изм", "Кол-во", "Примечание"]
+    assert SOURCE_NO_HEADER not in values[0]
+    assert values[1][:3] == [1, "Работа", "Пробивка гнезд"]
 
 
 def test_generate_list_writes_non_numeric_number_as_text():

@@ -5,10 +5,17 @@
 import io
 
 import openpyxl
+import pytest_asyncio
+from sqlalchemy import delete
 
+from app.models.estimate_version import EstimateVersion
+from app.models.project import Project
+from app.models.summary_estimate import SummaryEstimate
+from app.models.task import Task
+from app.models.workflow_card import WorkflowCard
 from app.services.material_kits import expand_completeness_items
 from app.utils.estimate_rows import items_to_rows, rows_to_items
-from app.utils.source_numbers import attach_source_numbers
+from app.utils.source_numbers import SOURCE_NO_HEADER, attach_source_numbers
 from app.utils.xlsx_cost_parser import extract_total_cost, parse_list_sheet
 from app.utils.xlsx_exporter import generate_estimate_xlsx
 
@@ -90,11 +97,11 @@ def test_estimate_xlsx_adds_column_first():
 
 
 def test_estimate_xlsx_keeps_ten_columns_without_numbers():
+    """Номеров нет — нет и колонки: первой идёт порядковый номер, как до функции."""
     data, _ = generate_estimate_xlsx([_est_item("Пробивка гнезд")])
     values = _estimate_values(data)
-    assert values[0] == ["№", "Наименование", "Ед. изм.", "Кол-во", "Цена работ",
-                         "Стоимость работ", "Цена матер.", "Стоимость матер.",
-                         "Источник цены", "Примечание"]
+    assert SOURCE_NO_HEADER not in values[0]
+    assert values[1][:2] == [1, "Пробивка гнезд"]
 
 
 def test_estimate_total_unchanged_by_new_column():
@@ -125,11 +132,64 @@ def test_multisheet_estimate_keeps_numbers_and_summary():
 
 # ── Фаза 4 (бэкенд-часть). Оптимизация и сводная наследуют номер ─────────────
 
-def test_summary_section_snapshot_keeps_number():
-    """Снимок раздела сводной — копия строк версии, без пересборки полей."""
-    rows = items_to_rows([_est_item("Пробивка гнезд", source_no="4")])
-    snapshot = list(rows)  # как в summary_service._build_sections_snapshot
-    assert snapshot[0]["source_no"] == "4"
+@pytest_asyncio.fixture
+async def estimate_card(db_session):
+    """Проект → карточка → смета с рабочей версией: строка с номером «4» и без номера."""
+    project = Project(name="Объект с номерами", owner_id=1)
+    db_session.add(project)
+    await db_session.flush()
+    task = Task(
+        owner_id=1, user_role="project_manager", task_type="ESTIMATE_FROM_LIST",
+        status="completed", input_files=[], input_file_data=[], chat_history=[],
+        project_id=str(project.id),
+    )
+    db_session.add(task)
+    await db_session.flush()
+    version = EstimateVersion(
+        task_id=str(task.id), version_number=0, version_label="original",
+        version_display_name="Исходная смета", file_slot="estimate",
+        task_type="ESTIMATE_FROM_LIST",
+        rows=items_to_rows([
+            _est_item("Пробивка гнезд", source_no="4"),
+            _est_item("Заделка борозд"),
+        ]),
+    )
+    card = WorkflowCard(project_id=str(project.id), name="АР", stage="estimate",
+                        estimate_task_id=str(task.id))
+    db_session.add_all([version, card])
+    await db_session.commit()
+
+    ids = {"project": str(project.id), "card": str(card.id), "version": str(version.id),
+           "task": str(task.id)}
+    yield ids
+
+    await db_session.rollback()
+    await db_session.execute(delete(SummaryEstimate).where(SummaryEstimate.project_id == ids["project"]))
+    await db_session.execute(delete(WorkflowCard).where(WorkflowCard.id == ids["card"]))
+    await db_session.execute(delete(EstimateVersion).where(EstimateVersion.task_id == ids["task"]))
+    await db_session.execute(delete(Task).where(Task.id == ids["task"]))
+    await db_session.execute(delete(Project).where(Project.id == ids["project"]))
+    await db_session.commit()
+
+
+async def test_summary_section_snapshot_keeps_number(async_client, user_token, estimate_card):
+    """Раздел сводной, собранный из сметы карточки, несёт номер исходной позиции."""
+    resp = await async_client.post(
+        f"/api/projects/{estimate_card['project']}/summary",
+        json={"sections": [{"card_id": estimate_card["card"],
+                            "version_id": estimate_card["version"]}]},
+        headers={"Authorization": user_token},
+    )
+    assert resp.status_code == 201, resp.text
+
+    reread = await async_client.get(
+        f"/api/projects/{estimate_card['project']}/summary",
+        headers={"Authorization": user_token},
+    )
+    (section,) = reread.json()["sections"]
+    assert [(r["name"], r.get("source_no")) for r in section["rows"]] == [
+        ("Пробивка гнезд", "4"), ("Заделка борозд", None),
+    ]
 
 
 def test_end_to_end_list_to_estimate_file():
@@ -164,16 +224,23 @@ def test_end_to_end_list_to_estimate_file():
 
 
 def test_optimizer_column_mapping_ignores_new_column():
-    """Разбор сметы для оптимизации ищет колонки по названиям — наша не мешает."""
-    from app.utils.xlsx_optimizer import _find_header_row, _map_columns
+    """Разбор сметы для оптимизации ищет колонки по названиям — наша не мешает.
 
-    data, _ = generate_estimate_xlsx([_est_item("Пробивка гнезд", source_no="1")])
-    wb = openpyxl.load_workbook(io.BytesIO(data))
-    ws = wb["Смета"]
-    header_row = _find_header_row(ws)
-    cols = _map_columns(ws, header_row)
+    Колонка «№ в исходной смете» сдвигает таблицу на одну вправо: разбор по
+    позиции колонок прочёл бы номер как наименование, а наименование — как
+    единицу.
+    """
+    from app.utils.xlsx_optimizer import parse_estimate_xlsx
 
-    assert ws.cell(row=header_row, column=cols["name"]).value == "Наименование"
-    assert ws.cell(row=header_row, column=cols["quantity"]).value == "Кол-во"
-    # «№ в исходной смете» не притворилась ни одной из известных колонок
-    assert cols["name"] != 1
+    data, _ = generate_estimate_xlsx([
+        _est_item("Пробивка гнезд", source_no="1", qty=3.0, work=100.0),
+        _est_item("Смеси бетонные", type_="Материал", source_no="2", qty=2.0,
+                  work=None, mat=50.0),
+    ])
+
+    items = parse_estimate_xlsx(data)
+
+    assert [(it["name"], it["unit"], it["quantity"], it["price_excl_vat"]) for it in items] == [
+        ("Пробивка гнезд", "м2", 3.0, 100.0),
+        ("Смеси бетонные", "м2", 2.0, 50.0),
+    ]

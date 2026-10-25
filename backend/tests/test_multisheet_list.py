@@ -8,10 +8,14 @@ import io
 
 import openpyxl
 
+from app.services import storage_service
 from app.services.excel_service import data_sheet_titles, generate_list
-from app.services.task_processor import _chunk_by_work_boundaries, _chunk_sheet, _tag_sheet
+from app.services.task_processor import _chunk_by_work_boundaries, _chunk_sheet
 from app.utils.file_parser import chunk_rows, parse_xlsx_grand
 from app.utils.xlsx_generic import parse_xlsx_to_generic_rows
+from tests.helpers.anthropic_api import prompt_text
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _HEADER = ["№", "Наименование", "Ед. изм.", "Кол-во"]
 
@@ -116,24 +120,73 @@ class TestChunksStayWithinSheet:
         for chunk in chunks:
             assert len({it["sheet"] for it in chunk}) == 1
 
-    def test_items_returned_by_ai_get_the_chunk_sheet(self):
-        chunk = [{"name": "А", "sheet": "Раздел 2"}]
-        produced = [{"type": "Работа", "name": "Демонтаж"}, {"type": "Материал", "name": "Кирпич"}]
-        _tag_sheet(produced, _chunk_sheet(chunk))
 
-        assert [it["sheet"] for it in produced] == ["Раздел 2", "Раздел 2"]
 
-    def test_existing_sheet_is_not_overwritten(self):
-        produced = [{"name": "А", "sheet": "Раздел 1"}]
-        _tag_sheet(produced, "Раздел 9")
+def _list_answer(kwargs) -> dict:
+    """Ответ ИИ на чанк перечня: позиции этого чанка, без листа — ИИ о листах не знает.
 
-        assert produced[0]["sheet"] == "Раздел 1"
+    На раздел с кладкой ИИ ещё и дописывает материал, которого в строках нет:
+    лист ему может дать только чанк.
+    """
+    text = prompt_text(kwargs)
+    items = []
+    if "Демонтаж стен" in text:
+        items.append({"type": "Работа", "name": "Демонтаж стен", "unit": "м2", "quantity": 12.5})
+    if "Кладка кирпича" in text:
+        items += [
+            {"type": "Работа", "name": "Кладка кирпича", "unit": "м3", "quantity": 4},
+            {"type": "Материал", "name": "Кирпич", "unit": "шт", "quantity": 1600},
+        ]
+    return {"items": items}
 
-    def test_single_sheet_file_leaves_items_unmarked(self):
-        produced = [{"name": "А"}]
-        _tag_sheet(produced, _chunk_sheet([{"name": "исходная"}]))
 
-        assert "sheet" not in produced[0]
+def _cell_values(ws) -> set:
+    return {cell for row in ws.iter_rows(values_only=True) for cell in row}
+
+
+async def _run_list(processor_env, data: bytes):
+    task = await processor_env.task("LIST_FROM_GRAND")
+    await processor_env.input_file(task, "Смета.xlsx", XLSX_MIME, data)
+    await processor_env.run(task)
+    (result,) = await processor_env.results(task)
+    book = openpyxl.load_workbook(io.BytesIO(await storage_service.load_bytes(result.storage_key)))
+    task = await processor_env.reload(task)
+    assert task.status == "completed", task.error_message
+    return task, book
+
+
+class TestListOfMultiSheetFile:
+    """Перечень по файлу из двух листов: позиции из ответа ИИ получают лист своего чанка."""
+
+    async def test_items_returned_by_ai_get_the_chunk_sheet(self, processor_env, claude_api):
+        claude_api(_list_answer, repeat=True)
+        data = _grand({
+            "Раздел 1": [("Демонтаж стен", "м2", 12.5)],
+            "Раздел 2": [("Кладка кирпича", "м3", 4)],
+        })
+
+        task, book = await _run_list(processor_env, data)
+
+        assert [(it["name"], it.get("sheet")) for it in task.progress_data["items"]] == [
+            ("Демонтаж стен", "Раздел 1"),
+            ("Кладка кирпича", "Раздел 2"),
+            ("Кирпич", "Раздел 2"),
+        ]
+        assert book.sheetnames == ["Раздел 1", "Раздел 2", "Пояснительная записка"]
+        # Дописанный ИИ материал лёг на лист своей работы, а не на первый.
+        assert "Кирпич" in _cell_values(book["Раздел 2"])
+        assert "Кирпич" not in _cell_values(book["Раздел 1"])
+
+    async def test_single_sheet_file_leaves_items_unmarked(self, processor_env, claude_api):
+        claude_api(_list_answer, repeat=True)
+        data = _grand({"Смета": [("Демонтаж стен", "м2", 12.5), ("Кладка кирпича", "м3", 4)]})
+
+        task, book = await _run_list(processor_env, data)
+
+        items = task.progress_data["items"]
+        assert [it["name"] for it in items] == ["Демонтаж стен", "Кладка кирпича", "Кирпич"]
+        assert all(not it.get("sheet") for it in items)
+        assert book.sheetnames == ["Перечень", "Работы", "Материалы", "Пояснительная записка"]
 
 
 class TestGeneratedListFile:

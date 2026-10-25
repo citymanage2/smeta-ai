@@ -14,23 +14,40 @@ Claude: ИИ её не видел, в перечне её не было, и пр
 import io
 
 import openpyxl
+import pytest
 
 from app.utils.file_parser import parse_xlsx_grand
 
 
+# Однострочная шапка: «всего с учётом коэффициентов» стоит в самой строке шапки.
 _HEADER = [
     "№ п/п", "Обоснование", "Наименование работ и затрат", "Единица измерения",
     "Количество", "коэффициенты", "всего с учетом коэффициентов",
     "Сметная стоимость, руб.",
 ]
+ONE_ROW_HEADER = [_HEADER]
+
+# Настоящая раскладка ГРАНД-Сметы: «Количество» объединено над тремя
+# подколонками, «всего с учётом коэффициентов» — в строке подзаголовков, под ней
+# строка номеров колонок.
+GRAND_HEADER = [
+    ["№ п/п", "Обоснование", "Наименование работ и затрат", "Единица измерения",
+     "Количество", None, None, "Сметная стоимость, руб."],
+    [None, None, None, None, "на единицу измерения", "коэффициенты",
+     "всего с учетом коэффициентов", None],
+    [1, 2, 3, 4, 5, 6, 7, 8],
+]
 
 
-def _lsr(rows: list[list]) -> bytes:
-    """Фрагмент ЛСР в раскладке ГРАНД-Сметы: шапка, раздел, переданные строки."""
+def _lsr(rows: list[list], header: list[list] = ONE_ROW_HEADER) -> bytes:
+    """Фрагмент ЛСР: шапка (одна или несколько строк), раздел, переданные строки."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(["ЛОКАЛЬНЫЙ СМЕТНЫЙ РАСЧЕТ (СМЕТА) № 1"])
-    ws.append(_HEADER)
+    for header_row in header:
+        ws.append(header_row)
+    if header is GRAND_HEADER:
+        ws.merge_cells("E2:G2")
     ws.append(["Раздел 1. Оборудование"])
     for row in rows:
         ws.append(row)
@@ -168,9 +185,20 @@ def test_equipment_mark_is_not_part_of_the_number():
     assert controller["source_no"] == "3"
 
 
-def test_quantity_of_equipment_is_the_total_column():
-    """Объём берётся из «всего с учётом коэффициентов», как у любой позиции."""
-    rows = parse_xlsx_grand(_fire_alarm_section())
+@pytest.mark.parametrize("header", [GRAND_HEADER, ONE_ROW_HEADER], ids=["grand", "one-row"])
+def test_quantity_of_equipment_is_the_total_column(header):
+    """Объём — из «всего с учётом коэффициентов», а не из «Количества».
+
+    Числа в колонках разные (100 × 1,13 = 113): при равных тест не отличил бы
+    одну колонку от другой. Колонка «всего» находится и в строке подзаголовков
+    (ГРАНД), и в самой однострочной шапке.
+    """
+    rows = parse_xlsx_grand(_lsr([
+        ["5\nО", "ТЦ_89.1.61.02_66_6670465-193_27.11.2025_01_1.4",
+         "Извещатель пожарный дымовой оптико-электронный ИП 212-141 исп.01",
+         "шт", 100, 1.13, 113, 56500.0],
+        [None, None, "Всего по позиции", None, None, None, None, 56500.0],
+    ], header=header))
 
     detector = next(r for r in rows if r["name"].startswith("Извещатель пожарный"))
     assert detector["quantity"] == 113
