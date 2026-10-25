@@ -15,31 +15,10 @@ import io
 
 import openpyxl
 import pytest
-import pytest_asyncio
-from sqlalchemy import delete
 
-from app.models.price import PriceMaterial, PriceWork
 from app.services import reference_price
 from app.services.price_bulk import SKIP_NO_NAME, SKIP_NO_PRICE, SKIP_NOT_PRICEABLE
 from app.utils.price_min import ESTIMATE_CONTRACTOR
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def clean_price(db_session):
-    """Пустой прайс до и после каждого теста.
-
-    Тесты этого файла делают `commit`, а общая тестовая БД живёт весь прогон:
-    без уборки позиция одного теста становилась бы «неожиданным совпадением»
-    в другом — и файл проходил бы или падал в зависимости от порядка.
-    """
-    async def _wipe():
-        await db_session.execute(delete(PriceWork))
-        await db_session.execute(delete(PriceMaterial))
-        await db_session.commit()
-
-    await _wipe()
-    yield
-    await _wipe()
 
 
 def _xlsx(rows: list[list]) -> bytes:
@@ -187,24 +166,36 @@ def test_file_without_name_column_is_refused():
 
 
 # ---------------------------------------------------------------------------
-# План вытеснения
+# План вытеснения — то, что человек видит в предпросмотре
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_plan_shows_every_price_that_will_be_erased(db_session):
-    """Главный экран решения: какие именно цены исчезнут и чьи они."""
-    db_session.add(PriceWork(
-        name="Кладка стен", unit="м3",
-        prices={"ООО Рога": 1200.0, "ИП Копыта": 1100.0, ESTIMATE_CONTRACTOR: 900.0},
-        min_price=900.0,
-    ))
-    await db_session.commit()
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-    plan = await reference_price.build_plan(db_session, [
-        {"kind": "work", "name": "Кладка стен", "unit": "м3", "price": 1000.0},
+
+async def _preview_plan(async_client, admin_token, rows: list[list]) -> list[dict]:
+    """План из `/prices/reference/preview` для файла сметы с этими строками."""
+    r = await async_client.post(
+        "/prices/reference/preview",
+        files={"file": ("смета.xlsx", _smeta_file(rows), _XLSX)},
+        headers={"Authorization": admin_token},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["plan"]
+
+
+@pytest.mark.asyncio
+async def test_plan_shows_every_price_that_will_be_erased(async_client, admin_token, price_db):
+    """Главный экран решения: какие именно цены исчезнут и чьи они."""
+    price_db.work(
+        "Кладка стен", unit="м3",
+        prices={"ООО Рога": 1200.0, "ИП Копыта": 1100.0, ESTIMATE_CONTRACTOR: 900.0},
+    )
+    await price_db.load()
+
+    (entry,) = await _preview_plan(async_client, admin_token, [
+        [1, "Работа", "Кладка стен", "м3", 1, 1000, None, 1000, None],
     ])
 
-    entry = plan[0]
     assert entry["action"] == reference_price.ACTION_REPRICE
     assert sorted(entry["removed"], key=lambda r: r["contractor"]) == [
         {"contractor": "ИП Копыта", "price": 1100.0},
@@ -216,43 +207,44 @@ async def test_plan_shows_every_price_that_will_be_erased(db_session):
 
 
 @pytest.mark.asyncio
-async def test_plan_marks_new_position_as_add(db_session):
+async def test_plan_marks_new_position_as_add(async_client, admin_token, price_db):
     """Позиции в прайсе нет — стирать нечего, просто добавляем."""
-    plan = await reference_price.build_plan(db_session, [
-        {"kind": "work", "name": "Позиция которой нет", "unit": "м2", "price": 10.0},
+    price_db.work("Кладка стен", unit="м3", prices={"ООО Рога": 1200.0})
+    await price_db.load()
+
+    (entry,) = await _preview_plan(async_client, admin_token, [
+        [1, "Работа", "Позиция которой нет", "м2", 1, 10, None, 10, None],
     ])
 
-    assert plan[0]["action"] == reference_price.ACTION_ADD
-    assert plan[0]["removed"] == []
-    assert plan[0]["match"] is None
+    assert entry["action"] == reference_price.ACTION_ADD
+    assert entry["removed"] == []
+    assert entry["match"] is None
 
 
 @pytest.mark.asyncio
-async def test_plan_blocks_incompatible_unit(db_session):
+async def test_plan_blocks_incompatible_unit(async_client, admin_token, price_db):
     """Цена подрядчика за мешок и цена из файла за кг — про разное. Не стираем."""
-    db_session.add(PriceMaterial(name="Смесь сухая", unit="мешок", price=300.0))
-    await db_session.commit()
+    price_db.material("Смесь сухая", unit="мешок", price=300.0)
+    await price_db.load()
 
-    plan = await reference_price.build_plan(db_session, [
-        {"kind": "material", "name": "Смесь сухая", "unit": "кг", "price": 12.0},
+    (entry,) = await _preview_plan(async_client, admin_token, [
+        [1, "Материал", "Смесь сухая", "кг", 1, None, 12, None, 12],
     ])
 
-    entry = plan[0]
     assert entry["action"] == reference_price.ACTION_BLOCKED
     assert entry["reason"] == reference_price.BLOCK_UNIT_MISMATCH
     assert entry["removed"] == []
 
 
 @pytest.mark.asyncio
-async def test_plan_shows_material_price_that_will_be_replaced(db_session):
+async def test_plan_shows_material_price_that_will_be_replaced(async_client, admin_token, price_db):
     """У материала цена одна — но человек должен видеть, какую он затирает."""
-    db_session.add(PriceMaterial(name="Кирпич", unit="шт", price=30.0))
-    await db_session.commit()
+    price_db.material("Кирпич", unit="шт", price=30.0)
+    await price_db.load()
 
-    plan = await reference_price.build_plan(db_session, [
-        {"kind": "material", "name": "Кирпич", "unit": "шт", "price": 25.0},
+    (entry,) = await _preview_plan(async_client, admin_token, [
+        [1, "Материал", "Кирпич", "шт", 1, None, 25, None, 25],
     ])
 
-    entry = plan[0]
     assert entry["action"] == reference_price.ACTION_REPRICE
     assert entry["removed"] == [{"contractor": None, "price": 30.0}]
