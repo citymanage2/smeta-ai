@@ -276,18 +276,27 @@ def test_same_name_same_price_in_two_sections_stays_one_position():
 
 
 def test_conflict_inside_one_section_is_still_reported():
-    """Внутри одного раздела разделять нечем — это по-прежнему вопрос к человеку."""
+    """Внутри одного раздела разделять нечем — это по-прежнему вопрос к человеку.
+
+    Второй лист нужен, чтобы разведение по разделам вообще включилось: оно
+    разводит АР и КР, но два «Окраска стен» внутри АР так и остаются спором.
+    """
     data = _book({
         "АР": _section_sheet([
             _row("Окраска стен", "м2", 10, 350, None),
             _row("Окраска стен", "м2", 10, 650, None),
         ]),
+        "КР": _section_sheet([_row("Окраска стен", "м2", 10, 500, None)]),
     })
 
     result = reference_price.parse_reference_file(data, "сводная.xlsx", None)
 
-    assert [i["name"] for i in result["items"]] == ["Окраска стен"]
-    assert result["conflicts"][0]["prices"] == [350.0, 650.0]
+    assert sorted((i["name"], i["price"]) for i in result["items"]) == [
+        ("Окраска стен (АР)", 650.0),
+        ("Окраска стен (КР)", 500.0),
+    ]
+    assert [c["prices"] for c in result["conflicts"]] == [[350.0, 650.0]], \
+        "в споре — только цены одного раздела"
 
 
 def test_single_sheet_file_gets_no_section_suffix():
