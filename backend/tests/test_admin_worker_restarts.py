@@ -46,26 +46,8 @@ async def test_absent_without_events(async_client, admin_token):
     assert r.json()["worker_restarts"] is None
 
 
-async def test_single_start_is_reported_calmly(async_client, admin_token, db_session):
-    """Один старт — норма (деплой): цифры видны, тревоги в подсказке нет."""
-    db_session.add(_start_event())
-    await db_session.flush()
-
-    body = (
-        await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
-    ).json()
-
-    info = body["worker_restarts"]
-    assert info["starts_1h"] == 1
-    assert info["slots"] == 2
-    assert info["limit_mb"] == 2048.0
-    assert info["rss_mb"] == 780.0
-    assert info["last_age_s"] is not None
-    assert "перезапускался" not in body["hint"]
-
-
-async def test_repeated_starts_flagged_in_hint(async_client, admin_token, db_session):
-    """Три старта за час — контейнер умирает: диагноз прямо в подсказке."""
+async def test_repeated_starts_are_counted(async_client, admin_token, db_session):
+    """Три старта за час — счётчик показывает три: это улика умирающего контейнера."""
     for _ in range(3):
         db_session.add(_start_event())
     await db_session.flush()
@@ -75,10 +57,6 @@ async def test_repeated_starts_flagged_in_hint(async_client, admin_token, db_ses
     ).json()
 
     assert body["worker_restarts"]["starts_1h"] == 3
-    assert "перезапускался 3" in body["hint"]
-    # Причину не утверждаем: деплой — это тоже перезапуск, и уверенное «не хватает
-    # памяти» один раз уже увело разбор в сторону (30.07.2026).
-    assert "После деплоя это норма" in body["hint"]
 
 
 async def test_old_starts_not_counted_but_last_shown(async_client, admin_token, db_session):

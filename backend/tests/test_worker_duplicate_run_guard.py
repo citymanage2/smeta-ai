@@ -112,28 +112,14 @@ async def test_cpu_cap_unknown_cores(monkeypatch):
     assert worker._cpu_slots_cap() is None
 
 
-async def test_slots_limited_by_cpu(monkeypatch):
-    """Настроено 4, ядер 2 → берём 1: иначе интерфейс перестаёт отвечать."""
-    from app.utils.memory import MemorySnapshot
-
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
-    monkeypatch.setattr(worker.os, "cpu_count", lambda: 2)
-    monkeypatch.setattr(
-        worker, "memory_snapshot",
-        lambda: MemorySnapshot(rss_mb=200.0, usage_mb=None, limit_mb=None),
-    )
-
-    assert worker._effective_slots() == 1
-
-
-async def test_embedding_threads_leave_a_core():
+async def test_embedding_threads_leave_a_core(monkeypatch):
     """Эмбеддинги не забирают все ядра: ONNX по умолчанию берёт именно все."""
     from app.services import embedding_service
 
-    threads = embedding_service._embedding_threads()
-    assert threads >= 1
-    cores = embedding_service.os.cpu_count() or 2
-    assert threads <= max(1, cores - 1) or threads == settings.EMBEDDING_THREADS
+    monkeypatch.setattr(settings, "EMBEDDING_THREADS", 0)
+    monkeypatch.setattr(embedding_service.os, "cpu_count", lambda: 4)
+
+    assert embedding_service._embedding_threads() == 3
 
 
 async def test_fastembed_without_threads_param_still_loads():

@@ -73,16 +73,21 @@ async def _seed_task(db, task_id, *, status, progress_data=None,
     return task
 
 
+@pytest.mark.parametrize("progress_data", [{}, None], ids=["empty", "null"])
 async def test_resume_paused_without_checkpoint_restarts(
-    async_client, user_token, seed_users, db_session, monkeypatch
+    async_client, user_token, seed_users, db_session, progress_data
 ):
-    """Главный баг: paused без чекпоинта → 200 + pending (раньше был 409)."""
+    """Главный баг: paused без чекпоинта → 200 + pending (раньше был 409).
+
+    progress_data = NULL — пауза на самом первом вызове Claude, пустой dict — до
+    первого чекпоинта. Обе возобновляемы: перезапуск с нуля через очередь.
+    """
     task_id = "d8000000-0000-0000-0000-000000000001"
-    task = await _seed_task(db_session, task_id, status="paused", progress_data={})
-    monkeypatch.setattr(
-        "app.routers.tasks._run_task_in_background", AsyncMock(return_value=None)
-    )
+    task = await _seed_task(db_session, task_id, status="paused", progress_data=progress_data)
     try:
+        await db_session.execute(delete(Job))
+        await db_session.commit()
+
         resp = await async_client.post(
             f"/tasks/{task_id}/resume", headers={"Authorization": user_token}
         )
@@ -94,93 +99,32 @@ async def test_resume_paused_without_checkpoint_restarts(
         assert task.error_message is None
 
         jobs = (
-            await db_session.execute(
-                select(Job).where(Job.kind == "task.process")
-            )
-        ).scalars().all()
-        assert any(j.payload == {"task_id": task_id} for j in jobs)
-    finally:
-        await db_session.execute(delete(Job))
-        await db_session.execute(delete(Task).where(Task.id == task_id))
-        await db_session.commit()
-
-
-async def test_resume_paused_null_progress_data(
-    async_client, user_token, seed_users, db_session, monkeypatch
-):
-    """progress_data = NULL (пауза на самом первом вызове Claude) — тоже возобновляема."""
-    task_id = "d8000000-0000-0000-0000-000000000002"
-    task = await _seed_task(db_session, task_id, status="paused", progress_data=None)
-    monkeypatch.setattr(
-        "app.routers.tasks._run_task_in_background", AsyncMock(return_value=None)
-    )
-    try:
-        resp = await async_client.post(
-            f"/tasks/{task_id}/resume", headers={"Authorization": user_token}
-        )
-        assert resp.status_code == 200, resp.text
-        await db_session.refresh(task)
-        assert task.status == "pending"
-    finally:
-        await db_session.execute(delete(Job))
-        await db_session.execute(delete(Task).where(Task.id == task_id))
-        await db_session.commit()
-
-
-async def test_resume_paused_batch_pending_goes_to_processing(
-    async_client, user_token, seed_users, db_session, monkeypatch
-):
-    """Пачка уже оплачена → processing (её доберёт batch_poller), без нового job."""
-    task_id = "d8000000-0000-0000-0000-000000000003"
-    task = await _seed_task(
-        db_session, task_id, status="paused",
-        progress_data={"_stage": "batch_pending", "batch_id": "msgbatch_x", "items": []},
-    )
-    monkeypatch.setattr(
-        "app.routers.tasks._run_task_in_background", AsyncMock(return_value=None)
-    )
-    try:
-        await db_session.execute(delete(Job))
-        await db_session.commit()
-
-        resp = await async_client.post(
-            f"/tasks/{task_id}/resume", headers={"Authorization": user_token}
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "processing"
-
-        await db_session.refresh(task)
-        assert task.status == "processing"
-        # чекпоинт batch_pending сохранён — поллер найдёт задачу по нему
-        assert task.progress_data["_stage"] == "batch_pending"
-
-        jobs = (
             await db_session.execute(select(Job).where(Job.kind == "task.process"))
         ).scalars().all()
-        assert jobs == [], "batch-задачу нельзя ставить в очередь на пересчёт"
+        mine = [j.status for j in jobs if (j.payload or {}).get("task_id") == task_id]
+        assert mine == ["queued"]
     finally:
         await db_session.execute(delete(Job))
         await db_session.execute(delete(Task).where(Task.id == task_id))
         await db_session.commit()
 
 
-async def test_resume_failed_batch_pending_goes_to_processing(
-    async_client, user_token, seed_users, db_session, monkeypatch
+@pytest.mark.parametrize("status", ["paused", "failed"])
+async def test_resume_batch_pending_goes_to_processing(
+    async_client, user_token, seed_users, db_session, status
 ):
-    """Сборка пачки упала (failed), но пачка оплачена → processing, не пересчёт.
+    """Пачка уже оплачена → processing (её доберёт batch_poller), без нового job.
 
-    Прод 29.07.2026: забор результатов уходил мимо посредника и падал с 403,
-    задача вставала в failed с чекпоинтом batch_pending. Единственной кнопкой
-    был перезапуск с нуля — вторая оплата уже посчитанной пачки.
-    План: plans/2026-07-29-batch-results-via-proxy.md, Фаза 2.
+    paused — баланс кончился после submit пачки. failed — сборка результатов
+    упала, а пачка посчитана и оплачена: прод 29.07.2026, забор результатов
+    уходил мимо посредника и падал с 403, и единственной кнопкой был перезапуск с
+    нуля — вторая оплата уже посчитанной пачки
+    (plans/2026-07-29-batch-results-via-proxy.md, Фаза 2).
     """
-    task_id = "d8000000-0000-0000-0000-000000000005"
+    task_id = "d8000000-0000-0000-0000-000000000003"
     task = await _seed_task(
-        db_session, task_id, status="failed",
-        progress_data={"_stage": "batch_pending", "batch_id": "msgbatch_y", "items": []},
-    )
-    monkeypatch.setattr(
-        "app.routers.tasks._run_task_in_background", AsyncMock(return_value=None)
+        db_session, task_id, status=status,
+        progress_data={"_stage": "batch_pending", "batch_id": "msgbatch_x", "items": []},
     )
     try:
         await db_session.execute(delete(Job))
@@ -195,6 +139,7 @@ async def test_resume_failed_batch_pending_goes_to_processing(
         await db_session.refresh(task)
         assert task.status == "processing"
         assert task.error_message is None
+        # чекпоинт batch_pending сохранён — поллер найдёт задачу по нему
         assert task.progress_data["_stage"] == "batch_pending"
 
         jobs = (

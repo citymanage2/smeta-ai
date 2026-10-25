@@ -4,6 +4,7 @@
 created_at→updated_at, где сидит многочасовое ожидание в очереди.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -79,16 +80,14 @@ async def test_paused_is_not_terminal(db_session):
 async def test_restart_resets_started_at(db_session):
     """Повторный прогон отсчитывается заново — иначе остаток считался бы от
     первой попытки и прогноз готовности врал бы на часы."""
-    task = await _make_task(db_session)
-    proc = TaskProcessor(task.id, db_session)
+    first_run = datetime.now(timezone.utc) - timedelta(hours=1)
+    task = await _make_task(db_session, started_at=first_run)
 
-    await proc.update_status("processing")
-    await db_session.refresh(task)
-    first_start = task.started_at
-
-    await proc.update_status("failed")
-    await proc.update_status("processing")
+    await TaskProcessor(task.id, db_session).update_status("processing")
     await db_session.refresh(task)
 
-    assert task.started_at >= first_start
+    started_at = task.started_at
+    if started_at.tzinfo is None:  # SQLite отдаёт naive
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    assert started_at > datetime.now(timezone.utc) - timedelta(minutes=1)
     assert task.status == "processing"

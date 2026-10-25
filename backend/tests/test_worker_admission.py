@@ -42,8 +42,12 @@ def _snap(monkeypatch, rss=None, usage=None, limit=None, source=None, available=
 # ---------------------------------------------------------------------------
 
 async def test_brake_on_by_container_ratio(monkeypatch):
-    """Занято 85% лимита контейнера — новую задачу не берём."""
+    """Занято 85% лимита контейнера — новую задачу не берём.
+
+    Запас по мегабайтам выключен: срабатывать должна именно доля лимита.
+    """
     monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0.8)
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 0)
     monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 99999)
     monkeypatch.setattr(worker, "_inflight_job_ids", {1})
     _snap(monkeypatch, rss=900.0, usage=1740.0, limit=2048.0)
@@ -118,29 +122,6 @@ async def test_brake_on_when_cgroom_headroom_small(monkeypatch):
     _snap(monkeypatch, rss=1700.0, usage=1800.0, limit=2048.0, source="cgroup")
 
     assert worker._memory_brake_engaged() is True
-
-
-async def test_slots_from_available_memory_on_shared_host(monkeypatch):
-    """Слоты на общей машине считаются от свободного, а не от её общего размера.
-
-    (2500 − 512) / 400 = 4 → но настроено 3, значит 3.
-    """
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 3)
-    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
-    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
-    _snap(monkeypatch, rss=200.0, limit=3911.8, source="host", available=2500.0)
-
-    assert worker._effective_slots() == 3
-
-
-async def test_slots_shrink_when_shared_host_is_tight(monkeypatch):
-    """Мало свободного на машине — меньше слотов: (1200 − 512) / 400 = 1."""
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
-    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
-    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", 512)
-    _snap(monkeypatch, rss=200.0, limit=3911.8, source="host", available=1200.0)
-
-    assert worker._effective_slots() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -241,104 +222,76 @@ async def test_next_job_of_same_task_is_taken_right_away(worker_loop, monkeypatc
     assert [p["task_id"] for p in held.started] == ["task-Z", "task-Z"]
 
 
-# ---------------------------------------------------------------------------
-# Число слотов из лимита контейнера
-# ---------------------------------------------------------------------------
-
-async def test_slots_limited_by_container_memory(monkeypatch):
-    """Маленький пресет — меньше слотов, чем настроено: четыре = OOM-kill.
-
-    Лимит 2 ГБ, занято 800 МБ прайсом, на задачу закладываем 400 МБ:
-    (2048×0.8 − 800) / 400 = 2 слота.
-    """
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
-    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
-    monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0.8)
-    _snap(monkeypatch, rss=800.0, usage=800.0, limit=2048.0)
-
-    assert worker._effective_slots() == 2
-
-
-async def test_slots_never_below_one(monkeypatch):
-    """Даже когда памяти в обрез — один слот остаётся, иначе очередь не движется."""
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
-    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
-    _snap(monkeypatch, rss=980.0, usage=980.0, limit=1024.0)
-
-    assert worker._effective_slots() == 1
-
-
-async def test_slots_keep_configured_when_memory_is_plenty(monkeypatch):
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
-    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
-    _snap(monkeypatch, rss=500.0, usage=500.0, limit=8192.0)
-
-    assert worker._effective_slots() == 4
-
-
-async def test_slots_unchanged_when_ratio_disabled(monkeypatch):
-    """Доля 0 = механизм памяти выключен, а не «оставить один слот»."""
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 4)
-    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", 400)
-    monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0)
-    _snap(monkeypatch, rss=2000.0, usage=2000.0, limit=2048.0)
-
-    assert worker._effective_slots() == 4
-
-
-async def test_burst_claims_are_stopped_after_first(monkeypatch):
-    """Очередь полна — за один проход берётся ОДНА задача, а не все слоты.
+async def test_burst_claims_are_stopped_after_first(worker_loop, monkeypatch):
+    """Очередь полна, слоты свободны — в работу уходит ОДНА задача, а не все слоты.
 
     Тот самый дефект: `await sem.acquire()` на свободном слоте не отдаёт
     управление циклу, поэтому пока задача помечалась занятой внутри созданной
     корутины, следующий claim успевал пройти раньше — и три задачи уходили в
     работу за секунды, ни разу не показавшись ни тормозу, ни разносу.
     """
-    import asyncio
-
-    from app.models.job import Job
-
     monkeypatch.setattr(settings, "WORKER_CLAIM_STAGGER_S", 60)
-    monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", 0)
-    monkeypatch.setattr(settings, "WORKER_RSS_PAUSE_MB", 0)
-    monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_S", 0.01)
-    monkeypatch.setattr(worker, "_inflight_job_ids", set())
-    monkeypatch.setattr(worker, "_inflight_started_at", {})
+    held = worker_loop.hold("task.process")
+    for task_id in ("A", "B", "C", "D"):
+        await worker_loop.enqueue("task.process", {"task_id": task_id})
 
-    counter = {"n": 0}
-
-    async def endless_queue(db, worker_id):
-        counter["n"] += 1
-        return Job(id=counter["n"], kind="task.process", payload={}, status="running", attempts=1)
-
-    started = asyncio.Event()
-
-    async def slow_run(j):
-        started.set()
-        await asyncio.sleep(5)  # задача «считается» — слот занят
-
-    monkeypatch.setattr(worker.job_queue, "claim_one", endless_queue)
-    monkeypatch.setattr(worker, "run_job", slow_run)
-
-    shutdown = asyncio.Event()
-    monkeypatch.setattr(worker, "_shutdown", shutdown)
-
-    inflight: set = set()
-    loop_task = asyncio.create_task(worker._poll_loop(asyncio.Semaphore(4), inflight))
-    await asyncio.wait_for(started.wait(), timeout=2)
-    await asyncio.sleep(0.1)  # успело бы захватить остальные слоты
-    shutdown.set()
-    await asyncio.wait_for(loop_task, timeout=2)
-    for t in inflight:
-        t.cancel()
-    await asyncio.gather(*list(inflight), return_exceptions=True)
-
-    assert counter["n"] == 1, "взяли больше одной задачи, разнос захватов не работает"
+    async with worker_loop.running(slots=4):
+        await held.wait_started(1)
+        await asyncio.sleep(0.2)  # два десятка опросов очереди — успело бы взять остальные
+        assert sorted((await worker_loop.statuses()).values()) == [
+            "queued", "queued", "queued", "running",
+        ]
+        assert len(held.started) == 1
 
 
-async def test_slots_unchanged_without_cgroup(monkeypatch):
-    """Локально лимита не видно — ведём себя как раньше, ничего не выдумываем."""
-    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 3)
-    _snap(monkeypatch, rss=500.0, usage=None, limit=None)
+# ---------------------------------------------------------------------------
+# Число слотов: потолок — настройка, физика — память и процессор
+# ---------------------------------------------------------------------------
 
-    assert worker._effective_slots() == 3
+def _slots_case(id, *, configured, expected, cores=8, task_mem=400, ratio=0.8,
+                min_free=512, **memory):
+    return pytest.param(
+        dict(configured=configured, cores=cores, task_mem=task_mem, ratio=ratio,
+             min_free=min_free, memory=memory),
+        expected,
+        id=id,
+    )
+
+
+SLOTS_CASES = [
+    # Общая машина без личного лимита (прод 30.07.2026): слоты от СВОБОДНОГО, а не
+    # от её общего размера. (2500 − 512) / 400 = 4, но настроено 3 — значит 3.
+    _slots_case("shared-host-capped-by-setting", configured=3, expected=3,
+                rss=200.0, limit=3911.8, source="host", available=2500.0),
+    # (1200 − 512) / 400 = 1.
+    _slots_case("shared-host-tight", configured=4, expected=1,
+                rss=200.0, limit=3911.8, source="host", available=1200.0),
+    # Лимит 2 ГБ, занято 800 МБ прайсом: (2048×0.8 − 800) / 400 = 2 — четыре = OOM-kill.
+    _slots_case("small-container-limit", configured=4, expected=2,
+                rss=800.0, usage=800.0, limit=2048.0),
+    # Памяти в обрез — один слот остаётся, иначе очередь не движется.
+    _slots_case("never-below-one", configured=4, expected=1,
+                rss=980.0, usage=980.0, limit=1024.0),
+    _slots_case("plenty-of-memory", configured=4, expected=4,
+                rss=500.0, usage=500.0, limit=8192.0),
+    # Доля 0 = механизм памяти выключен, а не «оставить один слот».
+    _slots_case("ratio-zero-disables", configured=4, expected=4, ratio=0,
+                rss=2000.0, usage=2000.0, limit=2048.0),
+    # Локально лимита не видно — ведём себя как раньше, ничего не выдумываем.
+    _slots_case("no-cgroup", configured=3, expected=3, rss=500.0),
+    # Настроено 4, ядер 2 → одно ядро остаётся web: иначе интерфейс не отвечает.
+    _slots_case("fewer-cores-than-setting", configured=4, expected=1, cores=2, rss=200.0),
+    _slots_case("cores-unknown", configured=3, expected=3, cores=None, rss=200.0),
+]
+
+
+@pytest.mark.parametrize("case, expected", SLOTS_CASES)
+async def test_effective_slots(monkeypatch, case, expected):
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", case["configured"])
+    monkeypatch.setattr(settings, "WORKER_TASK_MEM_MB", case["task_mem"])
+    monkeypatch.setattr(settings, "WORKER_MEM_HIGH_RATIO", case["ratio"])
+    monkeypatch.setattr(settings, "WORKER_MEM_MIN_FREE_MB", case["min_free"])
+    monkeypatch.setattr(worker.os, "cpu_count", lambda: case["cores"])
+    _snap(monkeypatch, **case["memory"])
+
+    assert worker._effective_slots() == expected

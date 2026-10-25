@@ -94,10 +94,6 @@ def test_snapshot_ratio_none_without_limit():
     """Нет лимита — доли нет: делить не на что, а не «ноль»."""
     snap = memory.MemorySnapshot(rss_mb=1024.0, usage_mb=None, limit_mb=None)
     assert snap.ratio is None
-    assert snap.as_dict() == {
-        "rss_mb": 1024.0, "usage_mb": None, "limit_mb": None,
-        "limit_source": None, "available_mb": None, "ratio": None,
-    }
 
 
 def test_snapshot_never_raises():

@@ -27,7 +27,6 @@ paused-задачи, атомарно помечает их `pending` и зап�
 """
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -51,9 +50,6 @@ DEDUPE_WINDOW_MINUTES = 30
 # московское, иначе «проверка в 07:12» читается как трёхчасовое опоздание.
 _MSK = timezone(timedelta(hours=3))
 
-# Ссылки на fire-and-forget задачи, чтобы их не собрал GC до завершения.
-_background_runs: set = set()
-
 # Единый предикат возобновляемости — тот же, что в ручном resume-эндпоинте
 # (app/routers/tasks.py: resume_task). Алиас сохранён для обратной совместимости.
 _has_checkpoint = has_resumable_checkpoint
@@ -70,22 +66,6 @@ async def _find_resumable_paused_ids(db) -> list[str]:
     """
     result = await db.execute(select(Task).where(Task.status == "paused"))
     return [t.id for t in result.scalars().all()]
-
-
-async def _claim(db, task_id: str) -> bool:
-    """Атомарно перевести задачу paused→pending. Возвращает True, если захвачена
-    именно этим вызовом (не была уже перехвачена/изменена)."""
-    res = await db.execute(
-        update(Task)
-        .where(Task.id == task_id, Task.status == "paused")
-        .values(
-            status="pending",
-            error_message=None,
-            updated_at=datetime.now(timezone.utc),
-        )
-    )
-    await db.commit()
-    return res.rowcount == 1
 
 
 async def _claim_batch_to_processing(db, task_id: str) -> bool:
@@ -214,21 +194,17 @@ async def _record_balance_restored(session_factory, task_ids: list[str]) -> None
     logger.info("Balance restored event recorded", count=len(task_ids), task_ids=task_ids)
 
 
-async def resume_paused_tasks(
-    session_factory=AsyncSessionLocal, runner=None, pinger=None
-) -> list[str]:
+async def resume_paused_tasks(session_factory=AsyncSessionLocal, pinger=None) -> list[str]:
     """Один проход: захватить paused-задачи и переочередить их.
 
     Возвращает список ID реально захваченных (paused→pending) задач. Задачи с
     отправленной пачкой Batch API возвращаются в `processing` (их досчитает
     batch_poller) и в этот список не попадают — их не нужно обрабатывать заново.
 
-    Прод (`runner is None`): захват и постановка durable-job атомарны
-    (`_claim_and_enqueue`) — обработку доведёт worker из очереди, в рамках лимита
-    WORKER_CONCURRENCY и с reclaim-подстраховкой.
-    Тесты могут инъектировать `runner` — тогда используется старый путь
-    (`_claim` + прямой вызов runner) для проверки оркестрации. Аналогично
-    `pinger` подменяет пробный вызов API, чтобы тесты не ходили в сеть.
+    Захват и постановка durable-job атомарны (`_claim_and_enqueue`) — обработку
+    доведёт worker из очереди, в рамках лимита WORKER_CONCURRENCY и с
+    reclaim-подстраховкой. `pinger` подменяет пробный вызов API, чтобы тесты не
+    ходили в сеть.
     """
     async with session_factory() as db:
         candidates = await _find_resumable_paused_ids(db)
@@ -260,14 +236,13 @@ async def resume_paused_tasks(
     for task_id in candidates:
         async with session_factory() as db:
             task = await db.get(Task, task_id)
-            # Пачка Batch API уже отправлена → возвращаем в processing (без job и
-            # без runner): смету достроит batch_poller из готовых результатов.
+            # Пачка Batch API уже отправлена → возвращаем в processing (без job):
+            # смету достроит batch_poller из готовых результатов.
             if task is not None and is_batch_pending(task.progress_data):
                 if await _claim_batch_to_processing(db, task_id):
                     batch_claimed.append(task_id)
                 continue
-            ok = await (_claim(db, task_id) if runner is not None else _claim_and_enqueue(db, task_id))
-            if ok:
+            if await _claim_and_enqueue(db, task_id):
                 claimed.append(task_id)
 
     if batch_claimed:
@@ -287,13 +262,6 @@ async def resume_paused_tasks(
     if not claimed:
         return []
 
+    # Job уже стоят в очереди — их поставил _claim_and_enqueue.
     logger.info("Auto-resuming paused tasks", count=len(claimed))
-    # Прод-путь уже поставил job в очередь внутри _claim_and_enqueue. Прямой запуск —
-    # только для инъектированного тестового runner.
-    if runner is not None:
-        for task_id in claimed:
-            run = asyncio.create_task(runner(task_id))
-            _background_runs.add(run)
-            run.add_done_callback(_background_runs.discard)
-
     return claimed

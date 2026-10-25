@@ -132,40 +132,49 @@ async def test_empty_worker_id_is_noop(db_session):
 # Старт обработчика: подобрать брошенное и записать факт старта
 # ---------------------------------------------------------------------------
 
-async def test_announce_start_records_event_and_requeues(db_session, monkeypatch):
+async def test_announce_start_is_visible_in_admin(
+    async_client, admin_token, db_session, app_sessions, monkeypatch
+):
     """При старте обработчик забирает брошенные job и оставляет след о себе.
 
     След нужен, потому что при OOM-kill больше никаких следов нет: жалоба на
-    память не пишется, лог контейнера пользователю недоступен.
+    память не пишется, лог контейнера пользователю недоступен. Проверяем весь
+    путь: старт → строка в БД → блок «Диагностика» в админке.
     """
-    from sqlalchemy import select as sa_select
-
     from app import worker
-    from app.models.system_event import KIND_WORKER_STARTED, SystemEvent
-    from tests.conftest import TestSessionLocal
+    from app.models.system_event import SystemEvent
+    from app.utils.memory import MemorySnapshot
 
     await _clear(db_session)
     await db_session.execute(delete(SystemEvent))
     await db_session.commit()
 
-    monkeypatch.setattr(worker, "AsyncSessionLocal", TestSessionLocal)
     monkeypatch.setattr(worker, "WORKER_ID", "box-1:999")
-    await _running_job(db_session, "box-1:100", age_s=200)
+    # Память контейнера на момент старта (внешний мир: cgroup).
+    monkeypatch.setattr(
+        worker, "memory_snapshot",
+        lambda: MemorySnapshot(rss_mb=780.0, usage_mb=800.0, limit_mb=2048.0, limit_source="cgroup"),
+    )
+    await _running_job(db_session, "box-1:100", age_s=200)  # job умершего предшественника
+    try:
+        assert await worker._announce_start(slots=2) == 1
 
-    requeued = await worker._announce_start(slots=2)
-
-    assert requeued == 1
-    db_session.expire_all()
-    payloads = (
-        await db_session.execute(
-            sa_select(SystemEvent.payload).where(SystemEvent.kind == KIND_WORKER_STARTED)
-        )
-    ).scalars().all()
-    assert len(payloads) == 1
-    assert payloads[0]["worker_id"] == "box-1:999"
-    assert payloads[0]["slots"] == 2
-    assert payloads[0]["requeued"] == 1
-    assert "limit_mb" in payloads[0]  # цифры памяти есть даже когда None
+        body = (
+            await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
+        ).json()
+        info = body["worker_restarts"]
+        assert info["starts_1h"] == 1
+        assert info["slots"] == 2
+        assert info["requeued"] == 1
+        assert info["limit_mb"] == 2048.0
+        assert info["rss_mb"] == 780.0
+        # Брошенная job снова в очереди, а не «в работе» у мёртвого процесса.
+        assert body["counts"]["queued"] == 1
+        assert body["counts"]["running"] == 0
+    finally:
+        await _clear(db_session)
+        await db_session.execute(delete(SystemEvent))
+        await db_session.commit()
 
 
 async def test_announce_start_survives_db_failure(monkeypatch):

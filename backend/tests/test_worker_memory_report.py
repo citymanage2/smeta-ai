@@ -46,21 +46,28 @@ async def test_memory_below_threshold_is_silent(db_session, monkeypatch):
     assert await _events(db_session) == []
 
 
-async def test_memory_above_threshold_recorded(db_session, monkeypatch):
-    """Превышение порога → запись с цифрой, порогом и числом слотов."""
-    from tests.conftest import TestSessionLocal
+async def test_memory_above_threshold_reaches_admin(
+    async_client, admin_token, db_session, app_sessions, monkeypatch
+):
+    """Превышение порога видно в «Диагностике»: цифра, порог и число слотов.
 
-    monkeypatch.setattr(worker, "AsyncSessionLocal", TestSessionLocal)
+    Обработчик пишет жалобу своей сессией, админка читает её из БД — весь путь
+    целиком, без собранного руками payload.
+    """
     monkeypatch.setattr(settings, "WORKER_RSS_WARN_MB", 500)
+    monkeypatch.setattr(settings, "WORKER_CONCURRENCY", 2)
     await _clear_events(db_session)
+    try:
+        await worker._report_memory_if_high(1500.5)
 
-    await worker._report_memory_if_high(1500.5)
-
-    payloads = await _events(db_session)
-    assert len(payloads) == 1
-    assert payloads[0]["rss_mb"] == 1500.5
-    assert payloads[0]["threshold_mb"] == 500
-    assert payloads[0]["concurrency"] == settings.WORKER_CONCURRENCY
+        r = await async_client.get("/admin/queue-health", headers={"Authorization": admin_token})
+        mem = r.json()["worker_memory"]
+        assert mem["rss_mb"] == 1500.5
+        assert mem["threshold_mb"] == 500
+        assert mem["concurrency"] == 2
+        assert mem["age_s"] is not None
+    finally:
+        await _clear_events(db_session)
 
 
 async def test_memory_report_deduped(db_session, monkeypatch):

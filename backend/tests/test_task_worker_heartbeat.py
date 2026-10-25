@@ -63,33 +63,8 @@ async def _job(db, task_id, *, status="running", claimed_min_ago=None) -> Job:
 
 
 # ---------------------------------------------------------------------------
-# job_queue.live_heartbeat_age_s — возраст последнего сигнала
+# job_queue.heartbeat — сигнал продлевается
 # ---------------------------------------------------------------------------
-
-async def test_none_for_other_task_job(db_session):
-    """Чужая job не должна выдаваться за признак жизни этой задачи."""
-    mine = await _task(db_session)
-    other = await _task(db_session)
-    await _job(db_session, other.id, status="running", claimed_min_ago=1)
-
-    assert await job_queue.live_heartbeat_age_s(db_session, str(mine.id)) is None
-
-
-async def test_queued_job_has_no_heartbeat_yet(db_session):
-    """queued-job ещё не захвачена: claimed_at пуст, возраста нет."""
-    t = await _task(db_session, status="pending")
-    await _job(db_session, t.id, status="queued", claimed_min_ago=None)
-
-    assert await job_queue.live_heartbeat_age_s(db_session, str(t.id)) is None
-
-
-async def test_finished_job_is_not_a_live_signal(db_session):
-    """Завершённая job — не признак жизни: задача уже никем не обрабатывается."""
-    t = await _task(db_session)
-    await _job(db_session, t.id, status="done", claimed_min_ago=1)
-
-    assert await job_queue.live_heartbeat_age_s(db_session, str(t.id)) is None
-
 
 async def test_heartbeat_refresh_resets_age(db_session):
     """После heartbeat возраст сигнала сбрасывается почти в ноль."""
@@ -120,8 +95,28 @@ async def test_status_endpoint_exposes_heartbeat_age(async_client, db_session, a
     assert 170 <= body["worker_heartbeat_age_s"] <= 195
 
 
-async def test_status_endpoint_null_without_job(async_client, db_session, admin_token):
-    t = await _task(db_session)
+@pytest.mark.parametrize(
+    "scenario", ["no_job", "other_task_job", "queued_job", "finished_job"]
+)
+async def test_status_endpoint_null_without_live_job(
+    async_client, db_session, admin_token, scenario
+):
+    """Нет живого сигнала обработчика ЭТОЙ задачи — null, а не возраст.
+
+    - job нет вовсе;
+    - running-job чужой задачи — не признак жизни этой;
+    - queued-job ещё не захвачена: claimed_at пуст, сигнала нет;
+    - завершённая job — задачу уже никто не обрабатывает.
+    """
+    t = await _task(db_session, status="pending" if scenario == "queued_job" else "processing")
+    if scenario == "other_task_job":
+        other = await _task(db_session)
+        await _job(db_session, other.id, status="running", claimed_min_ago=1)
+    elif scenario == "queued_job":
+        await _job(db_session, t.id, status="queued", claimed_min_ago=None)
+    elif scenario == "finished_job":
+        await _job(db_session, t.id, status="done", claimed_min_ago=1)
+
     resp = await async_client.get(
         f"/tasks/{t.id}/status", headers={"Authorization": admin_token}
     )
