@@ -1,11 +1,16 @@
 import { TaskEta } from '../utils/eta'
+import type { TaskStatus } from './index'
 
 export type KanbanStage = 'list' | 'completeness' | 'estimate' | 'optimization'
 
 // `not_started` — задача создана, файл к ней прикреплён, но в очередь она не
 // поставлена и ждёт кнопки («Начать оптимизацию»). Это НЕ `pending`: у pending
 // тикает ожидание в очереди и строится прогноз, а тут ждут человека.
-export type TaskStatus = 'not_started' | 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'paused'
+//
+// Тип один на весь фронт (`types/index.ts`): своя копия объединения здесь
+// разошлась бы с картами статусов, которые проверяются по тому типу
+// (правило №20).
+export type { TaskStatus }
 
 export interface InputFileBrief {
   name: string

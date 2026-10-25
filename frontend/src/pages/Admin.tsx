@@ -16,7 +16,9 @@ import { useTaskSync } from '../stores/taskSync';
 import { SectionLoader } from '../components/ui/LumaSpin';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/Select';
 
-const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
+// `satisfies`, а не аннотация: проверка полноты стоит на самой карте — статус,
+// добавленный в `TaskStatus` и забытый здесь, ломает `tsc` (правило №20).
+const STATUS_COLORS = {
   // Создана, но не запущена (ждёт кнопки) — серый, как у неактивных.
   not_started: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
@@ -25,7 +27,7 @@ const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: stri
   failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
   cancelled: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
   paused: { bg: '#fffbeb', text: '#b45309', border: '#fcd34d' },
-};
+} satisfies Record<TaskStatus, { bg: string; text: string; border: string }>;
 
 const TASK_TYPES: TaskType[] = [
   'LIST_FROM_TZ', 'LIST_FROM_TZ_PROJECT', 'RESEARCH_PROJECT', 'LIST_FROM_PROJECT',

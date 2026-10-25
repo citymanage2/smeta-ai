@@ -26,7 +26,9 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '.
 import { useNotificationStore } from '../stores/notificationStore';
 import { notify } from '../utils/notify';
 
-const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string }> = {
+// `satisfies`, а не аннотация: проверка полноты стоит на самой карте — статус,
+// добавленный в `TaskStatus` и забытый здесь, ломает `tsc` (правило №20).
+const STATUS_COLORS = {
   not_started: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
   pending: { bg: '#fef9c3', text: '#854d0e', border: '#fde047' },
   processing: { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd' },
@@ -34,7 +36,7 @@ const STATUS_COLORS: Record<TStatus, { bg: string; text: string; border: string 
   failed: { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5' },
   cancelled: { bg: '#f8fafc', text: '#64748b', border: '#cbd5e1' },
   paused: { bg: '#fffbeb', text: '#b45309', border: '#fcd34d' },
-};
+} satisfies Record<TStatus, { bg: string; text: string; border: string }>;
 
 // Через сколько секунд молчания обработчика считаем задачу подозрительной.
 // Worker продлевает jobs.claimed_at раз в 60 с (app/worker.py: hb_interval),
