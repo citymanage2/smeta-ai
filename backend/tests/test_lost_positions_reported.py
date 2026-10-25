@@ -4,19 +4,17 @@
 связки: обработчик перечня из гранд-сметы сверяет ответ модели со строками
 файла и пишет предупреждение в ход выполнения задачи.
 
+Прогон настоящий, на тестовой БД; подменён только ИИ. Предупреждение читается
+из хода выполнения (`progress_log`) — там его видит пользователь.
+
 План: plans/2026-08-14-propusk-pozicij-iz-grand-smety.md, Фаза 3.
 """
 import io
-import sys
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+import re
 
 import openpyxl
-import pytest
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.task_processor import TaskProcessor  # noqa: E402
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _grand_xlsx() -> bytes:
@@ -34,58 +32,37 @@ def _grand_xlsx() -> bytes:
     return buf.getvalue()
 
 
-def _processor(monkeypatch, ai_items: list) -> tuple[TaskProcessor, list]:
-    """Обработчик, у которого ИИ отвечает `ai_items`, а БД подменена."""
-    processor = TaskProcessor("tid-lost", db=MagicMock())
-    messages: list = []
+async def _run(processor_env, claude_api, ai_items: list) -> list[str]:
+    """Перечень из гранд-сметы, ИИ отвечает `ai_items`; вернуть предупреждения задачи."""
+    claude_api({"items": ai_items})
+    task = await processor_env.task(
+        "LIST_FROM_GRAND", input_files=[{"name": "ЛСР.xlsx", "mime_type": XLSX_MIME}],
+    )
+    await processor_env.input_file(task, "ЛСР.xlsx", XLSX_MIME, _grand_xlsx())
 
-    async def fake_progress(message: str) -> None:
-        messages.append(message)
+    task = await processor_env.run(task)
 
-    async def fake_claude(*args, **kwargs) -> dict:
-        return {"items": ai_items}
-
-    async def noop(*args, **kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(processor, "update_progress", fake_progress)
-    monkeypatch.setattr(processor, "_call_claude_json_with_retry", fake_claude)
-    monkeypatch.setattr(processor, "_check_cancelled", noop)
-    monkeypatch.setattr(processor, "_save_progress_data", noop)
-    monkeypatch.setattr(processor, "save_result", noop)
-    monkeypatch.setattr(processor, "_create_initial_generic_version", noop)
-    return processor, messages
+    assert task.status == "completed"
+    return [line for line in task.progress_log or [] if line.startswith("⚠")]
 
 
-def _task() -> SimpleNamespace:
-    return SimpleNamespace(progress_data={}, name="", task_type="LIST_FROM_GRAND")
-
-
-@pytest.mark.asyncio
-async def test_warning_names_positions_ai_skipped(monkeypatch):
+async def test_warning_names_positions_ai_skipped(processor_env, claude_api):
     """ИИ вернул одну позицию из трёх — про две остальные сказано номерами."""
-    processor, messages = _processor(monkeypatch, [
+    (warning,) = await _run(processor_env, claude_api, [
         {"type": "Работа", "name": "Устройства промежуточные на количество лучей: 10",
          "unit": "шт", "quantity": 1},
     ])
 
-    await processor._handle_list_from_grand_xlsx(_task(), _grand_xlsx())
-
-    warning = next((m for m in messages if m.startswith("⚠")), "")
-    assert "2 позиции" in warning
-    assert "№3, №5" in warning
+    assert re.findall(r"№(\d+)", warning) == ["3", "5"]
 
 
-@pytest.mark.asyncio
-async def test_no_warning_when_ai_returned_everything(monkeypatch):
+async def test_no_warning_when_ai_returned_everything(processor_env, claude_api):
     """Все позиции на месте — лишнего предупреждения задача не пишет."""
-    processor, messages = _processor(monkeypatch, [
+    warnings = await _run(processor_env, claude_api, [
         {"type": "Работа", "name": "Устройства промежуточные на количество лучей: 10",
          "unit": "шт", "quantity": 1},
         {"type": "Материал", "name": "Контроллер Панель-2-ПРО (S3) исп.Л", "unit": "шт", "quantity": 1},
         {"type": "Материал", "name": "Извещатель ИП 212-141 исп.01", "unit": "шт", "quantity": 113},
     ])
 
-    await processor._handle_list_from_grand_xlsx(_task(), _grand_xlsx())
-
-    assert not any(m.startswith("⚠") for m in messages)
+    assert warnings == []

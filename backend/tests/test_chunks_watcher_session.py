@@ -15,18 +15,13 @@
 План: plans/2026-10-20-sessiya-bd-posle-pachki-chankov.md.
 """
 import asyncio
-import sys
 import time
 import uuid
-from unittest.mock import MagicMock
 
 import pytest_asyncio
 from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-# fitz (PyMuPDF) может отсутствовать в тестовом окружении — мок до импорта task_processor
-sys.modules.setdefault("fitz", MagicMock())
 
 from app.database import Base
 from app.models.task import Task

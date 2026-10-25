@@ -8,19 +8,18 @@
 План: plans/2026-08-26-oborvannyj-otvet-perechnya.md
 """
 import io
-import sys
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+import re
 
 import openpyxl
-import pytest
+from sqlalchemy import select
 
-sys.modules.setdefault("fitz", MagicMock())
+from app.models.estimate_version import EstimateVersion
+from app.utils.file_parser import split_chunk_in_half
+from app.utils.pdf_ocr_extractor import split_pdf_chunk
+from app.utils.source_numbers import SOURCE_NO_HEADER
+from tests.helpers.anthropic_api import claude_message, prompt_text
 
-from app.services.claude_service import ResponseTruncatedError  # noqa: E402
-from app.services.task_processor import TaskProcessor  # noqa: E402
-from app.utils.file_parser import split_chunk_in_half  # noqa: E402
-from app.utils.pdf_ocr_extractor import split_pdf_chunk  # noqa: E402
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 # --- деление чанка строк -------------------------------------------------
@@ -103,6 +102,10 @@ def test_pdf_split_bottom_is_single_page():
 
 
 # --- стадия перечня целиком ----------------------------------------------
+#
+# Прогон настоящий, на тестовой БД; подменён только ИИ. Перечень читается из
+# документа задачи (версия V0 — то, что видит редактор), предупреждения — из
+# хода выполнения (`progress_log`).
 
 
 def _grand_xlsx() -> bytes:
@@ -121,47 +124,43 @@ def _grand_xlsx() -> bytes:
     return buf.getvalue()
 
 
-def _processor(monkeypatch, answer):
-    """Обработчик с подменённым ИИ: `answer(prompt_text)` → dict или исключение."""
-    processor = TaskProcessor("tid-truncated", db=MagicMock())
-    messages: list = []
-    saved: dict = {}
-
-    async def fake_progress(message: str) -> None:
-        messages.append(message)
-
-    async def fake_claude(msgs, *args, **kwargs) -> dict:
-        return answer(msgs[0]["content"])
-
-    async def noop(*args, **kwargs) -> None:
-        return None
-
-    async def fake_version(excel_data, task_type, items) -> None:
-        saved["items"] = items
-
-    monkeypatch.setattr(processor, "update_progress", fake_progress)
-    monkeypatch.setattr(processor, "_call_claude_json_with_retry", fake_claude)
-    monkeypatch.setattr(processor, "_check_cancelled", noop)
-    monkeypatch.setattr(processor, "_save_progress_data", noop)
-    monkeypatch.setattr(processor, "save_result", noop)
-    monkeypatch.setattr(processor, "_create_initial_generic_version", fake_version)
-    return processor, messages, saved
+TRUNCATED = claude_message({"items": []}, stop_reason="max_tokens")
 
 
-def _task(task_type: str = "LIST_FROM_GRAND") -> SimpleNamespace:
-    return SimpleNamespace(progress_data={}, name="", task_type=task_type)
+async def _list_rows(processor_env, task) -> list[tuple[str, str]]:
+    """Строки перечня в документе задачи: (№ в исходной смете, наименование)."""
+    task_id = str((await processor_env.reload(task)).id)
+    version = (await processor_env.db.execute(
+        select(EstimateVersion).where(
+            EstimateVersion.task_id == task_id, EstimateVersion.file_slot == "result",
+        )
+    )).scalar_one()
+    return [
+        (str(row["cells"].get(SOURCE_NO_HEADER, "")), row["cells"]["Наименование"])
+        for row in version.rows
+    ]
 
 
-@pytest.mark.asyncio
-async def test_truncated_chunk_is_split_and_stage_completes(monkeypatch):
+def _warnings(task) -> list[str]:
+    return [line for line in task.progress_log or [] if line.startswith("⚠")]
+
+
+async def _run_grand_xlsx(processor_env, claude_api, answer):
+    """Перечень из гранд-сметы (xlsx); ИИ отвечает `answer(prompt) -> ответ`."""
+    ai = claude_api(lambda kwargs: answer(prompt_text(kwargs)), repeat=True)
+    task = await processor_env.task(
+        "LIST_FROM_GRAND", input_files=[{"name": "ЛСР.xlsx", "mime_type": XLSX_MIME}],
+    )
+    await processor_env.input_file(task, "ЛСР.xlsx", XLSX_MIME, _grand_xlsx())
+    return await processor_env.run(task), ai
+
+
+async def test_truncated_chunk_is_split_and_stage_completes(processor_env, claude_api):
     """Целый чанк не помещается — считаем половины, задача доходит до конца."""
-    calls: list = []
-
-    def answer(prompt: str) -> dict:
-        calls.append(prompt)
+    def answer(prompt: str):
         # Первый запрос — весь чанк из четырёх позиций: ответ не поместился.
         if "Устройство перегородок" in prompt and "Облицовка стен" in prompt:
-            raise ResponseTruncatedError("Ответ слишком большой")
+            return TRUNCATED
         items = []
         if "Устройство перегородок" in prompt:
             items = [
@@ -178,32 +177,28 @@ async def test_truncated_chunk_is_split_and_stage_completes(monkeypatch):
             ]
         return {"items": items}
 
-    processor, messages, saved = _processor(monkeypatch, answer)
+    task, ai = await _run_grand_xlsx(processor_env, claude_api, answer)
 
-    await processor._handle_list_from_grand_xlsx(_task(), _grand_xlsx())
-
+    assert task.status == "completed"
     # Оборванный чанк + две половины.
-    assert len(calls) == 3
-    names = [it["name"] for it in saved["items"]]
-    assert names == [
-        "Устройство перегородок из ГКЛ",
-        "Профиль направляющий ПН-2",
-        "Облицовка стен ГКЛ",
-        "Лист гипсокартонный 12,5 мм",
-    ]
+    assert len(ai.calls) == 3
     # Номера позиций ЛСР проставлены по своей половине, не перепутаны.
-    assert [it.get("source_no") for it in saved["items"]] == ["1", "2", "3", "4"]
-    assert not [m for m in messages if m.startswith("⚠")]
+    assert await _list_rows(processor_env, task) == [
+        ("1", "Устройство перегородок из ГКЛ"),
+        ("2", "Профиль направляющий ПН-2"),
+        ("3", "Облицовка стен ГКЛ"),
+        ("4", "Лист гипсокартонный 12,5 мм"),
+    ]
+    assert _warnings(task) == []
 
 
-@pytest.mark.asyncio
-async def test_bottom_of_recursion_reports_lost_positions(monkeypatch):
+async def test_bottom_of_recursion_reports_lost_positions(processor_env, claude_api):
     """Даже одна строка не поместилась — позиция не выдумана, её номер назван."""
-    def answer(prompt: str) -> dict:
+    def answer(prompt: str):
         # Позиция №1 не помещается в лимит ни в каком составе чанка —
         # рекурсия дойдёт до неё одной и упрётся в дно.
         if "Устройство перегородок" in prompt:
-            raise ResponseTruncatedError("Ответ слишком большой")
+            return TRUNCATED
         items = []
         if "Профиль направляющий" in prompt:
             items.append({"type": "Материал", "name": "Профиль направляющий ПН-2",
@@ -216,49 +211,46 @@ async def test_bottom_of_recursion_reports_lost_positions(monkeypatch):
                           "unit": "м2", "quantity": 88})
         return {"items": items}
 
-    processor, messages, saved = _processor(monkeypatch, answer)
+    task, _ = await _run_grand_xlsx(processor_env, claude_api, answer)
 
-    await processor._handle_list_from_grand_xlsx(_task(), _grand_xlsx())
+    assert task.status == "completed"
+    assert await _list_rows(processor_env, task) == [
+        ("2", "Профиль направляющий ПН-2"),
+        ("3", "Облицовка стен ГКЛ"),
+        ("4", "Лист гипсокартонный 12,5 мм"),
+    ]
+    (warning,) = _warnings(task)
+    assert re.findall(r"№(\d+)", warning) == ["1"]
 
-    names = [it["name"] for it in saved["items"]]
-    assert "Устройство перегородок из ГКЛ" not in names
-    assert "Облицовка стен ГКЛ" in names
 
-    warning = next((m for m in messages if m.startswith("⚠")), "")
-    assert "1 позицию" in warning
-    assert "№1" in warning
-
-
-@pytest.mark.asyncio
-async def test_pdf_truncated_chunk_is_split(monkeypatch):
+async def test_pdf_truncated_chunk_is_split(processor_env, claude_api):
     """PDF: чанк не поместился — считаем его постранично."""
-    calls: list = []
-
-    def answer(prompt: str) -> dict:
-        calls.append(prompt)
+    def answer(prompt: str):
         if "Страница 1" in prompt and "Страница 2" in prompt:
-            raise ResponseTruncatedError("Ответ слишком большой")
+            return TRUNCATED
         page = "1" if "Страница 1" in prompt else "2"
         return {"items": [
             {"type": "Работа", "name": f"Работа со страницы {page}",
              "unit": "м2", "quantity": 5},
         ]}
 
-    processor, messages, saved = _processor(monkeypatch, answer)
-    monkeypatch.setattr(
-        "app.services.task_processor.chunk_pdf_pages", lambda pages: [_pdf_chunk(2)]
+    ai = claude_api(lambda kwargs: answer(prompt_text(kwargs)), repeat=True)
+    # Текст страниц уже распознан (чекпоинт OCR): обе страницы — один чанк.
+    task = await processor_env.task(
+        "LIST_FROM_GRAND",
+        input_files=[{"name": "ЛСР.pdf", "mime_type": "application/pdf"}],
+        progress_data={"ocr_pages": [
+            {"page": 1, "text": "Позиции первой страницы сметы " * 4, "method": "embedded"},
+            {"page": 2, "text": "Позиции второй страницы сметы " * 4, "method": "embedded"},
+        ]},
     )
+    await processor_env.input_file(task, "ЛСР.pdf", "application/pdf", b"%PDF-1.4 fake")
 
-    task = _task()
-    task.progress_data = {"ocr_pages": [
-        {"page": 1, "text": "x" * 100, "method": "text"},
-        {"page": 2, "text": "y" * 100, "method": "text"},
-    ]}
+    task = await processor_env.run(task)
 
-    await processor._handle_list_from_grand_pdf(task, b"%PDF-fake")
-
-    assert len(calls) == 3
-    assert [it["name"] for it in saved["items"]] == [
+    assert task.status == "completed"
+    assert len(ai.calls) == 3
+    assert [name for _, name in await _list_rows(processor_env, task)] == [
         "Работа со страницы 1",
         "Работа со страницы 2",
     ]

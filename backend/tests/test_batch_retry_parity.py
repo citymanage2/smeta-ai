@@ -7,16 +7,22 @@
 Стало: тот же добор синхронно, чанками ESTIMATE_RETRY_CHUNK, тем же
 _fetch_price_chunk, что и в fast.
 
+Сборка пачки гоняется целиком: смета отправляет пачку (batch-режим), поллер
+видит её завершённой и достраивает смету — на тестовой БД, подменён только
+Anthropic API (результаты пачки и обычные вызовы добора). Результат читается из
+рабочей версии сметы, `progress_data` и кеша цен.
+
 План: plans/2026-07-28-снижение-числа-вызовов-claude.md, Фаза 3.
 """
-import sys
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
-import pytest
+from sqlalchemy import select
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.task_processor import TaskProcessor  # noqa: E402
+import app.services.batch_poller as bp
+import app.services.claude_service as cs
+from app.models.price_cache import PriceCacheWork
+from app.services.task_processor import TaskProcessor
+from tests.helpers.anthropic_api import balance_error, claude_message
 
 
 def _item(gidx: int, type_: str = "Работа") -> dict:
@@ -48,94 +54,175 @@ def test_ids_without_price_empty_when_all_priced():
 
 
 # --------------------------------------------------------------------------
-# resume_from_batch — добор непосчитанных позиций после пачки
+# Сборка пачки и добор непосчитанных позиций
 # --------------------------------------------------------------------------
 
-def _proc_for_batch(monkeypatch, unmatched: dict, batch_results: list[dict]):
-    p = TaskProcessor("tid-batch-parity", db=MagicMock())
-    p.update_progress = AsyncMock()
-    p._save_progress_data = AsyncMock()
-    p._cache_priced_item = AsyncMock()
-    p._check_cancelled = AsyncMock()
-    p._run_estimate_step3 = AsyncMock()
+WORKS = ["Кладка стен из кирпича", "Штукатурка стен", "Окраска стен"]
 
-    async def fake_collect(batch_id, task_id=None, db=None):
-        import json
-        return {"chunk-0": {"text": json.dumps({"items": batch_results}), "error": None}}
 
-    monkeypatch.setattr(
-        "app.services.task_processor.collect_claude_batch", fake_collect
+def _work(name: str, **fields) -> dict:
+    return {"type": "Работа", "name": name, "unit": "м2", "quantity": 10, **fields}
+
+
+def _succeeded(custom_id: str, answer: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        custom_id=custom_id,
+        result=SimpleNamespace(type="succeeded", message=claude_message(answer)),
     )
 
-    task = MagicMock()
-    task.progress_data = {
-        "batch_id": "msgbatch_x",
-        "items": [dict(it) for it in unmatched.values()],
-        "matched": {},
-        "unmatched": {str(k): v for k, v in unmatched.items()},
-        "current_date": "01.01.2026",
-    }
-    return p, task
+
+def _errored(custom_id: str) -> SimpleNamespace:
+    return SimpleNamespace(custom_id=custom_id, result=SimpleNamespace(type="errored"))
 
 
-async def test_resume_from_batch_fills_missing_positions(monkeypatch):
+class _Batches:
+    """`messages.batches` Anthropic: пачка принимается и сразу «готова»; что в ней
+    оказалось — задаёт тест (`entries`)."""
+
+    def __init__(self) -> None:
+        self.submitted: list[list[dict]] = []
+        self.entries: list = []
+
+    async def create(self, requests):
+        self.submitted.append(list(requests))
+        return SimpleNamespace(id="msgbatch_parity")
+
+    async def retrieve(self, batch_id):
+        return SimpleNamespace(id=batch_id, processing_status="ended")
+
+    async def results(self, batch_id):
+        entries = list(self.entries)
+
+        async def _stream():
+            for entry in entries:
+                yield entry
+
+        return _stream()
+
+
+async def _collect_batch(processor_env, app_sessions, claude_api, items, entries, *retry):
+    """Отправить смету пачкой, «досчитать» пачку и дать поллеру её собрать.
+
+    `retry` — ответы ИИ на добор (обычные вызовы `messages.create`).
+    Возвращает задачу из БД, сценарий обычных вызовов ИИ и отправленную пачку.
+    """
+    ai = claude_api(*retry)
+    batches = _Batches()
+    cs._get_client().messages.batches = batches
+    task = await processor_env.estimate_task(items, processing_mode="batch")
+    task = await processor_env.run(task)
+    assert task.progress_data["_stage"] == "batch_pending"
+
+    batches.entries = entries
+    await bp.poll_batch_tasks(app_sessions)
+    return await processor_env.reload(task), ai, batches
+
+
+async def _prices(processor_env, task) -> dict:
+    return {it["name"]: it["work_price"] for it in await processor_env.estimate_items(task)}
+
+
+async def test_resume_from_batch_fills_missing_positions(processor_env, app_sessions, claude_api):
     """Пачка вернула цену только для одной из трёх позиций — две добираем."""
-    unmatched = {0: _item(0), 1: _item(1), 2: _item(2)}
-    batch_results = [
-        {"id": 0, "work_price": 100},
-        {"id": 1, "work_price": None},  # нулевая цена — тоже проблема
+    batch = [_succeeded("chunk-0", {"items": [
+        {"id": 0, "type": "Работа", "work_price": 100},
+        {"id": 1, "type": "Работа", "work_price": None},  # нулевая цена — тоже проблема
         # id=2 пачка пропустила
-    ]
-    p, task = _proc_for_batch(monkeypatch, unmatched, batch_results)
+    ]})]
+    retry = {"items": [
+        {"id": 1, "type": "Работа", "work_price": 900},
+        {"id": 2, "type": "Работа", "work_price": 900},
+    ]}
 
-    asked: list[list[int]] = []
+    task, ai, _ = await _collect_batch(
+        processor_env, app_sessions, claude_api, [_work(n) for n in WORKS], batch, retry,
+    )
 
-    async def fake_fetch(chunk, current_date, label):
-        asked.append([it["_id"] for it in chunk])
-        return [{"id": it["_id"], "work_price": 900} for it in chunk]
-
-    p._fetch_price_chunk = fake_fetch
-
-    await p.resume_from_batch(task)
-
-    assert asked == [[1, 2]], f"добор запрошен неверно: {asked}"
-    _, _, _, claude_results = p._run_estimate_step3.await_args.args
-    assert claude_results[1]["work_price"] == 900
-    assert claude_results[2]["work_price"] == 900
-    assert claude_results[0]["work_price"] == 100  # цену из пачки не перетёрли
+    assert task.status == "completed"
+    assert await _prices(processor_env, task) == {
+        "Кладка стен из кирпича": 100,  # цену из пачки не перетёрли
+        "Штукатурка стен": 900,
+        "Окраска стен": 900,
+    }
+    # Добор — один запрос, и в нём только позиции без цены.
+    (_call,) = ai.calls
+    prompt = ai.prompt(0)
+    assert "Штукатурка стен" in prompt and "Окраска стен" in prompt
+    assert "Кладка стен из кирпича" not in prompt
 
 
-async def test_resume_from_batch_skips_retry_when_all_priced(monkeypatch):
+async def test_resume_from_batch_skips_retry_when_all_priced(processor_env, app_sessions, claude_api):
     """Пачка посчитала всё — лишних вызовов Claude быть не должно."""
-    unmatched = {0: _item(0), 1: _item(1)}
-    batch_results = [{"id": 0, "work_price": 100}, {"id": 1, "work_price": 200}]
-    p, task = _proc_for_batch(monkeypatch, unmatched, batch_results)
+    batch = [_succeeded("chunk-0", {"items": [
+        {"id": 0, "type": "Работа", "work_price": 100},
+        {"id": 1, "type": "Работа", "work_price": 200},
+    ]})]
 
-    p._fetch_price_chunk = AsyncMock(side_effect=AssertionError("добор не нужен"))
+    task, ai, _ = await _collect_batch(
+        processor_env, app_sessions, claude_api, [_work(n) for n in WORKS[:2]], batch,
+    )
 
-    await p.resume_from_batch(task)
-
-    _, _, _, claude_results = p._run_estimate_step3.await_args.args
-    assert claude_results[0]["work_price"] == 100
-    assert claude_results[1]["work_price"] == 200
+    assert task.status == "completed"
+    assert await _prices(processor_env, task) == {"Кладка стен из кирпича": 100, "Штукатурка стен": 200}
+    assert ai.calls == []
 
 
-async def test_resume_from_batch_checkpoints_before_failing(monkeypatch):
+async def test_resume_from_batch_checkpoints_before_failing(processor_env, app_sessions, claude_api):
     """Добор упал по балансу → собранное фиксируется, задача уходит в паузу."""
-    from app.services.claude_service import InsufficientBalanceError
+    batch = [_succeeded("chunk-0", {"items": [{"id": 0, "type": "Работа", "work_price": 100}]})]
 
-    unmatched = {0: _item(0), 1: _item(1)}
-    batch_results = [{"id": 0, "work_price": 100}]
-    p, task = _proc_for_batch(monkeypatch, unmatched, batch_results)
+    task, ai, _ = await _collect_batch(
+        processor_env, app_sessions, claude_api, [_work(n) for n in WORKS[:2]], batch,
+        balance_error(),
+    )
 
-    async def boom(chunk, current_date, label):
-        raise InsufficientBalanceError("no money")
+    assert task.status == "paused"
+    # Оплаченная пачка в чекпоинте: возобновление соберёт смету из него, а не
+    # отправит пачку заново.
+    checkpoint = task.progress_data
+    assert checkpoint["_stage"] == "pre_excel"
+    assert checkpoint["claude_results"]["0"]["work_price"] == 100
+    # Смета не собиралась.
+    assert await processor_env.results(task) == []
+    assert len(ai.calls) == 1
 
-    p._fetch_price_chunk = boom
 
-    with pytest.raises(InsufficientBalanceError):
-        await p.resume_from_batch(task)
+async def test_batch_prices_go_to_price_cache(processor_env, app_sessions, claude_api, db_session):
+    """Цена из пачки оплачена — она ложится в кеш и пригодится следующей смете."""
+    batch = [_succeeded("chunk-0", {"items": [{
+        "id": 0, "type": "Работа", "name": "Кладка стен из кирпича", "unit": "м2",
+        "work_price": 4500, "sources": "Подрядчик А: 4500 руб",
+    }]})]
 
-    saved = [c.args[0] for c in p._save_progress_data.await_args_list]
-    assert any(s.get("_stage") == "pre_excel" for s in saved), saved
-    p._run_estimate_step3.assert_not_awaited()
+    task, _, _ = await _collect_batch(
+        processor_env, app_sessions, claude_api, [_work(WORKS[0])], batch,
+    )
+
+    assert task.status == "completed"
+    db_session.expire_all()
+    cached = (await db_session.execute(
+        select(PriceCacheWork).where(PriceCacheWork.name == "Кладка стен из кирпича")
+    )).scalar_one()
+    assert float(cached.price) == 4500
+
+
+async def test_errored_batch_chunk_is_skipped_and_its_positions_retried(
+    processor_env, app_sessions, claude_api,
+):
+    """Кусок пачки с ошибкой не роняет сборку: его позиции уходят в добор."""
+    # Позиции на разных листах — два куска пачки: чанк не пересекает лист.
+    items = [_work(WORKS[0], sheet="Раздел 1"), _work(WORKS[1], sheet="Раздел 2")]
+    batch = [
+        _errored("chunk-1"),
+        _succeeded("chunk-0", {"items": [{"id": 0, "type": "Работа", "work_price": 100}]}),
+    ]
+    retry = {"items": [{"id": 1, "type": "Работа", "work_price": 300}]}
+
+    task, ai, batches = await _collect_batch(
+        processor_env, app_sessions, claude_api, items, batch, retry,
+    )
+
+    assert [r["custom_id"] for r in batches.submitted[0]] == ["chunk-0", "chunk-1"]
+    assert task.status == "completed"
+    assert await _prices(processor_env, task) == {"Кладка стен из кирпича": 100, "Штукатурка стен": 300}
+    assert len(ai.calls) == 1 and "Штукатурка стен" in ai.prompt(0)

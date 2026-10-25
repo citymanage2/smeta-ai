@@ -3,24 +3,13 @@ Phase 2b — промежуточный чекпоинт шага 2 ESTIMATE_FRO
 
 _pending_chunks: пропускает позиции, уже посчитанные Claude (resume без повторной
                  траты токенов).
-_save_claude_partial: пишет чекпоинт _stage="claude_partial" с накопленными
-                      claude_results.
+Чекпоинт claude_partial: пауза посреди шага 2 сохраняет уже оплаченные ответы, и
+                 возобновление шлёт в ИИ только непосчитанные позиции.
 
 План: plans/2026-07-21-resume-and-balance-pause.md, Фаза 2б.
 """
-import sys
-from unittest.mock import AsyncMock, MagicMock
-
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.task_processor import TaskProcessor  # noqa: E402
-
-
-def _proc() -> TaskProcessor:
-    p = TaskProcessor("tid-resume", db=MagicMock())
-    p.update_progress = AsyncMock(return_value=None)
-    p._save_progress_data = AsyncMock(return_value=None)
-    return p
+from app.services.task_processor import TaskProcessor
+from tests.helpers.anthropic_api import balance_error, prompt_text
 
 
 # --------------------------------------------------------------------------
@@ -38,20 +27,40 @@ def test_pending_chunks_excludes_done_ids():
 
 
 # --------------------------------------------------------------------------
-# _save_claude_partial — чекпоинт claude_partial с накопленными результатами
+# Чекпоинт claude_partial по кругу: пауза → возобновление без повторной оплаты.
+# Прогон настоящий, на тестовой БД; подменён только ИИ.
 # --------------------------------------------------------------------------
 
-async def test_save_claude_partial_writes_checkpoint():
-    p = _proc()
-    items = [{"_id": 0, "name": "A"}, {"_id": 1, "name": "B"}]
-    matched = {1: {"work_price": 100}}
-    claude_results = {0: {"id": 0, "work_price": 500}}
+def _priced(prompt: str, answer: dict):
+    """Ответ ИИ по позиции, которая в запросе: «Кладка» — цена, иначе `answer`."""
+    if "Кладка стен" in prompt:
+        return {"items": [{"id": 0, "type": "Работа", "work_price": 4500}]}
+    return answer
 
-    await p._save_claude_partial(items, matched, claude_results)
 
-    saved = p._save_progress_data.await_args.args[0]
-    assert saved["_stage"] == "claude_partial"
-    assert saved["items"] == items
-    # int-ключи сериализуются в строки (как в pre_excel / batch)
-    assert saved["matched"] == {"1": {"work_price": 100}}
-    assert saved["claude_results"] == {"0": {"id": 0, "work_price": 500}}
+async def test_resume_after_pause_sends_only_unpriced_positions(processor_env, claude_api):
+    # Позиции на разных листах — две части шага 2: часть не пересекает лист.
+    task = await processor_env.estimate_task([
+        {"type": "Работа", "name": "Кладка стен", "unit": "м3", "quantity": 12, "sheet": "Раздел 1"},
+        {"type": "Работа", "name": "Штукатурка стен", "unit": "м2", "quantity": 80, "sheet": "Раздел 2"},
+    ])
+    claude_api(lambda kw: _priced(prompt_text(kw), balance_error()), repeat=True)
+
+    task = await processor_env.run(task)
+
+    # Пауза посреди шага 2: оплаченная часть — в чекпоинте.
+    assert task.status == "paused"
+    assert task.progress_data["_stage"] == "claude_partial"
+    assert task.progress_data["claude_results"]["0"]["work_price"] == 4500
+
+    ai = claude_api(lambda kw: _priced(prompt_text(kw), {"items": [
+        {"id": 1, "type": "Работа", "work_price": 650},
+    ]}), repeat=True)
+    task = await processor_env.run(task)
+
+    assert task.status == "completed"
+    # В ИИ ушла только непосчитанная позиция.
+    (_call,) = ai.calls
+    assert "Штукатурка стен" in ai.prompt(0) and "Кладка стен" not in ai.prompt(0)
+    prices = {it["name"]: it["work_price"] for it in await processor_env.estimate_items(task)}
+    assert prices == {"Кладка стен": 4500, "Штукатурка стен": 650}

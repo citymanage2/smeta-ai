@@ -9,17 +9,21 @@
 
 План: plans/2026-07-28-снижение-числа-вызовов-claude.md, Фаза 1.
 """
-import sys
+import re
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import select
 
-sys.modules.setdefault("fitz", MagicMock())
-
-import app.services.claude_service as cs  # noqa: E402
-from app.services.claude_service import ResponseTruncatedError  # noqa: E402
-from app.services.task_processor import TaskProcessor  # noqa: E402
+import app.services.claude_service as cs
+import app.worker as worker
+from app.models.api_call_log import ApiCallLog
+from app.models.job import Job
+from app.services import estimate_store
+from app.services.claude_service import ResponseTruncatedError
+from app.services.task_processor import TaskProcessor
+from tests.helpers.anthropic_api import claude_message, prompt_text
 
 
 def _response(stop_reason: str, output_tokens: int = 32000):
@@ -56,21 +60,26 @@ async def test_truncated_response_raises_typed_error(monkeypatch):
         await cs.call_claude([{"role": "user", "content": "x"}])
 
 
-async def test_truncated_response_is_still_logged(monkeypatch):
+async def test_truncated_response_is_still_logged(processor_env, claude_api, db_session):
     """Оборванный ответ оплачен — токены должны попасть в метрику."""
-    _patch_client(monkeypatch, _response("max_tokens"))
-    logged: list = []
-
-    async def fake_log(*args, **kwargs):
-        logged.append(kwargs)
-
-    monkeypatch.setattr(cs, "_log_api_call", fake_log)
+    task_id = str((await processor_env.task("ESTIMATE_FROM_LIST", status="processing")).id)
+    claude_api(claude_message(
+        {"items": []}, stop_reason="max_tokens",
+        input_tokens=1000, output_tokens=32000, web_search_requests=4,
+    ))
 
     with pytest.raises(ResponseTruncatedError):
-        await cs.call_claude([{"role": "user", "content": "x"}], task_id="t1", db=object())
+        await cs.call_claude(
+            [{"role": "user", "content": "x"}], task_id=task_id, db=db_session,
+        )
 
-    assert len(logged) == 1, "оплаченный обрезанный вызов не залогирован"
-    assert logged[0]["web_search_requests"] == 4
+    db_session.expire_all()
+    (row,) = (await db_session.execute(
+        select(ApiCallLog).where(ApiCallLog.task_id == task_id)
+    )).scalars().all()
+    assert row.output_tokens == 32000
+    assert row.web_search_requests == 4
+    assert row.cost_usd > 0
 
 
 async def test_truncated_response_not_retried_by_chunk_retry(monkeypatch):
@@ -89,66 +98,46 @@ async def test_truncated_response_not_retried_by_chunk_retry(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Дробление порции пополам — проверяем на fix_empty_prices, где весь путь
-# (сбор батчей → вызов → применение) выполняется целиком.
+# Дробление порции пополам — на кнопке «Исправить пустые цены», где весь путь
+# (эндпоинт → job воркера → сбор батчей → вызов → применение) идёт целиком.
 # --------------------------------------------------------------------------
 
-def _capture_estimate_writes(monkeypatch) -> dict:
-    """Перехватить запись сметы в единый источник правды (Фаза 5).
-
-    Цены из исправления пустых цен уходят не в `progress_data`, а в рабочую
-    версию сметы через `estimate_store.write_items`. Здесь БД замокана целиком,
-    поэтому смотрим на то, что сервису передали.
-    """
-    from app.services import estimate_store
-
-    written: dict = {}
-
-    async def fake_write_items(_db, _task, items, **_kw):
-        written["items"] = [dict(it) for it in items]
-        return None, 0.0
-
-    monkeypatch.setattr(estimate_store, "write_items", fake_write_items)
-    return written
-
-
-async def test_truncated_batch_is_split_in_half_and_priced(monkeypatch):
+async def test_truncated_batch_is_split_in_half_and_priced(
+    processor_env, claude_api, async_client, user_token, db_session,
+):
     """Батч из 5 позиций не влез в ответ → две половины, все цены проставлены."""
-    import re
-
-    items = [
-        {"type": "Работа", "name": f"Работа {i}", "unit": "м3", "quantity": 1}
+    task = await processor_env.task("ESTIMATE_FROM_LIST", status="completed")
+    task_id = str(task.id)
+    await estimate_store.write_items(db_session, task, [
+        {"type": "Работа", "name": f"Работа {i}", "unit": "м3", "quantity": 1, "work_price": None}
         for i in range(5)
-    ]
-    task = MagicMock()
-    task.progress_data = {"items": items}
-    task.processing_mode = "fast"
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = task
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=result)
-    db.commit = AsyncMock()
+    ])
+    sizes: list[int] = []
 
-    p = TaskProcessor("tid-split", db=db)
-    p.update_progress = AsyncMock()
-    p._check_cancelled = AsyncMock()
+    def answer(kwargs):
+        ids = [int(x) for x in re.findall(r'"id":\s*(\d+)', prompt_text(kwargs))]
+        sizes.append(len(ids))
+        if len(sizes) == 1:
+            return claude_message({"items": []}, stop_reason="max_tokens")
+        return {"items": [{"id": i, "type": "Работа", "work_price": 100 + i} for i in ids]}
 
-    written = _capture_estimate_writes(monkeypatch)
+    ai = claude_api(answer, repeat=True)
 
-    calls = {"n": 0, "sizes": []}
-
-    async def fake_claude(messages, **kwargs):
-        calls["n"] += 1
-        ids = [int(x) for x in re.findall(r'"id":\s*(\d+)', messages[0]["content"])]
-        calls["sizes"].append(len(ids))
-        if calls["n"] == 1:
-            raise ResponseTruncatedError("too big")
-        return {"items": [{"id": i, "work_price": 100 + i} for i in ids]}
-
-    p._call_claude_json_with_retry = fake_claude
-
-    await p.fix_empty_prices()
+    response = await async_client.post(
+        f"/tasks/{task_id}/estimate-items/fix-empty-prices",
+        headers={"Authorization": user_token},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"empty_count": 5, "status": "started"}
+    db_session.expire_all()
+    jobs = (await db_session.execute(select(Job).where(Job.kind == "task.fix_prices"))).scalars().all()
+    (job,) = [j for j in jobs if j.payload.get("task_id") == task_id]
+    await worker.run_job(job)
 
     # Один обрезанный вызов на 5 позиций → две половины вместо трёх повторов.
-    assert calls["sizes"] == [5, 2, 3], calls["sizes"]
-    assert [it.get("work_price") for it in written["items"]] == [100, 101, 102, 103, 104]
+    assert len(ai.calls) == 3
+    assert sizes == [5, 2, 3]
+    task = await processor_env.reload(task)
+    assert task.status == "completed"
+    items = await processor_env.estimate_items(task)
+    assert [it["work_price"] for it in items] == [100, 101, 102, 103, 104]

@@ -36,12 +36,25 @@ def _batch_body(results_url: str = DIRECT_RESULTS_URL) -> dict:
         "cancel_initiated_at": None,
         "results_url": results_url,
         "request_counts": {
-            "processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0,
+            "processing": 0, "succeeded": 1, "errored": 1, "canceled": 0, "expired": 0,
         },
     }
 
 
-_JSONL = json.dumps({
+# Порядок результатов у Anthropic произвольный: ошибочная запись идёт раньше
+# успешной — разбор обязан ключевать по custom_id, а не по позиции.
+_ERRORED = json.dumps({
+    "custom_id": "chunk-1",
+    "result": {
+        "type": "errored",
+        "error": {
+            "type": "error",
+            "error": {"type": "api_error", "message": "Internal server error"},
+        },
+    },
+}, ensure_ascii=False) + "\n"
+
+_SUCCEEDED = json.dumps({
     "custom_id": "chunk-0",
     "result": {
         "type": "succeeded",
@@ -63,6 +76,8 @@ _JSONL = json.dumps({
         },
     },
 }, ensure_ascii=False) + "\n"
+
+_JSONL = _ERRORED + _SUCCEEDED
 
 
 @pytest.fixture
@@ -96,10 +111,12 @@ async def test_batch_results_request_goes_through_proxy(transport):
 
 
 async def test_batch_results_parsed_after_rewrite(transport):
-    """Переписывание URL не ломает разбор JSONL: текст и usage на месте."""
+    """Переписывание URL не ломает разбор JSONL: текст и usage на месте,
+    ошибочная запись помечена ошибкой и не путается с успешной."""
     out = await cs.collect_claude_batch(BATCH_ID, task_id=None, db=None)
 
-    assert set(out) == {"chunk-0"}
+    assert set(out) == {"chunk-0", "chunk-1"}
+    assert out["chunk-1"] == {"text": None, "error": "errored", "usage": None}
     entry = out["chunk-0"]
     assert entry["error"] is None
     assert json.loads(entry["text"]) == {"items": [{"id": 1, "price": 100}]}

@@ -11,6 +11,8 @@
 
 План: plans/2026-08-14-propusk-pozicij-iz-grand-smety.md
 """
+import re
+
 from app.utils.source_numbers import attach_source_numbers, lost_positions_warning
 
 
@@ -79,10 +81,14 @@ def test_warning_names_the_numbers():
 
 
 def test_warning_lists_at_most_twenty_numbers():
-    """Список номеров не должен раздувать строку статуса на весь экран."""
-    text = lost_positions_warning([str(n) for n in range(1, 31)])
+    """Список номеров не раздувает строку статуса на весь экран, а масштаб
+    потери виден по общему счёту."""
+    lost = [str(n) for n in range(1, 31)]
 
-    assert "30 позиций" in text
-    assert "№20" in text
-    assert "№21" not in text
-    assert "…" in text
+    text = lost_positions_warning(lost)
+
+    shown = re.findall(r"№(\d+)", text)
+    assert 0 < len(shown) <= 20
+    assert set(shown) <= set(lost)
+    # Общий счёт — отдельным числом, не номером позиции.
+    assert 30 in [int(n) for n in re.findall(r"(?<![№\d])\d+", text)]
