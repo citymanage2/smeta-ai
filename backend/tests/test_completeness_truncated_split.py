@@ -10,15 +10,12 @@
 
 План: plans/2026-08-26-oborvannyj-otvet-perechnya.md
 """
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.modules.setdefault("fitz", MagicMock())
-
-from app.services.claude_service import ResponseTruncatedError  # noqa: E402
-from app.services.task_processor import (  # noqa: E402
+from app.services.claude_service import ResponseTruncatedError
+from app.services.task_processor import (
     COMPLETENESS_SKIPPED_NOTE,
     TaskProcessor,
     _split_items_in_half,

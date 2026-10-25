@@ -5,13 +5,9 @@ Phase 3 — примитив параллельной обработки чан�
 План: plans/2026-07-21-estimate-processing-modes.md, Phase 3.
 """
 import asyncio
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# fitz (PyMuPDF) может отсутствовать в тестовом окружении — мок до импорта task_processor
-sys.modules.setdefault("fitz", MagicMock())
 
 from app.services.task_processor import TaskProcessor, TaskCancelledError
 

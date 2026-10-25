@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal
 from datetime import datetime, timezone
 
@@ -50,7 +51,20 @@ def test_pdf_html_contains_download_link():
     assert "http://localhost:8000/tasks/t1/files/estimate/download" in html
 
 
-def test_pdf_html_contains_itogo_row():
-    project, tasks, slot_results = _make_data()
+def _total_row_sum(html: str) -> float:
+    """Число в строке ИТОГО таблицы задач (разделители разрядов — пробелы)."""
+    (row,) = [r for r in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S) if "ИТОГО" in r]
+    (amount,) = re.findall(r"([\d ]+\.\d{2}) ₽", row)
+    return float(amount.replace(" ", ""))
+
+
+def test_pdf_html_total_row_sums_task_costs():
+    """ИТОГО — сумма стоимостей задач; задача без стоимости в сумму не входит."""
+    project, _, slot_results = _make_data()
+    tasks = [
+        _FakeTask("t1", "LIST_FROM_GRAND", "estimated", Decimal("1000000"), _DT),
+        _FakeTask("t2", "LIST_FROM_GRAND", "estimated", Decimal("500000"), _DT),
+        _FakeTask("t3", "LIST_FROM_GRAND", "not_applicable", None, _DT),
+    ]
     html = _build_html(project, tasks, slot_results, "http://localhost:8000")
-    assert "ИТОГО" in html
+    assert _total_row_sum(html) == 1_500_000

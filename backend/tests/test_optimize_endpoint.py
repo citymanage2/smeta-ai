@@ -15,10 +15,11 @@ import pytest_asyncio
 import openpyxl
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import delete, select, text
 
+from app.models.job import Job
 from app.models.task import Task
-from app.models.result import TaskResult
+from app.models.result import TaskResult  # noqa: F401  (регистрирует таблицу)
 from tests.conftest import store_result_row
 
 
@@ -81,6 +82,11 @@ async def seed_optimize_task(db_session: AsyncSession):
     )
     await db_session.commit()
     yield
+    await db_session.rollback()
+    jobs = (await db_session.execute(select(Job.id, Job.payload))).all()
+    stale = [jid for jid, payload in jobs if (payload or {}).get("task_id") == TASK_ID]
+    if stale:
+        await db_session.execute(delete(Job).where(Job.id.in_(stale)))
     await db_session.execute(text("DELETE FROM task_results WHERE task_id = :tid"), {"tid": _TASK_ID_HEX})
     await db_session.execute(text("DELETE FROM tasks WHERE id = :tid"), {"tid": _TASK_ID_HEX})
     await db_session.commit()
@@ -92,7 +98,7 @@ async def seed_optimize_task(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_analyze_returns_items(async_client: AsyncClient, user_token: str, seed_optimize_task):
-    """POST /optimize/analyze returns 200 with items list."""
+    """POST /optimize/analyze разбирает смету из слота estimate и отбирает дорогие позиции."""
     resp = await async_client.post(
         f"/tasks/{TASK_ID}/optimize/analyze",
         json={"categories": ["work", "material"]},
@@ -100,11 +106,13 @@ async def test_analyze_returns_items(async_client: AsyncClient, user_token: str,
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert "items" in data
-    assert "total_analyzed" in data
-    assert "total_selected" in data
-    assert "coverage_pct" in data
-    assert isinstance(data["items"], list)
+    (item,) = data["items"]
+    assert (item["name"], item["type"], item["row_index"], item["quantity"]) == (
+        "Кирпич М150", "material", 2, 1000,
+    )
+    assert data["total_analyzed"] == 1
+    assert data["total_selected"] == 1
+    assert data["coverage_pct"] == 100
 
 
 @pytest.mark.asyncio
@@ -136,7 +144,9 @@ async def test_analyze_empty_slot_returns_404(async_client: AsyncClient, user_to
 
 
 @pytest.mark.asyncio
-async def test_run_starts_background(async_client: AsyncClient, user_token: str, seed_optimize_task):
+async def test_run_starts_background(
+    async_client: AsyncClient, user_token: str, seed_optimize_task, db_session: AsyncSession,
+):
     """POST /optimize/run returns 200 with optimization_started status."""
     items = [
         {
@@ -156,9 +166,17 @@ async def test_run_starts_background(async_client: AsyncClient, user_token: str,
         headers={"Authorization": user_token},
     )
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "optimization_started"
-    assert data["task_id"] == TASK_ID
+    assert resp.json()["task_id"] == TASK_ID
+
+    # Оптимизация ушла воркеру: job с позициями экрана, задача — в работе.
+    db_session.expire_all()
+    task = await db_session.get(Task, TASK_ID)
+    assert (task.status, task.estimation_status) == ("processing", "optimizing")
+    jobs = (await db_session.execute(select(Job).where(Job.kind == "task.optimize"))).scalars().all()
+    (job,) = [j for j in jobs if j.payload.get("task_id") == TASK_ID]
+    assert job.status == "queued"
+    assert [it["name"] for it in job.payload["items"]] == ["Кирпич М150"]
+    assert job.payload["prompt"] == "Тест"
 
 
 @pytest.mark.asyncio
