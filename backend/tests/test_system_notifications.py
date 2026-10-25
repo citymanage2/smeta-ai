@@ -21,7 +21,7 @@ def _auth(user_id: int, role: str, username: str = None) -> dict:
     return {"Authorization": f"Bearer {create_access_token(user_id, role, username)}"}
 
 
-def _task(task_id: str, owner_id: int, name: str, is_shared: bool = False) -> Task:
+def _task(task_id: str, owner_id: int, name: str) -> Task:
     return Task(
         id=task_id,
         user_role="user",
@@ -31,14 +31,13 @@ def _task(task_id: str, owner_id: int, name: str, is_shared: bool = False) -> Ta
         input_file_data=[],
         chat_history=[],
         owner_id=owner_id,
-        is_shared=is_shared,
         name=name,
     )
 
 
 @pytest_asyncio.fixture
 async def notif_fixture(db_session):
-    """Два ПМ, менеджер и событие с тремя задачами: pm1, pm2 и общая."""
+    """Два ПМ, менеджер и событие с тремя задачами: одна у pm1, две у pm2."""
     for model in (SystemEvent, Task, User):
         await db_session.execute(model.__table__.delete())
     await db_session.commit()
@@ -51,7 +50,7 @@ async def notif_fixture(db_session):
 
     t_pm1 = _task("e1000000-0000-0000-0000-000000000001", pm1.id, "Смета ПМ1")
     t_pm2 = _task("e1000000-0000-0000-0000-000000000002", pm2.id, "Смета ПМ2")
-    t_shared = _task("e1000000-0000-0000-0000-000000000003", pm2.id, "Общая смета", is_shared=True)
+    t_shared = _task("e1000000-0000-0000-0000-000000000003", pm2.id, "Третья смета")
     db_session.add_all([t_pm1, t_pm2, t_shared])
 
     event = SystemEvent(
@@ -128,23 +127,17 @@ async def test_events_ordered_by_id(async_client, db_session, notif_fixture):
 # --- AC8: RBAC ---
 
 @pytest.mark.asyncio
-async def test_manager_sees_all_tasks(async_client, notif_fixture):
+@pytest.mark.parametrize("who, role", [
+    ("head", "head_of_sales"),
+    ("pm1", "project_manager"),   # задачи общие — ПМ видит и задачу коллеги
+])
+async def test_everyone_sees_all_resumed_tasks(async_client, notif_fixture, who, role):
     r = await async_client.get(
-        "/notifications/system", headers=_auth(notif_fixture["head"], "head_of_sales", "n_head")
-    )
-    names = {t["name"] for t in r.json()["events"][0]["tasks"]}
-    assert names == {"Смета ПМ1", "Смета ПМ2", "Общая смета"}
-
-
-@pytest.mark.asyncio
-async def test_pm_sees_all_tasks_too(async_client, notif_fixture):
-    """Задачи общие — ПМ видит в событии и задачу коллеги."""
-    r = await async_client.get(
-        "/notifications/system", headers=_auth(notif_fixture["pm1"], "project_manager", "n_pm1")
+        "/notifications/system", headers=_auth(notif_fixture[who], role, f"n_{who}")
     )
     event = r.json()["events"][0]
     names = {t["name"] for t in event["tasks"]}
-    assert names == {"Смета ПМ1", "Смета ПМ2", "Общая смета"}
+    assert names == {"Смета ПМ1", "Смета ПМ2", "Третья смета"}
     assert event["resumed_count"] == 3
 
 

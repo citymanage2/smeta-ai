@@ -15,6 +15,7 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from app.services import anthropic_admin
@@ -113,30 +114,78 @@ class TestPagination:
         assert request.await_args_list[1].kwargs["params"]["page"] == "page_abc"
 
 
+@pytest.fixture
+def http_requests(monkeypatch):
+    """Транспорт httpx клиента отчёта: в сеть не ходит, отвечает `respond(request)`.
+
+    Возвращает функцию установки ответа; её атрибут `sent` — ушедшие запросы.
+    """
+    sent: list = []
+    state: dict = {"respond": lambda request: httpx.Response(500)}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return state["respond"](request)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    class _Httpx:
+        def __getattr__(self, name):
+            return getattr(httpx, name)
+
+        @staticmethod
+        def AsyncClient(**kwargs):
+            return real_client(transport=transport, **kwargs)
+
+    monkeypatch.setattr(anthropic_admin, "httpx", _Httpx())
+
+    def _respond(fn):
+        state["respond"] = fn
+
+    _respond.sent = sent
+    return _respond
+
+
 class TestNoKey:
     @pytest.mark.asyncio
-    async def test_returns_none_without_admin_key(self):
-        """Без админ-ключа — None, а не исключение: фича обязана работать без него."""
-        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", ""):
+    async def test_returns_none_without_admin_key(self, http_requests):
+        """Ни админского, ни рабочего ключа — None, а не исключение и не запрос:
+        фича обязана работать без них."""
+        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", ""), \
+             patch.object(anthropic_admin.settings, "ANTHROPIC_API_KEY", ""):
             assert (
                 await anthropic_admin.fetch_cost_days(date(2026, 8, 30), date(2026, 8, 31))
                 is None
             )
+        assert http_requests.sent == []
 
 
 class TestErrors:
     @pytest.mark.asyncio
-    async def test_http_error_propagates(self):
-        """401/403 не глотаем: вызывающий должен показать, что сверка сломана."""
-        with patch.object(
-            anthropic_admin,
-            "_request",
-            AsyncMock(side_effect=anthropic_admin.AdminApiError("401 unauthorized")),
-        ), patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", "sk-ant-admin01-x"):
-            with pytest.raises(anthropic_admin.AdminApiError):
+    async def test_http_error_propagates(self, http_requests):
+        """403 не глотаем: вызывающий должен показать, что сверка сломана.
+
+        «HTTP 403» в тексте — маркер, по которому воркер ставит сверку на паузу
+        на сутки (`worker._sync_api_cost_job`); тело ответа — чтобы отличить отказ
+        Anthropic от отказа своего прокси.
+        """
+        http_requests(lambda request: httpx.Response(
+            403,
+            json={"type": "error", "error": {
+                "type": "permission_error",
+                "message": "Admin API is not available for individual accounts",
+            }},
+        ))
+        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", "sk-ant-admin01-x"):
+            with pytest.raises(anthropic_admin.AdminApiError) as err:
                 await anthropic_admin.fetch_cost_days(
                     date(2026, 8, 30), date(2026, 8, 31)
                 )
+
+        assert len(http_requests.sent) == 1
+        assert "HTTP 403" in str(err.value)
+        assert "Admin API is not available for individual accounts" in str(err.value)
 
 
 class TestBaseUrl:
@@ -176,8 +225,3 @@ class TestCredential:
              patch.object(anthropic_admin.settings, "ANTHROPIC_API_KEY", "sk-ant-work"):
             assert anthropic_admin._credential() == "sk-ant-work"
             assert anthropic_admin.is_configured() is True
-
-    def test_no_keys_at_all(self):
-        with patch.object(anthropic_admin.settings, "ANTHROPIC_ADMIN_KEY", ""), \
-             patch.object(anthropic_admin.settings, "ANTHROPIC_API_KEY", ""):
-            assert anthropic_admin.is_configured() is False

@@ -15,7 +15,8 @@
 План: plans/2026-07-21-resume-and-balance-pause.md (Фаза 7 — харденинг).
 """
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import anthropic
 import pytest
@@ -27,8 +28,7 @@ from app.services.claude_service import (  # noqa: E402
     InsufficientBalanceError,
     _is_insufficient_balance,
 )
-from app.services.task_processor import TaskProcessor  # noqa: E402
-from tests.helpers.anthropic_api import api_error  # noqa: E402
+from tests.helpers.anthropic_api import api_error, balance_error, prompt_text  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -105,107 +105,73 @@ async def test_submit_batch_non_balance_error_propagates(monkeypatch):
 # _submit_estimate_batch — resumable-чекпоинт сохраняется ДО отправки
 # ---------------------------------------------------------------------------
 
-async def test_submit_estimate_batch_checkpoints_before_submit(monkeypatch):
-    """Если билинг падает на отправке пачки, до этого уже сохранён claude_partial —
-    иначе paused-задачу не подхватит resume_poller (batch_pending не resumable)."""
-    p = TaskProcessor("tid-batch-hardening", db=MagicMock())
-    saved: list[dict] = []
+async def test_submit_estimate_batch_checkpoints_before_submit(
+    processor_env, patch_claude_create
+):
+    """Пачка отклонена по балансу при отправке: задача на паузе, и в БД уже лежит
+    возобновляемый чекпоинт claude_partial — иначе paused-задачу не подхватит
+    resume_poller (batch_pending не возобновляется, а до отправки его и нет)."""
+    submitted: list = []
 
-    async def fake_save(data):
-        saved.append(data)
+    async def no_sync_calls(**kwargs):
+        raise AssertionError("batch-режим не ходит в обычный messages.create")
 
-    p._save_progress_data = fake_save  # type: ignore[assignment]
-    p.update_progress = AsyncMock()  # type: ignore[assignment]
+    async def batches_create(**kwargs):
+        submitted.append(kwargs["requests"])
+        raise balance_error()
 
-    async def boom(_requests):
-        raise InsufficientBalanceError("no money")
+    client = patch_claude_create(no_sync_calls)
+    client.messages.batches = SimpleNamespace(create=batches_create)
+    task = await processor_env.estimate_task(
+        [{"type": "Работа", "name": "Кладка", "unit": "м3", "quantity": 1}],
+        processing_mode="batch",
+    )
 
-    monkeypatch.setattr("app.services.task_processor.submit_claude_batch", boom)
+    task = await processor_env.run(task)
 
-    item = {"_id": 0, "type": "Работа", "name": "Кладка", "unit": "м3", "quantity": 1}
-    unmatched = {0: item}
-    chunks = [[item]]
-
-    with pytest.raises(InsufficientBalanceError):
-        await p._submit_estimate_batch(
-            task=MagicMock(),
-            items=[item],
-            matched_by_gidx={},
-            unmatched_by_gidx=unmatched,
-            current_date="01.01.2026",
-            chunks=chunks,
-        )
-
-    # Resumable-чекпоинт сохранён ДО упавшей отправки; batch_pending — нет.
-    assert any(s.get("_stage") == "claude_partial" for s in saved), saved
-    assert not any(s.get("_stage") == "batch_pending" for s in saved), saved
+    assert task.status == "paused"
+    assert len(submitted) == 1, "пачку отправляли ровно один раз"
+    assert task.progress_data["_stage"] == "claude_partial"
+    assert "batch_id" not in task.progress_data
 
 
 # ---------------------------------------------------------------------------
 # fix_empty_prices — оплаченные батчи не теряются при исчерпании баланса
 # ---------------------------------------------------------------------------
 
-def _proc_with_task(items: list[dict]) -> tuple[TaskProcessor, MagicMock]:
-    """Процессор с замоканной БД: db.execute(...).scalar_one_or_none() → task."""
-    task = MagicMock()
-    task.progress_data = {"items": items}
-    task.processing_mode = "fast"
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = task
-    db = MagicMock()
-    db.execute = AsyncMock(return_value=result)
-    db.commit = AsyncMock()
-    p = TaskProcessor("tid-fix-empty", db=db)
-    p.update_progress = AsyncMock()  # type: ignore[assignment]
-    p._check_cancelled = AsyncMock()  # type: ignore[assignment]
-    return p, task
-
-
-async def test_fix_empty_prices_saves_paid_batches_before_balance_pause(monkeypatch):
+async def test_fix_empty_prices_saves_paid_batches_before_balance_pause(
+    processor_env, claude_api, api_sleeps
+):
     """Первый батч оплачен и вернул цены, второй упал по балансу.
 
     Найденные цены должны быть сохранены ДО падения — иначе перезапуск задачи
-    снова увидит их пустыми и оплатит те же позиции второй раз. С Фазы 5 они
-    уходят в рабочую версию сметы (единый источник правды), а не в
-    `progress_data`.
+    снова увидит их пустыми и оплатит те же позиции второй раз. Они уходят в
+    рабочую версию сметы (единый источник правды), а не в `progress_data`.
     """
     from app.services import estimate_store
 
-    written: dict = {}
+    # 12 позиций → два батча по 10 и 2: первый успешный, второй — пустой счёт.
+    names = [f"Работа {i:02d}" for i in range(12)]
+    task = await processor_env.task("ESTIMATE_FROM_LIST", status="completed")
+    await estimate_store.write_items(processor_env.db, task, [
+        {"type": "Работа", "name": name, "unit": "м3", "quantity": 1} for name in names
+    ])
 
-    async def fake_write_items(_db, _task, items_, **_kw):
-        written["items"] = [dict(it) for it in items_]
-        return None, 0.0
+    def answer(kwargs):
+        prompt = prompt_text(kwargs)
+        if "Работа 10" in prompt:
+            return balance_error()
+        ids = [i for i, name in enumerate(names) if name in prompt]
+        return {"items": [{"id": i, "work_price": 100 + i} for i in ids]}
 
-    monkeypatch.setattr(estimate_store, "write_items", fake_write_items)
-
-    # 12 позиций → два батча (ESTIMATE_RETRY_CHUNK=10 + 2): первый успешный,
-    # второй падает по балансу.
-    from app.services.task_processor import ESTIMATE_RETRY_CHUNK
-
-    size = ESTIMATE_RETRY_CHUNK
-    items = [
-        {"type": "Работа", "name": f"Работа {i}", "unit": "м3", "quantity": 1}
-        for i in range(size + 2)
-    ]
-    p, task = _proc_with_task(items)
-
-    calls = {"n": 0}
-
-    async def fake_claude(messages, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"items": [{"id": i, "work_price": 100 + i} for i in range(size)]}
-        raise InsufficientBalanceError("Баланс API Anthropic меньше 0")
-
-    p._call_claude_json_with_retry = fake_claude  # type: ignore[assignment]
+    ai = claude_api(answer, repeat=True)
 
     with pytest.raises(InsufficientBalanceError):
-        await p.fix_empty_prices()
+        await processor_env.processor(task).fix_empty_prices()
 
-    saved_items = written["items"]
-    assert [it.get("work_price") for it in saved_items[:size]] == [
-        100 + i for i in range(size)
-    ]
+    assert len(ai.calls) == 2
+    items = await processor_env.estimate_items(task)
+    by_name = {it["name"]: it.get("work_price") for it in items}
+    assert [by_name[n] for n in names[:10]] == [100 + i for i in range(10)]
     # Позиции из упавшего батча остались пустыми — их пересчитает resume.
-    assert not saved_items[size].get("work_price")
+    assert not by_name["Работа 10"] and not by_name["Работа 11"]
