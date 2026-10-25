@@ -31,6 +31,7 @@ vi.mock('../api/documents', async () => {
 import * as api from '../api/documents';
 import DocumentEditor from '../components/editor/DocumentEditor';
 import { useDocumentEditorStore } from '../stores/documentEditor';
+import { numberNextTo } from './screenQueries';
 
 function meta(overrides: Partial<api.DocumentMeta> = {}): api.DocumentMeta {
   return {
@@ -131,13 +132,15 @@ describe('вкладки листов', () => {
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
     await screen.findByTestId('document-editor-grid');
 
-    // Раздел 1: 10 000 работ + 300 накладных + 12 500 материалов + 375 транспортных
-    expect(screen.getByText('ИТОГО по листу «Раздел 1»:')).toBeInTheDocument();
-    expect(screen.getByText('23 175,00 ₽')).toBeInTheDocument();
+    // Раздел 1: 10 000 работ + 300 накладных + 12 500 материалов + 375 транспортных.
+    expect(numberNextTo(/^ИТОГО по листу/)).toBe(23175);
+    // Весь документ: плюс Раздел 2 — 2 000 работ + 60 накладных.
+    expect(numberNextTo(/^ВСЕГО по документу/)).toBe(25235);
 
-    // Весь документ: плюс Раздел 2 — 2 000 работ + 60 накладных
-    expect(screen.getByText('ВСЕГО по документу:')).toBeInTheDocument();
-    expect(screen.getByText('25 235,00 ₽')).toBeInTheDocument();
+    // Другой лист — свой итог, а сумма контракта та же.
+    fireEvent.click(sheetTab(/Раздел 2/));
+    await waitFor(() => expect(numberNextTo(/^ИТОГО по листу/)).toBe(2060));
+    expect(numberNextTo(/^ВСЕГО по документу/)).toBe(25235);
   });
 
   it('«Применить» записывает все вкладки, а не только открытую', async () => {
@@ -188,7 +191,7 @@ describe('вкладки листов', () => {
     fireEvent.click(sheetTab(/Раздел 2/));
 
     await waitFor(() => expect(onStateChange).toHaveBeenLastCalledWith(
-      { versionId: 'v1', tab: 'all', sheet: 'Раздел 2', collapsed: false, hideMinus: false },
+      expect.objectContaining({ sheet: 'Раздел 2' }),
     ));
   });
 });

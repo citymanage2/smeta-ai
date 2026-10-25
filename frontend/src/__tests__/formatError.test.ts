@@ -4,139 +4,115 @@ import { formatTaskError, shortTaskError } from '../utils/formatError';
 // Прод 13–14.08.2026: в «Журнале ошибок» четыре записи подряд выглядели как
 // «'unit'» — это repr питоновского KeyError. По такой строке не понять ни рода
 // ошибки, ни что делать. План: plans/2026-08-18-ponyatnyy-tekst-oshibki.md.
-describe('formatTaskError — падение на данных', () => {
-  it('голое repr KeyError переводится с расшифровкой поля', () => {
-    expect(formatTaskError("'unit'")).toBe(
-      'Внутренняя ошибка сервиса: в данных задачи нет поля «единица измерения». ' +
-        'Задача остановлена, чтобы не выдать неверную смету. Сообщите разработчику.'
-    );
+//
+// Тесты не сверяют формулировки: текст перевода можно переписать. Проверяется
+// разбор — к какой категории отнесена сырая причина. Причины одной категории
+// получают одно объяснение, разных категорий — разные. Порядок правил тоже
+// здесь: частное раньше общего (403 внутри «Error code» — это ключ, а не общий
+// отказ API; ошибка БД со словом connection — это база, а не сеть).
+
+const CATEGORIES: Record<string, Array<string | undefined>> = {
+  'нет поля «unit»': ["'unit'", "KeyError: 'unit'", 'KeyError: "unit"'],
+  'баланс API': [
+    'Error code: 400 - your credit balance is too low',
+    'billing: payment required',
+  ],
+  'доступ по ключу': [
+    "Ошибка сборки сметы из batch: Error code: 403 - {'type': 'forbidden'}",
+    "Error code: 401 - {'type': 'authentication_error'}",
+    'invalid x-api-key',
+  ],
+  'перегрузка': [
+    'Error code: 429 - rate_limit_error',
+    "{'type': 'overloaded_error'}",
+    'Error code: 529',
+  ],
+  'таймаут': ['asyncio.TimeoutError', 'Request timed out'],
+  'ответ ИИ не разобран': [
+    'JSONDecodeError: Expecting value: line 1 column 1 (char 0)',
+    'Unterminated string starting at: line 1 column 5',
+  ],
+  'отказ API': [
+    "Error code: 500 - {'type': 'api_error'}",
+    "{'type': 'error', 'error': {'type': 'invalid_request_error'}}",
+  ],
+  'сертификат': [
+    'SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed',
+    'certificate verify failed: unable to get local issuer certificate',
+  ],
+  'нет связи': ['APIConnectionError: Connection error.', 'RemoteDisconnected: closed'],
+  'база данных': [
+    'OperationalError: server closed the connection unexpectedly',
+    'asyncpg.exceptions.DeadlockDetectedError: deadlock detected',
+  ],
+  'файл не xlsx': [
+    'BadZipFile: File is not a zip file',
+    'InvalidFileException: openpyxl does not support the old .xls format',
+  ],
+  'память': ['MemoryError'],
+  'внутреннее исключение': [
+    "TypeError: unsupported operand type(s) for *: 'NoneType' and 'float'",
+    "AttributeError: 'NoneType' object has no attribute 'get'",
+    'IndexError: list index out of range',
+  ],
+  'прочее непонятное': ['Something went terribly wrong in module X'],
+  'причина не записана': [undefined, '', '   '],
+};
+
+const CASES = Object.entries(CATEGORIES).flatMap(
+  ([category, raws]) => raws.map((raw) => [category, raw] as const),
+);
+
+/** Объяснение категории — по первой её причине. */
+const explanationOf = (category: string) => formatTaskError(CATEGORIES[category][0]);
+
+describe('formatTaskError — разбор причины по категориям', () => {
+  it.each(CASES)('%s: %j', (category, raw) => {
+    expect(formatTaskError(raw)).toBe(explanationOf(category));
   });
 
-  it('KeyError с типом исключения переводится так же', () => {
-    expect(formatTaskError("KeyError: 'unit'")).toBe(formatTaskError("'unit'"));
-  });
-
-  it('незнакомое поле называется как есть, а не прячется', () => {
-    expect(formatTaskError("KeyError: 'grand_total'")).toContain('«grand_total»');
-  });
-
-  it('прочие внутренние исключения Python не выдаются за ошибку пользователя', () => {
-    const text = formatTaskError(
-      "TypeError: unsupported operand type(s) for *: 'NoneType' and 'float'"
-    );
-    expect(text).toBe(
-      'Внутренняя ошибка сервиса при обработке данных. Задача остановлена. ' +
-        'Запустите её заново — если повторится, сообщите разработчику, приложив подробности.'
-    );
-    expect(formatTaskError("AttributeError: 'NoneType' object has no attribute 'get'")).toBe(text);
-    expect(formatTaskError('IndexError: list index out of range')).toBe(text);
-  });
-});
-
-describe('formatTaskError — ИИ-сервис', () => {
-  it('исчерпанный баланс', () => {
-    expect(formatTaskError('Error code: 400 - your credit balance is too low')).toBe(
-      'Баланс API Anthropic исчерпан. Обратитесь к администратору сервиса.'
-    );
-  });
-
-  it('отказ по ключу важнее общего «ошибка сервиса»', () => {
-    expect(formatTaskError("Ошибка сборки сметы из batch: Error code: 403 - {'type': 'forbidden'}")).toBe(
-      'ИИ-сервис отклонил запрос: нет доступа по ключу. Обратитесь к администратору сервиса.'
-    );
-  });
-
-  it('перегрузка и лимит запросов', () => {
-    const text = 'ИИ-сервис перегружен запросами. Подождите несколько минут и запустите задачу заново.';
-    expect(formatTaskError('Error code: 429 - rate_limit_error')).toBe(text);
-    expect(formatTaskError("{'type': 'overloaded_error'}")).toBe(text);
-  });
-
-  it('таймаут', () => {
-    expect(formatTaskError('asyncio.TimeoutError')).toBe(
-      'Превышено время ожидания ответа от ИИ. Запустите задачу заново.'
-    );
-  });
-
-  it('неразобранный ответ ИИ', () => {
-    expect(formatTaskError('JSONDecodeError: Expecting value: line 1 column 1 (char 0)')).toBe(
-      'ИИ вернул ответ в неожиданном формате — разобрать его не удалось. Запустите задачу заново.'
-    );
-  });
-
-  it('прочая ошибка API', () => {
-    expect(formatTaskError("Error code: 500 - {'type': 'api_error'}")).toBe(
-      'Ошибка на стороне ИИ-сервиса. Запустите задачу заново — если повторится, обратитесь к администратору.'
-    );
-  });
-});
-
-describe('formatTaskError — окружение', () => {
-  it('сертификат отделён от обычного обрыва связи: чинит его администратор', () => {
-    expect(
-      formatTaskError('SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed')
-    ).toBe(
-      'Не удалось установить защищённое соединение с ИИ-сервисом: не проверился сертификат. ' +
-        'Обратитесь к администратору сервиса.'
-    );
-  });
-
-  it('обрыв связи', () => {
-    expect(formatTaskError('APIConnectionError: Connection error.')).toBe(
-      'Не удалось связаться с ИИ-сервисом. Запустите задачу заново — если повторится, обратитесь к администратору.'
-    );
-  });
-
-  it('база данных', () => {
-    expect(formatTaskError('OperationalError: server closed the connection unexpectedly')).toBe(
-      'Ошибка базы данных. Запустите задачу заново — если повторится, обратитесь к администратору.'
-    );
-  });
-
-  it('битый xlsx — единственная ошибка, которую чинит сам пользователь', () => {
-    const text =
-      'Файл не читается как xlsx: он повреждён или сохранён в другом формате. ' +
-      'Пересохраните его в Excel и загрузите заново.';
-    expect(formatTaskError('BadZipFile: File is not a zip file')).toBe(text);
-    expect(formatTaskError('InvalidFileException: openpyxl does not support the old .xls format')).toBe(text);
-  });
-
-  it('нехватка памяти', () => {
-    expect(formatTaskError('MemoryError')).toBe(
-      'Не хватило памяти на обработку файла — он слишком большой. ' +
-        'Разбейте смету на части или обратитесь к администратору.'
-    );
+  it('у разных категорий разные объяснения', () => {
+    const explanations = Object.keys(CATEGORIES).map(explanationOf);
+    expect(new Set(explanations).size).toBe(explanations.length);
   });
 });
 
-describe('formatTaskError — наши сообщения', () => {
-  it('русский текст идёт как есть', () => {
-    const ours = 'Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.';
+describe('formatTaskError — инварианты', () => {
+  const ENGLISH = CASES
+    .map(([, raw]) => raw)
+    .filter((raw): raw is string => !!raw && raw.trim() !== '');
+
+  it.each(ENGLISH)('сырая причина не выдаётся человеку как есть: %j', (raw) => {
+    const text = formatTaskError(raw);
+    expect(text).not.toBe(raw);
+    expect(text).toMatch(/[а-яё]/i);
+  });
+
+  it.each([
+    'Баланс API Anthropic исчерпан. Задача продолжится автоматически после пополнения счёта.',
+    'Задача остановлена пользователем',
+    'Обработка прервана и не возобновилась. Запустите задачу заново.',
+  ])('наш русский текст идёт как есть: %j', (ours) => {
     expect(formatTaskError(ours)).toBe(ours);
-    expect(formatTaskError('Задача остановлена пользователем')).toBe('Задача остановлена пользователем');
-    expect(formatTaskError('Обработка прервана и не возобновилась. Запустите задачу заново.')).toBe(
-      'Обработка прервана и не возобновилась. Запустите задачу заново.'
-    );
   });
 
-  it('пустая причина не показывается пустым местом', () => {
-    expect(formatTaskError(undefined)).toBe(
-      'Задача остановилась, но причина не записана. Запустите её заново — если повторится, сообщите разработчику.'
-    );
-    expect(formatTaskError('   ')).toBe(formatTaskError(undefined));
+  it('отсутствующее поле названо: по-человечески, а незнакомое — как есть', () => {
+    expect(formatTaskError("'unit'")).toContain('единица измерения');
+    expect(formatTaskError("KeyError: 'grand_total'")).toContain('grand_total');
   });
 
-  it('в уведомление идёт первая фраза — что случилось, без «что делать»', () => {
-    expect(shortTaskError("'unit'")).toBe(
-      'Внутренняя ошибка сервиса: в данных задачи нет поля «единица измерения».'
-    );
-    expect(shortTaskError('asyncio.TimeoutError')).toBe('Превышено время ожидания ответа от ИИ.');
+  it.each(["'unit'", 'asyncio.TimeoutError', 'Error code: 429 - rate_limit_error'])(
+    'в уведомление идёт начало объяснения, первая фраза: %j',
+    (raw) => {
+      const full = formatTaskError(raw);
+      const short = shortTaskError(raw);
+      expect(full.startsWith(short)).toBe(true);
+      expect(short.length).toBeLessThan(full.length);
+      expect(short).toMatch(/[.!?]$/);
+    },
+  );
+
+  it('однофразная причина в уведомлении целиком', () => {
     expect(shortTaskError('Задача остановлена пользователем')).toBe('Задача остановлена пользователем');
-  });
-
-  it('незнакомый английский текст не выдаётся пользователю сырым', () => {
-    expect(formatTaskError('Something went terribly wrong in module X')).toBe(
-      'Внутренняя ошибка сервиса. Задача остановлена. Сообщите разработчику, приложив подробности.'
-    );
   });
 });

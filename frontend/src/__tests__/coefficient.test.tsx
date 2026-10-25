@@ -13,8 +13,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import { calcEstimateTotals, rowCoefficient } from '../utils/estimateCalc';
 import { estimateAdapter } from '../components/editor/adapters/estimateAdapter';
-import { GridRow } from '../components/editor/adapters/types';
-import { numberNextTo } from './screenQueries';
+import { genericAdapter } from '../components/editor/adapters/genericAdapter';
+import { withGridLayout } from './gridLayout';
+import { cellIn, getGridRow, numberNextTo, parseScreenNumber } from './screenQueries';
 
 const STORED = [
   { id: 'r1', lineage_id: 'r1', type: 'work', name: 'Кладка', unit: 'м2',
@@ -47,6 +48,30 @@ describe('единый расчёт итогов', () => {
       { overhead_pct: 10, transport_pct: 0 },
     );
     expect(totals.grand).toBeCloseTo(9400, 6);
+  });
+
+  it('итоги перечня считаются по типу строки, проценты — из настроек проекта', () => {
+    // В перечне колонки называет заказчик: стоимость работ и материалов
+    // узнаётся по заголовку, а в итог идёт только по своему типу строки.
+    const grid = genericAdapter.toGrid([
+      { row_id: 'g1', cells: { 'Тип': 'Работа', 'Наименование': 'Кладка',
+        'Стоимость работ': 1000, 'Стоимость материалов': 0 } },
+      { row_id: 'g2', cells: { 'Тип': 'Материал', 'Наименование': 'Кирпич',
+        'Стоимость работ': 0, 'Стоимость материалов': 2000 } },
+      // Стоимость работ у материала в сумму работ не идёт: строка — материал.
+      { row_id: 'g3', cells: { 'Тип': 'Материал', 'Наименование': 'Раствор',
+        'Стоимость работ': 500, 'Стоимость материалов': 400 } },
+      // Строка без типа (заголовок раздела) в итог не идёт вовсе.
+      { row_id: 'g4', cells: { 'Тип': '', 'Наименование': 'Раздел 1',
+        'Стоимость работ': 9999, 'Стоимость материалов': 9999 } },
+    ]);
+    const totals = genericAdapter.totals(grid, { overhead_pct: 10, transport_pct: 5 })!;
+
+    expect(totals.sumWork).toBe(1000);
+    expect(totals.overhead).toBeCloseTo(100, 6);
+    expect(totals.sumMat).toBe(2400);
+    expect(totals.transport).toBeCloseTo(120, 6);
+    expect(totals.grand).toBeCloseTo(3620, 6);
   });
 
   it('коэффициент действует только на строки из области применения', () => {
@@ -143,10 +168,21 @@ function mockDocument(metaOverrides: Partial<api.DocumentMeta> = {}) {
   });
 }
 
+// Ячейки таблицы нужны: цена читается с экрана, правка идёт двойным щелчком.
+withGridLayout();
+
+async function waitForRows(count: number) {
+  await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
+    .toHaveAttribute('data-row-count', String(count)));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useDocumentEditorStore.getState().reset();
   vi.mocked(api.setDocumentCoefficient).mockResolvedValue({ coefficient: null });
+  vi.mocked(api.applyDocument).mockResolvedValue({
+    version_id: 'v1', rev: 1, rows_count: 2, changes_count: 1,
+  });
 });
 
 describe('коэффициент в редакторе', () => {
@@ -159,13 +195,15 @@ describe('коэффициент в редакторе', () => {
     expect(screen.getByRole('button', { name: /Коэффициент/ })).toBeInTheDocument();
   });
 
-  it('с коэффициентом видно, какой он и на что действует', async () => {
+  it('с коэффициентом цена в таблице показана уже умноженной', async () => {
     mockDocument({ coefficient: { work: 1.05, material: 1, scope: 'all' } });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
+    await waitForRows(2);
 
-    await waitFor(() => expect(screen.getByText(/работы ×1,05/)).toBeInTheDocument());
-    // Цена в таблице — уже с коэффициентом.
-    expect(useDocumentEditorStore.getState().rows[0].price_work).toBeCloseTo(1050, 6);
+    // 1000 × 1,05 — человек видит цену с коэффициентом, а не исходную.
+    const row = getGridRow('Кладка');
+    expect(parseScreenNumber(cellIn(row, 'Цена работ').textContent)).toBe(1050);
+    expect(parseScreenNumber(cellIn(row, 'Стоим. работ').textContent)).toBe(4200);
   });
 
   it('коэффициент к отмеченным строкам уходит списком строк', async () => {
@@ -239,18 +277,22 @@ describe('коэффициент в редакторе', () => {
   it('правка ячейки при коэффициенте сохраняет исходную цену', async () => {
     mockDocument({ coefficient: { work: 2, material: 1, scope: 'all' } });
     render(<DocumentEditor cardId="card-1" kind="estimate" />);
-    await waitFor(() => expect(screen.getByTestId('document-editor-grid'))
-      .toHaveAttribute('data-row-count', '2'));
+    await waitForRows(2);
 
-    const store = useDocumentEditorStore.getState();
-    store.setRows(store.rows.map((row: GridRow, index: number) => (
-      index === 0 ? { ...row, price_work: 3000 } : row
-    )));
+    // В ячейке 2000 (1000 × 2). Человек ставит 3000 — это цена с коэффициентом.
+    fireEvent.doubleClick(cellIn(getGridRow('Кладка'), 'Цена работ'));
+    const input = await screen.findByDisplayValue('2000');
+    fireEvent.change(input, { target: { value: '3000' } });
+    // Enter, а не blur: React слушает focusout, и blur из jsdom редактор не увидит.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
 
-    const sent = useDocumentEditorStore.getState().adapter.fromGrid(
-      useDocumentEditorStore.getState().rows,
-      { coefficient: { work: 2, material: 1, scope: 'all' } },
-    ) as Array<Record<string, unknown>>;
-    expect(sent[0].price_work).toBeCloseTo(1500, 2);
+    await waitFor(() => expect(api.applyDocument).toHaveBeenCalled());
+    const sent = vi.mocked(api.applyDocument).mock.calls[0][3] as Array<Record<string, unknown>>;
+    const byId = new Map(sent.map((row) => [row.id, row]));
+    // В документ уходит исходная: 3000 ÷ 2.
+    expect(byId.get('r1')!.price_work).toBe(1500);
+    // Нетронутая цена материала уходит как была.
+    expect(byId.get('r2')!.price_material).toBe(500);
   });
 });

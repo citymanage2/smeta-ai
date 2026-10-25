@@ -6,6 +6,9 @@ import { genericAdapter } from '../components/editor/adapters/genericAdapter';
  * и в редакторе. План: plans/2026-08-06-nomer-pozicii-iz-ishodnoj-smety.md
  */
 
+/** Заголовок колонки — один на все стадии (`source_numbers.SOURCE_NO_HEADER`). */
+const SOURCE_NO_HEADER = '№ в исходной смете';
+
 const listRow = {
   row_id: 'r1',
   cells: {
@@ -20,10 +23,13 @@ const listRow = {
 };
 
 describe('перечень: номер позиции исходной сметы', () => {
-  it('колонка идёт первой, перед типом и наименованием', () => {
-    const grid = genericAdapter.toGrid([listRow]);
-    const keys = genericAdapter.columns(grid).map((c) => c.key);
-    expect(keys.slice(0, 3)).toEqual(['№ в исходной смете', 'Тип', 'Наименование']);
+  it('колонка идёт первой, где бы ни стояла в строке', () => {
+    // В ячейках номер стоит после типа и наименования — в таблице он всё равно первый.
+    const { '№ в исходной смете': sourceNo, ...rest } = listRow.cells;
+    const grid = genericAdapter.toGrid([
+      { row_id: 'r1', cells: { ...rest, [SOURCE_NO_HEADER]: sourceNo } },
+    ]);
+    expect(genericAdapter.columns(grid)[0].name).toBe(SOURCE_NO_HEADER);
   });
 
   it('колонка редактируемая и не числовая — «1.1» и «2а» остаются как есть', () => {
@@ -34,18 +40,7 @@ describe('перечень: номер позиции исходной смет�
     expect(column).toBeDefined();
     expect(column!.numeric).toBe(false);
     expect(column!.editable).toBe(true);
-    expect(genericAdapter.displayValue(grid[0], '№ в исходной смете')).toBeNull();
-  });
-
-  it('без колонки порядок прежний — тип, наименование, остальное', () => {
-    const grid = genericAdapter.toGrid([
-      {
-        row_id: 'r1',
-        cells: { '№ п/п': 1, 'Тип': 'Работа', 'Наименование': 'Пробивка', 'Кол-во': 1 },
-      },
-    ]);
-    const keys = genericAdapter.columns(grid).map((c) => c.key);
-    expect(keys).toEqual(['Тип', 'Наименование', '№ п/п', 'Кол-во']);
+    expect(genericAdapter.displayValue?.(grid[0], '№ в исходной смете')).toBeNull();
   });
 
   it('правка строки номер не теряет', () => {

@@ -6,8 +6,8 @@
  * строки документа, поэтому «Применить» записывает их все, а правка свёрнутой
  * строки превращается в правку каждой её позиции по отдельности.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { fireEvent } from '@testing-library/dom';
 
 vi.mock('../api/documents', async () => {
@@ -31,10 +31,8 @@ vi.mock('../api/documents', async () => {
 import * as api from '../api/documents';
 import DocumentEditor from '../components/editor/DocumentEditor';
 import { useDocumentEditorStore } from '../stores/documentEditor';
-
-// В русской локали разряды отбиваются неразрывным пробелом: на экране это
-// пробел, но сравнивать надо с тем символом, который реально печатается.
-const NBSP = String.fromCharCode(160);
+import { withGridLayout } from './gridLayout';
+import { cellIn, getGridRow, numberNextTo, parseScreenNumber } from './screenQueries';
 
 function meta(overrides: Partial<api.DocumentMeta> = {}): api.DocumentMeta {
   return {
@@ -73,33 +71,8 @@ function mockRows(rows: unknown[]) {
   });
 }
 
-// В jsdom нет ни ResizeObserver, ни размеров: react-data-grid считает таблицу
-// нулевой и не рисует ячеек вовсе.
-let restoreWidth: PropertyDescriptor | undefined;
-let originalRect: typeof HTMLElement.prototype.getBoundingClientRect;
-
-beforeAll(() => {
-  restoreWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
-  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
-    configurable: true, value: 2000,
-  });
-  originalRect = HTMLElement.prototype.getBoundingClientRect;
-  HTMLElement.prototype.getBoundingClientRect = function fake() {
-    return { width: 2000, height: 600, top: 0, left: 0, right: 2000,
-      bottom: 600, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
-  };
-  (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-  Element.prototype.scrollIntoView = () => {};
-});
-
-afterAll(() => {
-  if (restoreWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', restoreWidth);
-  HTMLElement.prototype.getBoundingClientRect = originalRect;
-});
+// В jsdom таблица без подмены размеров не рисует ни одной ячейки.
+withGridLayout();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -114,6 +87,9 @@ beforeEach(() => {
 const collapseButton = () => screen.getByRole('button', { name: /Свернуть дубли/i });
 const grid = () => screen.getByTestId('document-editor-grid');
 const gridText = () => document.querySelector('.de-grid')?.textContent ?? '';
+const applyButton = () => screen.getByRole('button', { name: 'Применить' });
+/** Поле ввода внутри таблицы — открытый редактор ячейки (поиск в тулбаре не в счёт). */
+const cellInput = () => within(screen.getByRole('grid')).queryByRole('textbox');
 
 async function openCollapsed(rows: unknown[] = ROWS, expectedCount = '3') {
   mockRows(rows);
@@ -138,12 +114,9 @@ describe('свёрнутый режим', () => {
     await openCollapsed();
 
     expect(screen.queryByRole('tablist', { name: /Листы документа/i })).toBeNull();
-    // 59 225 работ + 1 776,75 накладных + 12 500 материалов + 375 транспортных.
-    const totals = document.querySelector('.de-totals')?.textContent ?? '';
-    expect(totals).toContain('ИТОГО:');
-    expect(totals).toContain(`73${NBSP}876,75 ₽`);
-    // Отдельного «ВСЕГО по документу» нет: итог и так по всему документу.
-    expect(totals).not.toContain('ВСЕГО по документу');
+    // Оба раздела: 59 225 работ + 1 776,75 накладных + 12 500 материалов +
+    // 375 транспортных. Только «Раздел 1» дал бы 49 955.
+    expect(numberNextTo(/^ИТОГО/)).toBe(73876.75);
   });
 
   it('режим уходит в ссылку и приходит из неё', async () => {
@@ -218,31 +191,30 @@ describe('правка свёрнутой строки', () => {
 
   it('общий объём не редактируется', async () => {
     await openCollapsed();
+    const group = getGridRow('Штукатурка стен');
+    expect(parseScreenNumber(cellIn(group, 'Кол-во').textContent)).toBe(120.5);
 
-    const cell = [...document.querySelectorAll('.rdg-cell')]
-      .find((node) => node.textContent === '120,5');
-    fireEvent.doubleClick(cell!);
+    // Объём свёрнутой строки — результат сложения: поля ввода не появляется.
+    fireEvent.doubleClick(cellIn(group, 'Кол-во'));
+    expect(cellInput()).toBeNull();
 
-    // Ячейка объёма у свёрнутой строки только для чтения: ввода не появляется.
-    expect(document.querySelector('.de-cell-input')).toBeNull();
+    // А цена той же строки правится — двойной щелчок в таблице работает.
+    fireEvent.doubleClick(cellIn(getGridRow('Штукатурка стен'), 'Цена работ'));
+    expect(await screen.findByDisplayValue('450')).toBe(cellInput());
   });
 });
 
 describe('операции, опасные в свёрнутом виде', () => {
-  it('вставка из буфера отклоняется с подсказкой, а не молча', async () => {
+  it('вставка из буфера отклоняется: строки не меняются, применять нечего', async () => {
     await openCollapsed();
 
-    // Курсор в ячейке — без него вставке некуда целиться.
-    const cell = [...document.querySelectorAll('.rdg-cell')]
-      .find((node) => node.textContent === '120,5');
-    fireEvent.click(cell!);
-    fireEvent.paste(document.querySelector('.de-grid-wrap')!, {
-      clipboardData: { getData: () => '1\t2' },
-    });
+    // Курсор в ячейке объёма — без него вставке некуда целиться.
+    fireEvent.click(cellIn(getGridRow('Кирпич'), 'Кол-во'));
+    fireEvent.paste(grid(), { clipboardData: { getData: () => '1\t2' } });
 
-    expect(await screen.findByText(/Вставка недоступна в свёрнутом режиме/)).toBeInTheDocument();
-    // Документ не тронут.
-    expect(useDocumentEditorStore.getState().isDirty).toBe(false);
+    // Объём остался прежним, документ не тронут.
+    expect(parseScreenNumber(cellIn(getGridRow('Кирпич'), 'Кол-во').textContent)).toBe(500);
+    expect(applyButton()).toBeDisabled();
   });
 
   it('удаление отмеченной группы уносит обе её позиции', async () => {

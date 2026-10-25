@@ -81,11 +81,22 @@ describe('свёрнутые строки', () => {
   });
 
   it('служебные поля позиций свёрнутой строке не наследуются', () => {
-    const [group] = buildCollapsedRows(ROWS, FIELDS, kindOf, NOTHING);
-    // Лист исходного файла у позиций разный, а свёрнутая строка не строка
-    // документа вовсе — сохраняться ей некуда.
-    expect(Object.keys(group).filter((key) => key.startsWith('__')))
-      .toEqual(['__key', '__group', '__mixed']);
+    // Строки — как их кладёт в таблицу адаптер: с листом и исходной ценой рядом.
+    const positions = estimateAdapter.toGrid([
+      { id: 'r1', type: 'work', name: 'Штукатурка стен', unit: 'м2', qty: 80,
+        price_work: 450, price_material: null, sheet: 'Раздел 1' },
+      { id: 'r3', type: 'work', name: 'Штукатурка стен', unit: 'м2', qty: 40.5,
+        price_work: 450, price_material: null, sheet: 'Раздел 2' },
+    ]);
+    expect(positions[0]).toHaveProperty('__sheet', 'Раздел 1');
+    expect(positions[0]).toHaveProperty('__base_price_work', 450);
+
+    const [group] = buildCollapsedRows(positions, FIELDS, kindOf, NOTHING);
+    // Лист у позиций разный, а свёрнутая строка не строка документа вовсе —
+    // ни листа, ни исходной цены у неё нет: сохраняться ей некуда.
+    expect(group).not.toHaveProperty('__sheet');
+    expect(group).not.toHaveProperty('__base_price_work');
+    expect(group).not.toHaveProperty('__base_price_material');
   });
 
   it('не сворачивает разделы', () => {
