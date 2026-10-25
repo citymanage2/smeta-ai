@@ -7,7 +7,7 @@ from sqlalchemy import select
 import structlog
 from app.models.price import PriceWork, PriceMaterial
 from app.models.price_cache import PriceCacheWork, PriceCacheMaterial
-from app.services.claude_service import claude_service as _claude_svc
+from app.services import claude_service as _claude
 from app.utils.json_utils import extract_json
 from app.config import settings as _settings
 
@@ -18,8 +18,21 @@ except ImportError:
     np = None  # type: ignore[assignment]
     _numpy_available = False
 
-async def call_claude(messages: list, system_prompt: str = "", use_web_search: bool = False) -> str:
-    return await _claude_svc.call(messages, system_prompt=system_prompt, use_web_search=use_web_search)
+async def call_claude(
+    messages: list,
+    system_prompt: str = "",
+    use_web_search: bool = False,
+    task_id: Optional[str] = None,
+    db: Optional[AsyncSession] = None,
+    is_extra: bool = False,
+) -> str:
+    # task_id/db/is_extra — запись вызова в журнал затрат (правило №13). До
+    # 26.10.2026 обёртка их не принимала: веб-поиск цены падал на TypeError,
+    # его глотал except, и цена с рынка не находилась вовсе (с 06.08.2026).
+    return await _claude.call_claude(
+        messages, system_prompt=system_prompt, use_web_search=use_web_search,
+        task_id=task_id, db=db, is_extra=is_extra,
+    )
 
 logger = structlog.get_logger()
 

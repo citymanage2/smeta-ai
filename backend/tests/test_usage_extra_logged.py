@@ -26,17 +26,6 @@ from app.models.task import Task
 from app.models.workflow_card import WorkflowCard  # noqa: F401
 from app.services import analogs_service, claude_service, price_service
 
-# Найдено при переписывании 25.10.2026: с 4f14718 (06.08.2026) веб-поиск цены в
-# `price_service` передаёт `task_id/db/is_extra` своей обёртке `call_claude`, а
-# она их не принимает — TypeError глотается, поиск возвращает None. Цена с рынка
-# не находится вовсе (оптимизация `_process_single_item`), и в журнал ничего не
-# пишется. Старые тесты подменяли саму обёртку и этого не видели. Строгий xfail:
-# починят обёртку — тесты пройдут, и маркер надо будет снять.
-WEB_SEARCH_WRAPPER_BUG = pytest.mark.xfail(
-    strict=True,
-    reason="price_service.call_claude не принимает task_id/db/is_extra — веб-поиск цены мёртв",
-)
-
 
 @pytest_asyncio.fixture
 async def task_id(db_session, app_sessions):
@@ -85,7 +74,6 @@ async def test_analogs_search_logged_as_extra(db_session, task_id, claude_api):
     assert await _journal(db_session, task_id) == [(task_id, True)]
 
 
-@WEB_SEARCH_WRAPPER_BUG
 @pytest.mark.asyncio
 async def test_web_search_work_price_logged_as_extra(db_session, task_id, claude_api, price_db):
     """Цены работы нет в прайсе — веб-поиск платный, это доп этой задачи."""
@@ -98,7 +86,6 @@ async def test_web_search_work_price_logged_as_extra(db_session, task_id, claude
     assert await _journal(db_session, task_id) == [(task_id, True)]
 
 
-@WEB_SEARCH_WRAPPER_BUG
 @pytest.mark.asyncio
 async def test_find_material_price_threads_task_through(db_session, task_id, claude_api, price_db):
     """Прайс-лист и эмбеддинги бесплатны — task_id доезжает до веб-поиска."""
