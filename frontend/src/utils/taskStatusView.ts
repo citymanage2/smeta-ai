@@ -13,7 +13,9 @@ import { EstimationStatus, TaskStatus } from '../types'
 // ---------------------------------------------------------------------------
 
 /** Состояние текущей стадии по техническому статусу задачи. */
-export const STATE_STYLE: Record<TaskStatus, { label: string; color: string }> = {
+// `satisfies`, а не аннотация: проверка полноты стоит на самой карте — статус,
+// добавленный в `TaskStatus` и забытый здесь, ломает `tsc` (правило №20).
+export const STATE_STYLE = {
   // Не запущена — это разновидность ожидания, а не хода работы: узел этапа
   // должен выглядеть так же, как до создания задачи, иначе человек читает
   // «Идёт» там, где ничего не происходит и без него не произойдёт.
@@ -24,7 +26,7 @@ export const STATE_STYLE: Record<TaskStatus, { label: string; color: string }> =
   paused: { label: 'На паузе', color: '#b45309' },
   failed: { label: 'Ошибка', color: '#ef4444' },
   cancelled: { label: 'Отменено', color: '#94a3b8' },
-}
+} satisfies Record<TaskStatus, { label: string; color: string }>
 
 /** Нет задачи на стадии — стадия ещё не запускалась. */
 export const WAITING_STATE = { label: 'Ожидает', color: '#94a3b8' }

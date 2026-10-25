@@ -42,6 +42,7 @@ vi.mock('../utils/notificationSound', () => ({ playSuccess: vi.fn(), playError: 
 import { getProject, listProjects } from '../api/projects';
 import ProjectDetailPage from '../pages/ProjectDetail';
 import ProjectsPage from '../pages/Projects';
+import { numberNextTo, numbersIn } from './screenQueries';
 
 /** Текст приходит с неразрывными пробелами — сравниваем по-человечески. */
 const text = (needle: string) => (content: string) =>
@@ -66,14 +67,16 @@ const PROJECT = {
 describe('цель по объекту на карточке проекта', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('показывает цель и превышение красным', async () => {
+  it('показывает цель, превышение и его процент', async () => {
     vi.mocked(getProject).mockResolvedValue({ ...PROJECT, summary_target_total: 250000 } as never);
     render(<MemoryRouter><ProjectDetailPage /></MemoryRouter>);
 
-    expect(await screen.findByText('Цель:')).toBeInTheDocument();
-    const deviation = await screen.findByText(text('+50 000 ₽'));
-    expect(deviation).toHaveStyle({ color: 'rgb(220, 38, 38)' });
-    expect(deviation.textContent!.replace(/\u00A0/g, ' ')).toContain('+20%');
+    // Сводная 300 000 при цели 250 000: превышение +50 000, это +20% цели.
+    // Знак — часть числа: перепутанное «цель минус факт» дало бы −50 000.
+    const label = await screen.findByText('Цель:');
+    expect(numberNextTo('Цель:')).toBe(250000);
+    const line = label.parentElement as HTMLElement;
+    expect(numbersIn(line.textContent)).toEqual(expect.arrayContaining([50000, 20]));
   });
 
   it('пока итог сводной не сохранён, показывает цель без отклонения', async () => {

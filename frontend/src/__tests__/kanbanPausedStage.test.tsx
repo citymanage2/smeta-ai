@@ -13,7 +13,15 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => vi.fn() }
 })
 
+// Сетевой слой карточек. Стор канбана — настоящий: «доска перечитывается»
+// проверяется запросом карточек, а не вызовом метода стора.
 vi.mock('../api/workflowCards', () => ({
+  getWorkflowCards: vi.fn().mockResolvedValue([]),
+  createWorkflowCard: vi.fn(),
+  updateWorkflowCard: vi.fn(),
+  deleteWorkflowCard: vi.fn(),
+  startTask: vi.fn(),
+  launchTask: vi.fn(),
   // Мета файлов не нужна: стадии переживают её отсутствие (fallback-вид).
   getCardFilesMeta: vi.fn().mockRejectedValue(new Error('no meta in test')),
   downloadInputFileById: vi.fn(),
@@ -27,23 +35,8 @@ vi.mock('../api/tasks', () => ({
 
 vi.mock('../api/projects', () => ({ downloadSlotFile: vi.fn() }))
 
-const fetchCards = vi.fn().mockResolvedValue(undefined)
-const startTask = vi.fn()
-
-const storeState = {
-  startTask,
-  fetchCards,
-  submittingCardIds: new Set<string>(),
-  pendingListTasks: {},
-  clearPendingListTask: vi.fn(),
-}
-
-vi.mock('../stores/kanban', () => ({
-  // Стадии читают стор целиком, диспетчер — селектором: поддерживаем оба вызова.
-  useKanbanStore: (selector?: (s: typeof storeState) => unknown) =>
-    (selector ? selector(storeState) : storeState),
-}))
-
+import { getWorkflowCards } from '../api/workflowCards'
+import { useKanbanStore } from '../stores/kanban'
 import { resumeTask } from '../api/tasks'
 import { CardStageContent } from '../components/kanban/CardStageContent'
 import { WorkflowCard, TaskBrief, TaskStatus, KanbanStage } from '../types/workflow'
@@ -87,43 +80,75 @@ async function renderStage(card: WorkflowCard) {
   await waitFor(() => expect(screen.getByText(/На паузе/)).toBeInTheDocument())
 }
 
+const initialStore = useKanbanStore.getState()
+
 beforeEach(() => {
   vi.clearAllMocks()
+  useKanbanStore.setState(initialStore, true)
   vi.mocked(resumeTask).mockResolvedValue({ task_id: 't' } as never)
+  vi.mocked(getWorkflowCards).mockResolvedValue([])
+})
+
+const PAUSED_STAGES: {
+  label: string
+  card: WorkflowCard
+  taskId: string
+  /** Кнопка первого запуска стадии — на паузе её быть не должно. */
+  freshStart?: RegExp
+}[] = [
+  {
+    label: 'Смета',
+    card: makeCard('estimate', {
+      estimate_task_id: 't3',
+      estimate_task: task('paused', 'ESTIMATE_FROM_LIST', 't3'),
+    }),
+    taskId: 't3',
+    freshStart: /Создать смету/,
+  },
+  {
+    label: 'Полнота',
+    card: makeCard('completeness', {
+      completeness_task_id: 't2',
+      completeness_task: task('paused', 'CHECK_LIST_COMPLETENESS', 't2'),
+    }),
+    taskId: 't2',
+    freshStart: /Запустить проверку полноты/,
+  },
+  {
+    label: 'Перечень',
+    card: makeCard('list', { list_task: task('paused', 'LIST_FROM_GRAND', 't1') }),
+    taskId: 't1',
+  },
+  {
+    label: 'Оптимизация',
+    card: makeCard('optimization', {
+      optimization_task_id: 't4',
+      optimization_task: task('paused', 'ESTIMATE_OPTIMIZATION', 't4'),
+    }),
+    taskId: 't4',
+  },
+]
+
+describe.each(PAUSED_STAGES)('Канбан — стадия «$label» на паузе по балансу API', ({ card, taskId, freshStart }) => {
+  it('«Продолжить сейчас» возобновляет задачу стадии и перечитывает доску', async () => {
+    await renderStage(card)
+
+    fireEvent.click(screen.getByRole('button', { name: /Продолжить сейчас/ }))
+
+    await waitFor(() => expect(resumeTask).toHaveBeenCalledWith(taskId))
+    await waitFor(() => expect(getWorkflowCards).toHaveBeenCalledWith('proj-1'))
+  })
+
+  if (freshStart) {
+    it('не предлагает запустить стадию заново', async () => {
+      await renderStage(card)
+
+      expect(screen.queryByRole('button', { name: freshStart })).not.toBeInTheDocument()
+    })
+  }
 })
 
 describe('Канбан — задача на паузе по балансу API', () => {
-  it('стадия «Смета» на паузе не предлагает создать смету заново', async () => {
-    await renderStage(makeCard('estimate', {
-      estimate_task_id: 't3',
-      estimate_task: task('paused', 'ESTIMATE_FROM_LIST', 't3'),
-    }))
-
-    expect(screen.queryByRole('button', { name: /Создать смету/ })).not.toBeInTheDocument()
-  })
-
-  it('клик по «Продолжить сейчас» зовёт resumeTask с id задачи', async () => {
-    await renderStage(makeCard('estimate', {
-      estimate_task_id: 't3',
-      estimate_task: task('paused', 'ESTIMATE_FROM_LIST', 't3'),
-    }))
-
-    fireEvent.click(screen.getByRole('button', { name: /Продолжить сейчас/ }))
-
-    await waitFor(() => expect(resumeTask).toHaveBeenCalledWith('t3'))
-  })
-
-  it('после успешного продолжения доска перечитывается', async () => {
-    await renderStage(makeCard('estimate', {
-      estimate_task_id: 't3',
-      estimate_task: task('paused', 'ESTIMATE_FROM_LIST', 't3'),
-    }))
-
-    fireEvent.click(screen.getByRole('button', { name: /Продолжить сейчас/ }))
-
-    await waitFor(() => expect(fetchCards).toHaveBeenCalledWith('proj-1'))
-  })
-
   it('ошибка продолжения показывается текстом, кнопка снова доступна', async () => {
     vi.mocked(resumeTask).mockRejectedValue(new Error('boom'))
     await renderStage(makeCard('estimate', {
@@ -135,38 +160,5 @@ describe('Канбан — задача на паузе по балансу API'
 
     await waitFor(() => expect(screen.getByText(/Не удалось возобновить/)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /Продолжить сейчас/ })).toBeEnabled()
-  })
-
-  it('стадия «Полнота»: пауза видна и управляема', async () => {
-    await renderStage(makeCard('completeness', {
-      completeness_task_id: 't2',
-      completeness_task: task('paused', 'CHECK_LIST_COMPLETENESS', 't2'),
-    }))
-
-    fireEvent.click(screen.getByRole('button', { name: /Продолжить сейчас/ }))
-
-    await waitFor(() => expect(resumeTask).toHaveBeenCalledWith('t2'))
-    expect(screen.queryByRole('button', { name: /Запустить проверку полноты/ })).not.toBeInTheDocument()
-  })
-
-  it('стадия «Перечень»: пауза видна и управляема', async () => {
-    await renderStage(makeCard('list', {
-      list_task: task('paused', 'LIST_FROM_GRAND', 't1'),
-    }))
-
-    fireEvent.click(screen.getByRole('button', { name: /Продолжить сейчас/ }))
-
-    await waitFor(() => expect(resumeTask).toHaveBeenCalledWith('t1'))
-  })
-
-  it('стадия «Оптимизация»: пауза видна и управляема', async () => {
-    await renderStage(makeCard('optimization', {
-      optimization_task_id: 't4',
-      optimization_task: task('paused', 'ESTIMATE_OPTIMIZATION', 't4'),
-    }))
-
-    fireEvent.click(screen.getByRole('button', { name: /Продолжить сейчас/ }))
-
-    await waitFor(() => expect(resumeTask).toHaveBeenCalledWith('t4'))
   })
 })

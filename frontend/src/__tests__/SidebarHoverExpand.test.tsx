@@ -93,7 +93,9 @@ describe('Свёрнутое меню: раскрытие по наведени�
     await waitFor(() => expect(screen.queryByPlaceholderText('Название *')).not.toBeNull());
 
     fireEvent.mouseLeave(container);
-    act(() => { vi.advanceTimersByTime(300); });
+    // Все таймеры, а не «300 мс»: тест не должен зависеть от длины паузы —
+    // иначе при паузе длиннее он проходил бы, даже если меню свернётся.
+    act(() => { vi.runAllTimers(); });
 
     expect(expandedMarker()).not.toBeNull();
   });
@@ -124,7 +126,7 @@ describe('Закреплённое меню статично', () => {
     await waitFor(() => expect(expandedMarker()).not.toBeNull());
 
     fireEvent.mouseLeave(container);
-    act(() => { vi.advanceTimersByTime(300); });
+    act(() => { vi.runAllTimers(); });
 
     expect(expandedMarker()).not.toBeNull();
     expect(screen.queryByText('Свернуть меню')).not.toBeNull();

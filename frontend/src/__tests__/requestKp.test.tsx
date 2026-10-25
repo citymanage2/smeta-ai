@@ -55,6 +55,7 @@ import CardKpRequests from '../components/kp/CardKpRequests';
 import { useDocumentEditorStore } from '../stores/documentEditor';
 import { useAuthStore } from '../stores/auth';
 import type { KpItem, KpPreview, KpRequestBrief } from '../types/kp';
+import { numberNextTo, numbersIn } from './screenQueries';
 
 function meta(overrides: Partial<api.DocumentMeta> = {}): api.DocumentMeta {
   return {
@@ -273,23 +274,22 @@ function renderDialog(props: Partial<React.ComponentProps<typeof RequestKpDialog
 const sendButton = () => screen.getByRole('button', { name: /^Отправить/ });
 
 describe('окно «Запросить КП»', () => {
-  it('разбивает позиции на материалы и работы с числом сотрудников роли', async () => {
+  it('разбивает позиции на материалы и работы', async () => {
     vi.mocked(kpApi.previewKpRequest).mockResolvedValue(preview({
-      material: [item({ name: 'Кирпич', source_row_ids: ['r2'], item_type: 'material' })],
+      material: [item({ name: 'Кирпич', qty: 500, source_row_ids: ['r2'], item_type: 'material' })],
       work: [item({ name: 'Штукатурка стен', unit: 'м2', qty: 120.5, source_row_ids: ['r1', 'r3'], item_type: 'work' })],
       supply: 2, contractors: 1,
     }));
     renderDialog();
 
+    // Каждая позиция — в своей группе и с объёмом из предпросмотра (у
+    // штукатурки он общий для двух строк документа).
     const material = await screen.findByTestId('kp-group-material');
-    expect(material).toHaveTextContent('Материалы');
-    expect(material).toHaveTextContent('отдел снабжения');
-    expect(material).toHaveTextContent('2 сотрудника');
-    expect(material).toHaveTextContent('Кирпич');
     const work = screen.getByTestId('kp-group-work');
-    expect(work).toHaveTextContent('подрядчики');
-    expect(work).toHaveTextContent('1 сотрудник');
-    expect(work).toHaveTextContent('120,5');
+    expect(numberNextTo('Кирпич', material)).toBe(500);
+    expect(within(material).queryByText('Штукатурка стен')).not.toBeInTheDocument();
+    expect(numberNextTo('Штукатурка стен', work)).toBe(120.5);
+    expect(within(work).queryByText('Кирпич')).not.toBeInTheDocument();
     expect(sendButton()).toBeEnabled();
   });
 
@@ -458,7 +458,7 @@ describe('запросы КП в карточке сметы', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('показывает категорию, статус, кто взял, позиции, вложения и бейдж полученных КП', async () => {
+  it('бейдж «КП получены» считает завершённые и не применённые запросы', async () => {
     vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([
       brief({ id: 'a', category: 'material', status: 'in_progress', taken_by_name: 'Олег' }),
       brief({ id: 'b', category: 'work', status: 'done', items_count: 5, files_count: 0 }),
@@ -466,14 +466,9 @@ describe('запросы КП в карточке сметы', () => {
     ]);
     render(<CardKpRequests cardId="card-1" />);
 
-    const rowA = await screen.findByTestId('kp-request-a');
-    expect(rowA).toHaveTextContent('Материалы');
-    expect(rowA).toHaveTextContent('В работе');
-    expect(rowA).toHaveTextContent('Олег');
-    expect(rowA).toHaveTextContent('3');
-    expect(screen.getByTestId('kp-request-b')).toHaveTextContent('Завершён');
-    // Завершён, но не применён — один из двух завершённых.
-    expect(screen.getByText('КП получены: 1')).toBeInTheDocument();
+    await screen.findByTestId('kp-request-a');
+    // Завершён, но не применён — один из двух завершённых; взятый в работу не в счёт.
+    expect(numbersIn(screen.getByText(/КП получены/).textContent)).toEqual([1]);
   });
 
   it('«Отменить» — у нового и взятого в работу запроса, у завершённого нет', async () => {

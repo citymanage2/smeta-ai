@@ -13,7 +13,7 @@
  *   «Вернуть в работу».
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ComponentProps } from 'react';
@@ -57,6 +57,7 @@ import { useAuthStore } from '../stores/auth';
 import type {
   KpCell, KpItemDetail, KpOffer, KpPermissions, KpRequestBrief, KpRequestDetail,
 } from '../types/kp';
+import { numbersIn } from './screenQueries';
 
 function loginAs(role: string) {
   useAuthStore.getState().setAuth('token', role, 'user');
@@ -199,8 +200,7 @@ describe('Сравнительная таблица', () => {
   it('цена в единице КП и приведённая видны в ячейке', () => {
     renderTable(twoOffersRequest());
     const c = screen.getByTestId('kp-cell-i1-o1');
-    expect(c).toHaveTextContent('30,00 ₽ / шт');
-    expect(c).toHaveTextContent('24,59 ₽ / шт');
+    expect(numbersIn(c.textContent)).toEqual(expect.arrayContaining([30, 24.59]));
   });
 
   it('черновик ИИ подсвечен, несводимая единица — причина в ячейке', () => {
@@ -524,15 +524,12 @@ describe('Страница запроса', () => {
   });
 
   it('ответ фонового опроса, ушедший до действия, не перетирает результат действия', async () => {
-    const polls: Array<() => void> = [];
-    const spy = vi.spyOn(window, 'setInterval').mockImplementation(((fn: () => void, ms?: number) => {
-      // Опрос страницы — раз в 30 секунд; остальные интервалы (счётчики) не нужны.
-      if (ms === 30_000) polls.push(fn);
-      return polls.length + 1000;
-    }) as unknown as typeof window.setInterval);
+    // Часы идут сами (иначе встали бы findBy/waitFor), опрос — по докрутке.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     // В jsdom документ «скрыт», и опрос бы молчал.
     const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       const request = twoOffersRequest({
         status: 'new', taken_by_id: null, taken_by_name: null, offers: [],
         items: [detailItem({ id: 'i1' })],
@@ -546,18 +543,22 @@ describe('Страница запроса', () => {
       vi.mocked(kpApi.getKpRequest).mockReturnValueOnce(
         new Promise((resolve) => { resolveStale = resolve; }),
       );
-      for (const poll of polls) poll();
+      // Докручиваем таймеры до следующего опроса страницы (рядом тикает и
+      // счётчик в шапке — его таймер может оказаться ближе).
+      for (let i = 0; i < 5 && vi.mocked(kpApi.getKpRequest).mock.calls.length < 2; i += 1) {
+        await act(async () => { await vi.advanceTimersToNextTimerAsync(); });
+      }
       expect(kpApi.getKpRequest).toHaveBeenCalledTimes(2);
+
       vi.mocked(kpApi.takeKpRequest).mockResolvedValue({ ...request, status: 'in_progress' });
-      await userEvent.click(take);
+      await user.click(take);
       expect(await screen.findByText('В работе')).toBeInTheDocument();
 
-      resolveStale(request);
-      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      await act(async () => { resolveStale(request); });
       expect(screen.getByText('В работе')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Взять в работу' })).not.toBeInTheDocument();
     } finally {
-      spy.mockRestore();
+      vi.useRealTimers();
       hidden.mockRestore();
       vi.mocked(kpApi.getKpRequest).mockReset();
     }

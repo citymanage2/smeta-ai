@@ -56,6 +56,14 @@ function cell(overrides = {}) {
   }
 }
 
+/** Автор правки ячейки — текст заголовка ячейки без названия поля. */
+function authorOf(field: string): string {
+  const label = screen.getByText(field)
+  let head: HTMLElement | null = label.parentElement
+  while (head && (head.textContent ?? '').trim() === field) head = head.parentElement
+  return (head?.textContent ?? '').replace(field, '').trim()
+}
+
 describe('ReconciliationPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -113,16 +121,12 @@ describe('ReconciliationPanel', () => {
       },
     }))
 
-    const { container } = render(
-      <ReconciliationPanel documentRef={docRef} onClose={() => {}} />,
-    )
+    render(<ReconciliationPanel documentRef={docRef} onClose={() => {}} />)
 
-    // Автор помечен именно «сервисом»: слово «сервис» есть и в подписи шага,
-    // поэтому проверяем бейдж автора, а не текст на странице.
-    await waitFor(() => {
-      expect(container.querySelector('.de-recon-author-service')).not.toBeNull()
-    })
-    expect(container.querySelector('.de-recon-author-human')).toBeNull()
+    // Слово «сервис» есть и в подписи шага «ИИ → сервис → итог», поэтому автор
+    // читается из заголовка ячейки — рядом с названием поля, а не со страницы.
+    await screen.findByText('Кладка стен')
+    expect(authorOf('Цена работ')).toBe('сервис')
     expect(screen.queryByText('Иванов Иван')).not.toBeInTheDocument()
   })
 

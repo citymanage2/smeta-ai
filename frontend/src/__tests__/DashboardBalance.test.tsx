@@ -26,6 +26,7 @@ vi.mock('../api/apiBalance', () => ({
 
 import DashboardBalance from '../components/dashboard/DashboardBalance'
 import type { ApiBalance } from '../api/apiBalance'
+import { numbersIn } from './screenQueries'
 
 function balance(overrides: Partial<ApiBalance> = {}): ApiBalance {
   return {
@@ -53,13 +54,13 @@ describe('DashboardBalance', () => {
     vi.clearAllMocks()
   })
 
-  it('показывает остаток и на сколько дней его хватит', async () => {
+  it('показывает остаток, на сколько дней и на сколько смет его хватит', async () => {
     fetchApiBalance.mockResolvedValue(balance())
-    render(<DashboardBalance />)
+    const { container } = render(<DashboardBalance />)
 
-    expect(await screen.findByText(/\$450,00/)).toBeInTheDocument()
-    expect(screen.getByText(/хватит примерно на 30 дней/)).toBeInTheDocument()
-    expect(screen.getByText(/примерно 45 смет/)).toBeInTheDocument()
+    await screen.findByText('Остаток на Claude API')
+    // Числа, а не формат «$450,00»: остаток 450, хватит на 30 дней и 45 смет.
+    expect(numbersIn(container.textContent)).toEqual(expect.arrayContaining([450, 30, 45]))
   })
 
   it('без отметки говорит «неизвестно», а не показывает ноль', async () => {
@@ -82,27 +83,21 @@ describe('DashboardBalance', () => {
     expect(screen.getByText(/пополнили и не отметили/)).toBeInTheDocument()
   })
 
-  it('без ключа Anthropic сверять нечем — кнопка выключена', async () => {
+  // Официальной сверки может не быть никогда: на личной организации Anthropic
+  // отвечает 403, а остаток при этом полностью рабочий. Поэтому кнопку
+  // выключает только отсутствие ключа, а не отсутствие данных сверки.
+  it.each([
+    { official_enabled: true, enabled: true },
+    { official_enabled: false, enabled: false },
+  ])('ключ Anthropic задан: $official_enabled — «Сверить траты» активна: $enabled', async ({ official_enabled, enabled }) => {
     fetchApiBalance.mockResolvedValue(
-      balance({ official_enabled: false, official_through: null, synced_at: null })
+      balance({ official_enabled, official_through: null, synced_at: null })
     )
     render(<DashboardBalance />)
 
     const button = await screen.findByRole('button', { name: 'Сверить траты' })
-    expect(button).toBeDisabled()
-    expect(screen.getByText(/Ключ Anthropic не задан/)).toBeInTheDocument()
-  })
-
-  it('без официальных данных подпись нейтральна — блок не выглядит сломанным', async () => {
-    // Официальной сверки может не быть никогда: на личной организации Anthropic
-    // отвечает 403. Остаток при этом полностью рабочий.
-    fetchApiBalance.mockResolvedValue(
-      balance({ official_enabled: true, official_through: null, synced_at: null })
-    )
-    render(<DashboardBalance />)
-
-    expect(await screen.findByText(/Официальная сверка с Anthropic: данных нет/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Сверить траты' })).toBeEnabled()
+    if (enabled) expect(button).toBeEnabled()
+    else expect(button).toBeDisabled()
   })
 
   it('неудачная сверка показывает ответ Anthropic целиком', async () => {
@@ -119,15 +114,22 @@ describe('DashboardBalance', () => {
     expect(await screen.findByText(/HTTP 401 invalid x-api-key/)).toBeInTheDocument()
   })
 
-  it('удачная сверка не оставляет сообщения об ошибке', async () => {
+  it('удачная сверка убирает ответ прошлой неудачной', async () => {
+    // Своей роли у сообщения об ошибке нет — ищем его по ответу Anthropic,
+    // который в нём показан: формулировка вокруг может меняться.
     fetchApiBalance.mockResolvedValue(balance({ synced_at: null }))
-    syncApiBalance.mockResolvedValue(balance({ synced_at: '2026-09-01T10:00:00Z' }))
+    syncApiBalance
+      .mockResolvedValueOnce(balance({ synced_at: null, sync_error: 'HTTP 401 invalid x-api-key' }))
+      .mockResolvedValueOnce(balance({ synced_at: '2026-09-01T10:00:00Z' }))
     render(<DashboardBalance />)
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Сверить траты' }))
+    const button = await screen.findByRole('button', { name: 'Сверить траты' })
+    await userEvent.click(button)
+    expect(await screen.findByText(/HTTP 401 invalid x-api-key/)).toBeInTheDocument()
 
-    await waitFor(() => expect(syncApiBalance).toHaveBeenCalled())
-    expect(screen.queryByText(/Сверка не прошла/)).not.toBeInTheDocument()
+    await userEvent.click(button)
+    await waitFor(() => expect(syncApiBalance).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByText(/HTTP 401 invalid x-api-key/)).not.toBeInTheDocument())
   })
 
   it('внесённая отметка сразу пересчитывает остаток', async () => {

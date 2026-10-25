@@ -30,6 +30,7 @@ vi.mock('../api/notifications', async () => {
 
 import { getSystemNotifications } from '../api/notifications';
 import { useSystemNotifications } from '../hooks/useSystemNotifications';
+import { numbersIn } from './screenQueries';
 
 const CURSOR_KEY = 'systemEventCursor';
 
@@ -90,19 +91,30 @@ describe('useSystemNotifications', () => {
     expect(localStorage.getItem(CURSOR_KEY)).toBe('6');
   });
 
-  it('AC12: курсор сдвигается — повторный опрос не показывает то же событие', async () => {
-    localStorage.setItem(CURSOR_KEY, '5');
-    vi.mocked(getSystemNotifications).mockResolvedValue({
-      cursor: 6,
-      events: [balanceEvent(6, [{ id: 't1', name: 'Смета А' }])],
-    });
+  it('AC12: курсор сдвигается — следующий опрос не показывает то же событие', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      localStorage.setItem(CURSOR_KEY, '5');
+      // Сервер отдаёт события после курсора — как настоящий `since_id`.
+      const events = [balanceEvent(6, [{ id: 't1', name: 'Смета А' }])];
+      vi.mocked(getSystemNotifications).mockImplementation(async (since: number) => ({
+        cursor: 6,
+        events: events.filter((e) => e.id > since),
+      }));
 
-    renderHook(() => useSystemNotifications());
+      renderHook(() => useSystemNotifications());
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
 
-    await waitFor(() => expect(toastSuccess).toHaveBeenCalledTimes(1));
-    // Следующий тик спрашивает уже от нового курсора — сервер вернёт пусто.
-    expect(vi.mocked(getSystemNotifications).mock.calls[0][0]).toBe(5);
-    expect(localStorage.getItem(CURSOR_KEY)).toBe('6');
+      // Следующий плановый опрос.
+      await vi.advanceTimersToNextTimerAsync();
+      await waitFor(() => expect(getSystemNotifications).toHaveBeenCalledTimes(2));
+
+      expect(getSystemNotifications).toHaveBeenLastCalledWith(6);
+      expect(localStorage.getItem(CURSOR_KEY)).toBe('6');
+      expect(toastSuccess).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('AC12: событие без названий задач всё равно показывает количество', async () => {
@@ -116,7 +128,7 @@ describe('useSystemNotifications', () => {
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     const [, opts] = toastSuccess.mock.calls[0] as [string, { description: string }];
-    expect(opts.description).toBe('Возобновлены задачи: 3');
+    expect(numbersIn(opts.description)).toContain(3);
   });
 
   it('AC13: скрытая вкладка не опрашивает сервер', async () => {

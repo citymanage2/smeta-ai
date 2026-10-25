@@ -117,7 +117,7 @@ describe('cardUsage', () => {
     expect(cardUsage(card()).hasData).toBe(false)
   })
 
-  it('незаполненные стадии не превращаются в нули времени', () => {
+  it('незаполненное время стадий складывается как ноль, а не NaN; токены без времени — уже данные', () => {
     const c = card({ estimate_task: task({ usage: usage({ tokens: 10, cost_usd: 0.01 }) }) })
     const u = cardUsage(c)
     expect(u.queueSeconds).toBe(0)

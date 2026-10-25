@@ -50,6 +50,7 @@ import { useDocumentEditorStore } from '../stores/documentEditor';
 import { useAuthStore } from '../stores/auth';
 import type { VersionBrief } from '../api/documents';
 import type { KpApplyPreview, KpRequestBrief } from '../types/kp';
+import { numberNextTo } from './screenQueries';
 
 function version(overrides: Partial<VersionBrief>): VersionBrief {
   return {
@@ -130,26 +131,21 @@ describe('409 предпросмотра — «Обновить документ
 });
 
 describe('коэффициент версии в окне', () => {
-  it('×1,2 — пояснение видно; ×1 и без коэффициента — нет', async () => {
+  it.each([
+    { name: '×1,2', coefficient: { work: 1.2, material: 1.2, scope: 'all' as const }, shown: true },
+    { name: '×1', coefficient: { work: 1, material: 1 }, shown: false },
+    { name: 'без коэффициента', coefficient: undefined, shown: false },
+  ])('$name — пояснение про коэффициент видно: $shown', async ({ coefficient, shown }) => {
     vi.mocked(kpApi.previewKpApply).mockResolvedValue(preview());
-    const { unmount } = render(
-      <KpApplyDialog
-        cardId="card-1" versionId="v2" onClose={vi.fn()} onApplied={vi.fn()}
-        coefficient={{ work: 1.2, material: 1.2, scope: 'all' }}
-      />,
-    );
-    expect(await screen.findByTestId('kp-apply-coefficient'))
-      .toHaveTextContent('В таблице цены покажутся с коэффициентом ×1,2');
-    unmount();
-
     render(
       <KpApplyDialog
         cardId="card-1" versionId="v2" onClose={vi.fn()} onApplied={vi.fn()}
-        coefficient={{ work: 1, material: 1 }}
+        coefficient={coefficient}
       />,
     );
     await screen.findByTestId('kp-apply-rows');
-    expect(screen.queryByTestId('kp-apply-coefficient')).not.toBeInTheDocument();
+    if (shown) expect(screen.getByTestId('kp-apply-coefficient')).toBeInTheDocument();
+    else expect(screen.queryByTestId('kp-apply-coefficient')).not.toBeInTheDocument();
   });
 
   it('KpPrices передаёт коэффициент, только если открыта последняя версия', async () => {
@@ -182,7 +178,11 @@ function meta(overrides: Partial<api.DocumentMeta> = {}): api.DocumentMeta {
     task_id: 'task-1', task_type: 'ESTIMATE_OPTIMIZATION', task_status: 'completed',
     can_write: true, readonly_reason: null, rev: 0,
     active_version_id: 'v1',
-    versions: [version({}), version({ id: 'v1', version_number: 1, version_label: 'opt' })],
+    // Свои транспортные у каждой версии: по итогу на экране видно, какая открыта.
+    versions: [
+      version({}),
+      version({ id: 'v1', version_number: 1, version_label: 'opt', expenses_overridden: true, transport_pct: 10 }),
+    ],
     coefficient: null, has_draft: false, draft_updated_at: null, lock: null,
     project: { overhead_pct: 3, transport_pct: 3, name: 'ЖК Северный' },
     ...overrides,
@@ -253,15 +253,22 @@ describe('редактор оптимизации и «Цены из КП»', ()
     fireEvent.click(kpButton());
     await screen.findByRole('button', { name: 'Обновить документ' });
 
+    // Открыта V1: 500 × 25 = 12 500 материалов + 10% транспортных.
+    expect(numberNextTo('ИТОГО:')).toBe(13750);
+
     vi.mocked(api.getDocumentMeta).mockResolvedValue(meta({
-      versions: [...meta().versions, version({ id: 'v2', version_number: 2, version_label: 'kp' })],
+      versions: [
+        ...meta().versions,
+        version({ id: 'v2', version_number: 2, version_label: 'kp', expenses_overridden: true, transport_pct: 50 }),
+      ],
     }));
     const rowsCalls = vi.mocked(api.getDocumentRows).mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Обновить документ' }));
     expect(await screen.findByTestId('kp-apply-rows')).toBeInTheDocument();
     expect(kpApi.previewKpApply).toHaveBeenLastCalledWith('card-1', 'v2');
-    // Строки документа не перезагружались — черновик и открытая версия на месте.
+    // Строки документа не перезагружались — черновик на месте, а таблица
+    // осталась на V1: итог считается по её ставкам, а не по ставкам V2 (18 750).
     expect(vi.mocked(api.getDocumentRows).mock.calls.length).toBe(rowsCalls);
-    expect(useDocumentEditorStore.getState().versionId).toBe('v1');
+    expect(numberNextTo('ИТОГО:')).toBe(13750);
   });
 });

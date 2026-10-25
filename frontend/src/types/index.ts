@@ -152,7 +152,9 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   ESTIMATE_OPTIMIZATION: 'Оптимизация сметы',
 };
 
-export const STATUS_LABELS: Record<TaskStatus, string> = {
+// `satisfies`, а не аннотация: проверка полноты стоит на самой карте — статус,
+// добавленный в `TaskStatus` и забытый здесь, ломает `tsc` (правило №20).
+export const STATUS_LABELS = {
   not_started: 'Не запущено',
   pending: 'Ожидание',
   processing: 'Обработка',
@@ -160,7 +162,7 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   failed: 'Ошибка',
   cancelled: 'Остановлено',
   paused: 'На паузе',
-};
+} satisfies Record<TaskStatus, string>;
 
 export interface Project {
   id: string;

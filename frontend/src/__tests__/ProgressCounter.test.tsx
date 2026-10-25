@@ -42,10 +42,10 @@ describe('ProgressCounter', () => {
     expect(container.querySelector('[role="progressbar"]')).toBeNull();
   });
 
-  it('clamps overflow (done > total) to 100%', () => {
+  it('clamps overflow (done > total) to the total', () => {
     render(<ProgressCounter data={{ chunks_done: 9, total_chunks: 5 }} />);
-    const fill = document.querySelector('[data-testid="progress-counter-fill"]');
-    expect(fill).toHaveStyle({ width: '100%' });
-    expect(screen.getByText(/5 из 5 частей/)).toBeInTheDocument();
+    const bar = screen.getByRole('progressbar');
+    expect(bar).toHaveAttribute('aria-valuenow', '5');
+    expect(bar).toHaveAttribute('aria-valuemax', '5');
   });
 });

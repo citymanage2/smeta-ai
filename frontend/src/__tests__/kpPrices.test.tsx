@@ -13,7 +13,7 @@
  * * 409 — понятное сообщение, окно не закрывается и версию не меняет.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { fireEvent } from '@testing-library/dom';
 
 vi.mock('../api/kpRequests', async () => {
@@ -32,6 +32,7 @@ import KpPrices from '../components/editor/actions/KpPrices';
 import KpApplyDialog from '../components/kp/KpApplyDialog';
 import type { VersionBrief } from '../api/documents';
 import type { KpApplyItem, KpApplyPreview, KpApplyRow, KpRequestBrief } from '../types/kp';
+import { numbersIn } from './screenQueries';
 
 function version(overrides: Partial<VersionBrief>): VersionBrief {
   return {
@@ -128,35 +129,27 @@ function renderButton(props: Partial<React.ComponentProps<typeof KpPrices>> = {}
 const kpButton = () => screen.getByRole('button', { name: /Цены из КП/ });
 
 describe('кнопка «Цены из КП»', () => {
-  it('неактивна без завершённых запросов', async () => {
-    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([
-      brief({ status: 'in_progress' }), brief({ id: 'q2', status: 'cancelled' }),
-    ]);
-    renderButton();
+  // Один предикат «можно ли применять» — по случаю на каждое условие.
+  it.each([
+    {
+      name: 'без завершённых запросов',
+      requests: [brief({ status: 'in_progress' }), brief({ id: 'q2', status: 'cancelled' })],
+      props: {},
+    },
+    {
+      name: 'если завершённые запросы без цен (поставщики не ответили)',
+      requests: [brief({ confirmed_prices_count: 0 }), brief({ id: 'q2', confirmed_prices_count: 0 })],
+      props: {},
+    },
+    { name: 'без строк оптимизации', requests: [brief({})], props: { rowsCount: 0 } },
+    { name: 'при непринятых правках', requests: [brief({})], props: { isDirty: true } },
+  ])('неактивна $name', async ({ requests, props }) => {
+    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue(requests);
+    renderButton(props);
     await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalledWith('card-1'));
-    expect(kpButton()).toBeDisabled();
-  });
-
-  it('неактивна, если завершённые запросы без цен (поставщики не ответили)', async () => {
-    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([
-      brief({ confirmed_prices_count: 0 }), brief({ id: 'q2', confirmed_prices_count: 0 }),
-    ]);
-    renderButton();
-    await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalledWith('card-1'));
-    expect(kpButton()).toBeDisabled();
-  });
-
-  it('неактивна без строк оптимизации', async () => {
-    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([brief({})]);
-    renderButton({ rowsCount: 0 });
-    await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalled());
-    expect(kpButton()).toBeDisabled();
-  });
-
-  it('неактивна при непринятых правках', async () => {
-    vi.mocked(kpApi.listCardKpRequests).mockResolvedValue([brief({})]);
-    renderButton({ isDirty: true });
-    await waitFor(() => expect(kpApi.listCardKpRequests).toHaveBeenCalled());
+    // Пока список не разобран, кнопка неактивна и так («Проверяю…»): проверяем
+    // после ответа, а не до него.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(kpButton()).toBeDisabled();
   });
 
@@ -189,8 +182,12 @@ function renderDialog(data: KpApplyPreview) {
 
 const applyButton = () => screen.getByRole('button', { name: /^Применить/ });
 
+/** Числа строки по ячейкам: в тексте строки целиком «25,00» и «21,50» слипаются. */
+const cellNumbers = (tr: HTMLElement) =>
+  within(tr).getAllByRole('cell').flatMap((cell) => numbersIn(cell.textContent));
+
 describe('окно «Цены из КП»', () => {
-  it('показывает было → стало, КП, «Не найдено» и «включают материалы: N»', async () => {
+  it('показывает было → стало, поставщика, «Не найдено» и сколько цен включают материалы', async () => {
     renderDialog(preview({
       rows: [
         row({}),
@@ -205,14 +202,17 @@ describe('окно «Цены из КП»', () => {
 
     const rows = await screen.findByTestId('kp-apply-rows');
     const first = within(rows).getByTestId('kp-apply-row-r1');
+    const second = within(rows).getByTestId('kp-apply-row-r2');
     expect(first).toHaveTextContent('Кирпич');
-    expect(first).toHaveTextContent('25');
-    expect(first).toHaveTextContent('21,5');
+    expect(cellNumbers(first)).toEqual(expect.arrayContaining([25, 21.5]));
     expect(first).toHaveTextContent('ООО Кирпич');
-    expect(first).toHaveTextContent('10.09.2026');
-    expect(within(rows).getByTestId('kp-apply-row-r2')).toHaveTextContent('включает материалы');
+    expect(cellNumbers(second)).toContain(1200);
+    expect(second).toHaveTextContent('СтройМонтаж');
+    // Флаг «включает материалы» — только у строки, где он пришёл.
+    expect(second).toHaveTextContent(/включает материалы/);
+    expect(first).not.toHaveTextContent(/включает материалы/);
     expect(screen.getByTestId('kp-apply-not-found')).toHaveTextContent('Гвозди 100 мм');
-    expect(screen.getByTestId('kp-apply-includes-materials')).toHaveTextContent('включают материалы: 1');
+    expect(numbersIn(screen.getByTestId('kp-apply-includes-materials').textContent)).toEqual([1]);
     expect(applyButton()).toBeEnabled();
   });
 

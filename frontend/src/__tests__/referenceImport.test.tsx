@@ -9,7 +9,7 @@
  * (источник, тип, id).
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../api/catalog', () => ({
   referencePreview: vi.fn(),
@@ -18,6 +18,7 @@ vi.mock('../api/catalog', () => ({
 
 import * as catalogApi from '../api/catalog';
 import ReferenceImport from '../components/prices/ReferenceImport';
+import { numbersIn } from './screenQueries';
 
 const preview = {
   items: [{ kind: 'work' as const, name: 'Кладка стен', unit: 'м3', price: 1000 }],
@@ -108,8 +109,11 @@ describe('ReferenceImport', () => {
       }],
     });
     await openPreview();
-    expect(screen.getByText('Демонтаж кабеля')).toBeTruthy();
-    expect(screen.getByText(/30,00 \/ 60,00 \/ 100,00/)).toBeTruthy();
+    // Все три цены позиции — рядом с ней; выбирать верную система не вправе
+    // (правило №18), поэтому видны все, а не только взятая. Формат не важен.
+    const row = screen.getByText('Демонтаж кабеля').closest('tr') as HTMLElement;
+    const cells = within(row).getAllByRole('cell').map((cell) => numbersIn(cell.textContent));
+    expect(cells).toContainEqual([30, 60, 100]);
   });
 
   it('говорит, когда поиск по смыслу отключён', async () => {

@@ -30,6 +30,9 @@ export function TaskStatusBadge({ task }: Props) {
     case 'paused':
       return <span style={{ color: '#b45309', fontSize: '13px' }}>● На паузе</span>
     default:
+      // Новый статус без своей ветки — ошибка `tsc` (правило №20). Сама ветка
+      // остаётся на случай статуса, которого фронт ещё не знает.
+      task.status satisfies never
       return <span style={{ color: '#94a3b8', fontSize: '13px' }}>● Неизвестно</span>
   }
 }

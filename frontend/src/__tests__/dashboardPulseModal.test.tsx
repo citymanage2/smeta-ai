@@ -7,7 +7,7 @@
  * задачи и во что они обошлись, приходилось искать глазами в других блоках.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -95,14 +95,17 @@ describe('Пульс сегодня', () => {
     expect(navigate).toHaveBeenCalledWith('/tasks/task-1/status')
   })
 
-  it('время не выдумывается: не стартовавшая задача показывает прочерк', async () => {
+  it('время и деньги не выдумываются: у не стартовавшей задачи нет нулей', async () => {
     getPulseBucket.mockResolvedValue(
       detail({ tasks: [row({ work_seconds: null, tokens: 0, cost_usd: 0 })] })
     )
     renderPulse()
     await userEvent.click(screen.getByRole('button', { name: /В ожидании/ }))
 
+    // Чем заменён ноль — прочерком или словом — не важно; важно, что задача,
+    // которая ещё не работала, не выглядит отработавшей «0 мин» за «$0».
     const tr = (await screen.findByText('ЖК Северный')).closest('tr') as HTMLElement
-    expect(within(tr).getAllByText('—').length).toBe(3)
+    expect(tr.textContent).not.toMatch(/(^|\D)0 (сек|мин|ч)/)
+    expect(tr.textContent).not.toContain('$0')
   })
 })

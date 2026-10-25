@@ -8,14 +8,22 @@
  * относятся», и отдельно — что допзапросы не смешаны с основной обработкой.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
   return { ...actual, useNavigate: () => vi.fn() }
 })
 
+// Стор канбана — настоящий, мокается только сеть.
 vi.mock('../api/workflowCards', () => ({
+  getWorkflowCards: vi.fn().mockResolvedValue([]),
+  createWorkflowCard: vi.fn(),
+  updateWorkflowCard: vi.fn(),
+  deleteWorkflowCard: vi.fn(),
+  startTask: vi.fn(),
+  launchTask: vi.fn(),
   getCardFilesMeta: vi.fn().mockRejectedValue(new Error('no meta in test')),
   downloadInputFileById: vi.fn(),
   downloadSlotFileById: vi.fn(),
@@ -28,23 +36,11 @@ vi.mock('../api/tasks', () => ({
 
 vi.mock('../api/projects', () => ({ downloadSlotFile: vi.fn() }))
 
-const storeState = {
-  startTask: vi.fn(),
-  fetchCards: vi.fn().mockResolvedValue(undefined),
-  submittingCardIds: new Set<string>(),
-  pendingListTasks: {},
-  clearPendingListTask: vi.fn(),
-}
-
-vi.mock('../stores/kanban', () => ({
-  useKanbanStore: (selector?: (s: typeof storeState) => unknown) =>
-    (selector ? selector(storeState) : storeState),
-}))
-
-import { CardStageContent } from '../components/kanban/CardStageContent'
+import { CardStageContent, CardStagesAccordion } from '../components/kanban/CardStageContent'
 import UsageChips from '../components/card/UsageChips'
 import { stageUsage } from '../utils/usageMetrics'
 import { KanbanStage, TaskBrief, TaskUsage, WorkflowCard } from '../types/workflow'
+import { numbersIn } from './screenQueries'
 
 function usage(over: Partial<TaskUsage> = {}): TaskUsage {
   return {
@@ -95,23 +91,37 @@ function card(stage: KanbanStage, over: Partial<WorkflowCard> = {}): WorkflowCar
 }
 
 describe('чипы стадии в карточке', () => {
-  it('AC-1: текущая стадия показывает свои токены, деньги и время', () => {
+  it('AC-1: у каждой стадии — её токены, деньги и время, а не соседней', () => {
     render(
-      <CardStageContent
-        card={card('estimate', {
-          estimate_task: task({
-            id: 'e',
-            usage: usage({
-              tokens: 1_200_000, cost_usd: 9.84, queue_seconds: 180, work_seconds: 840,
+      <MemoryRouter>
+        <CardStagesAccordion
+          card={card('estimate', {
+            list_task_id: 'l',
+            list_task: task({
+              id: 'l', task_type: 'LIST_FROM_GRAND',
+              usage: usage({ tokens: 1_200_000, cost_usd: 9.84, queue_seconds: 180, work_seconds: 840 }),
             }),
-          }),
-        })}
-      />,
+            estimate_task_id: 'e',
+            estimate_task: task({
+              id: 'e',
+              usage: usage({ tokens: 500, cost_usd: 0.4, queue_seconds: 60, work_seconds: 300 }),
+            }),
+          })}
+        />
+      </MemoryRouter>,
     )
-    expect(screen.getByText('1.2M')).toBeTruthy()
-    expect(screen.getByText('$9.84')).toBeTruthy()
-    expect(screen.getByText('3 мин')).toBeTruthy()
-    expect(screen.getByText('14 мин')).toBeTruthy()
+    // Секция стадии — её заголовок и всё, что под ним.
+    const chipsOf = (stage: RegExp) => {
+      const section = screen.getByRole('button', { name: stage }).parentElement as HTMLElement
+      return numbersIn(within(section).getByTestId('usage-chips').textContent)
+    }
+    const list = chipsOf(/^Перечень/)
+    const estimate = chipsOf(/^Смета/)
+    // Перечень: $9.84, ожидание 3 мин, работа 14 мин; смета: 500 токенов, $0.4, 5 мин.
+    expect(list).toEqual(expect.arrayContaining([9.84, 3, 14]))
+    expect(list).not.toContain(0.4)
+    expect(estimate).toEqual(expect.arrayContaining([500, 0.4, 5]))
+    expect(estimate).not.toContain(9.84)
   })
 
   it('AC-2: стадия без вызовов ИИ не рисует ни чипов, ни нулей', () => {

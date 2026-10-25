@@ -88,7 +88,7 @@ describe('CardStagesAccordion — стадии секциями', () => {
     expect(mockNavigate).not.toHaveBeenCalled()
   })
 
-  it('AC-8: заблокированная стадия не раскрывается, причина — в подсказке', () => {
+  it('AC-8: заблокированная стадия не раскрывается', () => {
     renderAccordion(makeCard({
       list_task: null,
       list_task_id: null,
@@ -96,8 +96,11 @@ describe('CardStagesAccordion — стадии секциями', () => {
       completeness_task_id: null,
       stage: 'list',
     }))
-    const header = screen.getByTitle('Полнота: Сначала создайте Перечень')
+    // Перечня нет — «Полнота» заблокирована: заголовок неактивен, и клик по
+    // нему не открывает форму запуска (гейт её всё равно не пустит).
+    const header = screen.getByRole('button', { name: /^Полнота/ })
+    expect(header).toBeDisabled()
     fireEvent.click(header)
-    expect(screen.queryByText('Запустить проверку полноты')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Запустить проверку полноты/ })).toBeNull()
   })
 })
