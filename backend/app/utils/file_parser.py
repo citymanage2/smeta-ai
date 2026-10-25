@@ -20,6 +20,8 @@ _UNIT_KEYWORDS = ["ед", "изм", "мер"]  # ед. изм. / единица 
 _QTY_KEYWORDS = ["колич", "объем", "объём", "кол-во", "кол.", "кол "]
 # Ключевое слово для колонки "всего с учётом коэффициентов" (итоговое кол-во)
 _QTY_TOTAL_KEYWORDS = ["всего с учет", "всего с коэф"]
+# Так же бывает подписана и стоимость — это деньги, а не объём.
+_QTY_TOTAL_NOT_MONEY = ["стоим", "цен", "руб"]
 
 # Слова в строке-наименовании, указывающие на итоговую/служебную строку (пропускаем).
 # Каждое — целое слово: без границы слева «сп» совпадало внутри «исп.» (сокращение
@@ -133,7 +135,8 @@ def _find_header_row(all_rows) -> Tuple[Optional[int], Optional[int], Optional[i
     for sub_idx in range(best_row_idx, min(best_row_idx + 5, len(all_rows))):
         sub_cells = [str(c).strip().lower() if c is not None else "" for c in all_rows[sub_idx]]
         for col_idx, cell in enumerate(sub_cells):
-            if any(kw in cell for kw in _QTY_TOTAL_KEYWORDS):
+            if (any(kw in cell for kw in _QTY_TOTAL_KEYWORDS)
+                    and not any(kw in cell for kw in _QTY_TOTAL_NOT_MONEY)):
                 qty_total_col = col_idx
                 break
         if qty_total_col is not None:

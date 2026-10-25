@@ -203,3 +203,22 @@ def test_quantity_of_equipment_is_the_total_column(header):
     detector = next(r for r in rows if r["name"].startswith("Извещатель пожарный"))
     assert detector["quantity"] == 113
     assert detector["unit"] == "шт"
+
+
+def test_cost_column_named_with_coefficients_is_not_the_quantity():
+    """Стоимость «всего с учётом коэффициентов» — деньги, а не объём.
+
+    Колонки итогового количества в файле нет, зато так подписана стоимость:
+    объём остаётся из «Количества», а не превращается в 56500 рублей.
+    """
+    header = [[
+        "№ п/п", "Обоснование", "Наименование работ и затрат", "Единица измерения",
+        "Количество", "коэффициенты", "Стоимость всего с учетом коэффициентов, руб.",
+    ]]
+    rows = parse_xlsx_grand(_lsr([
+        ["5", "ТЦ_89.1.61.02", "Извещатель пожарный дымовой ИП 212-141",
+         "шт", 100, 1.13, 56500.0],
+    ], header=header))
+
+    detector = next(r for r in rows if r["name"].startswith("Извещатель пожарный"))
+    assert detector["quantity"] == 100
