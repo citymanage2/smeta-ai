@@ -10,137 +10,145 @@
 - Баланс API (InsufficientBalanceError) в любом чанке НЕ проглатывается, а
   пробрасывается вверх (→ пауза) — раньше non-first чанк молча пропускался.
 
+Прогон настоящий: PDF проекта лежит во входных файлах задачи, задача и её
+чекпоинты — в тестовой БД, подменён только ИИ. Возобновление — второй прогон той
+же задачи после паузы, как это делает воркер.
+
 План: plans/2026-07-21-resume-and-balance-pause.md, Фаза 2.
 """
-import base64
-import sys
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
-
+import fitz
 import pytest
+from sqlalchemy import select
 
-sys.modules.setdefault("fitz", MagicMock())
+from app.models.estimate_version import EstimateVersion
+from tests.helpers.anthropic_api import balance_error, claude_message, prompt_text
 
-import app.services.task_processor as tp  # noqa: E402
-from app.services.task_processor import TaskProcessor  # noqa: E402
-from app.services.claude_service import InsufficientBalanceError  # noqa: E402
+PART_1 = "Страница 1 ---"
+PART_2 = "Страница 2 ---"
 
-
-def _item(name, qty=1):
-    return {"name": name, "type": "work", "quantity": qty}
-
-
-def _make_proc(monkeypatch, *, chunks, claude_side_effect):
-    """TaskProcessor с замоканными PDF-чанкингом, Claude и побочными методами."""
-    p = TaskProcessor("tid-lfp", db=MagicMock())
-    p.update_progress = AsyncMock(return_value=None)
-    p._save_progress_data = AsyncMock(return_value=None)
-    p.save_result = AsyncMock(return_value=None)
-    p._create_initial_generic_version = AsyncMock(return_value=None)
-    p._load_input_files = AsyncMock(return_value=[
-        {"mime_type": "application/pdf", "content_b64": base64.b64encode(b"pdf").decode()}
-    ])
-    p._interruptible_claude_json_with_retry = AsyncMock(side_effect=claude_side_effect)
-
-    monkeypatch.setattr(tp, "chunk_project_pdf", lambda _b: chunks)
-    monkeypatch.setattr(tp, "normalize_items", lambda items: items)
-    monkeypatch.setattr(tp, "generate_list", lambda *a, **k: b"xlsx-bytes")
-    return p
+DUCT_WORK = {"type": "Работа", "name": "Монтаж воздуховодов", "unit": "м2", "quantity": 120}
+DUCT = {"type": "Материал", "name": "Воздуховод оцинкованный", "unit": "м2", "quantity": 126}
 
 
-def _chunks(n):
-    return [{"text": f"t{i}", "image_pages": []} for i in range(n)]
+@pytest.fixture(scope="module")
+def project_pdf() -> bytes:
+    """PDF проекта из двух текстовых страниц; первая длиннее порога части, поэтому
+    документ уходит в ИИ двумя частями — по странице на часть."""
+    doc = fitz.open()
+    page = doc.new_page(width=842, height=1191)
+    page.insert_textbox(
+        fitz.Rect(10, 10, 832, 1181), " ".join(f"section{i}" for i in range(4500)), fontsize=4,
+    )
+    page = doc.new_page()
+    page.insert_textbox(
+        fitz.Rect(36, 36, 559, 806), " ".join(f"appendix{i}" for i in range(60)), fontsize=10,
+    )
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+def _by_part(part_1, part_2, pass_2=None):
+    """Ответ ИИ по тому, какую часть PDF ему прислали (или уточнение объёмов)."""
+    def answer(kwargs):
+        prompt = prompt_text(kwargs)
+        if PART_1 in prompt:
+            return part_1
+        if PART_2 in prompt:
+            return part_2
+        assert pass_2 is not None, "неожиданный запрос уточнения объёмов"
+        return pass_2
+    return answer
+
+
+async def _project_task(processor_env, project_pdf):
+    task = await processor_env.task(
+        "LIST_FROM_PROJECT", input_files=[{"name": "Проект.pdf", "mime_type": "application/pdf"}],
+    )
+    await processor_env.input_file(task, "Проект.pdf", "application/pdf", project_pdf)
+    return task
+
+
+async def _list_names(processor_env, task) -> list[str]:
+    """Наименования позиций в документе перечня (версия V0 — её видит редактор)."""
+    task_id = str((await processor_env.reload(task)).id)
+    version = (await processor_env.db.execute(
+        select(EstimateVersion).where(
+            EstimateVersion.task_id == task_id, EstimateVersion.file_slot == "result",
+        )
+    )).scalar_one()
+    return [row["cells"]["Наименование"] for row in version.rows]
+
+
+# ---------------------------------------------------------------------------
+# Баланс в non-first чанке прохода 1 → пауза с чекпоинтом (не проглатывается)
+# ---------------------------------------------------------------------------
+
+async def test_balance_error_in_pass1_propagates(processor_env, claude_api, project_pdf):
+    claude_api(_by_part({"items": [DUCT_WORK]}, balance_error()), repeat=True)
+    task = await _project_task(processor_env, project_pdf)
+
+    task = await processor_env.run(task)
+
+    # Задача не завершилась и не упала, а ушла на паузу.
+    assert task.status == "paused"
+    # Чекпоинт после успешного чанка 0 сохранён — resume продолжит с чанка 1.
+    checkpoint = task.progress_data
+    assert checkpoint["_stage"] == "pass1"
+    assert (checkpoint["chunks_done"], checkpoint["total_chunks"]) == (1, 2)
+    assert [it["name"] for it in checkpoint["items"]] == ["Монтаж воздуховодов"]
+    assert await processor_env.results(task) == []
 
 
 # ---------------------------------------------------------------------------
 # Resume прохода 1 — пропуск уже обработанных чанков
 # ---------------------------------------------------------------------------
 
-async def test_resume_pass1_skips_done_chunks(monkeypatch):
-    # 2 чанка, chunks_done=1 → обрабатываем только чанк с индексом 1.
-    task = SimpleNamespace(
-        task_type="LIST_FROM_PROJECT",
-        name=None,
-        progress_data={
-            "chunks_done": 1,
-            "total_chunks": 2,
-            "items": [_item("A")],
-            "_stage": "pass1",
-        },
+async def test_resume_pass1_skips_done_chunks(processor_env, claude_api, project_pdf):
+    claude_api(_by_part({"items": [DUCT_WORK]}, balance_error()), repeat=True)
+    task = await processor_env.run(await _project_task(processor_env, project_pdf))
+    assert task.status == "paused"
+
+    ai = claude_api(_by_part(AssertionError("часть 1 уже посчитана"), {"items": [DUCT]}), repeat=True)
+    task = await processor_env.run(task)
+
+    assert task.status == "completed"
+    # В ИИ ушла только вторая часть — первая взята из чекпоинта.
+    (_call,) = ai.calls
+    assert PART_2 in ai.prompt(0) and PART_1 not in ai.prompt(0)
+    assert await _list_names(processor_env, task) == ["Монтаж воздуховодов", "Воздуховод оцинкованный"]
+
+
+async def test_resume_pass1_done_skips_pass1_entirely(processor_env, claude_api, project_pdf):
+    """Пауза во втором проходе (уточнение объёмов) — возобновление не повторяет первый."""
+    unknown_qty = {**DUCT_WORK, "quantity": None}
+    claude_api(_by_part({"items": [unknown_qty]}, {"items": [DUCT]}, balance_error()), repeat=True)
+    task = await processor_env.run(await _project_task(processor_env, project_pdf))
+    assert task.status == "paused"
+    assert task.progress_data["_stage"] == "pass1_done"
+
+    ai = claude_api(
+        _by_part(AssertionError("проход 1 уже сделан"), AssertionError("проход 1 уже сделан"),
+                 {"items": [DUCT_WORK]}),
+        repeat=True,
     )
-    p = _make_proc(
-        monkeypatch,
-        chunks=_chunks(2),
-        claude_side_effect=[{"items": [_item("B")]}],  # только для чанка 1
-    )
+    task = await processor_env.run(task)
 
-    await p._handle_list_from_project(task)
-
-    # Claude вызван ровно один раз (первый чанк пропущен по чекпоинту).
-    assert p._interruptible_claude_json_with_retry.await_count == 1
-    # Результат сформирован из восстановленных + новых позиций.
-    p.save_result.assert_awaited_once()
-    saved_stages = [c.args[0].get("_stage") for c in p._save_progress_data.await_args_list]
-    assert "pass1_done" in saved_stages
+    assert task.status == "completed"
+    # Ни одной части PDF повторно — только уточнение объёма.
+    (_call,) = ai.calls
+    assert PART_1 not in ai.prompt(0) and PART_2 not in ai.prompt(0)
+    assert await _list_names(processor_env, task) == ["Монтаж воздуховодов", "Воздуховод оцинкованный"]
 
 
-async def test_resume_pass1_done_skips_pass1_entirely(monkeypatch):
-    # _stage=pass1_done + все позиции с объёмом → ни один вызов Claude не нужен.
-    task = SimpleNamespace(
-        task_type="LIST_FROM_PROJECT",
-        name=None,
-        progress_data={
-            "chunks_done": 2,
-            "total_chunks": 2,
-            "items": [_item("A"), _item("B")],
-            "_stage": "pass1_done",
-        },
-    )
-    p = _make_proc(monkeypatch, chunks=_chunks(2), claude_side_effect=[])
-
-    await p._handle_list_from_project(task)
-
-    assert p._interruptible_claude_json_with_retry.await_count == 0
-    p.save_result.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# Баланс в non-first чанке прохода 1 → пробрасывается (не проглатывается)
-# ---------------------------------------------------------------------------
-
-async def test_balance_error_in_pass1_propagates(monkeypatch):
-    task = SimpleNamespace(
-        task_type="LIST_FROM_PROJECT",
-        name=None,
-        progress_data=None,
-    )
-    p = _make_proc(
-        monkeypatch,
-        chunks=_chunks(2),
-        claude_side_effect=[
-            {"items": [_item("A")]},                 # чанк 0 — ок
-            InsufficientBalanceError("no money"),    # чанк 1 — баланс
-        ],
-    )
-
-    with pytest.raises(InsufficientBalanceError):
-        await p._handle_list_from_project(task)
-
-    # Чекпоинт после успешного чанка 0 сохранён — resume продолжит с чанка 1.
-    saved = [c.args[0] for c in p._save_progress_data.await_args_list]
-    assert any(s.get("chunks_done") == 1 and s.get("_stage") == "pass1" for s in saved)
-    # save_result НЕ вызывался — задача не завершилась, а ушла на паузу.
-    p.save_result.assert_not_awaited()
-
-
-async def test_first_chunk_failure_raises(monkeypatch):
+async def test_first_chunk_failure_raises(processor_env, claude_api, project_pdf):
     """Регрессия: падение самого первого чанка (не баланс) по-прежнему валит задачу."""
-    task = SimpleNamespace(task_type="LIST_FROM_PROJECT", name=None, progress_data=None)
-    p = _make_proc(
-        monkeypatch,
-        chunks=_chunks(2),
-        claude_side_effect=[RuntimeError("boom")],  # чанк 0 падает
-    )
+    truncated = claude_message({"items": []}, stop_reason="max_tokens")
+    ai = claude_api(_by_part(truncated, {"items": [DUCT]}), repeat=True)
+    task = await _project_task(processor_env, project_pdf)
 
-    with pytest.raises(RuntimeError):
-        await p._handle_list_from_project(task)
+    task = await processor_env.run(task)
+
+    assert task.status == "failed"
+    assert len(ai.calls) == 1
+    assert await processor_env.results(task) == []
