@@ -1,16 +1,22 @@
 """Правила для промпта: включает человек, без правил промпт прежний.
 
 План: plans/2026-09-10-sverka-i-obuchenie-na-pravkah.md, Фаза 8.
+
+`system` проверяется в настоящем запросе к Anthropic — том, что уходит из
+расчёта сметы (обычный вызов и пачка Batch API), а не в сборке параметров.
 """
+import json
+from types import SimpleNamespace
+
 import pytest
 import pytest_asyncio
 
 from app.models.prompt_rule import PromptRule
 from app.models.user import User
-from app.services import claude_service
 from app.services import prompt_rules as svc
-from app.services.task_processor import SYSTEM_BASE, TaskProcessor
+from app.services.task_processor import SYSTEM_BASE
 from app.utils.auth import create_access_token, hash_password
+from tests.helpers.anthropic_api import ClaudeScript, claude_message
 
 
 def _auth(user_id: int, role: str) -> dict:
@@ -34,28 +40,73 @@ async def env(db_session):
     await db_session.commit()
 
 
-def test_no_rules_prompt_is_byte_identical():
-    """Правил нет — `system` ровно тот же, что до функции. И в batch тоже."""
-    before = [{"type": "text", "text": SYSTEM_BASE, "cache_control": {"type": "ephemeral"}}]
-    msgs = [{"role": "user", "content": "x"}]
-
-    params = claude_service._build_message_params(msgs, system_prompt=svc.system_for(SYSTEM_BASE, None))
-    assert params["system"] == before
-
-    request = claude_service.build_batch_request("c1", msgs, system_prompt=svc.system_for(SYSTEM_BASE, None))
-    assert request["params"]["system"] == before
+# Позиции нет в прайсе — смета спрашивает её цену у ИИ.
+ITEM = {"type": "Материал", "name": "Смеси сухие", "unit": "кг", "quantity": 30}
+ANSWER = {"items": [{"id": 0, "type": "Материал", "name": "Смеси сухие", "unit": "кг",
+                     "material_price": 70.0, "sources": "источник"}]}
 
 
-def test_rules_go_as_separate_block_after_base():
-    """Правила — вторым блоком; метка кеша одна, на последнем блоке."""
-    params = claude_service._build_message_params(
-        [{"role": "user", "content": "x"}],
-        system_prompt=svc.system_for(SYSTEM_BASE, "ПРАВИЛА"),
-    )
-    assert params["system"] == [
-        {"type": "text", "text": SYSTEM_BASE},
-        {"type": "text", "text": "ПРАВИЛА", "cache_control": {"type": "ephemeral"}},
+class _Anthropic:
+    """Клиент Anthropic: обычные вызовы — по сценарию, пачки Batch API — запоминает."""
+
+    def __init__(self, script: ClaudeScript):
+        self.script = script
+        self.batches: list[list] = []
+
+    async def create_batch(self, *, requests):
+        self.batches.append(list(requests))
+        return SimpleNamespace(id="msgbatch_test")
+
+    def systems(self) -> list:
+        """`system` каждого ушедшего запроса: сначала обычные вызовы, потом пачки."""
+        return [call.get("system") for call in self.script.calls] + [
+            request["params"].get("system") for batch in self.batches for request in batch
+        ]
+
+
+@pytest.fixture
+def anthropic(patch_claude_create):
+    def _install(*steps) -> _Anthropic:
+        api = _Anthropic(ClaudeScript(steps))
+        client = patch_claude_create(api.script.create)
+        client.messages.batches = SimpleNamespace(create=api.create_batch)
+        return api
+
+    return _install
+
+
+async def _estimate(processor_env, mode: str = "fast"):
+    task = await processor_env.estimate_task([ITEM], processing_mode=mode)
+    return await processor_env.run(task)
+
+
+@pytest.mark.parametrize("mode", ["fast", "batch"])
+async def test_no_rules_prompt_is_byte_identical(processor_env, anthropic, env, mode):
+    """Правил нет — `system` ровно тот же, что до функции: основной промпт одним
+    блоком с меткой кеша. И в пачке Batch API тоже."""
+    api = anthropic(ANSWER)
+
+    await _estimate(processor_env, mode)
+
+    assert api.systems() == [
+        [{"type": "text", "text": SYSTEM_BASE, "cache_control": {"type": "ephemeral"}}],
     ]
+
+
+@pytest.mark.parametrize("mode", ["fast", "batch"])
+async def test_rules_go_as_separate_block_after_base(processor_env, anthropic, db_session, env, mode):
+    """Правила — вторым блоком; метка кеша одна, на последнем блоке."""
+    db_session.add(PromptRule(text="Не округляй объём", scope="ALL", enabled=True))
+    await db_session.commit()
+    api = anthropic(ANSWER)
+
+    await _estimate(processor_env, mode)
+
+    (system,) = api.systems()
+    base, rules = system
+    assert base == {"type": "text", "text": SYSTEM_BASE}
+    assert "Не округляй объём" in rules["text"]
+    assert rules["cache_control"] == {"type": "ephemeral"}
 
 
 def test_block_contains_only_enabled_and_applicable_rules():
@@ -73,19 +124,25 @@ def test_block_contains_only_enabled_and_applicable_rules():
     assert svc.build_block([rules[2]], "LIST_FROM_GRAND") is None
 
 
-@pytest.mark.asyncio
-async def test_rules_read_once_per_run(db_session, env):
-    """Процессор читает включённые правила в блок и отдаёт их в system."""
+async def test_rules_read_once_per_run(processor_env, anthropic, db_session, env):
+    """Правило, включённое посреди расчёта, ждёт следующего: один расчёт — один промпт."""
     db_session.add(PromptRule(text="Не округляй объём", scope="ALL", enabled=True))
     await db_session.commit()
 
-    processor = TaskProcessor("00000000-0000-0000-0000-000000000000", db_session)
-    assert processor._system() == SYSTEM_BASE
+    async def skip_and_enable_second_rule(kwargs):
+        db_session.add(PromptRule(text="Бери цены Екатеринбурга", scope="ALL", enabled=True))
+        await db_session.commit()
+        return claude_message({"items": []})  # позиция пропущена — будет повторный запрос
 
-    await processor._load_prompt_rules("LIST_FROM_GRAND")
-    system = processor._system()
-    assert system[0] == SYSTEM_BASE
-    assert "Не округляй объём" in system[1]
+    api = anthropic(skip_and_enable_second_rule, ANSWER)
+
+    task = await _estimate(processor_env)
+
+    assert task.status == "completed"
+    first, second = api.systems()
+    assert second == first
+    assert "Не округляй объём" in first[1]["text"]
+    assert "Екатеринбурга" not in json.dumps(second, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

@@ -166,16 +166,25 @@ async def test_optimization_document_opens_with_its_versions(
 
 
 @pytest.mark.asyncio
-async def test_meta_versions_carry_expense_percentages(async_client, doc_env):
+async def test_meta_versions_carry_expense_percentages(async_client, db_session, doc_env):
     """Сравнение версий считает итоги по процентам самой версии, а не общим."""
+    version = await db_session.get(EstimateVersion, doc_env["version_id"])
+    version.overhead_pct = 5
+    version.transport_pct = 1
+    version.contingency_pct = 2
+    version.expenses_overridden = True
+    await db_session.commit()
+
     r = await async_client.get(
         f"/documents/{doc_env['card_id']}/list", headers=_pm1(doc_env))
 
     assert r.status_code == 200
-    version = r.json()["versions"][0]
-    for field in ("overhead_pct", "transport_pct", "contingency_pct"):
-        assert field in version
-    assert version["expenses_overridden"] is False
+    body = r.json()
+    brief = next(v for v in body["versions"] if v["id"] == doc_env["version_id"])
+    assert (brief["overhead_pct"], brief["transport_pct"], brief["contingency_pct"]) == (5, 1, 2)
+    assert brief["expenses_overridden"] is True
+    # Проценты проекта (по умолчанию 3 %) остаются своими: версия их не подменяет.
+    assert float(body["project"]["overhead_pct"]) == 3.0
 
 
 def _pm1(env):
@@ -389,45 +398,35 @@ async def test_apply_without_changes_writes_no_history(async_client, doc_env):
 
 
 @pytest.mark.asyncio
-async def test_history_is_trimmed_and_old_snapshots_dropped(async_client, doc_env, db_session):
+async def test_history_is_trimmed_and_old_snapshots_dropped(async_client, doc_env):
     """История не растёт без предела: снимки строк — только у последних записей.
 
     Снимок «как было» весит столько же, сколько сам документ; без ограничения
     документ на 2000 строк раздул бы БД на десятки мегабайт за месяц работы.
     """
-    from app.services.document_service import HISTORY_DEPTH, SNAPSHOT_DEPTH
-    from app.services import document_service as svc
+    url = f"/documents/{doc_env['card_id']}/list"
+    for rev in range(25):
+        r = await async_client.post(
+            f"{url}/apply",
+            json={"version_id": doc_env["version_id"], "rev": rev, "rows": _rows(1000 + rev)},
+            headers=_pm1(doc_env),
+        )
+        assert r.status_code == 200, r.text
 
-    user = {"sub": str(doc_env["pm1"]), "role": "project_manager"}
-    doc = await svc.resolve_document(db_session, doc_env["card_id"], "list", user)
-    version = svc.pick_version(doc, None)
+    history = (await async_client.get(f"{url}/history", headers=_pm1(doc_env))).json()
+    assert len(history) == 20
 
-    total_applies = HISTORY_DEPTH + 5
-    for i in range(total_applies):
-        doc = await svc.resolve_document(db_session, doc_env["card_id"], "list", user)
-        version = svc.pick_version(doc, None)
-        await svc.apply_rows(db_session, doc, version, _rows(1000 + i), version.rev, user)
-
-    entries = await svc.list_history(db_session, doc)
-    assert len(entries) == HISTORY_DEPTH
-
-    rows_snapshots = (await db_session.execute(
-        select(TaskHistory)
-        .where(TaskHistory.task_id == doc_env["task_id"])
-        .order_by(TaskHistory.created_at.desc())
-    )).scalars().all()
-    with_snapshot = [
-        e for e in rows_snapshots
-        if isinstance(e.previous_value, dict) and e.previous_value.get("rows") is not None
-    ]
-    assert len(with_snapshot) == SNAPSHOT_DEPTH
-
-    # Свежая запись всё ещё позволяет откатиться
-    latest_id = str(rows_snapshots[0].id)
+    # Старая запись осталась справкой «кто и что менял», откатиться на неё нельзя.
     r = await async_client.post(
-        f"/documents/{doc_env['card_id']}/list/history/{latest_id}/revert",
-        headers=_pm1(doc_env))
-    assert r.status_code == 200
+        f"{url}/history/{history[-1]['id']}/revert", headers=_pm1(doc_env))
+    assert r.status_code == 422
+
+    # Свежая откатывается: строки — как до последнего «Применить».
+    r = await async_client.post(
+        f"{url}/history/{history[0]['id']}/revert", headers=_pm1(doc_env))
+    assert r.status_code == 200, r.text
+    rows = (await async_client.get(f"{url}/rows", headers=_pm1(doc_env))).json()["rows"]
+    assert rows[0]["cells"]["Цена работ"] == 1023
 
 
 # ---------------------------------------------------------------------------

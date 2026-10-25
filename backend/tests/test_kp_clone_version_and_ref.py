@@ -3,7 +3,7 @@
 * `estimate_versions_service.clone_version` — клонирование версии без
   `commit`: применение цен из КП создаёт версию «Цены из КП» в той же
   транзакции, что и сверку ревизии, поэтому коммитить внутри нельзя.
-  Ручная «Зафиксировать версию» идёт через него же, ответ роута прежний.
+  Ручная «Зафиксировать версию» идёт через него же.
 * `kp_ref` — ссылка строки на КП — едет полем строки (`PASSTHROUGH_FIELDS`),
   но в промпты не уходит (проблема 34).
 """
@@ -142,9 +142,9 @@ async def test_clone_version_copies_content_and_does_not_commit(db_session, clon
 
 
 @pytest.mark.asyncio
-async def test_create_manual_version_route_response_unchanged(
-    async_client, db_session, clone_env,
-):
+async def test_create_manual_version_copies_source(async_client, db_session, clone_env):
+    """«Зафиксировать версию» идёт через `clone_version`: следующий номер, строки,
+    проценты и коэффициент исходной версии, тип задачи и слот файла."""
     headers = {"Authorization": f"Bearer {create_access_token(clone_env['pm'], 'project_manager', 'pm_clone')}"}
     resp = await async_client.post(
         f"/tasks/{clone_env['task_id']}/estimate/versions",
@@ -152,25 +152,20 @@ async def test_create_manual_version_route_response_unchanged(
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert set(body) == {
-        "id", "task_id", "version_number", "version_label", "version_display_name",
-        "rows", "overhead_pct", "transport_pct", "contingency_pct",
-        "expenses_overridden", "optimization_proposals", "is_rolled_back", "created_at",
-    }
-    assert body["version_number"] == 4
-    assert body["version_label"] == "custom"
-    assert body["version_display_name"] == "Снимок"
-    assert [r["id"] for r in body["rows"]] == ["r1", "r2"]
-    assert float(body["overhead_pct"]) == 7 and body["expenses_overridden"] is True
-    assert body["is_rolled_back"] is False
 
     db_session.expire_all()
-    saved = await db_session.get(EstimateVersion, body["id"])
-    assert saved is not None
-    assert saved.file_slot == "result"
-    assert saved.task_type == "ESTIMATE_OPTIMIZATION"
+    saved = await db_session.get(EstimateVersion, resp.json()["id"])
+    assert saved is not None and saved.task_id == clone_env["task_id"]
+    assert saved.version_number == 4
+    assert saved.version_display_name == "Снимок"
+    assert saved.rows == _rows()
+    assert float(saved.overhead_pct) == 7 and saved.expenses_overridden is True
     assert saved.coefficient == {"work": 1.05, "material": 1.0, "scope": "all"}
+    assert saved.task_type == "ESTIMATE_OPTIMIZATION"
+    assert saved.file_slot == "result"
+    # Исходная версия осталась как была.
+    source = await db_session.get(EstimateVersion, clone_env["source_id"])
+    assert source.version_number == 3 and source.rows == _rows()
 
 
 @pytest.mark.asyncio

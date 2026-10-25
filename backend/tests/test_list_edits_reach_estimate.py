@@ -5,20 +5,20 @@
 в редакторе объём оставался в документе и в скачиваемом файле, а в смету уезжал
 перечень до правок — молча.
 """
-import sys
 import uuid
-from unittest.mock import MagicMock
 
 import pytest
+import pytest_asyncio
 
-sys.modules.setdefault('fitz', MagicMock())
-
-from app.models.estimate_version import EstimateVersion  # noqa: E402
-from app.models.project import Project  # noqa: E402
-from app.models.task import Task  # noqa: E402
-from app.models.user import User  # noqa: E402
-from app.utils.auth import hash_password  # noqa: E402
-from app.utils.generic_items import generic_rows_to_items  # noqa: E402
+from app.models.document_lock import DocumentLock
+from app.models.estimate_version import EstimateVersion
+from app.models.history import TaskHistory
+from app.models.project import Project
+from app.models.task import Task
+from app.models.user import User
+from app.models.workflow_card import WorkflowCard
+from app.utils.auth import create_access_token, hash_password
+from app.utils.generic_items import generic_rows_to_items
 
 
 def _row(name: str, qty, type_: str = "Материал", notes: str = "", sheet=None) -> dict:
@@ -104,20 +104,17 @@ def test_round_trip_through_the_real_file():
     assert restored[1]["notes"].startswith("Добавлено по норме")
 
 
-def _doc(svc, task, version, file_slot: str):
-    """Документ проверки полноты вокруг задачи и её версии."""
-    return svc.ResolvedDocument(
-        card=None, kind="completeness", task=task, project=None,
-        file_slot=file_slot, row_format="generic", versions=[version],
-        active=version,
-    )
+# ── «Применить» в документе полноты обновляет позиции задачи ─────────────────
+
+_MODELS = (DocumentLock, TaskHistory, EstimateVersion, WorkflowCard, Task, Project, User)
+
+_PARTITION = _row("Устройство перегородок из ГВЛ", 5.475, type_="Работа")
 
 
-# ── сохранение документа обновляет позиции задачи ────────────────────────────
-
-@pytest.fixture
-async def list_task_env(db_session, fake_s3):
-    for model in (EstimateVersion, Task, Project, User):
+@pytest_asyncio.fixture
+async def completeness_env(db_session, fake_s3):
+    """Карточка с посчитанной полнотой: позиции задачи и рабочая версия V0."""
+    for model in _MODELS:
         await db_session.execute(model.__table__.delete())
     await db_session.commit()
 
@@ -143,50 +140,62 @@ async def list_task_env(db_session, fake_s3):
     db_session.add(task)
     await db_session.flush()
 
+    card = WorkflowCard(project_id=str(project.id), name="АР", stage="completeness",
+                        completeness_task_id=str(task.id))
     version = EstimateVersion(
         task_id=str(task.id), version_number=0, version_label="original",
-        version_display_name="V0 — Оригинал",
-        rows=[_row("Устройство перегородок из ГВЛ", 5.475, type_="Работа")],
+        version_display_name="V0 — Оригинал", rows=[_PARTITION],
         file_slot="result", task_type="CHECK_LIST_COMPLETENESS",
     )
-    db_session.add(version)
+    db_session.add_all([card, version])
     await db_session.commit()
 
-    return {"user_id": user.id, "task_id": str(task.id), "version_id": str(version.id)}
+    yield {
+        "headers": {"Authorization": f"Bearer {create_access_token(user.id, 'project_manager', 'pm-list')}"},
+        "card_id": str(card.id), "task_id": str(task.id), "version_id": str(version.id),
+    }
+
+    for model in _MODELS:
+        await db_session.execute(model.__table__.delete())
+    await db_session.commit()
+
+
+async def _apply(async_client, env, rows) -> None:
+    r = await async_client.post(
+        f"/documents/{env['card_id']}/completeness/apply",
+        json={"version_id": env["version_id"], "rev": 0, "rows": rows},
+        headers=env["headers"],
+    )
+    assert r.status_code == 200, r.text
+
+
+async def _task_items(db_session, env) -> list[dict]:
+    db_session.expire_all()
+    task = await db_session.get(Task, env["task_id"])
+    return task.progress_data["items"]
 
 
 @pytest.mark.asyncio
-async def test_saved_rows_update_task_items(db_session, list_task_env):
+async def test_saved_rows_update_task_items(async_client, db_session, completeness_env):
     """Человек дописал материал в редакторе — смета обязана его увидеть."""
-    from app.services import document_service as svc
-
-    task = await db_session.get(Task, list_task_env["task_id"])
-    version = await db_session.get(EstimateVersion, list_task_env["version_id"])
-    doc = _doc(svc, task, version, file_slot="result")
-
-    new_rows = [
-        _row("Устройство перегородок из ГВЛ", 5.475, type_="Работа"),
+    await _apply(async_client, completeness_env, [
+        _PARTITION,
         _row("Лист гипсоволокнистый ГВЛ 12,5 мм", 21.9,
              notes="Добавлено по норме: 5,475 × 4 (2 слоя × 2 стороны) = 21,9 м2."),
-    ]
-    svc._sync_task_items(doc, new_rows)
+    ])
 
-    items = task.progress_data["items"]
-    assert len(items) == 2
-    assert items[1]["name"] == "Лист гипсоволокнистый ГВЛ 12,5 мм"
-    assert items[1]["quantity"] == 21.9
+    items = await _task_items(db_session, completeness_env)
+    assert [(i["name"], i["quantity"]) for i in items] == [
+        ("Устройство перегородок из ГВЛ", 5.475),
+        ("Лист гипсоволокнистый ГВЛ 12,5 мм", 21.9),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_rows_of_foreign_format_do_not_wipe_task_items(db_session, list_task_env):
+async def test_rows_of_foreign_format_do_not_wipe_task_items(async_client, db_session, completeness_env):
     """Пустой разбор не должен стирать позиции задачи."""
-    from app.services import document_service as svc
+    before = await _task_items(db_session, completeness_env)
 
-    task = await db_session.get(Task, list_task_env["task_id"])
-    version = await db_session.get(EstimateVersion, list_task_env["version_id"])
-    doc = _doc(svc, task, version, file_slot="result")
-    before = list(task.progress_data["items"])
+    await _apply(async_client, completeness_env, [{"row_id": "1", "cells": {"Колонка": "значение"}}])
 
-    svc._sync_task_items(doc, [{"row_id": "1", "cells": {"Колонка": "значение"}}])
-
-    assert task.progress_data["items"] == before
+    assert await _task_items(db_session, completeness_env) == before

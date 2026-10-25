@@ -380,14 +380,14 @@ async def test_section_history_is_separate_from_estimate(async_client, summary_e
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_head_of_sales_can_edit_foreign_section(async_client, db_session, summary_env):
-    """Руководитель отдела продаж правит разделы любого проекта."""
+async def test_colleague_can_edit_foreign_section(async_client, db_session, summary_env):
+    """Проекты общие: рядовой менеджер правит раздел чужого проекта."""
     edited = _estimate_rows(1500)
     edited[0]["price_work"] = 7000
 
     resp = await async_client.post(
         _url(summary_env, "/apply"), json={"rev": 0, "rows": edited},
-        headers=_auth(summary_env["head"], "head_of_sales"))
+        headers=_auth(summary_env["pm2"], "project_manager"))
     assert resp.status_code == 200, resp.text
 
     summary = await _reload_summary(db_session, summary_env)

@@ -205,16 +205,17 @@ async def test_second_edit_of_same_cell_is_not_first_touch(
 
 
 @pytest.mark.asyncio
-async def test_added_and_removed_rows_are_signals(async_client, db_session, env):
-    """Пропущенная и лишняя позиция — самый ценный сигнал, поле `__row`."""
+async def test_added_and_removed_rows_reach_the_report(async_client, env):
+    """Пропущенная и лишняя позиция — самый ценный сигнал: отдельные цифры отчёта
+    («пропустили позицию», «выдумали лишнюю») и строки ленты."""
     rows = _list_rows()
     rows.pop()  # убрали «Песок»
-    rows.append({
-        "row_id": "r3",
-        "cells": {"Тип": "Материал", "Наименование": "Щебень",
-                  "Ед. изм": "т", "Кол-во": 5, "Цена работ": 900},
-    })
-
+    for row_id, name in (("r3", "Щебень"), ("r4", "Цемент")):
+        rows.append({
+            "row_id": row_id,
+            "cells": {"Тип": "Материал", "Наименование": name,
+                      "Ед. изм": "т", "Кол-во": 5, "Цена работ": 900},
+        })
     r = await async_client.post(
         f"/documents/{env['card_id']}/list/apply",
         json={"version_id": env["list_version_id"], "rev": 0, "rows": rows},
@@ -222,31 +223,48 @@ async def test_added_and_removed_rows_are_signals(async_client, db_session, env)
     )
     assert r.status_code == 200, r.text
 
-    signals = await _signals(db_session, env["list_task_id"])
-    by_row = {s.row_key: s for s in signals if s.field == FIELD_ROW}
-    assert by_row["r3"].new_value == "добавлена"
-    assert by_row["r3"].row_name == "Щебень"
-    assert by_row["r2"].new_value == "удалена"
-    assert by_row["r2"].row_name == "Песок"
+    head = _auth(env["head"], "head_of_sales", "head")
+    stats = (await async_client.get("/corrections/stats", headers=head)).json()
+    assert (stats["rows_added"], stats["rows_removed"]) == (2, 1)
+
+    feed = (await async_client.get("/corrections", headers=head)).json()
+    assert {(c["row_name"], c["new_value"]) for c in feed if c["field"] == FIELD_ROW} == {
+        ("Щебень", "добавлена"), ("Цемент", "добавлена"), ("Песок", "удалена"),
+    }
 
 
 @pytest.mark.asyncio
-async def test_automatic_operations_are_not_signals(async_client, db_session, env):
-    """Проверка цен правит смету через тот же `apply_rows` — но это не правка человека."""
-    from app.services import document_service as svc
-
-    doc = await svc.resolve_document(
-        db_session, env["card_id"], "estimate",
-        {"sub": str(env["pm1"]), "role": "project_manager", "username": "pm1"}, None,
+async def test_automatic_operations_are_not_signals(async_client, db_session, env, price_db):
+    """Проверка единиц и откат правят смету тем же «Применить» — но это не правка человека."""
+    url = f"/documents/{env['card_id']}/estimate"
+    r = await async_client.post(
+        f"{url}/apply",
+        json={"version_id": env["estimate_version_id"], "rev": 0, "rows": _estimate_rows(2500.0)},
+        headers=_pm1(env),
     )
-    version = svc.pick_version(doc, env["estimate_version_id"])
-    await svc.apply_rows(
-        db_session, doc, version, _estimate_rows(2500.0), 0,
-        {"sub": str(env["pm1"]), "role": "project_manager", "username": "pm1"},
-        operation_type="price_units_check",
-    )
+    assert r.status_code == 200, r.text
+    manual = len(await _signals(db_session, env["estimate_task_id"]))
+    assert manual > 0
 
-    assert await _signals(db_session, env["estimate_task_id"]) == []
+    # В прайсе 2500 ₽ — за м2, а позиция в м3: проверка ставит строке пометку.
+    price_db.work("Кладка стен", unit="м2", prices={"Подрядчик": 2500})
+    await price_db.load()
+    r = await async_client.post(
+        f"{url}/price-units-check",
+        json={"version_id": env["estimate_version_id"], "rev": 1}, headers=_pm1(env),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["flagged"] == 1
+
+    # Откат ручной правки (самая старая запись истории).
+    history = (await async_client.get(f"{url}/history", headers=_pm1(env))).json()
+    r = await async_client.post(f"{url}/history/{history[-1]['id']}/revert", headers=_pm1(env))
+    assert r.status_code == 200, r.text
+    rows = (await async_client.get(f"{url}/rows", headers=_pm1(env))).json()["rows"]
+    assert rows[0]["price_work"] == 3000
+
+    db_session.expire_all()
+    assert len(await _signals(db_session, env["estimate_task_id"])) == manual
 
 
 @pytest.mark.asyncio
@@ -311,32 +329,6 @@ async def test_stats_counts_only_first_touch_as_system_error(
     full = await async_client.get(
         "/corrections", params={"first_touch_only": False}, headers=head)
     assert len(full.json()) == 2
-
-
-@pytest.mark.asyncio
-async def test_added_and_removed_rows_counted_separately(
-    async_client, db_session, env
-):
-    """«Пропустили позицию» и «выдумали лишнюю» — отдельные цифры отчёта."""
-    rows = _list_rows()
-    rows.pop()
-    rows.append({
-        "row_id": "r3",
-        "cells": {"Тип": "Материал", "Наименование": "Щебень",
-                  "Ед. изм": "т", "Кол-во": 5, "Цена работ": 900},
-    })
-    r = await async_client.post(
-        f"/documents/{env['card_id']}/list/apply",
-        json={"version_id": env["list_version_id"], "rev": 0, "rows": rows},
-        headers=_pm1(env),
-    )
-    assert r.status_code == 200, r.text
-
-    stats = await async_client.get(
-        "/corrections/stats", headers=_auth(env["head"], "head_of_sales", "head"))
-    body = stats.json()
-    assert body["rows_added"] == 1
-    assert body["rows_removed"] == 1
 
 
 @pytest.mark.asyncio

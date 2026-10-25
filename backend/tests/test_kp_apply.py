@@ -156,7 +156,8 @@ async def test_material_and_work_prices_go_to_new_version(async_client, db_sessi
 
     source, clone = await _versions(db_session, env)
     assert body["version_id"] == str(clone.id)
-    assert clone.version_display_name == "Цены из КП"
+    # Новая версия — отдельной вкладкой: у неё своё имя, не как у исходной.
+    assert clone.version_display_name and clone.version_display_name != source.version_display_name
     assert source.rows == _base_rows()  # исходная не изменена
     assert clone.coefficient == COEF
     new = _by_id(clone.rows)

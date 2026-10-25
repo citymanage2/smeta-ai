@@ -84,6 +84,11 @@ async def env(db_session, fake_s3):
     await db_session.commit()
 
 
+def _num(text) -> float:
+    """Значение ячейки сверки числом: API отдаёт его текстом, сверяем число, а не запись."""
+    return float(text)
+
+
 async def _recon(async_client, env) -> dict:
     r = await async_client.get(
         f"/documents/{env['card_id']}/estimate/reconciliation",
@@ -132,9 +137,9 @@ async def test_human_edit_shows_three_columns(async_client, db_session, env):
     row = next(r for r in data["rows"] if r["row_key"] == "e1")
     cell = next(c for c in row["cells"] if c["field_key"] == "price_work")
 
-    assert cell["ai_value"] == "3000.0"
-    assert cell["service_value"] == "3000.0"
-    assert cell["current_value"] == "2500.0"
+    assert _num(cell["ai_value"]) == 3000
+    assert _num(cell["service_value"]) == 3000
+    assert _num(cell["current_value"]) == 2500
     assert cell["changed_by"] == "human"
     assert cell["delta"] == -500.0
     assert cell["price_source"] == "Прайс подрядчика №2"
@@ -162,10 +167,10 @@ async def test_service_change_is_not_blamed_on_human(async_client, db_session, e
         for c in r["cells"] if c["field_key"] == "price_work"
     )
 
-    assert cell["ai_value"] == "3000.0"
-    assert cell["current_value"] == "2800.0"
+    assert _num(cell["ai_value"]) == 3000
+    assert _num(cell["current_value"]) == 2800
     # Ключевое: «сервис поставил» = «сейчас», человек к ячейке не прикасался.
-    assert cell["service_value"] == "2800.0"
+    assert _num(cell["service_value"]) == 2800
     assert cell["changed_by"] == "service"
     assert cell["user_name"] is None
 
@@ -194,9 +199,9 @@ async def test_service_then_human_keeps_both_steps_visible(
         for c in r["cells"] if c["field_key"] == "price_work"
     )
 
-    assert cell["ai_value"] == "3000.0"
-    assert cell["service_value"] == "2800.0"
-    assert cell["current_value"] == "2500.0"
+    assert _num(cell["ai_value"]) == 3000
+    assert _num(cell["service_value"]) == 2800
+    assert _num(cell["current_value"]) == 2500
     assert cell["changed_by"] == "human"
     # Промах считается от ответа ИИ: 2500 − 3000.
     assert cell["delta"] == -500.0
@@ -222,8 +227,8 @@ async def test_second_edit_does_not_move_service_column(
     )
 
     # 2500 — уже человеческое число, в колонку сервиса оно попасть не должно.
-    assert cell["service_value"] == "3000.0"
-    assert cell["current_value"] == "2400.0"
+    assert _num(cell["service_value"]) == 3000
+    assert _num(cell["current_value"]) == 2400
 
 
 @pytest.mark.asyncio
@@ -316,8 +321,8 @@ async def test_rebuilt_rows_are_matched_by_name(async_client, db_session, env):
     cell = next(
         c for r in data["rows"] for c in r["cells"] if c["field_key"] == "price_work"
     )
-    assert cell["ai_value"] == "3000.0"
-    assert cell["current_value"] == "2500.0"
+    assert _num(cell["ai_value"]) == 3000
+    assert _num(cell["current_value"]) == 2500
 
 
 @pytest.mark.asyncio
@@ -348,7 +353,7 @@ async def test_service_change_after_human_is_not_credited_to_human(
         for c in r["cells"] if c["field_key"] == "price_work"
     )
 
-    assert cell["current_value"] == "2700.0"
+    assert _num(cell["current_value"]) == 2700
     assert cell["changed_by"] == "service"
     # Шаг человека при этом не теряется: видно, что он ставил 2500.
-    assert cell["service_value"] == "3000.0"
+    assert _num(cell["service_value"]) == 3000

@@ -1,7 +1,7 @@
 """ИИ-разбор файла КП (план 2026-09-14-zapros-kp.md, фаза 6; критерии 16–17).
 
 Claude замокан. Проверяется:
-* загрузка КП с файлом ставит разбор в очередь той же транзакцией;
+* загрузка КП с файлом ставит разбор в очередь, воркер его выполняет;
 * ИИ возвращает цены только для позиций запроса — чужой id отброшен;
 * распознанная цена — черновик (`ai`, не подтверждена), ручная цена цела;
 * «только сумма» → цена = сумма / количество, уверенность низкая;
@@ -27,7 +27,8 @@ from app.models.api_call_log import ApiCallLog
 from app.models.job import Job
 from app.models.kp_request import KpOffer, KpOfferPrice, KpRequest
 from app.services import kp_parser
-from tests.helpers.kp import CONTRACTOR, PM, SUPPLY, create_offer, headers, upload_offer
+from tests.helpers.anthropic_api import claude_message, prompt_text
+from tests.helpers.kp import CONTRACTOR, PM, SUPPLY, create_offer, headers, pdf, upload_offer
 
 
 def _xlsx() -> bytes:
@@ -39,6 +40,17 @@ def _xlsx() -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _png() -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (20, 20), "white").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @pytest_asyncio.fixture
@@ -98,6 +110,13 @@ async def _run(db_session, monkeypatch, offer_id, answer_fn=None, **fake_kw):
     return fake
 
 
+def _ids_in(kwargs: dict) -> dict:
+    """Имя позиции → id, под которым она ушла в настоящий запрос к ИИ."""
+    text = prompt_text(kwargs)
+    listing = json.loads(text.split("<positions>")[1].split("</positions>")[0])
+    return {p["name"]: p["id"] for p in listing}
+
+
 async def _prices(db_session, offer_id):
     rows = (await db_session.execute(
         select(KpOfferPrice).where(KpOfferPrice.offer_id == offer_id)
@@ -109,22 +128,27 @@ async def _prices(db_session, offer_id):
 # Постановка разбора
 # ---------------------------------------------------------------------------
 
-def test_worker_knows_parse_job():
+@pytest.mark.asyncio
+async def test_upload_with_file_queues_parse_that_worker_runs(async_client, db_session, env, claude_api):
+    """Загрузка КП с файлом ставит разбор в очередь; воркер его выполняет — цены черновиком."""
     from app import worker
 
-    assert kp_parser.JOB_KIND == "kp.parse_offer"
-    assert kp_parser.JOB_KIND in worker.HANDLERS
-
-
-@pytest.mark.asyncio
-async def test_upload_with_file_queues_parse_in_same_transaction(async_client, db_session, env):
     offer = await create_offer(async_client, env)
     assert offer["parse_status"] == "queued"
-    jobs = (await db_session.execute(select(Job).where(Job.kind == "kp.parse_offer"))).scalars().all()
-    assert len(jobs) == 1
-    assert jobs[0].payload == {"offer_id": offer["id"]}
-    assert jobs[0].owner_id == env["supply1"]
-    assert jobs[0].status == "queued"
+    (job,) = (await db_session.execute(select(Job).where(Job.status == "queued"))).scalars().all()
+
+    claude_api(lambda kwargs: {"prices": [
+        {"item_id": _ids_in(kwargs)["Арматура А500"], "unit": "т", "unit_price": 54900,
+         "confidence": "high"},
+    ]})
+    # Как `worker.run_job`: обработчик по виду job, payload с номером job.
+    await worker.HANDLERS[job.kind]({**job.payload, "_job_id": job.id, "_job_attempt": 1}, db_session)
+
+    db_session.expire_all()
+    stored = await db_session.get(KpOffer, offer["id"])
+    assert stored.parse_status == "parsed"
+    row = (await _prices(db_session, offer["id"]))[env["armature"]]
+    assert (row.price, row.unit, row.source, row.confirmed) == (54900, "т", "ai", False)
 
 
 @pytest.mark.asyncio
@@ -481,37 +505,27 @@ async def test_fresh_processing_is_not_abandoned(async_client, db_session, env):
 # Файлы: что уходит в ИИ
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("file, blocks, text", [
+    pytest.param(("kp.pdf", pdf(), "application/pdf"), ["document"], [], id="pdf-документом"),
+    pytest.param(("kp.png", _png(), "image/png"), ["image"], [], id="png-картинкой"),
+    pytest.param(("kp.xlsx", _xlsx(), XLSX_MIME), [], ["Арматура А500С d12", "54900", "Прайс"],
+                 id="xlsx-текстом"),
+])
 @pytest.mark.asyncio
-async def test_pdf_goes_as_document_block(async_client, db_session, env, monkeypatch):
-    offer = await create_offer(async_client, env)
-    fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
-    blocks = fake.calls[0]["image_data"]
-    assert len(blocks) == 1 and blocks[0]["type"] == "document"
-    assert fake.calls[0].get("use_web_search") in (None, False)
+async def test_offer_file_goes_to_ai_by_its_type(async_client, db_session, env, claude_api,
+                                                 file, blocks, text):
+    """PDF уходит документом, картинка — изображением, таблица — текстом; веб-поиска нет."""
+    offer = await create_offer(async_client, env, file=file)
+    ai = claude_api({"prices": []})
 
+    await kp_parser.process_offer(db_session, offer["id"])
 
-@pytest.mark.asyncio
-async def test_image_goes_as_image_block(async_client, db_session, env, monkeypatch):
-    from PIL import Image
-
-    buf = io.BytesIO()
-    Image.new("RGB", (20, 20), "white").save(buf, format="PNG")
-    offer = await create_offer(async_client, env, file=("kp.png", buf.getvalue(), "image/png"))
-    fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
-    blocks = fake.calls[0]["image_data"]
-    assert len(blocks) == 1 and blocks[0]["type"] == "image"
-
-
-@pytest.mark.asyncio
-async def test_xlsx_goes_as_text(async_client, db_session, env, monkeypatch):
-    offer = await create_offer(
-        async_client, env,
-        file=("kp.xlsx", _xlsx(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-    )
-    fake = await _run(db_session, monkeypatch, offer["id"], answer={"prices": []})
-    assert not fake.calls[0].get("image_data")
-    text = _prompt_text(fake.calls[0]["messages"])
-    assert "Арматура А500С d12" in text and "54900" in text and "Прайс" in text
+    (call,) = ai.calls
+    content = call["messages"][0]["content"]
+    sent = [b["type"] for b in content if b.get("type") != "text"] if isinstance(content, list) else []
+    assert sent == blocks
+    assert all(fragment in prompt_text(call) for fragment in text)
+    assert "tools" not in call
 
 
 def test_spreadsheet_text_is_capped():
@@ -537,27 +551,18 @@ def test_broken_spreadsheet_raises_readable_error():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_parse_cost_in_call_log(async_client, db_session, env, monkeypatch, patch_claude_create):
+async def test_parse_cost_in_call_log(async_client, db_session, env, claude_api):
+    """Трата на разбор — в журнале вызовов (идёт в остаток денег) и в `parse_cost` КП."""
     offer = await create_offer(async_client, env)
+    claude_api(claude_message({"prices": []}, input_tokens=10_000, output_tokens=1_000))
 
-    async def fake_create(**kwargs):
-        return SimpleNamespace(
-            stop_reason="end_turn",
-            content=[SimpleNamespace(type="text", text='{"prices": []}')],
-            usage=SimpleNamespace(input_tokens=10_000, output_tokens=1_000,
-                                  cache_read_input_tokens=0, cache_creation_input_tokens=0,
-                                  server_tool_use=None),
-        )
-
-    patch_claude_create(fake_create)
     await kp_parser.process_offer(db_session, offer["id"])
-    db_session.expire_all()
 
-    logs = (await db_session.execute(select(ApiCallLog))).scalars().all()
-    assert len(logs) == 1
-    assert logs[0].task_id is None
-    # Sonnet 5: 10 000 × $2/1M + 1 000 × $10/1M = $0.03
-    assert logs[0].cost_usd == Decimal("0.03")
+    db_session.expire_all()
+    (log,) = (await db_session.execute(select(ApiCallLog))).scalars().all()
+    assert log.task_id is None
     stored = await db_session.get(KpOffer, offer["id"])
     assert stored.parse_status == "parsed"
-    assert stored.parse_cost == pytest.approx(0.03)
+    # Цены модели закреплены в test_api_cost_pricing.py; здесь — что трата одна и та же.
+    assert log.cost_usd > 0
+    assert stored.parse_cost == pytest.approx(float(log.cost_usd))
