@@ -14,7 +14,15 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => vi.fn() }
 })
 
+// Сетевой слой карточек: по нему видно, какой эндпоинт ушёл — `start-task`
+// (прикрепить) или `launch-task` (запустить). Стор канбана — настоящий.
 vi.mock('../api/workflowCards', () => ({
+  getWorkflowCards: vi.fn().mockResolvedValue([]),
+  createWorkflowCard: vi.fn(),
+  updateWorkflowCard: vi.fn(),
+  deleteWorkflowCard: vi.fn(),
+  startTask: vi.fn(),
+  launchTask: vi.fn(),
   getCardFilesMeta: vi.fn().mockRejectedValue(new Error('no meta in test')),
   downloadInputFileById: vi.fn(),
   downloadSlotFileById: vi.fn(),
@@ -27,25 +35,8 @@ vi.mock('../api/tasks', () => ({
 
 vi.mock('../api/projects', () => ({ downloadSlotFile: vi.fn() }))
 
-const startTask = vi.fn().mockResolvedValue(undefined)
-const launchTask = vi.fn().mockResolvedValue(undefined)
-const fetchCards = vi.fn().mockResolvedValue(undefined)
-
-const storeState = {
-  startTask,
-  launchTask,
-  fetchCards,
-  submittingCardIds: new Set<string>(),
-  pendingListTasks: {},
-  clearPendingListTask: vi.fn(),
-}
-
-vi.mock('../stores/kanban', () => ({
-  useKanbanStore: (selector?: (s: typeof storeState) => unknown) =>
-    (selector ? selector(storeState) : storeState),
-  computeGuard: () => ({ allowed: true, blockType: null, message: '' }),
-}))
-
+import { launchTask, startTask } from '../api/workflowCards'
+import { useKanbanStore } from '../stores/kanban'
 import { CardStageContent } from '../components/kanban/CardStageContent'
 import { computeNodeState } from '../components/pipeline/PipelineStepper'
 import { WorkflowCard, TaskBrief, TaskStatus, KanbanStage } from '../types/workflow'
@@ -90,9 +81,16 @@ const notStartedCard = () => makeCard('optimization', {
   optimization_task: task('not_started', 'ESTIMATE_OPTIMIZATION', 't4'),
 })
 
+const initialStore = useKanbanStore.getState()
+
 beforeEach(() => {
   vi.clearAllMocks()
-  storeState.submittingCardIds = new Set<string>()
+  useKanbanStore.setState(initialStore, true)
+  vi.mocked(startTask).mockResolvedValue(notStartedCard())
+  vi.mocked(launchTask).mockResolvedValue(makeCard('optimization', {
+    optimization_task_id: 't4',
+    optimization_task: task('pending', 'ESTIMATE_OPTIMIZATION', 't4'),
+  }))
 })
 
 describe('Оптимизация — запуск только по кнопке', () => {
@@ -121,8 +119,8 @@ describe('Оптимизация — запуск только по кнопке
     const button = await screen.findByRole('button', { name: /Начать оптимизацию/ })
     fireEvent.click(button)
 
+    // Ушёл `launch-task`; прикрепление (`start-task`) кнопка запуска не повторяет.
     await waitFor(() => expect(launchTask).toHaveBeenCalledWith('card-1', 'ESTIMATE_OPTIMIZATION'))
-    // Прикрепление — отдельное действие: кнопка запуска его не повторяет.
     expect(startTask).not.toHaveBeenCalled()
   })
 
@@ -132,6 +130,7 @@ describe('Оптимизация — запуск только по кнопке
     const button = await screen.findByRole('button', { name: /Использовать смету/ })
     fireEvent.click(button)
 
+    // Ушёл только `start-task` — задача создаётся `not_started`, в очередь не идёт.
     await waitFor(() => expect(startTask).toHaveBeenCalledWith('card-1', {
       task_type: 'ESTIMATE_OPTIMIZATION',
       use_previous_stage: true,

@@ -63,6 +63,7 @@ vi.mock('../utils/notificationSound', () => ({
 import { getTaskStatus, getTaskResults, TaskStatusResponse } from '../api/tasks';
 import { TaskStatus } from '../types';
 import TaskStatusPage from '../pages/TaskStatus';
+import { numbersIn } from './screenQueries';
 
 function makeTaskResponse(overrides: Partial<TaskStatusResponse> = {}): TaskStatusResponse {
   return {
@@ -96,28 +97,19 @@ describe('TaskStatus — progress_message display', () => {
     vi.mocked(getTaskResults).mockResolvedValue([]);
   });
 
-  it('shows progress_message directly under the status badge when processing', async () => {
+  it.each([
+    { status: 'processing' as TaskStatus, message: 'Анализ проектной документации...' },
+    { status: 'pending' as TaskStatus, message: 'Задача ожидает выполнения...' },
+  ])('shows progress_message directly under the status badge when $status', async ({ status, message }) => {
     vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({ status: 'processing', progress_message: 'Анализ проектной документации...' })
+      makeTaskResponse({ status, progress_message: message })
     );
 
     renderPage();
 
     // Must be rendered via a dedicated element, not just via progressLog accumulation
     const el = await screen.findByTestId('progress-message');
-    expect(el).toBeInTheDocument();
-    expect(el).toHaveTextContent('Анализ проектной документации...');
-  });
-
-  it('shows progress_message directly under the status badge when pending', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({ status: 'pending', progress_message: 'Задача ожидает выполнения...' })
-    );
-
-    renderPage();
-
-    const el = await screen.findByTestId('progress-message');
-    expect(el).toHaveTextContent('Задача ожидает выполнения...');
+    expect(el).toHaveTextContent(message);
   });
 
   it('does NOT render the progress-message element when progress_message is null', async () => {
@@ -151,30 +143,20 @@ describe('TaskStatus — resume button visibility (Phase 1)', () => {
     vi.mocked(getTaskResults).mockResolvedValue([]);
   });
 
-  it('shows "Продолжить" for a failed CHECK_LIST_COMPLETENESS with a chunk checkpoint', async () => {
+  it.each([
+    { name: 'CHECK_LIST_COMPLETENESS, chunk checkpoint', task_type: 'CHECK_LIST_COMPLETENESS', progress_data: { chunks_done: 2, total_chunks: 5 } },
+    { name: 'CHECK_PROJECT_COMPLETENESS, chunk checkpoint', task_type: 'CHECK_PROJECT_COMPLETENESS', progress_data: { chunks_done: 1, total_chunks: 3 } },
+    { name: 'ESTIMATE_FROM_LIST, pre_excel stage (regression)', task_type: 'ESTIMATE_FROM_LIST', progress_data: { _stage: 'pre_excel' } },
+    { name: 'ESTIMATE_FROM_LIST, claude_partial stage (Phase 2b)', task_type: 'ESTIMATE_FROM_LIST', progress_data: { _stage: 'claude_partial', claude_results: { '0': {} } } },
+    { name: 'LIST_FROM_GRAND, partial OCR checkpoint', task_type: 'LIST_FROM_GRAND', progress_data: { ocr_pages_partial: [{ page: 1, text: 'a', method: 'ocr' }] } },
+    { name: 'LIST_FROM_GRAND, OCR fully done (ocr_pages)', task_type: 'LIST_FROM_GRAND', progress_data: { ocr_pages: [{ page: 1, text: 'a', method: 'ocr' }] } },
+  ])('offers resume for a failed task: $name', async ({ task_type, progress_data }) => {
     vi.mocked(getTaskStatus).mockResolvedValue(
       makeTaskResponse({
-        task_type: 'CHECK_LIST_COMPLETENESS' as any,
+        task_type: task_type as any,
         status: 'failed',
         error_message: 'Ошибка',
-        progress_data: { chunks_done: 2, total_chunks: 5 } as any,
-      })
-    );
-
-    renderPage();
-
-    const btn = await screen.findByTestId('resume-button');
-    expect(btn).toBeInTheDocument();
-    expect(btn).toHaveTextContent('Продолжить');
-  });
-
-  it('shows "Продолжить" for a failed CHECK_PROJECT_COMPLETENESS with a chunk checkpoint', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        task_type: 'CHECK_PROJECT_COMPLETENESS' as any,
-        status: 'failed',
-        error_message: 'Ошибка',
-        progress_data: { chunks_done: 1, total_chunks: 3 } as any,
+        progress_data: progress_data as any,
       })
     );
 
@@ -183,37 +165,7 @@ describe('TaskStatus — resume button visibility (Phase 1)', () => {
     expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
   });
 
-  it('still shows "Продолжить" for a failed ESTIMATE_FROM_LIST at pre_excel stage (regression)', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        task_type: 'ESTIMATE_FROM_LIST' as any,
-        status: 'failed',
-        error_message: 'Ошибка',
-        progress_data: { _stage: 'pre_excel' } as any,
-      })
-    );
-
-    renderPage();
-
-    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
-  });
-
-  it('shows "Продолжить" for a failed ESTIMATE_FROM_LIST at claude_partial stage (Phase 2b)', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        task_type: 'ESTIMATE_FROM_LIST' as any,
-        status: 'failed',
-        error_message: 'Баланс API исчерпан',
-        progress_data: { _stage: 'claude_partial', claude_results: { '0': {} } } as any,
-      })
-    );
-
-    renderPage();
-
-    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
-  });
-
-  it('shows "Продолжить" for a failed LIST_FROM_GRAND with a partial OCR checkpoint', async () => {
+  it('partial OCR checkpoint tells how many pages are already recognized', async () => {
     vi.mocked(getTaskStatus).mockResolvedValue(
       makeTaskResponse({
         task_type: 'LIST_FROM_GRAND' as any,
@@ -231,25 +183,8 @@ describe('TaskStatus — resume button visibility (Phase 1)', () => {
 
     renderPage();
 
-    const btn = await screen.findByTestId('resume-button');
-    expect(btn).toHaveTextContent('Продолжить');
-    // сообщение с числом уже распознанных страниц
-    expect(screen.getByText(/Распознано\s*3\s*стр/)).toBeInTheDocument();
-  });
-
-  it('shows "Продолжить" for a failed LIST_FROM_GRAND after OCR fully done (ocr_pages)', async () => {
-    vi.mocked(getTaskStatus).mockResolvedValue(
-      makeTaskResponse({
-        task_type: 'LIST_FROM_GRAND' as any,
-        status: 'failed',
-        error_message: 'Ошибка',
-        progress_data: { ocr_pages: [{ page: 1, text: 'a', method: 'ocr' }] } as any,
-      })
-    );
-
-    renderPage();
-
-    expect(await screen.findByTestId('resume-button')).toBeInTheDocument();
+    await screen.findByTestId('resume-button');
+    expect(numbersIn(screen.getByText(/Распознано/).textContent)).toEqual([3]);
   });
 
   it('shows only "Перезапустить" for a failed task without a checkpoint', async () => {

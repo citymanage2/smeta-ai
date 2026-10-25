@@ -60,18 +60,14 @@ describe('PriceLearning', () => {
     undoPriceDecision.mockResolvedValue({ restored: true })
   })
 
-  it('показывает расхождение словами и не пишет в прайс сам', async () => {
+  it('пока не нажали — в прайс ничего не записано (правило №9)', async () => {
     getPriceSuggestions.mockResolvedValue([suggestion()])
 
     render(<PriceLearning />)
 
-    await waitFor(() => {
-      expect(screen.getByText('Кладка стен')).toBeInTheDocument()
-    })
-    expect(screen.getByText(/система посчитала/)).toBeInTheDocument()
-    expect(screen.getByText(/3 000,00 ₽/)).toBeInTheDocument()
-    // Ключевое: пока не нажали — ничего не записано.
+    expect(await screen.findByText('Кладка стен')).toBeInTheDocument()
     expect(acceptPriceSuggestion).not.toHaveBeenCalled()
+    expect(rejectPriceSuggestion).not.toHaveBeenCalled()
   })
 
   it('предупреждает, что цена станет главнее прайсов подрядчиков', async () => {

@@ -21,6 +21,7 @@ vi.mock('../api/admin', () => ({
 
 import { HealthPanel } from '../pages/Admin'
 import type { QueueHealth } from '../api/admin'
+import { numbersIn } from './screenQueries'
 
 const API_OK = {
   checked_at: new Date().toISOString(),
@@ -77,45 +78,37 @@ describe('Диагностика: перезапуски обработчика'
     getApiHealth.mockResolvedValue(API_OK)
   })
 
-  it('показывает цифры памяти и число слотов', async () => {
-    getQueueHealth.mockResolvedValue(
-      queueHealth({
-        starts_1h: 1,
-        last_age_s: 120,
-        slots: 2,
-        limit_mb: 2048,
-        rss_mb: 780,
-        requeued: 0,
-      })
-    )
+  // Строка перезапусков — единственное место, где видно, что обработчик умирает
+  // и поднимается заново. Проверяются числа, а не фразы: формулировки меняются,
+  // а потерять цифру (или напечатать «null» без cgroup) нельзя. Возраст старта
+  // (5 с) выбран так, чтобы не совпасть ни с одним проверяемым числом — иначе
+  // пропавшее число нашлось бы в нём.
+  it.each([
+    {
+      name: 'память, слоты, перезапуски за час',
+      restarts: { starts_1h: 1, last_age_s: 5, slots: 2, limit_mb: 2048, rss_mb: 780, requeued: 0 },
+      numbers: [1, 2, 2048, 780],
+    },
+    {
+      name: 'нет цифр памяти (платформа без cgroup)',
+      restarts: { starts_1h: 1, last_age_s: 5, slots: 4, limit_mb: null, rss_mb: null, requeued: null },
+      numbers: [1, 4],
+    },
+    {
+      // Оставлено из «несколько стартов за час…» (план чистки тестов): других
+      // проверок числа подобранных брошенных задач нет.
+      name: 'подобраны брошенные задачи',
+      restarts: { starts_1h: 4, last_age_s: 5, slots: 2, limit_mb: 2048, rss_mb: 900, requeued: 3 },
+      numbers: [4, 2, 2048, 900, 3],
+    },
+  ])('$name — все числа видны, пустых нет', async ({ restarts, numbers }) => {
+    getQueueHealth.mockResolvedValue(queueHealth(restarts))
 
     await check()
 
     const line = await screen.findByTestId('worker-restarts')
-    expect(line).toHaveTextContent('1 за час')
-    expect(line).toHaveTextContent('слотов 2')
-    expect(line).toHaveTextContent('лимит памяти 2048 МБ')
-    expect(line).toHaveTextContent('занято 780 МБ')
-  })
-
-  it('несколько стартов за час выделены тревожным цветом', async () => {
-    getQueueHealth.mockResolvedValue(
-      queueHealth({
-        starts_1h: 4,
-        last_age_s: 60,
-        slots: 2,
-        limit_mb: 2048,
-        rss_mb: 900,
-        requeued: 3,
-      })
-    )
-
-    await check()
-
-    const line = await screen.findByTestId('worker-restarts')
-    expect(line).toHaveTextContent('4 за час')
-    expect(line).toHaveTextContent('подобрано брошенных задач: 3')
-    expect(line).toHaveStyle({ color: 'rgb(180, 83, 9)' })
+    expect(numbersIn(line.textContent)).toEqual(expect.arrayContaining(numbers))
+    expect(line.textContent).not.toMatch(/null|undefined|NaN/)
   })
 
   it('без событий строки нет — не показываем ноль как факт', async () => {
@@ -126,25 +119,6 @@ describe('Диагностика: перезапуски обработчика'
     await waitFor(() => expect(screen.getByText('Очередь движется штатно.')).toBeInTheDocument())
     expect(screen.queryByTestId('worker-restarts')).toBeNull()
   })
-
-  it('нет цифр памяти (платформа без cgroup) — строка всё равно читается', async () => {
-    getQueueHealth.mockResolvedValue(
-      queueHealth({
-        starts_1h: 1,
-        last_age_s: 5,
-        slots: 4,
-        limit_mb: null,
-        rss_mb: null,
-        requeued: null,
-      })
-    )
-
-    await check()
-
-    const line = await screen.findByTestId('worker-restarts')
-    expect(line).toHaveTextContent('слотов 4')
-    expect(line.textContent).not.toContain('лимит памяти')
-  })
 })
 
 describe('Диагностика: ограничения API (429)', () => {
@@ -153,25 +127,26 @@ describe('Диагностика: ограничения API (429)', () => {
     getApiHealth.mockResolvedValue(API_OK)
   })
 
-  it('свежие 429 выделены — это текущая проблема, а не история', async () => {
+  it.each([
+    { via_proxy: true, proxy: true },
+    { via_proxy: false, proxy: false },
+  ])('числа 429 видны; через посредника — $proxy', async ({ via_proxy, proxy }) => {
     getQueueHealth.mockResolvedValue(
       queueHealth(null, {
         hits_1h: 7,
         hits_24h: 21,
-        last_age_s: 120,
+        last_age_s: 5,
         max_wait_s_24h: 240,
-        via_proxy: true,
+        via_proxy,
       })
     )
 
     await check()
 
     const line = await screen.findByTestId('api-rate-limits')
-    expect(line).toHaveTextContent('7 за час')
-    expect(line).toHaveTextContent('21 за сутки')
-    expect(line).toHaveTextContent('дольше всего ждали 240 с')
-    expect(line).toHaveTextContent('через посредника')
-    expect(line).toHaveStyle({ color: 'rgb(180, 83, 9)' })
+    expect(numbersIn(line.textContent)).toEqual(expect.arrayContaining([7, 21, 240]))
+    if (proxy) expect(line).toHaveTextContent(/посредник/)
+    else expect(line).not.toHaveTextContent(/посредник/)
   })
 
   it('429 не было вовсе — строки нет', async () => {

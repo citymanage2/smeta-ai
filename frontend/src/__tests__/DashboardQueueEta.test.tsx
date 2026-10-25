@@ -14,6 +14,7 @@ vi.mock('../api/tasks', () => ({ cancelTask: vi.fn() }))
 
 import DashboardQueue from '../components/dashboard/DashboardQueue'
 import { ActiveTask } from '../api/dashboard'
+import { describeEta } from '../utils/eta'
 
 function makeTask(overrides: Partial<ActiveTask> = {}): ActiveTask {
   return {
@@ -45,52 +46,34 @@ function renderQueue(tasks: ActiveTask[]) {
   )
 }
 
-describe('DashboardQueue — готовность', () => {
-  it('ожидающая задача показывает и время старта', () => {
-    renderQueue([
-      makeTask({
-        status: 'pending',
-        eta: {
-          starts_in_s: 1500,
-          ready_in_s: 4200,
-          ready_at: new Date(Date.now() + 4200_000).toISOString(),
-          rough: false,
-          finishing: false,
-          units: 300,
-          unit_kind: 'rows',
-        },
-      }),
-    ])
-    const cell = screen.getByTestId('queue-eta')
-    expect(cell).toHaveTextContent('старт ≈ через 25 мин')
-    expect(cell).toHaveTextContent(/через 1 ч 10 мин/)
-  })
-})
-
 /**
- * Место в очереди в списке активных задач. Задачи считаются по одной, поэтому
- * очередь читается как очередь.
+ * Тексты прогноза («старт ≈ через 25 мин», «2-я в очереди») проверяет
+ * `eta.test.ts`. Здесь — связка: ячейка очереди показывает прогноз именно этой
+ * задачи и с её статусом. Ожидающая задача берётся потому, что у неё видно всё
+ * сразу — и место в очереди, и старт, и готовность; у считающейся (`processing`)
+ * первых двух нет, и перепутанный статус здесь бы заметился.
  *
- * План: plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 8.
+ * Место в очереди: план plans/2026-07-30-parallelnaya-obrabotka-umiraet.md, Фаза 8.
  */
-describe('DashboardQueue — место в очереди', () => {
-  it('ожидающая задача показывает позицию', () => {
-    renderQueue([
-      makeTask({
-        status: 'pending',
-        eta: {
-          starts_in_s: 1800,
-          ready_in_s: 4200,
-          ready_at: new Date(Date.now() + 4200_000).toISOString(),
-          rough: false,
-          finishing: false,
-          units: 300,
-          unit_kind: 'rows',
-          queue_position: 2,
-        },
-      }),
-    ])
+describe('DashboardQueue — готовность', () => {
+  it('ожидающая задача показывает место в очереди, старт и готовность', () => {
+    const eta = {
+      starts_in_s: 1500,
+      ready_in_s: 4200,
+      ready_at: new Date(Date.now() + 4200_000).toISOString(),
+      rough: false,
+      finishing: false,
+      units: 300,
+      unit_kind: 'rows',
+      queue_position: 2,
+    }
+    renderQueue([makeTask({ status: 'pending', eta })])
 
-    expect(screen.getByTestId('queue-position')).toHaveTextContent('2-я в очереди')
+    const view = describeEta(eta, 'pending')!
+    const cell = screen.getByTestId('queue-eta')
+    expect(view.position && view.start && view.ready).toBeTruthy()
+    expect(screen.getByTestId('queue-position')).toHaveTextContent(view.position)
+    expect(cell).toHaveTextContent(view.start)
+    expect(cell).toHaveTextContent(view.ready)
   })
 })
